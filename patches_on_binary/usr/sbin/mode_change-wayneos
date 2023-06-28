@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# A script that handles /etc/chrome_dev.conf.
+# Copyright (C) 2021 Wayne Inc. <seongbin@wayne-inc.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# any later version.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+conf_file_error() {
+        echo "error: chrome_dev.conf doesn't exist in /etc/"
+}
+
+if [ -f /etc/chrome_dev.conf ]; then
+	sudo mount -o remount,rw /
+	# sudo vi /etc/chrome_dev.conf
+	sudo nano /etc/chrome_dev.conf
+	sudo mount -o remount,ro /
+	echo "Modified chrome_dev.conf"
+else
+	conf_file_error
+fi
+
+echo "The change will show after reboot (do 'sudo reboot')"
