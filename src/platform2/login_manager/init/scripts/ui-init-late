@@ -1,0 +1,30 @@
+#!/bin/sh
+
+# Copyright 2016 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+set -e
+
+JOB=$(basename "$0")
+
+UI_MACHINE_INFO_FILE=/run/session_manager/machine-info
+
+# Bail out if data collection is still pending.
+[ -e "${UI_MACHINE_INFO_FILE}" ] || exit 0
+
+# Note the tr command below that fixes up the input data to only
+# contain ASCII characters. Well-formed input should only contain
+# ASCII characters anyways. However, there are devices in the wild
+# that have random invalid binary data in their VPD.
+#
+# Sanitization is necessary here because dbus-send asserts the input
+# string to be valid UTF-8. Without sanitization, these asserts
+# generate crash reports for dbus-send and fail to forward potentially
+# intact VPD contents. See also http://crbug.com/438166.
+dbus-send --system --dest=org.chromium.SessionManager \
+          --type=method_call /org/chromium/SessionManager \
+          org.chromium.SessionManagerInterface.InitMachineInfo \
+          string:"$(tr -cd '\1-\177' < "${UI_MACHINE_INFO_FILE}")" ||
+    logger -t "${JOB}" \
+           "Failed to pass machine info to session_manager!"

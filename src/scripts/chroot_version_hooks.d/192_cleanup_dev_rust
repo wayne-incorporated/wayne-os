@@ -1,0 +1,42 @@
+# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Clean up rust packages which no longer have corresponding ebuilds
+#
+# This is achieved by:
+# * Running `eclean` to remove binary packages without a corresponding ebuild
+# * Running `equery l -b` to find ebuilds with no binary package
+# * Running `emerge -C` to remove those revisions.
+
+export CLEAN_DELAY=0
+
+do_clean() {
+  local suffix="$1"
+  local emerge_cmd=()
+  local args
+
+  if [[ -z "${suffix}" ]]; then
+    emerge_cmd+=( sudo )
+
+    qlist -IC ^cross- | sudo eclean -e /dev/stdin packages
+  else
+    "eclean${suffix}" packages
+  fi
+  emerge_cmd+=( "emerge${suffix}" )
+
+  args=( $("equery${suffix}" l -b --format='=$cpv' 'dev-rust/*' ) )
+  if [[ ${#args[@]} -eq 0 ]]; then
+    return
+  fi
+
+  "${emerge_cmd[@]}" -C "${args[@]}"
+}
+
+do_clean
+for board_root in /build/*; do
+  board_name=${board_root##*/}
+  if [[ -d "${board_root}/var/db/pkg/dev-rust" ]]; then
+    do_clean "-${board_name}"
+  fi
+done

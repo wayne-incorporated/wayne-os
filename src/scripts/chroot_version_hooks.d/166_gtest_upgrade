@@ -1,0 +1,18 @@
+# Copyright 2014 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# gtest/gmock 1.7 is not binary compatible with the 1.6 version since
+# some internal symbols exposed in the .so file changed. The portage
+# cache in /build/$BOARD/var/cache/portage/chromeos-base will keep files
+# even if the ebuild is recompiled with the new gtest, so we need to remove
+# those files as well.
+#
+
+for sysroot in /build/* /; do
+  (
+  info "Cleaning /var/cache/portage/chromeos-base from ${sysroot}"
+  sudo rm -rf "${sysroot}"/var/cache/portage/chromeos-base
+  ) &
+done
+wait

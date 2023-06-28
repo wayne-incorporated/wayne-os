@@ -1,0 +1,159 @@
+{
+  "metadata":{
+    "rootdev_base": "/dev/mtd0",
+    "block_size": 512,
+    "fs_block_size": 4096
+  },
+  "layouts":{
+    "common":[
+      {
+        "num": 6,
+        "label":"KERN-C",
+        "type":"blank",
+        "size":"0"
+      },
+      {
+        "num": 7,
+        "label":"ROOT-C",
+        "type":"blank",
+        "size":"0"
+      },
+      {
+        "num": 2,
+        "label":"KERN-A",
+        "type":"kernel"
+      },
+      {
+        "num": 4,
+        "label":"KERN-B",
+        "type":"kernel"
+      },
+      {
+        "num": 8,
+        "label":"OEM",
+        "type":"data",
+        "fs_format":"ext4",
+        "uuid": "random"
+      },
+      {
+        # Used for Legacy Bios, and EFI Bios, not Chrome OS hardware.
+        "num": 12,
+        "label": "EFI-SYSTEM",
+        "type": "efi",
+        "fs_format": "vfat",
+        "size": "16 MiB",
+        "uuid": "clear"
+      },
+      {
+        "num": 5,
+        "label":"ROOT-B",
+        "type":"rootfs",
+        "fs_format":"ext2",
+        "uuid": "random"
+      },
+      {
+        "num": 3,
+        "label":"ROOT-A",
+        "type":"rootfs",
+        "fs_format":"ext2",
+        "uuid": "random"
+      },
+      {
+        "num": 1,
+        "label": "STATE",
+        "type": "data",
+        "fs_format": "ext4",
+        "uuid": "random"
+      }
+    ],
+    "base":[
+      {
+        "num": "metadata",
+        "external_gpt": true
+      },
+      {
+        "num": 2,
+        "format": "nand"
+      },
+      {
+        "num": 4,
+        "format": "nand"
+      },
+      {
+        "num": 12,
+        "label":"EFI-SYSTEM",
+        "type":"blank",
+        "size":"0"
+      },
+      {
+        "num": 5,
+        "format":"ubi"
+      },
+      {
+        "num": 3,
+        "format":"ubi"
+      },
+      {
+        "num": 1,
+        "format": "ubi",
+        "fs_format": "ubifs"
+      },
+      # BBT partition exists just to hold a few blocks open for
+      # the bad block table.
+      {
+        "num": 13,
+        "label": "BBT",
+        "size": 0,
+        "type": "blank",
+        "reserved_erase_blocks": 4
+      }
+    ],
+    "usb": [
+      {
+        "num": 1,
+        "features": ["expand"]
+      }
+    ],
+    "factory_install": [
+      {
+        "num": 12,
+        "size": "32 MiB"
+      },
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        "num": 3,
+        "size": "420 MiB",
+        "fs_size": "400 MiB"
+      },
+      {
+        "num": 1,
+        "size": "140 MiB"
+      }
+    ],
+    "recovery": [
+      {
+        # Slot B rootfs, unused on USB, but pad to 2M.
+        # installation will expand this to size from base.
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        # Shrunken rootfs partition to support smaller USB sticks,
+        # and smaller recovery downloads.
+        # Installation will expand this to size from base.
+        # The offset to the beginning of this partition, and the FS
+        # size must match base exactly to allow secure boot.
+        "num": 3,
+        "size": "1290 MiB"
+      },
+      {
+        # Stateful on recovery is dynamically resized larger.
+        "num": 1,
+        "size": "2 MiB"
+      }
+    ]
+  }
+}

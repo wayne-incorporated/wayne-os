@@ -1,0 +1,506 @@
+#!/bin/bash
+
+# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+. "$(dirname "$0")/common.sh" || exit 1
+
+# Script must run inside the chroot
+restart_in_chroot_if_needed "$@"
+
+assert_not_root_user
+
+# Developer-visible flags.
+DEFINE_string board "${DEFAULT_BOARD}" \
+  "The board to build packages for."
+DEFINE_boolean usepkg "${FLAGS_TRUE}" \
+  "Use binary packages to bootstrap when possible."
+DEFINE_boolean usepkgonly "${FLAGS_FALSE}" \
+  "Only use binary packages to bootstrap; abort if any are missing."
+DEFINE_boolean workon "${FLAGS_TRUE}" \
+  "Force-build workon packages."
+DEFINE_boolean showoutput "${FLAGS_FALSE}" \
+  "Show all output from parallel_emerge."
+DEFINE_boolean withautotest "${FLAGS_TRUE}" \
+  "Build autotest client code."
+DEFINE_boolean withdebugsymbols "${FLAGS_FALSE}" \
+  "Install the debug symbols for all packages"
+DEFINE_string eventfile "${DEFAULT_EVENT_FILE}" \
+  "Define the file that event logs will be written."
+DEFINE_boolean withrevdeps "${FLAGS_TRUE}" \
+  "Calculate reverse dependencies on changed ebuilds."
+DEFINE_boolean autosetgov "${FLAGS_FALSE}" \
+  "Automatically set cpu governor to 'performance'."
+DEFINE_boolean use_any_chrome "${FLAGS_TRUE}" \
+  "Use any Chrome prebuilt available, even if the prebuilt doesn't match exactly."
+DEFINE_boolean cleanbuild "${FLAGS_FALSE}" \
+  "Perform a clean build; delete sysroot if it exists before building."
+DEFINE_boolean internal "${FLAGS_FALSE}" \
+  "Build the internal version of chrome (set the chrome_internal USE flag)."
+DEFINE_boolean pretend "${FLAGS_FALSE}" \
+  "Don't build packages, just display which packages would have been installed."
+
+# The --board_root flag specifies the environment variables ROOT and PKGDIR.
+# This allows fetching and emerging of all packages to specified board_root.
+# Note that --board_root will setup the board normally in /build/$BOARD, if it's
+# not setup yet. It also expects the toolchain to already be installed in the
+# board_root. --usepkgonly and --norebuild are required, because building is not
+# supported when board_root is set.
+# enforce this)."
+DEFINE_string board_root "" \
+  "Emerge packages to board_root."
+
+FLAGS_HELP="usage: $(basename $0) [flags] [packages]
+
+build_packages updates the set of binary packages needed by Chrome OS. It will
+cross compile all packages that have been updated into the given target's root
+and build binary packages as a side-effect. The output packages will be picked
+up by the build_image script to put together a bootable Chrome OS image.
+
+If [packages] are specified, only build those specific packages (and any
+dependencies they might need).
+
+For the fastest builds, use --nowithautotest --noworkon.
+"
+
+# The following options are advanced options, only available to those willing
+# to read the source code. They are not shown in help output, since they are
+# not needed for the typical developer workflow.
+DEFINE_string accept_licenses "" \
+  "Licenses to append to the accept list."
+DEFINE_boolean eclean "${FLAGS_TRUE}" \
+  "Run eclean to delete old binpkgs."
+DEFINE_integer jobs -1 \
+  "How many packages to build in parallel at maximum."
+DEFINE_boolean norebuild "${FLAGS_FALSE}" \
+  "Don't automatically rebuild dependencies."
+DEFINE_boolean skip_chroot_upgrade "${FLAGS_FALSE}" \
+  "Don't run the chroot upgrade automatically; use with care."
+DEFINE_boolean skip_setup_board "${FLAGS_FALSE}" \
+  "Don't run setup_board. Implies skip_chroot_upgrade and" \
+  "skip_toolchain_update."
+DEFINE_boolean skip_toolchain_update "${FLAGS_FALSE}" \
+  "Don't update toolchain automatically."
+DEFINE_boolean withdev "${FLAGS_TRUE}" \
+  "Build useful developer friendly utilities."
+DEFINE_boolean withdebug "${FLAGS_TRUE}" \
+  "Build debug versions of Chromium-OS-specific packages."
+DEFINE_boolean withfactory "${FLAGS_TRUE}" \
+  "Build factory installer."
+DEFINE_boolean withtest "${FLAGS_TRUE}" \
+  "Build packages required for testing."
+DEFINE_boolean expandedbinhosts "${FLAGS_TRUE}" \
+  "Allow expanded binhost inheritance."
+
+# The --reuse_pkgs_from_local_boards flag tells Portage to share binary
+# packages between boards that are built locally, so that the total time
+# required to build several boards is reduced. This flag is only useful
+# when you are not able to use remote binary packages, since remote binary
+# packages are usually more up to date than anything you have locally.
+DEFINE_boolean reuse_pkgs_from_local_boards "${FLAGS_FALSE}" \
+  "Bootstrap from local packages instead of remote packages."
+
+# --run_goma option is designed to be used on bots.
+# If you're trying to build pacakges with goma in your local dev env, this is
+# *not* the option you're looking for. Please see comments below.
+# This option; 1) starts goma, 2) builds packages (expecting that goma is
+# used), then 3) stops goma explicitly.
+# 3) is a request from the goma team, so that stats/logs can be taken.
+# Note: GOMA_DIR and GOMA_SERVICE_ACCOUNT_JSON_FILE are expected to be passed
+# via env var.
+#
+# In local dev env cases, compiler_proxy is expected to keep running.
+# In such a case;
+#   $ python ${GOMA_DIR}/goma_ctl.py ensure_start
+#   $ ./build_packages (... and options without --run_goma ...)
+# is an expected commandline sequence. If you set --run_goma flag while
+# compiler_proxy is already running, the existing compiler_proxy will be
+# stopped.
+DEFINE_boolean run_goma "${FLAGS_FALSE}" \
+  "If set to true, (re)starts goma, builds packages, and then stops goma."
+
+# This option is for building chrome remotely.
+#1) starts reproxy 2) builds chrome with reproxy and 3) stops reproxy so
+# logs/stats can be collected.
+# Note: RECLIENT_DIR and REPROXY_CFG are expected to be passed via env var.
+DEFINE_boolean run_remoteexec "${FLAGS_FALSE}" \
+  "If set to true, starts RBE reproxy, builds packages, and then stops reproxy."
+
+# Parse command line
+FLAGS "$@" || exit 1
+eval set -- "${FLAGS_ARGV}"
+
+# Die on any errors.
+switch_to_strict_mode
+
+# Chrome packages that need to be treated the same. These are the chrome and
+# chrome follow-on packages that share the same version as chrome and are
+# updated in lock step.
+CHROME_PACKAGES=(
+  "chromeos-base/chromeos-chrome"
+  "chromeos-base/chrome-icu"
+)
+
+if [[ "${FLAGS_internal}" -eq "${FLAGS_TRUE}" ]]; then
+  export USE="${USE} chrome_internal"
+fi
+
+# Right now build_packages has to be run from scripts/
+. ${SRC_ROOT}/third_party/chromiumos-overlay/chromeos/config/chromeos_version.sh
+
+# On some systems, powersave can take a long time to ramp up.  Inform the user
+# so they can get faster builds.  https://crbug.com/1008932
+if grep -qs powersave \
+     /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; then
+  # Make sure we can actually support "performance".
+  if grep -qs performance \
+      /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors; then
+    if [[ "${FLAGS_autosetgov}" -eq "${FLAGS_TRUE}" ]]; then
+      info "Temporarily setting cpu governor to 'performance'"
+      trap "sudo cpupower -c all frequency-set -g powersave >&/dev/null" EXIT
+      sudo cpupower -c all frequency-set -g performance >&/dev/null
+    else
+      warn "Current CPU governor set to 'powersave' which can slow down builds."
+      warn "Use --autosetgov to automatically (and temporarily) switch to" \
+        "'performance'."
+    fi
+  fi
+fi
+
+if [[ -z "${FLAGS_board}" ]]; then
+  echo "Error: --board is required."
+  exit 1
+fi
+
+if [[ "${FLAGS_skip_setup_board}" -eq "${FLAGS_FALSE}" ]]; then
+  # Before we can run any tools, we need to update chroot or setup_board.
+  UPDATE_ARGS=()
+  if [[ -n ${FLAGS_accept_licenses} ]]; then
+    UPDATE_ARGS+=( --accept-licenses "${FLAGS_accept_licenses}" )
+  fi
+  if [ "${FLAGS_usepkg}" -eq "${FLAGS_TRUE}" ]; then
+    UPDATE_ARGS+=( --usepkg )
+  else
+    UPDATE_ARGS+=( --nousepkg )
+  fi
+  if [[ "${FLAGS_jobs}" -ne -1 ]]; then
+    UPDATE_ARGS+=( --jobs=${FLAGS_jobs} )
+  fi
+  if [ "${FLAGS_reuse_pkgs_from_local_boards}" -eq "${FLAGS_TRUE}" ]; then
+    UPDATE_ARGS+=( --reuse-pkgs-from-local-boards )
+  fi
+  if [ "${FLAGS_skip_toolchain_update}" -eq "${FLAGS_TRUE}" ]; then
+    UPDATE_ARGS+=( --skip-toolchain-update )
+  fi
+  if [ "${FLAGS_skip_chroot_upgrade}" -eq "${FLAGS_TRUE}" ]; then
+    UPDATE_ARGS+=( --skip-chroot-upgrade )
+  fi
+  if [[ -n ${FLAGS_board_root} ]]; then
+    UPDATE_ARGS+=( --board-root "${FLAGS_board_root}" )
+  fi
+  if [ "${FLAGS_cleanbuild}" -eq "${FLAGS_TRUE}" ]; then
+    UPDATE_ARGS+=( --force )
+  fi
+  if [[ "${FLAGS_expandedbinhosts}" -eq "${FLAGS_FALSE}" ]]; then
+    UPDATE_ARGS+=( --fewer-binhosts )
+  fi
+
+  setup_board --quiet --board=${FLAGS_board} "${UPDATE_ARGS[@]}"
+fi
+
+sudo_clear_shadow_locks "/build/${FLAGS_board}"
+PORTAGE_BINHOST=$(portageq-${FLAGS_board} envvar 'PORTAGE_BINHOST')
+info "PORTAGE_BINHOST: ${PORTAGE_BINHOST}"
+
+
+# Setup all the emerge command/flags.
+EMERGE_FLAGS=( -uDNv --backtrack=30 --newrepo --with-test-deps y )
+
+EMERGE_CMD=(
+  "${CHROMITE_BIN}/parallel_emerge"
+  --board=${FLAGS_board}
+)
+
+if [[ "${FLAGS_use_any_chrome}" -eq "${FLAGS_TRUE}" ]]; then
+  for pkg in "${CHROME_PACKAGES[@]}"; do
+    EMERGE_CMD+=( "--force-remote-binary=${pkg}" )
+  done
+fi
+
+EMERGE_CMD+=( ${EXTRA_BOARD_FLAGS} )
+
+if [[ "${FLAGS_pretend}" -eq "${FLAGS_TRUE}" ]]; then
+  EMERGE_FLAGS+=( "--pretend" )
+fi
+
+if [[ "${FLAGS_usepkg}" -eq "${FLAGS_TRUE}" ||
+      "${FLAGS_reuse_pkgs_from_local_boards}" -eq "${FLAGS_TRUE}" ||
+      "${FLAGS_usepkgonly}" -eq "${FLAGS_TRUE}" ]]; then
+  # Use binary packages. Include all build-time dependencies,
+  # so as to avoid unnecessary differences between source
+  # and binary builds.
+  EMERGE_FLAGS+=( --getbinpkg --with-bdeps y )
+  if [[ ${FLAGS_usepkgonly} -eq ${FLAGS_TRUE} ]]; then
+    EMERGE_FLAGS+=( --usepkgonly )
+  else
+    EMERGE_FLAGS+=( --usepkg )
+  fi
+fi
+
+if [[ "${FLAGS_jobs}" -ne -1 ]]; then
+  EMERGE_FLAGS+=( --jobs=${FLAGS_jobs} )
+fi
+
+if [[ "${FLAGS_norebuild}" -eq "${FLAGS_FALSE}" ]]; then
+  EMERGE_FLAGS+=( --rebuild-if-new-rev )
+fi
+if [[ "${FLAGS_showoutput}" -eq "${FLAGS_TRUE}" ]]; then
+  EMERGE_FLAGS+=( --show-output )
+fi
+
+if [[ "${FLAGS_withdebug}" -eq "${FLAGS_FALSE}" ]]; then
+  export USE="${USE} -cros-debug"
+fi
+
+# Figure out which packages we should be building.
+PACKAGES=( "$@" )
+FORCE_LOCAL_BUILD_PKGS=()
+if [[ $# -eq 0 ]]; then
+  PACKAGES=( virtual/target-os )
+  if [[ "${FLAGS_withdev}" -eq "${FLAGS_TRUE}" ]]; then
+    PACKAGES+=( virtual/target-os-dev )
+  fi
+  if [[ "${FLAGS_withfactory}" -eq "${FLAGS_TRUE}" ]]; then
+    PACKAGES+=( virtual/target-os-factory )
+    PACKAGES+=( virtual/target-os-factory-shim )
+  fi
+  if [[ "${FLAGS_withtest}" -eq "${FLAGS_TRUE}" ]]; then
+    PACKAGES+=( virtual/target-os-test )
+    # chromeos-ssh-testkeys may generate ssh keys if the right USE flag is set.
+    # We force rebuilding this package from source every time, so that
+    # consecutive builds don't share ssh keys.
+    FORCE_LOCAL_BUILD_PKGS+=( chromeos-base/chromeos-ssh-testkeys )
+  fi
+  if [[ "${FLAGS_withautotest}" -eq "${FLAGS_TRUE}" ]]; then
+    PACKAGES+=( chromeos-base/autotest-all )
+  fi
+fi
+
+info "Rebuilding Portage cache"
+# Before running any emerge operations, regenerate the Portage dependency cache
+# in parallel.
+info_run "${EMERGE_CMD[@]}" --regen --quiet
+
+# Clean out any stale binpkgs we've accumulated. This is done immediately after
+# regenerating the cache in case ebuilds have been removed (e.g. from a revert).
+if [[ "${FLAGS_eclean}" -eq "${FLAGS_TRUE}" ]]; then
+  info "Cleaning stale binpkgs"
+  get_eclean_exclusions | "eclean-${FLAGS_board}" -e /dev/stdin packages
+fi
+
+# Verify that all packages can be emerged from scratch, without any
+# backtracking. Only print the output if this step fails.
+info "Checking package dependencies are correct: ${PACKAGES[*]}"
+if ! OUTPUT=$(emerge-${FLAGS_board} -pe --backtrack=0 \
+              "${PACKAGES[@]}" 2>&1); then
+  printf "%s\n" "${OUTPUT}"
+  die_notrace "emerge detected broken ebuilds. See error message above."
+fi
+
+# Build cros_workon packages when they are changed.
+CROS_WORKON_PKGS=()
+if [ "${FLAGS_workon}" -eq "${FLAGS_TRUE}" ]; then
+  LIST_MODIFIED_PACKAGES="${CHROMITE_BIN}/cros_list_modified_packages"
+  MODIFIED_PACKAGES=( $("${LIST_MODIFIED_PACKAGES}" --board=${FLAGS_board}) )
+  info "cros_workon modified packages '${MODIFIED_PACKAGES[*]}' detected"
+  CROS_WORKON_PKGS+=( "${MODIFIED_PACKAGES[@]}" )
+
+  # TODO(anush): Make chrome a fake cros-workon package.
+  if [[ -n "${CHROME_ORIGIN}" ]]; then
+    CROS_WORKON_PKGS+=( "${CHROME_PACKAGES[@]}" )
+  fi
+fi
+
+# cros_workon packages always have to be rebuilt.
+FORCE_LOCAL_BUILD_PKGS+=( "${CROS_WORKON_PKGS[@]}" )
+
+# Any package that directly depends on an active cros_workon package also needs
+# to be rebuilt in order to be correctly built against the current set of
+# changes a user may have made to the cros_workon package.
+if [[ ${#CROS_WORKON_PKGS[@]} -gt 0 ]]; then
+  # Collect all installed packages that depend on active cros_workon packages.
+  WORKON_PKG_CONSUMERS=()
+  mapfile -t WORKON_PKG_CONSUMERS < <( \
+    equery-${FLAGS_board} -q depends "${CROS_WORKON_PKGS[@]}" | \
+    sort -u | \
+    grep -Ev "^\s*$" )
+
+  # Transform this list of packages with versions in to a list of just
+  # $CATEGORY/$NAME entries, since we don't want to pass packages with explicit
+  # version numbers as arguments to `emerge`.
+  if [[ ${#WORKON_PKG_CONSUMERS[@]} -gt 0 ]]; then
+    WORKON_REBUILD_PKGS=()
+    mapfile -t WORKON_REBUILD_PKGS < <( \
+      equery-${FLAGS_board} list -p -o --format='$category/$name' \
+        "${WORKON_PKG_CONSUMERS[@]}" | sort -u )
+
+    info "The following packages depend directly on an active" \
+      "cros_workon package and will be rebuilt: ${WORKON_REBUILD_PKGS[*]}"
+
+    FORCE_LOCAL_BUILD_PKGS+=( "${WORKON_REBUILD_PKGS[@]}" )
+  fi
+fi
+
+if [[ -n "${FLAGS_board_root}" ]]; then
+  export ROOT="${FLAGS_board_root}"
+  export PORTAGE_CONFIGROOT="${ROOT}"
+  export SYSROOT="${ROOT}"
+  export PKGDIR="${ROOT}"/packages
+fi
+
+# Temporarily modify the emerge flags so we can calculate the revdeps
+# on the modified packages.
+if [[ "${FLAGS_withrevdeps}" -eq "${FLAGS_TRUE}" ]]; then
+  info "starting reverse dependency calculations ..."
+  SIM_EMERGE_FLAGS=( "${EMERGE_FLAGS[@]}" --pretend --columns )
+
+  if [[ ${#PACKAGES[@]} -gt 0 ]]; then
+    SIM_EMERGE_FLAGS+=(
+      --reinstall-atoms="${PACKAGES[*]}"
+      --usepkg-exclude="${PACKAGES[*]}"
+    )
+  fi
+
+  # cros-workon packages are always going to be force reinstalled, so we add
+  # the forced reinstall behavior to the modified package calculation. This is
+  # necessary to include when a user has already installed a 9999 ebuild and is
+  # now reinstalling that package with additional local changes, because
+  # otherwise the modified package calculation would not see that a 'new'
+  # package is being installed.
+  if [[ ${#CROS_WORKON_PKGS[@]} -gt 0 ]]; then
+    SIM_EMERGE_FLAGS+=(
+      --reinstall-atoms="${CROS_WORKON_PKGS[*]}"
+      --usepkg-exclude="${CROS_WORKON_PKGS[*]}"
+    )
+  fi
+
+  # Calculate only the ebuild changes from the emerge simulation ignoring
+  # the virtual packages and the forced rebuild of autotest-all package.
+  # The lines of the following block do the following operations:
+  # 1. Do a pretend `emerge` command to get a list of what would be built.
+  # 2. Filter to only packages that will be installed to the board sysroot.
+  # 3. Filter to only packages that would be built from source and rewrite the
+  #    line from Portage's full output to only $CATEGORY/$PACKAGE
+  # 4. Filter the list of packages to a heuristic set of packages known to have
+  #    incorrectly specified dependencies.
+  # 5. Sort the output and remove any duplicate entries.
+  BASE_INSTALL_PKGS=( $( \
+    sudo -E "${EMERGE_CMD[@]}" "${SIM_EMERGE_FLAGS[@]}" "${PACKAGES[@]}" | \
+    grep -e 'to /build/' | \
+    sed -n -E '/^\[ebuild /{s:^[^]]+\] +::;s: .*::;p}' | \
+    grep -E '/(coreboot-private-files.*|tast-build-deps)$' | \
+    sort -u ) )
+
+  MOD_PKGS=()
+  if [[ "${#BASE_INSTALL_PKGS[@]}" -gt 0 ]]; then
+    info "Forced rebuild packages detected: ${BASE_INSTALL_PKGS[*]}."
+    # Convert specific versions into base package names
+    MOD_PKGS+=( $(\
+    equery-${FLAGS_board} list -p -o --format='$category/$name' \
+      "${BASE_INSTALL_PKGS[@]}" | sort -u ) )
+    # Remove Chrome as rebuilding it is expensive and almost never makes sense.
+    # Ignore grep exit status in case chromeos-chrome is the only package.
+    grep_cmd=( grep -v )
+    for pkg in "${CHROME_PACKAGES[@]}"; do
+      grep_cmd+=( -e "${pkg}" )
+    done
+    MOD_PKGS=( $(printf '%s\n' "${MOD_PKGS[@]}" | "${grep_cmd[@]}" || :) )
+  fi
+
+  FORCE_LOCAL_BUILD_PKGS+=( "${MOD_PKGS[@]}" )
+
+  if [[ "${#MOD_PKGS[@]}" -gt 0 ]]; then
+    info "calculating reverse dependencies on packages: ${MOD_PKGS[*]}"
+    REV_DEPS=( $(\
+      equery-${FLAGS_board} -q depends --indirect "${MOD_PKGS[@]}" |\
+      awk '{print $1}' | grep -v ^virtual/ | sort -u) )
+    if [[ "${#REV_DEPS[@]}" -gt 0 ]]; then
+      # Convert specific versions into base package names
+      RMOD_PKGS=( $(\
+        equery-${FLAGS_board} -q list -p -o --format='$category/$name' \
+        "${REV_DEPS[@]}" | sort -u ) )
+      # Remove Chrome as rebuilding it is expensive and almost never makes
+      # sense.  Ignore grep exit status in case chromeos-chrome is the only
+      # package.
+      grep_cmd=( grep -v )
+      for pkg in "${CHROME_PACKAGES[@]}"; do
+        grep_cmd+=( -e "${pkg}" )
+      done
+      RMOD_PKGS=( $(printf '%s\n' "${RMOD_PKGS[@]}" | "${grep_cmd[@]}" || :) )
+      info "final reverse dependencies that will be rebuilt: ${RMOD_PKGS[*]}"
+      FORCE_LOCAL_BUILD_PKGS+=( "${RMOD_PKGS[@]}" )
+    fi
+  fi
+fi # end FLAGS_withrevdeps
+
+if [[ ${#FORCE_LOCAL_BUILD_PKGS[@]} -gt 0 ]]; then
+  EMERGE_FLAGS+=(
+    --reinstall-atoms="${FORCE_LOCAL_BUILD_PKGS[*]}"
+    --usepkg-exclude="${FORCE_LOCAL_BUILD_PKGS[*]}"
+  )
+fi
+
+# A list of critical system packages that should never be incidentally
+# reinstalled as a side effect of build_packages. All packages in this list
+# are special cased to prefer matching installed versions, overriding the
+# typical logic of upgrading to the newest available version.
+#
+# This list can't include any package that gets installed to a board!
+# Packages such as LLVM or binutils must not be in this list as the normal
+# rebuild logic must still apply to them for board targets.
+#
+# TODO(crbug/1050752): Remove this list and the corresponding arguments
+# to `emerge` below once we figure out how to exclude toolchain packages from
+# being upgraded transitively via BDEPEND relations.
+CRITICAL_SDK_PACKAGES=(
+  "dev-lang/rust"
+  "dev-lang/go"
+  "sys-libs/glibc"
+  "sys-devel/gcc"
+)
+
+info "Merging board packages now"
+(
+
+  # Start reproxy for remote execution of building chrome.
+  if [[ "${FLAGS_run_remoteexec}" -eq "${FLAGS_TRUE}" ]]; then
+    info "Starting RBE reproxy."
+    bootstrap="'${RECLIENT_DIR}/boostrap' --cfg='${REPROXY_CFG}' \
+      --re_proxy='${RECLIENT_DIR}/reproxy'"
+    "${boostrap}"
+    trap "'${boostrap}' --shutdown" EXIT
+  # Support goma on bots. This has to run in subshell, otherwise EXIT trap
+  # handler is overwritten.
+  elif [[ "${FLAGS_run_goma}" -eq "${FLAGS_TRUE}" ]]; then
+    info "Starting goma compiler_proxy."
+    goma_ctl="${GOMA_DIR:-${HOME}/goma}/goma_ctl.py"
+    "${goma_ctl}" restart
+    trap "'${goma_ctl}' stop" EXIT
+  fi
+
+  info_run sudo -E "${EMERGE_CMD[@]}" "${EMERGE_FLAGS[@]}" "${PACKAGES[@]}" \
+    --useoldpkg-atoms="${CRITICAL_SDK_PACKAGES[*]}" \
+    --rebuild-exclude="${CRITICAL_SDK_PACKAGES[*]}"
+)
+
+echo "Builds complete"
+
+if [[ ${FLAGS_withdebugsymbols} -eq ${FLAGS_TRUE} ]]; then
+  info "fetching the debug symbols"
+  info_run sudo -E "${CHROMITE_BIN}/cros_install_debug_syms" \
+    "--board=${FLAGS_board}" "--all"
+fi
+
+command_completed
+echo "Done"

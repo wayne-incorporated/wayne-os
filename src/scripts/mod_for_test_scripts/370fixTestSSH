@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Copyright 2014 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# If openssh-server is installed on in /usr/local, fix a couple items
+# that don't work.
+
+USR_LOCAL="${ROOT_FS_DIR}/usr/local"
+
+if [ ! -d "${USR_LOCAL}" ]; then
+  echo "Missing stateful mount point for developer images."
+  exit 1
+fi
+
+if [ ! -f "${USR_LOCAL}/bin/ssh" ]; then
+  echo "Nothing to do. SSH is not installed in /usr/local."
+  exit 0
+fi
+
+echo "Symlinking ssh."
+ln -sf /usr/local/bin/ssh "${ROOT_FS_DIR}/usr/bin/ssh"

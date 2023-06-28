@@ -1,0 +1,55 @@
+#!/bin/sh
+
+# Copyright 2016 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+set -e
+
+# Records the difference between two timestamps in milliseconds.
+# Only emits metrics if none of the three arguments are empty.
+# Arguments are <starting point> <ending point> <metric name>
+record_delta() {
+  if [ $# -eq 3 ]; then
+    metrics_client $3 $(($2 - $1)) 1 1000000 50
+  fi
+}
+
+CHROME_LOGOUT_STARTED=$(bootstat_get_last logout-started time-ms)
+# Only record restart statistics if chrome performed a logout.
+if [ -n "$CHROME_LOGOUT_STARTED" ]; then
+  CHROME_UI_POST_STOP=$(bootstat_get_last ui-post-stop time-ms)
+  CHROME_PROCESSES_TERMINATED=$(bootstat_get_last \
+                                other-processes-terminated time-ms)
+  # Stub this out since X no longer exists, but the stats below are defined
+  # as transitions to/from the X kill phase.
+  CHROME_X_TERMINATED=${CHROME_PROCESSES_TERMINATED}
+  CHROME_CRYPTOHOME_UNMOUNTED=$(bootstat_get_last \
+                                cryptohome-unmounted time-ms)
+  CHROME_EXEC=$(bootstat_get_last chrome-exec time-ms)
+  CHROME_LOGIN_PROMPT_VISIBLE=$(bootstat_get_last \
+                                login-prompt-visible time-ms)
+
+  # Record deltas between some interesting steps.
+  record_delta $CHROME_LOGOUT_STARTED $CHROME_UI_POST_STOP \
+               Uptime.LogoutToUIStopAfterLogout
+
+  record_delta $CHROME_UI_POST_STOP $CHROME_PROCESSES_TERMINATED \
+               Uptime.UIStopToProcessesTerminatedAfterLogout
+
+  record_delta $CHROME_PROCESSES_TERMINATED $CHROME_EXEC \
+               Uptime.OtherProcessesTerminatedToChromeExecAfterLogout
+
+  record_delta $CHROME_EXEC $CHROME_LOGIN_PROMPT_VISIBLE \
+               Uptime.ChromeExecToLoginPromptVisibleAfterLogout
+
+  # Some summary statistics so we can account for everything.
+  record_delta $CHROME_LOGOUT_STARTED $CHROME_CRYPTOHOME_UNMOUNTED \
+               Uptime.Logout
+
+  record_delta $CHROME_CRYPTOHOME_UNMOUNTED $CHROME_LOGIN_PROMPT_VISIBLE \
+               Uptime.LoginPromptSetupTimeAfterLogout
+
+  record_delta $CHROME_LOGOUT_STARTED $CHROME_LOGIN_PROMPT_VISIBLE \
+               Uptime.LogoutToLoginPromptVisible
+fi

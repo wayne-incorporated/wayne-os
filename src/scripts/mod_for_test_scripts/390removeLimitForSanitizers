@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# Copyright 2018 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# Removes limits imposed on daemons in sanitizer images since
+# sanitizer builds often consume more resources.
+
+echo "Removing limits for sanitizer builds."
+
+BOARD=${BOARD_ROOT#"/build/"}
+CONF_FILES_PATH="${ROOT_FS_DIR}/etc/init"
+SANTIZER_USE_FLAGS=( asan msan tsan ubsan )
+
+if [[ ! -d "${CONF_FILES_PATH}" ]]; then
+  exit 0
+fi
+
+for flag in "${SANTIZER_USE_FLAGS[@]}"; do
+  if [[ " $(portageq-"${BOARD}" envvar USE) " == *" ${flag} "* ]]; then
+    # Remove limits from the conf files.
+    sed -E -i '/^limit (as|data|stack) /d' "${CONF_FILES_PATH}"/*.conf
+    # Always exit as Success to in case sed fails because of no conf files.
+    exit 0
+  fi
+done

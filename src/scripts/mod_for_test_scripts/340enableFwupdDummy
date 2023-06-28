@@ -1,0 +1,74 @@
+#!/bin/bash
+
+# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+if [[ ! -f ${ROOT_FS_DIR}/etc/fwupd/daemon.conf ]]; then
+  exit 0
+fi
+
+echo "Enabling dummy fwupd remote for tests."
+
+sed -e '/^DisabledPlugins=/s/^/#/' -i "${ROOT_FS_DIR}/etc/fwupd/daemon.conf"
+
+cat > "${ROOT_FS_DIR}/usr/share/fwupd/remotes.d/vendor/fwupd-tests.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Extracted from https://github.com/fwupd/fwupd/blob/HEAD/data/installed-tests/fwupd-tests.xml -->
+<components version="0.9" origin="lvfs">
+  <component type="firmware">
+    <id>org.fwupd.fakedevice.firmware</id>
+    <name>FakeDevice</name>
+    <summary>Firmware for the ACME Corp Integrated Webcam</summary>
+    <description>
+      <p>Updating the firmware on your webcam device improves performance and adds new features.</p>
+    </description>
+    <provides>
+      <firmware type="flashed">b585990a-003e-5270-89d5-3705a17f9a43</firmware>
+    </provides>
+    <url type="homepage">http://www.acme.com/</url>
+    <metadata_license>CC0-1.0</metadata_license>
+    <project_license>GPL-2.0+</project_license>
+    <developer_name>ACME Corp</developer_name>
+    <releases>
+      <release version="1.2.4" timestamp="1497484800" urgency="medium">
+        <location>https://fwupd.org/downloads/3fab34cfa1ef97238fb24c5e40a979bc544bb2b0967b863e43e7d58e0d9a923f-fakedevice124.cab</location>
+        <checksum type="sha1" filename="3fab34cfa1ef97238fb24c5e40a979bc544bb2b0967b863e43e7d58e0d9a923f-fakedevice124.cab" target="container">cffec02f8094d10552b68967425613d72d72ac02</checksum>
+        <checksum type="sha256" filename="3fab34cfa1ef97238fb24c5e40a979bc544bb2b0967b863e43e7d58e0d9a923f-fakedevice124.cab" target="container">3fab34cfa1ef97238fb24c5e40a979bc544bb2b0967b863e43e7d58e0d9a923f</checksum>
+        <checksum type="sha1" filename="fakedevice124.bin" target="content">2f822cbe6280d4472272fe0c2a3cb8b7f5dbd327</checksum>
+        <checksum type="sha256" filename="fakedevice124.bin" target="content">4a4782bef39a8082e2c298301d24cdf91e6b874a9e4a2faa920b29e634a8b736</checksum>
+        <description>
+          <p>Fixes another bug with the flux capacitor to prevent time going backwards.</p>
+        </description>
+        <size type="installed">10</size>
+        <size type="download">24493</size>
+        <artifacts>
+          <artifact type="binary">
+            <location>https://fwupd.org/downloads/3fab34cfa1ef97238fb24c5e40a979bc544bb2b0967b863e43e7d58e0d9a923f-fakedevice124.cab</location>
+            <filename>fakedevice124.cab</filename>
+            <checksum type="sha1">cffec02f8094d10552b68967425613d72d72ac02</checksum>
+            <checksum type="sha256">3fab34cfa1ef97238fb24c5e40a979bc544bb2b0967b863e43e7d58e0d9a923f</checksum>
+            <size type="installed">10</size>
+            <size type="download">24493</size>
+          </artifact>
+        </artifacts>
+      </release>
+    </releases>
+  </component>
+</components>
+EOF
+
+cat > "${ROOT_FS_DIR}/etc/fwupd/remotes.d/fwupd-tests.conf" <<EOF
+# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+[fwupd Remote]
+Enabled=true
+Title=fwupd test
+Type=local
+Keyring=none
+MetadataURI=file:///usr/share/fwupd/remotes.d/vendor/fwupd-tests.xml
+FirmwareBaseURI=https://storage.googleapis.com/chromeos-localmirror/lvfs/test/
+ApprovalRequired=false
+EOF
