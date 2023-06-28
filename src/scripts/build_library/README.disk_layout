@@ -1,0 +1,353 @@
+# Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+Disk Layout Format:
+
+The board layout scripts/build_library/legacy_disk_layout.json is used unless
+there is a board specific layout.
+
+To create a board specific layout that modifies this:
+  Create:
+    overlay-<board>/scripts/disk_layout.json
+    list disk_layout_v<N>.json as a parent in disk_layout.json for
+    modern images, or legacy_disk_layout.json for old boards.
+
+A layout file consists of layouts. Common types of layouts would be "base",
+"usb", "vm" and "common". Each of these layouts is made up of one or more
+partitions.
+
+The "common" layout is special, since it's the layout on which all other layouts
+get overlaid upon. The base layout represents the "installed" layout, the way
+things should be once the image has been installed onto a device. The "usb"
+layout represents how things should look on a USB image (typically, this means
+that ROOT-B is 1 block long).
+
+
+Here is an example disk layout with comments.
+
+# Comments are NOT legal in json, but you can include line comments if
+# the line starts with a #. Note that in-line comments are not supported,
+# the # char must to be the first non-blank char of the line.
+{
+  "_comment": "Old style _comment entries will be ignored as well.",
+
+  # Space seperated list of files to inherit from.
+  "parent": "legacy_disk_layout.json",
+
+  # Required. Define drive and filesystem block sizes.
+  # Inherited.
+  "metadata":{
+    "block_size": 512,
+    "fs_block_size": 4096,
+    # Where (in LBA) to place the primary partition entry array.
+    # If not specified, the value is 2.
+    "primary_entry_array_lba": 2,
+    # The rootdev sysfs path to install the base image. Wildcards are allowed.
+    # The scripts will translate that path into a block device name.
+    # If not specified in your overlay file, a recovery image can not be used
+    # for that platform.
+    "rootdev_base": "/sys/devices/pci0000:00/0000:00:1f.2/ata1/host*/target*/*/block/sd*",
+
+  },
+
+  # All disk layouts for this file.
+  "layouts":{
+
+    # All other layouts inherit from 'common'.
+    "common": [
+      # Every layout is a list of partitions. They will appear on disk in
+      # the order they appear here.
+      {
+        "num": 11,
+        "label":"RWFW",
+        "type":"firmware",
+        "size":"8 MiB"
+      },
+      {
+        # Number to use in partition device name. ie: /dev/sda1. Not tied to
+        # order of partitions on disk. This is the id used for inheritance.
+        "num": 1,
+
+        # Partition name.
+        "label":"STATE",
+
+        # GPT partition type uuid. Values map to cgpt binary command line
+        # arguments, which contain ChromiumOS specific extentions.
+        "type":"data",
+
+        # Size of partition in disk blocks (block_size * blocks == bytes).
+        # Only blocks or size can be used here, error will occur if both are
+        # used.
+        "blocks":"2097152",
+
+        # Size of partition in size (block_size * blocks / 1024 / 1024 == MiB).
+        # Only blocks or size can be used here, error will occur if both are
+        # used.
+        "size":"1024 MiB",
+
+        # What file system will this partition be formatted with.
+        "fs_format":"ext4",
+
+        # Optional, extra filesystem specific options passed to the program that
+        # creates the filesystem. For example, you can pass compression options
+        # to a compressed filesystem. This accepts a dictionary where the key is
+        # any of the valid fs_format values or a string, which will be used
+        # regardless of the fs_format value.
+        "fs_options":{
+          # Create an inode every 64 KiB of data on ext2 filesystems.
+          "ext2":"-i 65536",
+          # Compress squashfs with lzo.
+          "squashfs":"-comp lzo"
+        },
+
+        # Optional, default is size of partition. Meaningless without
+        # fs_format. Must be less than size of partition.
+        # Size of filesystem in fs size
+        # (block_size * fs_blocks / 1024 / 1024 == MiB).
+        "fs_size": "2048 MiB",
+
+        # Special handling of this partition.
+        "features":["expand"],
+
+        # Optional, default 'random'. Explicitly define the partition uuid.
+        # 'random' means generate a new one.
+        "uuid": "random",
+
+        # Optional, default is "" indicating a normal block device.
+        # With the value "ubi", it indicates that UBI should be formatted
+        # on this partition, which can support ubifs in read-write mode
+        # or any other filesystem read-only.
+        "format": "ubi",
+
+        # Optional, for NAND devices, indicate the number of erase blocks
+        # reserved for bad blocks. This needs to be separate from the size
+        # and the fs_size because this is on top of all the space that is
+        # reserved for verity's signatures and headers.
+        "reserved_erase_blocks": 25
+      }
+      # metadata type sections in a layout allow the inclusion of extra
+      # key/value information which pertain to a particular layout.
+      {
+        "num": "metadata",
+
+        # Optional. Defaults to false.
+        "hybrid_mbr": true,
+      }
+
+    ],
+    # common is usually good enough for "base", the partition installed on the
+    # fixed device.
+    "base": [
+      {
+        "num": "metadata",
+        # Some features are mostly useful on NAND flash devices.
+        # In principle these may be useful on other types of devices (e.g., NOR
+        # flash) though those parameters would be specified differently, for
+        # example because erase block size is nonuniform and there are no bad
+        # blocks.
+        # Size of an erase block (needed for partition alignment and making
+        # the partitions in the GPT bigger for reserved blocks).
+        "erase_block_size": "128 KiB",
+        # Size of a page, i.e., write granularity (needed for sizing UBI
+        # metadata).
+        "page_size": "4 KiB",
+        # Maximum bad blocks on the device (for verifying reserved_erase_blocks).
+        # The value will be found in NAND device datasheets.
+        "max_bad_erase_blocks": 80,
+        # Size of the base target device. This feature is mutually exclusive with
+        # the 'expand' feature for partitions, and it is used to calculate what
+        # is a reasonable value for bad block reservation.
+        "size": "1 GiB",
+        # Set to true if the GPT is held on external memory (e.g., for NAND)
+        "external_gpt": true,
+      }
+    ],
+    "usb": [
+      # This extends base. Partitions can not be removed or added.
+      # Normaly only used to modify partition or fs sizes.
+      {
+        # This number correlates to same partition in base.
+        "num": 11,
+
+        # This label overrides the label on the base partition.
+        "label":"RWFW",
+
+        # Type overrides to firmware.
+        "type":"firmware",
+
+        # This partition is resized to be 4 MiB large (from 1024 MiB).
+        "size":"4 MiB"
+      }
+    ]
+  }
+}
+
+Legal partition types:
+  data
+  efi
+  blank
+  firmware
+  kernel
+  rootfs
+  nand
+  ubi
+  reserved
+  minios
+
+Legal fs_format values:
+  ext2
+  ext3
+  ext4
+  vfat
+  fat
+  fat12
+  fat16
+  fat32
+  ubifs
+
+Features values:
+  expand
+  last_partition
+
+
+
+In the ChromiumOS build system and installers, a number of partitions have
+'special' handling. Partitions with special handling are always identified
+by partition number. Disk partitioning design is described here:
+http://www.chromium.org/chromium-os/chromiumos-design-docs/disk-format
+
+  Partition 1 - Stateful Partition
+    The stateful partition will have it's size expanded for USB and recovery
+    images to be exactly large enough to hold files.
+
+    On installation, its size will be expanded to use all available space
+    on the target drive, leaving room for a 'last_partition' if it exists.
+    If it does not contain a valid file system, it will be formatted on
+    system boot.
+
+  Partition 2 - Kernel Slot A
+    Contains the recovery kernel on recovery images. Contains the standard
+    kernel on all other images. Will be used at initial boot.
+
+  Partition 3 - Rootfs Slot A
+    Contains the rootfs to match kernel A. It's offset on the disk must
+    match security values embedded in the standard kernel which are validated
+    by the signers.
+
+  Partition 4 - Kernel Slot B
+    Contains the standard kernel on recovery images. Is empty on standard
+    recovery images.
+
+    1 block in size on USB Images
+
+    Will be overridden with a copy of the standard kernel from Slot A after
+    installation. Will be overridden with new kernel after first update.
+
+  Partition 5 - Rootfs Slot B
+    Empty on most USB and Recovery images.
+
+    Will be resized to match Partition 3 during installation.
+    with a copy of the rootfs from Slot A after installation.
+    with new rootfs after first update.
+
+  Partition 8 - OEM
+    May or may not have content installed during build image depending on the
+    board.
+
+  Partition 12 - EFI Paritition
+    Ignored/empty on installation to ChromeOS hardware, but not during VM Tests.
+
+    Only used with legacy boot bioses (especially during VM Testing). If
+    installation/update don't detect a secure bios (ie: ChromeOS hardware), then
+    GRUB/UBoot, or other bios boot files/kernels will be installed here.
+
+  Partition 9 - MiniOS A (src/platform2/minios)
+    Partition at the beginning of disk. MiniOS A will have priority over
+    MiniOS B when booting.
+
+  Partition 10 - MiniOS B
+    Has feature 'last_partition' which ensures that it is placed at the
+    end of the disk.
+
+  Partition 11 - Powerwash data
+    The powerwash partition preserves rollback data. It does not
+    have a filesystem.
+
+Inheritance Rules:
+
+  As noted above, a layout in a given file is defined by the common layout with
+overrides specified by the named layout. The usb layout in the example above
+is the full common layout with overrides for partition 11. Let's denote this
+inheritance as:
+
+local usb <-----
+                \
+                 -- local common
+                /
+local base <----
+
+  These rules change a bit when a parent is involved. Specifically, if a
+common, usb and base are defined in a local file and a parent has them as well
+this would be the ordering:
+
+   overlay                        |     parent
+                                  |
+local usb <-----                  | ---- parent usb ---
+                \                 |/                   \
+                 -- local common --                     -- parent common
+                /                 |\                   /
+local base <----                  | ---- parent base --
+
+Note this means if any of these are empty or not defined, the ordering is still
+the same. For instance, if local common is not defined:
+
+   overlay                        |     parent
+                                  |
+local usb <-----------------------|----- parent usb ---
+                                  |                    \
+                                  |                     -- parent common
+                                  |                    /
+local base <----------------------|----- parent base --
+
+
+If a local usb if usb isn't actually defined will be:
+
+   overlay                        |     parent
+                                  |
+                                  | ---- parent usb ---
+                                  |/                   \
+                    local common --                     -- parent common
+
+
+Rootfs size limitations:
+
+In newer disk layouts (4gb and greater), the fs_size is much smaller than the
+partition size. There are two reasons for this:
+
+1. We store verity hash and a boot cache in this partition too.
+2. We intentionally keep the filesystem size low to catch bloat.
+
+If you are an on-call trying to quickly fix an issue when rootfs size is greater
+than fs_size, you can override the board specific disk_layout.json (example CL:
+crrev.com/c/3067827).
+
+Along with bumping up the fs_size, you should also flag this regression with
+chromeos-image-size@google.com. Include the following breakdown:
+
+* Find the regressing build version and the last live version from Goldeneye.
+  * The last live version will have a "Live" label. Prefer to take the canary
+    version for the closest comparison.
+* Run `cros analyze-image --board=$BOARD --version=$VERSION --spreadsheet` for
+  both the regressing build and the one before it.
+
+FAQ
+
+I want to update a package and I used to use the --rootfs_size and
+--rootfs_partition_size options to make my root filesystem larger to aid this,
+how do I do this now?
+
+Most commonly, create an image using one of the development layouts:
+    ./build_image --disk_layout 2gb-rootfs
+    ./build_image --disk_layout 2gb-rootfs-updatable
+    ./build_image --disk_layout 4gb-rootfs

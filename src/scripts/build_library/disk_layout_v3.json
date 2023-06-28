@@ -1,0 +1,229 @@
+# Changes from disk_layout_v2:
+# * Introduce 128MB MINIOS-A and MINIOS-B on partitions 9 and 10, with
+#   10 being set as last_partition.
+# * Reduce OEM partition 8 from 16MB to 4MB.
+# * Remove -no-exports from ROOTFS-A squashfs options.
+# * Add powerwash data as partition 11.
+# * Delete 2gb-rootfs, 2gb-rootfs-updatable, and 4gb-rootfs.
+{
+  # See README.disk_layout.
+  "parent": "common_disk_layout.json",
+
+  "metadata": {
+    "block_size": 512,
+    "fs_block_size": 4096,
+    "fs_align": "2 MiB"
+  },
+  "layouts": {
+    # common is the standard layout template.
+    "common": [
+      {
+        # MiniOS A partition.
+        "num": 9,
+        "label": "MINIOS-A",
+        "type": "minios",
+        "size": "128 MiB"
+      },
+      {
+        # Unused partition, reserved for software slot C.
+        "num": 6,
+        "label": "KERN-C",
+        "type": "kernel"
+      },
+      {
+        # Unused partition, reserved for software slot C.
+        "num": 7,
+        "label": "ROOT-C",
+        "type": "rootfs"
+      },
+      {
+        # Board specific files, mostly unused.
+        "num": 8,
+        "label": "OEM",
+        "type": "data",
+        "size": "4 MiB",
+        "fs_format": "ext4",
+        "uuid": "random"
+      },
+      {
+        # Used for Legacy Bios, and EFI Bios, not ChromeOS hardware.
+        "num": 12,
+        "label": "EFI-SYSTEM",
+        "type": "efi",
+        "fs_format": "vfat",
+        "size": "64 MiB",
+        "uuid": "clear"
+      },
+      {
+        # Kernel for Slot A, no file system.
+        "num": 2,
+        "label": "KERN-A",
+        "type": "kernel",
+        "size": "32 MiB"
+      },
+      {
+        # Slot A rootfs. Rootfs + extras must fit.
+        # FS size + Verity (64 * FS blocks) + Boot Cache (200M).
+        # Make sure that other layouts still have room for the
+        # extras, should you increase FS size.
+        #
+        # Note that updates will fail if the rootfs size
+        # shrinks. (crbug.com/192136)
+        #
+        # Note: fs_size is intentionally much lower than partition size. See
+        # note under "Rootfs size limitations" in README.disk_layout
+        #
+        # Changes to the offset of this partition may require
+        # changes in cros-signing/security_test_baselines/
+        # ensure_secure_kernelparams.config to allow secure boot.
+        "num": 3,
+        "label": "ROOT-A",
+        "type": "rootfs",
+        "fs_format": "ext2",
+        "fs_options": {
+          "squashfs": "-noI -comp lzo -Xalgorithm lzo1x_999 -Xcompression-level 9",
+          "btrfs": "skinny-metadata"
+        },
+        "size": "4096 MiB",
+        "fs_size": "2300 MiB",
+        "uuid": "clear"
+      },
+      {
+        # Kernel for Slot B, no file system.
+        "num": 4,
+        "label": "KERN-B",
+        "type": "kernel",
+        "size": "32 MiB"
+      },
+      {
+        # Slot B rootfs. Must match Root A in size for normal
+        # updates. Will contain copy of Root A after install, and
+        # contain new rootfs's after runtime updates.
+        "num": 5,
+        "label": "ROOT-B",
+        "type": "rootfs",
+        "size": "4096 MiB"
+      },
+      {
+        # Powerwash data, including rollback data.
+        "num": 11,
+        "label": "POWERWASH-DATA",
+        "type": "data",
+        "size": "4 MiB",
+        "uuid": "random"
+      },
+      {
+        # User data, fills all remaining space on drive.
+        "num": 1,
+        "label": "STATE",
+        "type": "data",
+        "fs_format": "ext4",
+        "size": "4 GiB",
+        "features": ["expand"],
+        "uuid": "random"
+      },
+      {
+        # MiniOS B partition.
+        "num": 10,
+        "label": "MINIOS-B",
+        "type": "minios",
+        "size": "128 MiB",
+        # Places partition at the end of disk.
+        "features": ["last_partition"]
+      }
+    ],
+    # Used for installs on main device. By default, same as 'common'.
+    "base": [
+    ],
+    # Used for bootable USB installs (not recovery).
+    "usb": [
+      {
+        "num": 3,
+        "size": "2400 MiB"
+      },
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        # MINIOS-B partitions are not filled with anything on USB images.
+        "num": 10,
+        "size": "2 MiB",
+        "type": "reserved"
+      }
+    ],
+    # Used for factory install images.
+    "factory_install": [
+      {
+        "num": 3,
+        "size": "420 MiB",
+        "fs_size": "400 MiB"
+      },
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        "num": 1,
+        "size": "140 MiB"
+      },
+      {
+        "num": 10,
+        "size": "2 MiB",
+        "type": "reserved"
+      }
+    ],
+    "recovery": [
+      {
+        # Kernel for Slot A, no file system.
+        # Make the partition as large as the firmware supports so we can boot
+        # larger recovery kernels.  The kernel won't actually be this large.
+        "num": 2,
+        "size": "512 MiB"
+      },
+      {
+        # Shrunken rootfs partition to support smaller USB sticks,
+        # and smaller recovery downloads.
+        # Installation will expand this to size from base.
+        # The offset to the beginning of this partition, and the FS
+        # size must match base exactly to allow secure boot.
+        "num": 3,
+        "size": "2400 MiB"
+      },
+      {
+        # Slot B rootfs, unused on USB, but pad to 2M.
+        # Installation will expand this to size from base.
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        # Stateful on recovery is dynamically resized larger.
+        "num": 1,
+        "size": "2 MiB"
+      },
+      {
+        "num": 10,
+        "size": "2 MiB",
+        "type": "reserved"
+      }
+    ],
+    # Huge rootfs, suitable for VM only images, should not be used
+    # for actual hardware devices.
+    "16gb-rootfs": [
+      {
+        "num": 3,
+        "size": "16384 MiB",
+        "fs_size": "16000 MiB"
+      },
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        "num": 10,
+        "size": "2 MiB",
+        "type": "reserved"
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+# Copyright 2020 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Clean ebuilds that have been upgraded but aren't automatically removed.
+
+export CLEAN_DELAY=0
+
+to_remove=(
+  "~dev-rust/bitflags-1.1.0"
+  "~dev-rust/byteorder-1.3.1"
+  "~dev-rust/proc-macro2-1.0.8"
+  "~serde-1.0.81"
+  "~serde_derive-1.0.81"
+  "~syn-1.0.14"
+)
+
+sudo emerge -Cq "${to_remove[@]}" &
+
+for board_root in /build/*; do
+  board_name=${board_root##*/}
+  if [[ -d "${board_root}/var/db/pkg/dev-rust" ]]; then
+    emerge-"${board_name}" -Cq "${to_remove[@]}" &
+  fi
+done
+wait

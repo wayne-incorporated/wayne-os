@@ -1,0 +1,32 @@
+# Copyright 2019 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Purge subversion (and its unique deps) from the SDK as no one uses it anymore.
+# https://crbug.com/982351
+
+PKGS=(
+  dev-vcs/subversion
+  net-libs/neon
+  net-libs/serf
+
+  # Some boards might need these for other packages (e.g. apache), but our build
+  # system will just pull them back in on demand, so purging should be safe.
+  dev-libs/apr
+  dev-libs/apr-util
+)
+
+# Clear the SDK first.
+echo "Clearing subversion (and deps) from the SDK"
+sudo qmerge -Uqy "${PKGS[@]}" &
+
+# Clean board packages.
+for board_root in /build/*; do
+  board=${board_root##*/}
+  if [[ -d "${board_root}/var/db/pkg" ]]; then
+    echo "Clearing subversion (and deps) from ${board}"
+    sudo qmerge-${board} -Uqy "${PKGS[@]}" &
+  fi
+done
+
+wait

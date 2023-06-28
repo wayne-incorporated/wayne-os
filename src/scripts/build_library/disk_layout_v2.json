@@ -1,0 +1,246 @@
+{
+  # See README_disk_layout
+  "parent": "common_disk_layout.json",
+
+  "metadata": {
+    "block_size": 512,
+    "fs_block_size": 4096,
+    "fs_align": "2 MiB"
+  },
+  "layouts": {
+    # common is the standard layout template.
+    "common": [
+      {
+        # Modern boards no longer store RW firmware on primary storage.
+        "num": 11,
+        "label": "RWFW",
+        "type": "firmware"
+      },
+      {
+        # Unused partition, reserved for software slot C.
+        "num": 6,
+        "label": "KERN-C",
+        "type": "kernel"
+      },
+      {
+        # Unused partition, reserved for software slot C.
+        "num": 7,
+        "label": "ROOT-C",
+        "type": "rootfs"
+      },
+      {
+        # Unused partition, reserved for future changes.
+        "num": 9,
+        "type": "reserved",
+        "label": "reserved"
+      },
+      {
+        # Unused partition, reserved for future changes.
+        "num": 10,
+        "type": "reserved",
+        "label": "reserved"
+      },
+      {
+        # Kernel for Slot A, no file system.
+        "num": 2,
+        "label": "KERN-A",
+        "type": "kernel",
+        "size": "32 MiB"
+      },
+      {
+        # Kernel for Slot B, no file system.
+        "num": 4,
+        "label": "KERN-B",
+        "type": "kernel",
+        "size": "32 MiB"
+      },
+      {
+        # Board specific files, mostly unused.
+        "num": 8,
+        "label": "OEM",
+        "type": "data",
+        "fs_format": "ext4",
+        "size": "16 MiB",
+        "uuid": "random"
+      },
+      {
+        # Used for Legacy Bios, and EFI Bios, not ChromeOS hardware
+        "num": 12,
+        "label": "EFI-SYSTEM",
+        "type": "efi",
+        "fs_format": "vfat",
+        "size": "64 MiB",
+        "uuid": "clear"
+      },
+      {
+        # Slot B rootfs. Must match Root A in side for normal
+        # updates. Will contain copy of Root A after install, and
+        # contain new rootfs's after runtime updates.
+        "num": 5,
+        "label": "ROOT-B",
+        "type": "rootfs",
+        "size": "4096 MiB"
+      },
+      {
+        # Slot A rootfs. Rootfs + extras must fit.
+        # FS size + Verity (64 * FS blocks) + Boot Cache (200M).
+        # Make sure that other layouts still has room for the
+        # extras, should you increase FS size
+        #
+        # Note that updates will fail if the rootfs size
+        # shrinks. (crbug.com/192136)
+        #
+        # Note: fs_size is intentionally much lower than partition size. See
+        # note under "Rootfs size limitations" in README.disk_layout
+        #
+        # Changes to the offset of this partition may require
+        # changes in cros-signing/security_test_baselines/
+        # ensure_secure_kernelparams.config to allow secure boot.
+        "num": 3,
+        "label": "ROOT-A",
+        "type": "rootfs",
+        "fs_format": "ext2",
+        "fs_options": {
+          "squashfs": "-noI -no-exports -comp lzo -Xalgorithm lzo1x_999 -Xcompression-level 9",
+          "btrfs": "skinny-metadata"
+        },
+        "size": "4096 MiB",
+        "fs_size": "2300 MiB",
+        "uuid": "clear"
+      },
+      {
+        # User data, fills all remaining space on drive.
+        "num": 1,
+        "label": "STATE",
+        "type": "data",
+        "fs_format": "ext4",
+        "size": "4 GiB",
+        "features": ["expand"],
+        "uuid": "random"
+      }
+    ],
+    # Used for installs on main device
+    # by default, same as 'common'.
+    "base": [
+    ],
+    # Used for bootable USB installs (not recovery).
+    "usb": [
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        "num": 3,
+        "size": "2400 MiB"
+      }
+    ],
+    # Used for factory install images.
+    "factory_install": [
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        "num": 3,
+        "size": "420 MiB",
+        "fs_size": "400 MiB"
+      },
+      {
+        "num": 1,
+        "size": "140 MiB"
+      }
+    ],
+    # Used for recovery images.
+    "recovery": [
+      {
+        # Kernel for Slot A, no file system.
+        # Make the partition as large as the firmware supports so we can boot
+        # larger recovery kernels.  The kernel won't actually be this large.
+        "num": 2,
+        "size": "512 MiB"
+      },
+      {
+        # Slot B rootfs, unused on USB, but pad to 2M.
+        # installation will expand this to size from base.
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        # Shrunken rootfs partition to support smaller USB sticks,
+        # and smaller recovery downloads.
+        # Installation will expand this to size from base.
+        # The offset to the beginning of this partition, and the FS
+        # size must match base exactly to allow secure boot.
+        "num": 3,
+        "size": "2400 MiB"
+      },
+      {
+        # Stateful on recovery is dynamically resized larger.
+        "num": 1,
+        "size": "2 MiB"
+      }
+    ],
+    # Larger rootfs, suitable for development with symbols, etc.
+    # Cannot apply updates when running from USB (no slot B).
+    "2gb-rootfs": [
+      {
+        # Will be grown to size from base on install.
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        # Will be shrunk to size from base on install.
+        "num": 3,
+        "size": "2048 MiB",
+        "fs_size": "2000 MiB"
+      }
+    ],
+    # Larger rootfs, suitable for development with symbols, etc.
+    # CAN apply updates when running from USB.
+    "2gb-rootfs-updatable": [
+      {
+        # The partition size matches base, so it's installable.
+        "num": 5,
+        "size": "2048 MiB"
+      },
+      {
+        # The partition size matches base, so it's installable.
+        "num": 3,
+        "size": "2048 MiB",
+        "fs_size": "2000 MiB"
+      },
+      {
+        "num": 1,
+        "size": "4 GiB"
+      }
+    ],
+    # Very large rootfs, suitable for development with symbols,
+    # etc. Cannot apply updates when running from USB (no slot B)
+    "4gb-rootfs": [
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        # This partition is larger than the base partition, so the
+        # installer will corrupt the disk during installation.
+        "num": 3,
+        "size": "4096 MiB",
+        "fs_size": "4000 MiB"
+      }
+    ],
+    # Huge rootfs, suitable for VM only images, should not be used
+    # for actual hardware devices.
+    "16gb-rootfs": [
+      {
+        "num": 5,
+        "size": "2 MiB"
+      },
+      {
+        "num": 3,
+        "size": "16384 MiB",
+        "fs_size": "16000 MiB"
+      }
+    ]
+  }
+}

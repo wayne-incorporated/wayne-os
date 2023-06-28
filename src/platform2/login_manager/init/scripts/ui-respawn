@@ -1,0 +1,161 @@
+#!/bin/sh
+
+# Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# The ui job requires special respawning logic, as the system needs to respond
+# differently to different kinds of exits.
+#
+# 0: Normal exit; respawn forever.
+# 2: (Defined in session_manager_service.h) The browser is exiting too much too
+#    quickly. In some cases, such as a hung GPU, rebooting the device will allow
+#    the system to recover. Respawn up to TOO_CRASHY_LIMIT times in
+#    TOO_CRASHY_WINDOW_SECONDS before trying a reboot. Try this up to
+#    REBOOT_LIMIT times in REBOOT_WINDOW_SECONDS before giving up and waiting
+#    for an AU.
+# 3: (Defined in session_manager_service.h) The session_manager has detected
+#    a condition that requires a powerwash to recover. It should have requested
+#    that the device reboot before exiting, so stop respawning the UI.
+# Other nonzero: respawn up to RESPAWN_LIMIT times in RESPAWN_WINDOW_SECONDS,
+#                then stop.
+
+set -e
+
+RUNNING_JOB=$(basename "$0")
+RESPAWN_LIMIT=6
+RESPAWN_WINDOW_SECONDS=60
+RESPAWN_TIMESTAMP_FILE=/tmp/ui-respawn-timestamps
+
+MUST_WIPE_DEVICE=3  # Defined in session_manager_service.h
+
+CHILD_EXITING_TOO_FAST=2  # Defined in session_manager_service.h
+TOO_CRASHY_LIMIT=1
+TOO_CRASHY_WINDOW_SECONDS=180
+TOO_CRASHY_TIMESTAMP_FILE=/tmp/ui-too-crashy-timestamps
+
+REBOOT_LIMIT=1
+REBOOT_WINDOW_SECONDS=$(( 3 * TOO_CRASHY_WINDOW_SECONDS ))
+REBOOT_TIMESTAMP_DIR=/var/lib/ui
+REBOOT_TIMESTAMP_FILE="${REBOOT_TIMESTAMP_DIR}"/reboot-timestamps
+
+# Given a file full of timestamps, appends a timestamp for 'now', and then
+# trims it to include only timestamps in 'now' - |time|.
+# Succeeds if there are <= than |limit| timestamps remaining in |file|
+# after this operation, fails otherwise.
+#  file: the name of the file containing timestamps (in s), one per line.
+#  time: the window of time, prior to now, that we consider.
+#  limit: the number of timestamps we're willing to allow.
+under_limit() {
+  local file="$1"
+  local time="$2"
+  local limit="$3"
+
+  local tfile=$(mktemp)
+  local curtime=$(date +%s)
+  echo "${curtime}" >>"${file}"  # To ensure the file exists.
+  awk "\$0 >= ${curtime} - ${time}" "${file}" >"${tfile}"
+  mv "${tfile}" "${file}"
+
+  if [ $(wc -l < "${file}") -gt ${limit} ]; then
+    return 1
+  else
+    return 0
+  fi
+}
+
+over_ui_crash_limit() {
+  ! under_limit $TOO_CRASHY_TIMESTAMP_FILE $TOO_CRASHY_WINDOW_SECONDS \
+      $TOO_CRASHY_LIMIT
+}
+
+under_reboot_limit() {
+  under_limit $REBOOT_TIMESTAMP_FILE $REBOOT_WINDOW_SECONDS \
+      $REBOOT_LIMIT
+}
+
+under_respawn_limit() {
+  under_limit $RESPAWN_TIMESTAMP_FILE $RESPAWN_WINDOW_SECONDS \
+      $RESPAWN_LIMIT
+}
+
+# ${RESULT}, ${EXIT_STATUS}, ${EXIT_SIGNAL} and {JOB} are standard
+# environment variables for Upstart (predefined when the script is
+# run) that need to be defined for systemd.
+create_variables_for_systemd() {
+  # This is an environment variable set in the ui-respawn.service.
+  if [ -n "${SYSTEMD_RUN}" ]; then
+    # For systemd this script is run only on failure.
+    RESULT="failure"
+    JOB="ui.service"
+
+    EXIT_SIGNAL=$(systemctl show -p ExecMainCode ${JOB} | cut -f 2 -d '=')
+    EXIT_STATUS=$(systemctl show -p ExecMainStatus ${JOB} | cut -f 2 -d '=')
+  fi
+}
+
+start_service() {
+  local service="$1"
+  if [ -n "${SYSTEMD_RUN}" ]; then
+    systemctl --no-block start "${service}"
+  else
+    start -n "${service}"
+  fi
+}
+
+log() {
+  local message="$1"
+  logger -t "${RUNNING_JOB}" "${message}"
+}
+
+create_variables_for_systemd
+
+# Create the directory where reboot timestamps (which must persist across
+# reboots) will live.
+mkdir -p "${REBOOT_TIMESTAMP_DIR}"
+
+# If ${RESULT} = "ok", that means the job was stopped manually, so we want to
+# avoid respawning.
+if [ "${RESULT}" = "ok" ]; then
+  exit 0
+fi
+
+# If the job exited cleanly (e.g. logout), restart it.
+if [ "${EXIT_STATUS}" = "0" ] ; then
+  start_service "${JOB}"
+  exit 0
+fi
+
+if [ "${EXIT_STATUS}" = "${MUST_WIPE_DEVICE}" ]; then
+  log "Device should be rebooting to powerwash."
+  exit 0
+fi
+
+if [ "${EXIT_STATUS}" = "${CHILD_EXITING_TOO_FAST}" ]; then
+  if ! over_ui_crash_limit ; then
+    log "Haven't been too crashy too much yet."
+  elif crossystem "cros_debug?1"; then
+    log "Not auto-rebooting due to debug mode."
+  elif under_reboot_limit ; then
+    log "Rebooting to mitigate crashiness."
+    reboot
+  else
+    log "Rebooted too much; running respawn logic."
+  fi
+fi
+
+if [ -n "${EXIT_STATUS}" ]; then
+  log "${JOB} failed with exit status ${EXIT_STATUS}."
+elif [ -n "${EXIT_SIGNAL}" ]; then
+  log "${JOB} died on signal ${EXIT_SIGNAL}."
+else
+  log "${JOB} died for mysterious and unknown reasons."
+fi
+
+# Generic respawn handling.
+if under_respawn_limit ; then
+  log "Respawning ${JOB}."
+  start_service "${JOB}"
+else
+  log "Reached respawn limit for ${JOB}."
+fi
