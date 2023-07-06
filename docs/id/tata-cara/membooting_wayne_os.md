@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [booting_wayne_os.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/booting_wayne_os.md)
+Dokumen asli: [booting_wayne_os.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/booting_wayne_os.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## 1. Untuk mengakses BIOS/UEFI
@@ -71,4 +71,4 @@ Dokumen asli: [booting_wayne_os.md](https://gitlab.com/wayne-inc/wayneos/-/blob/
 
 ## 4. Troubleshoot
 - Perbarui BIOS/UEFI Anda.
-- Jika anda masih tidak dapat membooting OS, diharapkan untuk melapor di [beragam_isu_yang_diketahui.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/rilis/beragam_isu_yang_diketahui.md)
+- Jika anda masih tidak dapat membooting OS, diharapkan untuk melapor di [beragam_isu_yang_diketahui.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/rilis/beragam_isu_yang_diketahui.md)
