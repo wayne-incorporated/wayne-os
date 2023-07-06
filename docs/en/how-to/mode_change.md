@@ -4,7 +4,7 @@ This document is looking foward to your contribution (documentation, translation
 <br>The features in this document have not been released yet. (2022-03-17)
  
 ## Accessing to chrome_dev.conf
-- [login to console mode](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/using_shell.md).
+- [login to console mode](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md).
 - Type command `/usr/sbin/mode_change-wayneos` (requires sudo pw).
 - Reboot OS after modify the _chrome_dev.conf_.
 
