@@ -10,8 +10,8 @@ We (Wayne Inc.) modify kernel, update device drivers and firmwares from upstream
 - Cannot find Wi-Fi, or cannot connect to Wi-Fi: common Wireless LAN issue
 - Cannot see the initial setup screen in booting process, but can switch to console mode: GPU issue in high probability
 #### Solution
-- If you are an optimist, report working/non-working device model to [hw_compatibility_information.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/release/hw_compatibility_information.md) or [community](https://www.facebook.com/groups/wayneosgroup), then relax and wait until it is fixed in Wayne OS or upstream Chromium OS
-- Or plug in a [wireless LAN adapter](https://www.google.com/search?q=wireless+LAN+adapter&newwindow=1&sxsrf=ALeKk03aOfT-WximunZ5xF7ooFsttcmLjQ%3A1628912656397&ei=EDwXYbPKF7HcmAWPkJawCg&oq=wireless+LAN+adapter&gs_lcp=Cgdnd3Mtd2l6EAMyBAgjECcyBggAEAcQHjIGCAAQBxAeMgUIABCABDIFCAAQgAQyBQgAEIAEMgUIABCABDIFCAAQgAQyBQgAEIAEMgUIABCABDoHCCMQsAMQJzoHCAAQRxCwAzoHCAAQsAMQQzoHCCMQsAIQJ0oECEEYAFCCHFjAJmCcQWgBcAJ4AIABhgGIAeUGkgEDMC43mAEAoAEByAEKwAEB&sclient=gws-wiz&ved=0ahUKEwizkoTCzK_yAhUxLqYKHQ-IBaYQ4dUDCA4&uact=5) that works or exists in [hw_compatibility_information.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/release/hw_compatibility_information.md) list on the PC (Some of our customers are actually using this solution on the industry field)
+- If you are an optimist, report working/non-working device model to [hw_compatibility_information.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md) or [community](https://www.facebook.com/groups/wayneosgroup), then relax and wait until it is fixed in Wayne OS or upstream Chromium OS
+- Or plug in a [wireless LAN adapter](https://www.google.com/search?q=wireless+LAN+adapter&newwindow=1&sxsrf=ALeKk03aOfT-WximunZ5xF7ooFsttcmLjQ%3A1628912656397&ei=EDwXYbPKF7HcmAWPkJawCg&oq=wireless+LAN+adapter&gs_lcp=Cgdnd3Mtd2l6EAMyBAgjECcyBggAEAcQHjIGCAAQBxAeMgUIABCABDIFCAAQgAQyBQgAEIAEMgUIABCABDIFCAAQgAQyBQgAEIAEMgUIABCABDoHCCMQsAMQJzoHCAAQRxCwAzoHCAAQsAMQQzoHCCMQsAIQJ0oECEEYAFCCHFjAJmCcQWgBcAJ4AIABhgGIAeUGkgEDMC43mAEAoAEByAEKwAEB&sclient=gws-wiz&ved=0ahUKEwizkoTCzK_yAhUxLqYKHQ-IBaYQ4dUDCA4&uact=5) that works or exists in [hw_compatibility_information.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md) list on the PC (Some of our customers are actually using this solution on the industry field)
 
 
 ## Ethernet with static IP
@@ -46,4 +46,4 @@ This bug has been solved since wayne-os-3q21-r1 version.
 Cannot see initial screen in booting process or after PC installation.
 #### Solution
 - Try to press _Enter_ key
-- Try to switch to console mode then comeback to GUI mode again. Refer [using_shell.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/using_shell.md).
+- Try to switch to console mode then comeback to GUI mode again. Refer [using_shell.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md).
