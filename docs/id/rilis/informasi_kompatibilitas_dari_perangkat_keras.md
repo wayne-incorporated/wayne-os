@@ -1,6 +1,5 @@
 ## Catatan
 Dokumen asli: [hw_compatibility_information.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/release/hw_compatibility_information.md)
-<br>Dokumen ini akan diperbarui sebelum 4q22, sehingga untuk sementara kontribusi tidak dibutuhkan.
 
 ## Cara pemakaian
 Carilah (`ctrl+f`) nama PC/perangkat/chipset anda, dan periksa informasi kompatibilitasnya.
