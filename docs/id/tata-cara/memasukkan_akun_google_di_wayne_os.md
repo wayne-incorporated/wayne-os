@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [signing_in_google_account_in_wayne_os.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/signing_in_google_account_in_wayne_os.md)
+Dokumen asli: [signing_in_google_account_in_wayne_os.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/signing_in_google_account_in_wayne_os.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## Bergabung di Google Groups
