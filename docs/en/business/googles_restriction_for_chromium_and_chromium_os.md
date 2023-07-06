@@ -7,7 +7,7 @@ This is not only affect to Wayne OS as there are various browsers/OSs/embedded-S
 
 ## Solution
 Different from Chromium, Chromium OS requires Google login to use. Google therefore allows the login in Chromium OS with whitelist.
-<br>https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/signing_in_google_account_in_wayne_os.md
+<br>https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/signing_in_google_account_in_wayne_os.md
 
 ## Reference
 https://blog.chromium.org/2021/01/limiting-private-api-availability-in.html
