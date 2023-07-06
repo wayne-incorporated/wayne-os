@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [specification.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/release/specification.md)
+Dokumen asli: [specification.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/specification.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## Wayne OS 3q21-r1
