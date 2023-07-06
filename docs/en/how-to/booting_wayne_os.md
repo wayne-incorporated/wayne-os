@@ -61,4 +61,4 @@ This document is looking foward to your contribution (documentation, translation
 
 ## 4. Troubleshoot
 - Update your BIOS/UEFI.
-- If you still cannot boot the OS, please report on [known_issues.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/release/known_issues.md)
+- If you still cannot boot the OS, please report on [known_issues.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/known_issues.md)
