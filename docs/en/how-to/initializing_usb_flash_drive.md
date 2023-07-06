@@ -15,7 +15,7 @@ The exFAT supports over 32GiB volume size but it doesn’t work on Windows XP (n
 
 ![initialize_usb-2](resources/initialize_usb2.jpg)
 
-## Linux Shell, [Wayne OS Shell](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/using_shell.md)
+## Linux Shell, [Wayne OS Shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md)
 First, remove partition table on your USB flash drive.
 <br>
 `sudo dd if=/dev/zero bs=512 count=4096 of=/dev/${USB_FLASH_DRIVE}`
