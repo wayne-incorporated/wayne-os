@@ -5,7 +5,7 @@
 <!--- 
 Sort in alphabet order
 --->
-Indonesian: [pengenalan.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/pengenalan.md)
+Indonesian: [pengenalan.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/pengenalan.md)
 <br>Korean: [소개.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/ko/소개.md)
 <br>Every non-english documents are maintained by translators and may become outdated from time to time. 
 <br>Please refer on English version for the newest information.
