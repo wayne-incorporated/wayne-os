@@ -1,1 +1,1 @@
-https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/introduction.md
+https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/introduction.md
