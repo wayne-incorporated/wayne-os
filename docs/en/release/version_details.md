@@ -16,8 +16,8 @@ wayne-os-${IMAGE_TYPE}-${USE}-${RELEASED_QUARTER_YEAR}
 |                           |_base-portable_ |_dev-installation_  |_test-installation_ |
 |---                        |---    |---    |---    |
 |USB-STORAGE                |O      |X      |X      |
-|[using shell](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/using_shell.md)                |X      |O      |O      |
-|[installing on PC](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/installing_wayne_os_on_a_pc.md)           |X      |O      |O      |
-|[ssh connection from remote](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/ssh_connection_from_remote.md) |X      |O      |O      |
+|[using shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md)                |X      |O      |O      |
+|[installing on PC](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/installing_wayne_os_on_a_pc.md)           |X      |O      |O      |
+|[ssh connection from remote](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/ssh_connection_from_remote.md) |X      |O      |O      |
 |[cros flash](https://chromium.googlesource.com/chromiumos/docs/+/master/cros_flash.md) |X      |X      |O      |
 
