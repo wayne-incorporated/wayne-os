@@ -1,11 +1,11 @@
 ## Catatan
-Dokumen asli: [mode_change.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/mode_change.md)
+Dokumen asli: [mode_change.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/mode_change.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 <br>Fitur di dokumen ini belum dirilis. (2022-03-17)
  
  
 ## Mengakses ke chrome_dev.conf
-- [login ke mode konsol](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/tata-cara/menggunakan_shell.md).
+- [login ke mode konsol](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/menggunakan_shell.md).
 - Ketik command `/usr/sbin/mode_change-wayneos` (memerlukan sudo pw).
 - Booting ulang OS setelah memodifikasi _chrome_dev.conf_.
 
