@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [initializing_usb_flash_drive.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/initializing_usb_flash_drive.md)
+Dokumen asli: [initializing_usb_flash_drive.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/initializing_usb_flash_drive.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## Windows
@@ -17,7 +17,7 @@ exFAT mendukung lebih dari ukuran volum 32GiB tetapi tidak bisa berfungsi di Win
 ![initialize_usb-2](sumber/initialize_usb2.jpg)
 
 ## Linux
-## Shell Linux, [Wayne OS Shell](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/tata-cara/menggunakan_shell.md)
+## Shell Linux, [Wayne OS Shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/menggunakan_shell.md)
 Pertama, hapus tabel partisi di USB.
 <br>
 `sudo dd if=/dev/zero bs=512 count=4096 of=/dev/${USB_FLASH_DRIVE}`
