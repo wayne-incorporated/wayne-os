@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [version_details.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/release/version_details.md)
+Dokumen asli: [version_details.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/version_details.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## Notasi
@@ -20,7 +20,7 @@ wayne-os-${IMAGE_TYPE}-${USE}-${RELEASED_QUARTER_YEAR}
 |                           |_base-portable_ |_dev-installation_  |_test-installation_ |
 |---                        |---    |---    |---    |
 |USB-STORAGE                |O      |X      |X      |
-|[menggunakan shell](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/tata-cara/menggunakan_shell.md)                |X      |O      |O      |
-|[menginstal ke PC](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/tata-cara/menginstal_wayne_os_ke_pc.md)           |X      |O      |O      |
-|[koneksi ssh dari remote](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/tata-cara/koneksi_ssh_dari_remote.md) |X      |O      |O      |
+|[menggunakan shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/menggunakan_shell.md)                |X      |O      |O      |
+|[menginstal ke PC](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/menginstal_wayne_os_ke_pc.md)           |X      |O      |O      |
+|[koneksi ssh dari remote](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/koneksi_ssh_dari_remote.md) |X      |O      |O      |
 |[cros flash](https://chromium.googlesource.com/chromiumos/docs/+/master/cros_flash.md) |X      |X      |O      |
