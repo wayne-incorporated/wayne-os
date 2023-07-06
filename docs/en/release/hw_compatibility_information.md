@@ -1,6 +1,3 @@
-## Note
-This document will be renewed before 4q22. So it doesn't require any contribution for the time being.
-
 ## How to use
 Search (`ctrl+f`) your PC/device/chipset name, and check the compatibility information
 
