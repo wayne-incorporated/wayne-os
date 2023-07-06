@@ -9,7 +9,7 @@ This document is looking foward to your contribution (documentation, translation
 
 ## 3. Initialize USB flash drive (optional)
 - If your USB flash drive has an error/corruption, the installation process could fail
-- [Initialize USB](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/initializing_usb_flash_drive.md)
+- [Initialize USB](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/initializing_usb_flash_drive.md)
 
 ## 4. Write .bin file on USB flash drive by image writer tool
 ### Windows user
