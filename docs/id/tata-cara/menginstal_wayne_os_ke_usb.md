@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [installing_wayne_os_on_a_usb_flash_drive.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/installing_wayne_os_on_a_usb_flash_drive.md)
+Dokumen asli: [installing_wayne_os_on_a_usb_flash_drive.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/installing_wayne_os_on_a_usb_flash_drive.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## 1. Persiapan
@@ -10,7 +10,7 @@ Dokumen asli: [installing_wayne_os_on_a_usb_flash_drive.md](https://gitlab.com/w
 
 ## 3. Initialisasi USB (pilihan)
 - Jika USB anda eror/rusak, proses instalasi bisa gagal
-- [Menginisialisasi USB](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/tata-cara/menginisialisasi_usb.md)
+- [Menginisialisasi USB](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/menginisialisasi_usb.md)
 
 ## 4. Membuat fail .bin di USB dengan alat image writer
 ### Pengguna Windows
