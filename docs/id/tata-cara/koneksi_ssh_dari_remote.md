@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [ssh_connection_from_remote.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/ssh_connection_from_remote.md)
+Dokumen asli: [ssh_connection_from_remote.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/ssh_connection_from_remote.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## Persyaratan
