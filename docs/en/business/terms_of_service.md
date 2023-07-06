@@ -1,7 +1,7 @@
 # Wayne OS Terms of Service
 
 ## Note
-Original document: [이용약관.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/ko/%EB%B9%84%EC%A6%88%EB%8B%88%EC%8A%A4/%EC%9D%B4%EC%9A%A9%EC%95%BD%EA%B4%80.md)
+Original document: [이용약관.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EB%B9%84%EC%A6%88%EB%8B%88%EC%8A%A4/%EC%9D%B4%EC%9A%A9%EC%95%BD%EA%B4%80.md)
 
 ## Article 1 (Definition, purpose, and deemed agreement of the terms of service)
 ① “TOS” refers to Wayne OS Terms of service..
