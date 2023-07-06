@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [auto_login.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/auto_login.md)
+Dokumen asli: [auto_login.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/auto_login.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 <br>Dokumen ini sedang dalam proses penulisan.
 <br>Fitur-fitur di dokumen ini belum dirilis. (2022-03-17)
@@ -11,7 +11,7 @@ Dokumen asli: [auto_login.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master
 
 ## 1. Persiapan
 #### SSH
-Siapkan dan periksa [koneksi ssh](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/tata-cara/koneksi_ssh_dari_remote.md).
+Siapkan dan periksa [koneksi ssh](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/koneksi_ssh_dari_remote.md).
 #### ID Google 
 Disarankan menggunakan ID Google sementara dikarenakan fitur login otomatis ini tidaklah aman, dan lebih mudah untuk menggunakan login otomatis, jika Anda menonaktifkan Verifikasi 2 Langkah untuk ID Google.
 #### GCP
