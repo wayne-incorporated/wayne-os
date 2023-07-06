@@ -7,7 +7,7 @@ This document is looking foward to your contribution (documentation, translation
 _wayne-os-dev_ or _wayne-os-test_ versions
 
 ## In local shell
-[Open shell](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/using_shell.md) in Wayne OS device then try the following steps.
+[Open shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md) in Wayne OS device then try the following steps.
 #### Powerwash
 ```
 $ { sudo bash -c 'echo "fast safe" > /mnt/stateful_partition/factory_install_reset' ;} && sudo reboot
@@ -54,7 +54,7 @@ sudo initctl start/stop/restart/status ${JOB}
 - sudo [dmesg](https://man7.org/linux/man-pages/man1/dmesg.1.html)
 
 ## From remote
-You can send the shell commands from remote device to Wayne OS device [via ssh](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/ssh_connection_from_remote.md).
+You can send the shell commands from remote device to Wayne OS device [via ssh](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/ssh_connection_from_remote.md).
 ```
 ssh chronos@${IP} -t "COMMAND"  # This will ask pw again if the COMMAND includes sudo.
 ssh root@${IP} "COMMAND"  # This is available only in Wayne OS test version.
