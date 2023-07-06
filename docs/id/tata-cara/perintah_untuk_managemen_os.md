@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [commands_for_os_management.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/commands_for_os_management.md)
+Dokumen asli: [commands_for_os_management.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/commands_for_os_management.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 <br>Dokumen ini bertujuan untuk membantu para pengembang yang ingin mengelola Wayne OS.
 <br>Kegiatan: Sepertinya dokumen ini berfungsi untuk cros versi turunan lainnya, sehingga hasil tes harus ditambahkan.
@@ -8,7 +8,7 @@ Dokumen asli: [commands_for_os_management.md](https://gitlab.com/wayne-inc/wayne
 Versu _wayne-os-dev_ atau _wayne-os-test_ 
 
 ## Dalam shell lokal
-[Membuka shell](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/using_shell.md) di Wayne OS device kemudian cobalah langkah-langkah berikut.
+[Membuka shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/menggunakan_shell.md) di Wayne OS device kemudian cobalah langkah-langkah berikut.
 #### Penghapusan
 ```
 $ { sudo bash -c 'echo "fast safe" > /mnt/stateful_partition/factory_install_reset' ;} && sudo reboot
@@ -55,7 +55,7 @@ sudo initctl start/stop/restart/status ${JOB}
 - sudo [dmesg](https://man7.org/linux/man-pages/man1/dmesg.1.html)
 
 ## Dari jarak jauh
-Anda dapat mengirimkan perintah shell dari perangkat jarak jauh pada perangkat Wayne OS [melalui ssh](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/ssh_connection_from_remote.md).
+Anda dapat mengirimkan perintah shell dari perangkat jarak jauh pada perangkat Wayne OS [melalui ssh](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/koneksi_ssh_dari_remote.md).
 ```
 ssh chronos@${IP} -t "COMMAND"  # Bagian ini akan meminta kata sandi lagi jika perintah meliputi sudo.
 ssh root@${IP} "COMMAND"  # Bagian ini hanya tersedia di versi Wayne OS test.
