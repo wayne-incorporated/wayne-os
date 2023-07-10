@@ -5,7 +5,7 @@ The Parties agree as follows:
 
 ## 1. Appointment of Agent
 a. Company appoints Agent as its non-exclusive sales agent to solicit and introduce Company's product and service in accordance with the terms and conditions of this Agreement.
-<br>b. Agent is strictly an independent agent, not an employee of Company.
+<br>b. Agent is strictly an independent agent, not an employee of Company unless there is employment agreement between Company and Agent.
 <br>c. Company shall not be liable for any loss/damages arising from or out of or in any way related to the provision of agent services by Agent.
 <br>d. Company doesn’t transfer ownership of all rights including products, services, and intellectual property rights to Agent.
 
