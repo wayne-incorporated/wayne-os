@@ -52,11 +52,7 @@ a. This Agreement contains the entire understanding of the parties with respect 
 <br>Product/service:		Wayne OS ODM Service, and the equivalent products/services
 <br>Name: 			        Wayne Inc.
 <br>Address: 		        Insta1-510, 204, Convensia-daero, Yeonsu-gu, Incheon, 22004, Republic of Korea
-<br>CEO: 			          BAK Seongbin
-<br>PIC name: 		      Evelyn Widyasari KHO 
-<br>PIC title: 		      Director
-<br>PIC phone: 		      +82 10 2790 4700
-<br>PIC E-mail: 		    evelyn@wayne-inc.com
+
 
 [Agent]
 <br>Name:
