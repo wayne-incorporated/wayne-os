@@ -29,7 +29,7 @@ ii. The commission for subscription contract between Company and customer:
     The first 2 months of the subscription total amount in 2024.
     The first 1 month of the subscription total amount in 2025.
 iii.Both commissions for one time contract and for subscription contract can be paid at the same time from Company to Agent.
-iv. Total amount means the total payment without VAT/tax from customer to Company
+iv. Total amount means the total payment without VAT/tax/fee from customer to Company
 ```
 c. Company agrees to pay Agent the commission within 1 month upon Company receives payment from customer based on the customer's payment amount and date.
 <br>d. Agent bears the tax & transfer fees of the commision.
