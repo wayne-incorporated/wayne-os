@@ -10,7 +10,7 @@ a. Company appoints Agent as its non-exclusive sales agent to solicit and introd
 <br>d. Company doesn’t transfer ownership of all rights including products, services, and intellectual property rights to Agent.
 
 ## 2. Role of Agent
-a.Agent shall introduce Company's product/service (including but not limited to name and contact of Company, features of Company product/service) to customers (including but not limited to Agent’s related organization). 
+a. Agent shall introduce Company's product/service (including but not limited to name and contact of Company, features of Company product/service) to customers (including but not limited to Agent’s related organization). 
 <br>b. Agent shall pay all of his/her own expenses relating to the provision of agent services under this Agreement.
 <br>c. Agent shall not defame Company or engage in any illegal activities that may violate related laws or social trade rules.
 <br>d. In the case of an issue appearing between Agents, or between Agent and third parties during the provision of agent services by Agent, Agent shall solve it within themselves.
