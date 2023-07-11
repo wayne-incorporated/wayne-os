@@ -14,7 +14,7 @@ The Parties agree as follows:
 <br>2.2 Agent shall pay all of his/her own expenses relating to the provision of agent services under this Agreement.
 <br>2.3 Agent shall not defame Company or engage in any illegal activities that may violate related laws or social trade rules.
 <br>2.4 In the case of an issue appearing between Agents, or between Agent and third parties during the provision of agent services by Agent, Agent shall solve it within themselves.
-<br>2.5 In the case of an issue appearing as described point 2.c above with no solution, Company shall consider and judge.
+<br>2.5 In the case of an issue appearing as described point 2.2.4 above with no solution, Company shall consider and judge.
 
 ## 3. Commission
 3.1 For the product/service contract between Company and customer due to the provision of Agent's service that is recognized by either customer or Company, Company shall pay commision to Agent based on per customer.
