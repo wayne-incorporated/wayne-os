@@ -4,7 +4,7 @@ This Sales Agent Agreement (hereinafter referred to as Agreement) is made betwee
 The Parties agree as follows:
 
 ## 1. Appointment of Agent
-1.1 Company appoints Agent as its non-exclusive sales agent to introduce Company's product and service in accordance with the terms and conditions of this Agreement.
+1.1 Company appoints Agent as its non-exclusive sales agent to introduce Company's product/service in accordance with the terms and conditions of this Agreement.
 <br>1.2 Agent is strictly an independent agent, not an employee of Company unless there is employment agreement between Company and Agent.
 <br>1.3 Company shall not be liable for any loss/damages arising from or out of or in any way related to the provision of agent services by Agent.
 <br>1.4 Company doesn’t transfer ownership of all rights including products, services, and intellectual property rights to Agent.
