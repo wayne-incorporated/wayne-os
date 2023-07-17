@@ -9,7 +9,7 @@ In order to login to Wayne OS by Google account, you have to add the account to 
 4. Login with your Google account in Wayne OS.
 
 ## Note
-Above method is for test purpose and managed by Google officially. 
+Above method is for test purposes and managed by Google officially. 
 <br>
 However, It doesn't mean that you can use all of Google services since Google restricts/controls third-parties of open source.
 <br>
