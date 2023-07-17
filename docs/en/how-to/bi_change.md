@@ -12,5 +12,5 @@ This document is looking foward to your contribution (documentation, translation
 <br>/usr/share/chromeos-assets/images
 <br>/usr/share/chromeos-assets/images_100_percent
 <br>/usr/share/chromeos-assets/images_200_percent
-- Put your image files in above path (via USB flash drive or ssh).
+- Put your image files in the above path (via USB flash drive or ssh).
 - Reboot and check the new BI.
