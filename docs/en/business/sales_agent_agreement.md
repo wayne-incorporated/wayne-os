@@ -31,7 +31,7 @@ The Parties agree as follows:
 (c) Both commissions for one time contract and for subscription contract can be paid at the same time from Company to Agent.
 (d) Total amount means the total payment without VAT/tax/fee from customer to Company.
 ```
-3.2 Company agrees to pay Agent the commission within 1 month upon Company receives payment from customer based on the customer's payment amount and date.
+3.3 Company agrees to pay Agent the commission within 1 month upon Company receives payment from customer based on the customer's payment amount and date.
 <br>3.4 Agent bears the tax & transfer fees of the commision.
 <br>3.5 Commission under this Agreement shall be made in USD based on the remittance date currency via bank wire transfer or Paypal upon request.
 
