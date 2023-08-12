@@ -1,7 +1,7 @@
 [comment]: # ()
 
 ## Bahasa lainnya
-Bahasa Inggris: [introduction.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/introduction.md) 
+Bahasa Inggris: [introduction.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/introduction.md) 
 Bahasa Korea: [소개.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/ko/소개.md)
 <br>Setiap dokumen non-bahasa Inggris dikelola oleh penerjemah dan dapat menjadi kadaluwarsa dari waktu ke waktu.
 <br>Silahkan merujuk pada versi bahasa Inggris untuk informasi terbaru.
