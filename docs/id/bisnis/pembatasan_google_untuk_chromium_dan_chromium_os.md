@@ -5,7 +5,7 @@ Dokumen asli: [googles_restriction_for_chromium_and_chromium_os.md](https://gith
 Sayangnya sepeti yang disebutkan oleh Google bahwa sejak 15-03-2021, mereka akan membatasi sistem Oauth & Chrome Sync di Chromium dan Chromium OS yang dibuat oleh pihak ketiga.
 <br>
 <br>
-Sebagaimana disebutkan berarti , login dengan Google ID akan dibatasi dan browser Chromium tidak bisa sinkronisasi dengan Google ID di Wayne OS.
+Sebagaimana disebutkan berarti, login dengan Google ID akan dibatasi dan browser Chromium tidak bisa sinkronisasi dengan Google ID di Wayne OS.
 <br>
 <br>
 Hal ini tidak hanya akan berpengaruh kepada Wayne OS dikarenakan berbagai macam browser/OS/perankat lunak yang berasal dari projek open source Chromium & Chromium OS project, yang telah menyebarkan servis Google dan berkembang bersama dalam lingkungan open source. Namun, Google sepertinya memutuskan untuk mengambil bagian dari para saingan mereka.
