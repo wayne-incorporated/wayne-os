@@ -17,4 +17,4 @@ https://groups.google.com/a/chromium.org/g/chromium-packagers/c/SG6jnsP4pWM
 https://www.omgubuntu.co.uk/2021/01/chromium-sync-google-api-removed
 <br>
 https://alien.slackbook.org/blog/how-to-un-google-your-chromium-browser-experience/#comments
-
+1
