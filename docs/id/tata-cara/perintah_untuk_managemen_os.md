@@ -5,7 +5,7 @@ Dokumen asli: [commands_for_os_management.md](https://github.com/wayne-incorpora
 <br>Kegiatan: Sepertinya dokumen ini berfungsi untuk cros versi turunan lainnya, sehingga hasil tes harus ditambahkan.
 
 ## Persyaratan
-Versu _wayne-os-dev_ atau _wayne-os-test_ 
+Versu\i _wayne-os-dev_ atau _wayne-os-test_ 
 
 ## Dalam shell lokal
 [Membuka shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/menggunakan_shell.md) di Wayne OS device kemudian cobalah langkah-langkah berikut.
