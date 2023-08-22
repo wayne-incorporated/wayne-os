@@ -16,6 +16,6 @@ Namun bukan berarti anda dapat menggunakan seluruh servis dari Google dikarenaka
 <br>
 
 ## Referensi
-https://wayne-os.com/googles-restriction-for-chromium-chromium-os
+https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/bisnis/pembatasan_google_untuk_chromium_dan_chromium_os.md
 <br>
 https://www.chromium.org/developers/how-tos/api-keys
