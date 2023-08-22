@@ -18,7 +18,7 @@ Memanfaatkan Chromium OS tidaklah mudah karena Chromium OS didesain untuk Chrome
 - Mudah: Tidak ada pengaturan/management yang rumit seperti distro Linux tradisional atau Windows, UI/UX yang sederhana, mudah untuk pengguna akhir. 
 #### Perbedaan
 - Terbuka: Setiap kode sumber (di luar dari lisensi OSS), isu/rencana pengembangan, bug/kerusakan dibuka untuk umum.
-- Bebas: Siapa pun (individual/ organisasi profit/non profit,dsb.) dapat mengunduh/menginstal/menggunakan/memodifikasi/mengembangkan/mendistribusikan/menjual biner/kode sumber/dokumen/video dari proyek Wayne OS di bawah [license](https://gitlab.com/wayne-inc/wayneos/-/blob/master/LICENSE.md) dengan pembatasan minimal.
+- Bebas: Siapa pun (individual/ organisasi profit/non profit,dsb.) dapat mengunduh/menginstal/menggunakan/memodifikasi/mengembangkan/mendistribusikan/menjual biner/kode sumber/dokumen/video dari proyek Wayne OS di bawah [license](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md) dengan pembatasan minimal.
 - Tanpa biaya: Tidak ada harga/layanan tambahan, kecuali jika anda meminta [outsourcing](https://wayne-os.com/chromium-os-odm-service/).
 - Keanekaragaman: Tersedia biner dari portabel, instalasi, dll., fitur tambahan.
 - Dapat disesuaikan: Anda dapat memodifikasi biner (identitas merek, layar pembuka, proses login, mode, dll) atau kode sumber sesudai dengan tujuan anda.
