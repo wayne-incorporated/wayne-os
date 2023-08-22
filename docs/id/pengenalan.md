@@ -36,8 +36,8 @@ Setiap biner, kode sumber, dokumen, video berada di bawah lisensi yang berbeda.
 <br>[License.md](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md)
 
 ## Panduan untuk pengembangan dan pengontribusian di projek Wayne OS
-[README.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/README.md)
-<br>[CONTRIBUTING.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/CONTRIBUTING.md)
+[README.md](https://github.com/wayne-incorporated/wayne-os/blob/main/README.md)
+<br>[CONTRIBUTING.md](https://github.com/wayne-incorporated/wayne-os/blob/main/CONTRIBUTING.md)
 
 ## Kontributor
 - Alexander Frick @LordFrick
@@ -45,6 +45,6 @@ Setiap biner, kode sumber, dokumen, video berada di bawah lisensi yang berbeda.
 
 ## Channel resmi
 - Binari & Dokumen: [wayne-os.com](https://wayne-os.com)
-- Open source: [gitlab.com/wayne-inc/wayneos](https://gitlab.com/wayne-inc/wayneos)
+- Open source: [gitlab.com/wayne-inc/wayneos](https://github.com/wayne-incorporated/wayne-os)
 - Forum: [facebook.com/groups/wayneosgroup](https://facebook.com/groups/wayneosgroup)
 - Video: [youtube.com/c/wayneos](https://youtube.com/c/wayneos)
