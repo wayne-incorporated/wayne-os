@@ -33,7 +33,7 @@ Memanfaatkan Chromium OS tidaklah mudah karena Chromium OS didesain untuk Chrome
 
 ## Legalitas
 Setiap biner, kode sumber, dokumen, video berada di bawah lisensi yang berbeda.
-<br>[License.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/LICENSE.md)
+<br>[License.md](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md)
 
 ## Panduan untuk pengembangan dan pengontribusian di projek Wayne OS
 [README.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/README.md)
