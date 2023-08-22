@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [changelog.md](https://github.com/wayne-incorporated/wayne-os/edit/main/docs/en/release/changelog.md)
+Dokumen asli: [changelog.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/changelog.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 
 ## 3Q21-r1 (2021-09-19)
