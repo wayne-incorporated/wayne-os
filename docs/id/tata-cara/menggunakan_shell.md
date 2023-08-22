@@ -1,5 +1,5 @@
 ## Catatan
-Dokumen asli: [using_shell.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/how-to/using_shell.md)
+Dokumen asli: [using_shell.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/tata-cara/koneksi_ssh_dari_remote.md)
 <br>Dokumen ini mengharapkan kontribusi anda (dokumentasi, terjemahan, pelaporan, saran, pengkodean).
 <br>Shell hanya tersedia di versi _wayne-os-dev_ dan _wayne-os-test_ dikarenakan versi _wayne-os-base_ tidak mensupport shell
 
