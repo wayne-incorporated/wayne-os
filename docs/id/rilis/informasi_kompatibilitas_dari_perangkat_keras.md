@@ -13,7 +13,7 @@ Lihat tabel kompatibilitas, dan laporkan masalah kompatibilitas perangkat keras 
 
 #### Cara yang lebih baik
 Jika anda memiliki semangat open source, anda bisa menjadi kontributor.
-1) [Gabung di projek Wayne OS](https://gitlab.com/wayne-inc/wayneos/-/blob/master/CONTRIBUTING.md) dan mendapatkan posisi Developer
+1) [Gabung di projek Wayne OS](https://github.com/wayne-incorporated/wayne-os/blob/main/CONTRIBUTING.md) dan mendapatkan posisi Developer
 2) Buat branch sementara (contoh: report-hw_compatibility-[date])
 3) Tambahkan informasi di *docs/release/hw_compatibility_information.md*
 4) Commit
