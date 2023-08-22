@@ -9,7 +9,7 @@ Refer to compatibility table, and report HW compatibility issue on [community](h
 
 #### Better way
 If you have open source spirit, you can be a contributor.
-1) [Join Wayne OS project](https://gitlab.com/wayne-inc/wayneos/-/blob/master/CONTRIBUTING.md) and get _Developer_ role
+1) [Join Wayne OS project](https://github.com/wayne-incorporated/wayne-os/blob/main/CONTRIBUTING.md) and get _Developer_ role
 2) Make a temporary branch (ex: report-hw_compatibility-[date])
 3) Add HW compatibility information on *docs/release/hw_compatibility_information.md*
 4) Commit
