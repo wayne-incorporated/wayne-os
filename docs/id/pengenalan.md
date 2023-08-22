@@ -22,7 +22,7 @@ Memanfaatkan Chromium OS tidaklah mudah karena Chromium OS didesain untuk Chrome
 - Tanpa biaya: Tidak ada harga/layanan tambahan, kecuali jika anda meminta [outsourcing](https://wayne-os.com/chromium-os-odm-service/).
 - Keanekaragaman: Tersedia biner dari portabel, instalasi, dll., fitur tambahan.
 - Dapat disesuaikan: Anda dapat memodifikasi biner (identitas merek, layar pembuka, proses login, mode, dll) atau kode sumber sesudai dengan tujuan anda.
-- [Improved live USB](https://gitlab.com/wayne-inc/improved-live-usb): Berbeda dengan [live USB tradisional](https://en.wikipedia.org/wiki/Live_USB), Wayne OS USB dapat bekerja sebagai tempat penyimpanan yang dapat dilepas (dan partisi OS tersembunyi) di Windows/macOS. Wayne OS versi portabel mempunyai fitur tersebut. 
+- [Improved live USB](https://github.com/wayne-incorporated/improved-live-usb): Berbeda dengan [live USB tradisional](https://en.wikipedia.org/wiki/Live_USB), Wayne OS USB dapat bekerja sebagai tempat penyimpanan yang dapat dilepas (dan partisi OS tersembunyi) di Windows/macOS. Wayne OS versi portabel mempunyai fitur tersebut. 
 
 ## Contoh penggunaan
 - PC spek rendah (contohnya di rumah, distributor PC, smart factory)
