@@ -45,6 +45,6 @@ Setiap biner, kode sumber, dokumen, video berada di bawah lisensi yang berbeda.
 
 ## Channel resmi
 - Binari & Dokumen: [wayne-os.com](https://wayne-os.com)
-- Open source: [gitlab.com/wayne-inc/wayneos](https://github.com/wayne-incorporated/wayne-os)
+- Open source: [github.com/wayne-incorporated/wayne-os](https://github.com/wayne-incorporated/wayne-os)
 - Forum: [facebook.com/groups/wayneosgroup](https://facebook.com/groups/wayneosgroup)
 - Video: [youtube.com/c/wayneos](https://youtube.com/c/wayneos)
