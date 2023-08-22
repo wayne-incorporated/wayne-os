@@ -15,6 +15,6 @@ However, It doesn't mean that you can use all of Google services since Google re
 <br>
 
 ## Reference 
-https://wayne-os.com/googles-restriction-for-chromium-chromium-os
+https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/business/googles_restriction_for_chromium_and_chromium_os.md
 <br>
 https://www.chromium.org/developers/how-tos/api-keys
