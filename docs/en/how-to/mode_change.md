@@ -10,8 +10,8 @@ This document is looking foward to your contribution (documentation, translation
 
 #### Switching on flag:
 1. Select flags in the _chrome_dev.conf_. 
-2. Delete the sharp (#) which is ahead of the flag (Don't remove the sharp which is ahead of explanation).
-3. Add argument, if the flag requires it.
+2. Delete the sharp (#) which is ahead of the flag (Don't remove the sharp which is ahead of the explanation).
+3. Add an argument, if the flag requires it.
 #### Switching off flag:
 1. Write a sharp mark (#) ahead of the flag.
 

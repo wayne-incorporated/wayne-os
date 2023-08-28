@@ -5,7 +5,7 @@ This document is looking foward to your contribution (documentation, translation
 ## 1. Preparation
 - [Install](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/installing_wayne_os_on_a_usb_flash_drive.md) _wayne-os-dev_ or _wayne-os-test_ version on a USB flash drive.
 - After booting Wayne OS by USB flash drive on a target PC, check whether it is up and running (check HW compatibilities, features, known issues)  
-<p>If errors appear when you check, it means that the errors still exist even if you install OS on your PC. So if this case happens, you should reconsider about PC installation.
+<p>If errors appear when you check, it means that the errors still exist even if you install OS on your PC. So if this happens, you should reconsider PC installation.
 <br>FYI, Wayne OS STATE partition capacity will be increased as local disk capacity, after PC installation.
 
 ## 2. Installation
@@ -17,7 +17,7 @@ This document is looking foward to your contribution (documentation, translation
 - Type command `sudo /usr/sbin/chromeos-install --dst /dev/${TARGET_DISK}` 
 <br>(ex: `sudo /usr/sbin/chromeos-install --dst /dev/sda`)
 - Retype PW when the console asks for it
-- After dozens of minutes, the installation is successful if you can see `Installation to /dev/${TARGET_DISK} complete. Please shutdown, remove the USB device, cross your fingers, and reboot.` message
+- After dozens of minutes, the installation is successful if you can see the `Installation to /dev/${TARGET_DISK} complete. Please shutdown, remove the USB device, cross your fingers, and reboot.` message
 - Shutdown OS by `sudo poweroff`, remove USB flash drive, then [boot by target disk](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/booting_wayne_os.md)
 
 ## 3. Troubleshoot

@@ -12,7 +12,7 @@ This document is in progress.
 #### SSH
 Setup and check [ssh connection](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/ssh_connection_from_remote.md).
 #### Google ID
-Temporary Google ID is recommended since this auto login feature is not secure, and it's convenience to use auto login, if you turn off 2-Step Verification for the Google ID.
+Temporary Google ID is recommended since this auto login feature is not secure, and it's convenient to use auto login, if you turn off 2-Step Verification for the Google ID.
 #### GCP
 #### Server
 Turn on _Wayne OS test version_ and setup initial configuration (language/network/etc).
