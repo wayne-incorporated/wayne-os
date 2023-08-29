@@ -64,4 +64,4 @@
 
 ## 4. 문제 해결
 - BIOS/UEFI를 업데이트합니다.
-- 그래도 OS를 부팅할 수 없는 경우 [알려진_문제.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/kr/출시/알려진_문제.md)에 신고하세요.
+- 그래도 OS를 부팅할 수 없는 경우 [알려진_문제.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%B6%9C%EC%8B%9C/%EC%95%8C%EB%A0%A4%EC%A7%84_%EB%AC%B8%EC%A0%9C.md)에 신고하세요.
