@@ -15,7 +15,7 @@ exFAT는 32GiB 이상의 볼륨 크기를 지원하지만 Windows XP에서는 �
 
 ![initialize_usb-2](resources/initialize_usb2.jpg)
 
-## 리눅스 셸, [웨인 OS 셸](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md)
+## 리눅스 셸, [웨인OS 셸](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md)
 먼저 USB 플래시 드라이브의 파티션 테이블을 제거합니다.
 <br>
 `sudo dd if=/dev/zero bs=512 count=4096 of=/dev/${USB_FLASH_DRIVE}`
