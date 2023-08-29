@@ -9,7 +9,7 @@ PC/기기/칩셋 이름을 검색(`ctrl+f`)하고 호환성 정보를 확인합�
 
 ### 더 나은 방법
 오픈 소스 정신이 있다면 누구나 기여자가 될 수 있습니다.
-1) [웨인 OS 프로젝트에 참여](https://gitlab.com/wayne-inc/wayneos/-/blob/master/CONTRIBUTING.md)하고 _개발자_ 역할을 받습니다.
+1) [웨인OS 프로젝트에 참여](https://gitlab.com/wayne-inc/wayneos/-/blob/master/CONTRIBUTING.md)하고 _개발자_ 역할을 받습니다.
 2) 임시 브랜치를 생성합니다(예: report-hw_compatibility-[date]).
 3) *docs/release/hw_compatibility_information.md*에 HW 호환성 정보를 추가합니다.
 4) 커밋
@@ -37,7 +37,7 @@ I/O 포트: 입력/출력 포트/인터페이스
     - !: 문제 있음
     - X: 전혀 작동하지 않음
 증상: _works_ 열에 대한 설명
-OS 버전: Wayne OS 버전(예: _test-installation-3q21_)
+OS 버전: 웨인OS 버전(예: _test-installation-3q21_)
 보고자: 익명/이름/ID/닉네임/이메일
 보고 날짜: YYYY-MM-DD
 비고: 추가 정보
