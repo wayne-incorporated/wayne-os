@@ -9,7 +9,7 @@ PC/기기/칩셋 이름을 검색(`ctrl+f`)하고 호환성 정보를 확인합�
 
 ### 더 나은 방법
 오픈 소스 정신이 있다면 누구나 기여자가 될 수 있습니다.
-1) [웨인OS 프로젝트에 참여](https://gitlab.com/wayne-inc/wayneos/-/blob/master/CONTRIBUTING.md)하고 _개발자_ 역할을 받습니다.
+1) [웨인OS 프로젝트에 참여](https://github.com/wayne-incorporated/wayne-os/blob/main/CONTRIBUTING.md)하고 _개발자_ 역할을 받습니다.
 2) 임시 브랜치를 생성합니다(예: report-hw_compatibility-[date]).
 3) *docs/release/hw_compatibility_information.md*에 HW 호환성 정보를 추가합니다.
 4) 커밋
