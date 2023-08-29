@@ -16,8 +16,8 @@
 - _win32diskimager-binary_: [download](https://win32diskimager.download/)
 - _Chromebook recovery utility_: [download](https://chrome.google.com/webstore/detail/chromebook-recovery-utili/jndclpdbaamdhonoechobihbbiimdgai/RK%3D2/RS%3DUI2uA8SxDAwF_T9oPb4YviZFT3Y-)
 <br>우측 상단의 톱니바퀴 아이콘/설정 > 로컬 이미지 사용을 클릭합니다.
-- _balenaEtcher-Portable-1.5.109_: 웨인 OS 설치에서 완벽하게 작동하지 않는 것 같습니다.
-- _rufus-3.11_: Wayne OS를 정확히 설치할 수 없음
+- _balenaEtcher-Portable-1.5.109_: 웨인OS 설치에서 완벽하게 작동하지 않는 것 같습니다.
+- _rufus-3.11_: 웨인OS를 정확히 설치할 수 없음
 
 ### 크롬북사용자
 - _Chromebook recovery utility_: [download](https://chrome.google.com/webstore/detail/chromebook-recovery-utili/jndclpdbaamdhonoechobihbbiimdgai/RK%3D2/RS%3DUI2uA8SxDAwF_T9oPb4YviZFT3Y-)
