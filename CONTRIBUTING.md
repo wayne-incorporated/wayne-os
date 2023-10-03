@@ -9,7 +9,7 @@
 - Translation: translating English documents to other languages
 #### Development to use
 - Starting your own OS project: make a branch yourself or fork this project
-- Download OS binaries: [wayne-os.com](https://wayne-os.com)
+- Download OS binaries: [wayne-os.com](http://wayne-os.com/download-wayne-os-binary/)
 
 ## Joining Wayne OS project
 1) Join Gitlab: https://gitlab.com/users/sign_in
