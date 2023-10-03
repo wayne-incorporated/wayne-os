@@ -3,7 +3,7 @@
 ## What Wayne OS project looking forward from you
 #### Contribution
 - Reporting: [hw_compatibility_information.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md), [known_issues.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/known_issues.md)
-- Suggestion/Solution: [Issues](https://gitlab.com/wayne-inc/wayne_os/-/issues)
+- Suggestion/Solution: [Issues](https://github.com/orgs/wayne-incorporated/projects/23)
 - Coding: bug fix, refactoring, improving error/help messages
 - Documentation: update, revision, writing tutorial/manual, link
 - Translation: translating English documents to other languages
@@ -27,7 +27,7 @@ Wayne OS project repository doesn't manage upstream Chromium OS source codes as 
 - docs: documents that are referred in [wayne-os.com](http://wayne-os.com). English _document_ in en directory should be made first, then translate to other languages
 
 ## Issue
-- All project members can see/create [Issues](https://gitlab.com/wayne-inc/wayne_os/-/issues)
+- All project members can see/create [Issues](https://github.com/orgs/wayne-incorporated/projects/23)
 - There are Wayne OS development status, plan, direction
 
 ## Branch
@@ -35,7 +35,7 @@ Wayne OS project repository doesn't manage upstream Chromium OS source codes as 
 - At least *Developer* is allowed to create branches and push or merge to those
 - Avoid confusing branch name that is similar with existing branch name
 - You can delete your temporary branch after merge
-- If you want to protect certain branch and restrict push/merge authority, request it to the project owner in [Issues](https://gitlab.com/wayne-inc/wayne_os/-/issues)
+- If you want to protect certain branch and restrict push/merge authority, request it to the project owner in [Issues](https://github.com/orgs/wayne-incorporated/projects/23)
 
 ## Notation guide
 #### Date & time
