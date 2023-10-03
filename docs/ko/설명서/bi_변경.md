@@ -7,7 +7,7 @@
 - _png_ 파일의 픽셀 사이즈와 파일명이 참고자료와 동일한 지 확인하세요.
 
 ## Putting your BI in Wayne OS
-- [콘솔 모드에 로그인](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md)하세요.
+- [콘솔 모드에 로그인](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%84%A4%EB%AA%85%EC%84%9C/%EC%85%B8_%EC%82%AC%EC%9A%A9%ED%95%98%EA%B8%B0.md)하세요.
 - 다음 경로에 존재하는 파일들을 삭제하세요.
 <br>/usr/share/chromeos-assets/images
 <br>/usr/share/chromeos-assets/images_100_percent
