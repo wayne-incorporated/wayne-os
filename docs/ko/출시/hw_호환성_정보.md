@@ -1,3 +1,6 @@
+## 노토
+원본 문서: [hw_compatibility_information.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md)
+
 ## 사용 방법
 PC/기기/칩셋 이름을 검색(`ctrl+f`)하고 호환성 정보를 확인합니다.
 
