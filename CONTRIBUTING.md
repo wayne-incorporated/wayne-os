@@ -24,7 +24,7 @@ Wayne OS project repository doesn't manage upstream Chromium OS source codes as 
 <br>The upstream source codes and build instructions can be referred from [Chromium OS project](http://dev.chromium.org/chromium-os).
 - src: modified/added codes from Chromium OS codes. The directory path is the same with the path of Chromium OS source
 - patches_on_binary: additional codes that should be added in the OS binary. The directory path is the same with the path of Chromium OS binary
-- docs: documents that are referred in [wayne-os.com](https://wayne-os.com). English _document_ in en directory should be made first, then translate to other languages
+- docs: documents that are referred in [wayne-os.com](http://wayne-os.com). English _document_ in en directory should be made first, then translate to other languages
 
 ## Issue
 - All project members can see/create [Issues](https://gitlab.com/wayne-inc/wayne_os/-/issues)
