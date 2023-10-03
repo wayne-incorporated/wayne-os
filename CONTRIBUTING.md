@@ -2,7 +2,7 @@
 
 ## What Wayne OS project looking forward from you
 #### Contribution
-- Reporting: [https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md), [known_issues.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/known_issues.md)
+- Reporting: [hw_compatibility_information.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md), [known_issues.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/known_issues.md)
 - Suggestion/Solution: [Issues](https://gitlab.com/wayne-inc/wayne_os/-/issues)
 - Coding: bug fix, refactoring, improving error/help messages
 - Documentation: update, revision, writing tutorial/manual, link
