@@ -12,7 +12,7 @@
 
 ## 3. USB 플래시 드라이브 초기화 (선택 사항)
 - USB 플래시 드라이브에 오류/손상이 있는 경우 설치 프로세스가 실패할 수 있습니다.
-- [Initialize USB](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/initializing_usb_flash_drive.md)
+- [USB 초기화](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%84%A4%EB%AA%85%EC%84%9C/USB_%ED%94%8C%EB%9E%98%EC%8B%9C_%EB%93%9C%EB%9D%BC%EC%9D%B4%EB%B8%8C_%EC%B4%88%EA%B8%B0%ED%99%94.md)
 
 ## 4. 이미지 라이터 도구로 USB 플래시 드라이브에 .bin 파일 쓰기 ### Windows 사용자
 - _USBWriter-1.3_: [download](https://sourceforge.net/projects/usbwriter/)
