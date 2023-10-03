@@ -1,3 +1,3 @@
-English: https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/release/changelog.md
-<br>Indonesian: https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/id/rilis/catatan_perubahan.md
-<br>Korean: https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/ko/%EB%B0%B0%ED%8F%AC/%EB%B3%80%EA%B2%BD_%EA%B8%B0%EB%A1%9D.md
+English: https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/changelog.md
+<br>Indonesian: https://github.com/wayne-incorporated/wayne-os/blob/main/docs/id/rilis/catatan_perubahan.md
+<br>Korean: https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%B6%9C%EC%8B%9C/%EB%B3%80%EA%B2%BD%EB%A1%9C%EA%B7%B8.md
