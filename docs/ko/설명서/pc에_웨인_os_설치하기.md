@@ -19,7 +19,7 @@
 <br>(ex: `sudo /usr/sbin/chromeos-install --dst /dev/sda`)
 - 콘솔이 비밀번호를 물어보면 입력하세요.
 - 십여분 후 설치가 성공하면 `Installation to /dev/${TARGET_DISK} complete. Please shutdown, remove the USB device, cross your fingers, and reboot.` 메시지를 볼 수 있습니다.
-- `sudo poweroff` 를 통해 PC 전원을 끄고, USB flash drive를 제거하세요, 그리고 설치된 디스크로 [웨인OS를 부팅](hhttps://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%84%A4%EB%AA%85%EC%84%9C/%EC%9B%A8%EC%9D%B8os_%EB%B6%80%ED%8C%85.md)하세요.
+- `sudo poweroff` 를 통해 PC 전원을 끄고, USB flash drive를 제거하세요, 그리고 설치된 디스크로 [웨인OS를 부팅](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%84%A4%EB%AA%85%EC%84%9C/%EC%9B%A8%EC%9D%B8os_%EB%B6%80%ED%8C%85.md)하세요.
 
 ## 3. 문제 해결
 - 이동식 디스크에 웨인 OS를 설치하려면, `--skip_dst_removable` 를 추가하세요.
