@@ -2,8 +2,8 @@
 
 ## Binary
 Wayne OS Terms of Service
-<br>Korean: [이용약관.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/ko/%EB%B9%84%EC%A6%88%EB%8B%88%EC%8A%A4/%EC%9D%B4%EC%9A%A9%EC%95%BD%EA%B4%80.md)
-<br>English: [terms_of_service.md](https://gitlab.com/wayne-inc/wayneos/-/blob/master/docs/en/business/terms_of_service.md)
+<br>Korean: [이용약관.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EB%B9%84%EC%A6%88%EB%8B%88%EC%8A%A4/%EC%9D%B4%EC%9A%A9%EC%95%BD%EA%B4%80.md)
+<br>English: [terms_of_service.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/business/terms_of_service.md)
 
 ## Source code
 You need to check the source codes yourself since each packages/files are under different licenses. 
