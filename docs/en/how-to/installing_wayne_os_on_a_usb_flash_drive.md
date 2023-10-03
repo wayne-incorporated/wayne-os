@@ -5,7 +5,7 @@ This document is looking foward to your contribution (documentation, translation
 - Windows/Linux/Chromebook PC with the same free disk space available as the OS image file
 - A USB flash drive
 
-## 2. [Download Wayne OS binary](https://wayne-os.com/download-wayne-os-binary/)
+## 2. [Download Wayne OS binary](http://wayne-os.com/download-wayne-os-binary/)
 
 ## 3. Initialize USB flash drive (optional)
 - If your USB flash drive has an error/corruption, the installation process could fail
