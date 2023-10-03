@@ -1,3 +1,6 @@
+## 노토
+원본 문서: [commands_for_os_management.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/commands_for_os_management.md)
+
 ## 참고
 이 문서는 여러분의 기여(문서화, 번역, 보고, 제안, 코딩)를 기다리고 있습니다.
 <br>할 일: 이 문서는 다른 CROS 파생 문서에서도 작동하는 것 같으므로 테스트 결과를 추가해야 합니다.
