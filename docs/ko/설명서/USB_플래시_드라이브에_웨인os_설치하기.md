@@ -8,7 +8,7 @@
 - OS 이미지 파일과 동일한 디스크 여유 공간이 있는 Windows/Linux/Chromebook PC
 - USB 플래시 드라이브
 
-## 2. [웨인OS 바이너리 다운로드](https://wayne-os.com/download-wayne-os-binary/)
+## 2. [웨인OS 바이너리 다운로드](http://wayne-os.com/download-wayne-os-binary/)
 
 ## 3. USB 플래시 드라이브 초기화 (선택 사항)
 - USB 플래시 드라이브에 오류/손상이 있는 경우 설치 프로세스가 실패할 수 있습니다.
