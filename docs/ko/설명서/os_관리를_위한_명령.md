@@ -10,7 +10,7 @@
 wayne-os-dev_ 또는 _wayne-os-test_ 버전
 
 ## 로컬 셸에서
-웨인OS 기기에서 [셸 열기](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md)를 실행한 후 다음 단계를 시도합니다.
+웨인OS 기기에서 [셸 열기](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%84%A4%EB%AA%85%EC%84%9C/%EC%85%B8_%EC%82%AC%EC%9A%A9%ED%95%98%EA%B8%B0.md)를 실행한 후 다음 단계를 시도합니다.
 #### 파워워시
 ```
 $ { sudo bash -c 'echo "fast safe" > /mnt/stateful_partition/factory_install_reset' ;} && sudo reboot
@@ -57,7 +57,7 @@ sudo initctl start/stop/restart/status ${JOB}
 - sudo [dmesg](https://man7.org/linux/man-pages/man1/dmesg.1.html)
 
 ## 원격에서
-[ssh](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/ssh_connection_from_remote.md)를 통해 원격 장치에서 웨인OS 장치로 셸 명령을 보낼 수 있습니다.
+[ssh](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/ko/%EC%84%A4%EB%AA%85%EC%84%9C/%EC%9B%90%EA%B2%A9%EC%97%90%EC%84%9C__ssh_%EC%97%B0%EA%B2%B0.md)를 통해 원격 장치에서 웨인OS 장치로 셸 명령을 보낼 수 있습니다.
 ```
 ssh chronos@${IP} -t "COMMAND" # 명령에 sudo가 포함되어 있는지 pw에게 다시 묻습니다.
 ssh root@${IP} "COMMAND" # 이 명령은 Wayne OS 테스트 버전에서만 사용할 수 있습니다.
