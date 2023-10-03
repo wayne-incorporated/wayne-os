@@ -1,3 +1,6 @@
+## Note
+Original document: [sales_agent_agreement.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/business/sales_agent_agreement.md)
+
 # PERJANJIAN AGEN PENJUALAN
 
 Perjanjian Agen Penjualan ini (“Perjanjian”) dibuat oleh dan diantara Wayne Inc. (“Perusahaan”) dan Agen (secara bersama-sama disebut “Para Pihak”) berdasarkan itikad baik dan rasa kepercayaan.
