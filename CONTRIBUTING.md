@@ -15,8 +15,8 @@
 1) Join Gitlab: https://github.com/join
 2) Go to https://github.com/wayne-incorporated/wayne-os
 3) Press _Request Access_ button that is near the project title "Wayne OS", then wait for approval
-4) After approval, [Check](https://gitlab.com/wayne-inc/wayne_os/-/project_members) your [role and permission](https://docs.gitlab.com/ee/user/permissions.html)
-5) By default, each project member will get *Developer* role
+4) After approval, [Check](https://github.com/orgs/wayne-incorporated/people) your [role and permission](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
+5) By default, each project member will get *Member* role
 
 ## Directories of repository
 Wayne OS project repository doesn't manage upstream Chromium OS source codes as it manages only modified/additional source codes.
