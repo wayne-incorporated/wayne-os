@@ -1,4 +1,4 @@
-## Note
+## Catatan
 Dokumen asli: [sales_agent_agreement.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/business/sales_agent_agreement.md)
 
 # PERJANJIAN AGEN PENJUALAN
