@@ -12,8 +12,8 @@
 - Download OS binaries: [wayne-os.com](http://wayne-os.com/download-wayne-os-binary/)
 
 ## Joining Wayne OS project
-1) Join Gitlab: https://gitlab.com/users/sign_in
-2) Go to https://gitlab.com/wayne-inc/wayne_os
+1) Join Gitlab: https://github.com/join
+2) Go to https://github.com/wayne-incorporated/wayne-os
 3) Press _Request Access_ button that is near the project title "Wayne OS", then wait for approval
 4) After approval, [Check](https://gitlab.com/wayne-inc/wayne_os/-/project_members) your [role and permission](https://docs.gitlab.com/ee/user/permissions.html)
 5) By default, each project member will get *Developer* role
