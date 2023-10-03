@@ -22,7 +22,7 @@ Utilizing Chromium OS is not easy as it's designed for Chromebook (Chrome OS) an
 #### Difference
 - Open: Every source codes (beyond OSS license duty), development issue/plan, bugs are opened to public.
 - Free: Anyone (individual, profit/nonprofit org, etc.) can download/install/use/modify/expand/distribute/sell Wayne OS project's binary/source-code/document/video under minimal restrictions [licenses](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md).
-- No charge: Nothing requires any prices/addtional-services, unless you request [outsourcing](https://wayne-os.com/chromium-os-odm-service/).
+- No charge: Nothing requires any prices/addtional-services, unless you request [outsourcing](http://wayne-os.com/chromium-os-odm-service/).
 - Diversity: Portable, installation, etc. additional featured binaries are offered.
 - Customizable: You can modify (brand identity, splash-screen, login process, mode, etc) binary or source code for your purpose.
 - [Improved live USB](https://github.com/wayne-incorporated/improved-live-usb): In contrast to [legacy live USB](https://en.wikipedia.org/wiki/Live_USB), Wayne OS USB works as a removable storage (and the OS partitions are hidden) in Windows/macOS. Wayne OS portable versions include this feature.
