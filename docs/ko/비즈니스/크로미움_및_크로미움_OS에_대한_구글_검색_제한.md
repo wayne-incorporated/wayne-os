@@ -1,3 +1,6 @@
+## 노토
+원본 문서: [update googles_restriction_for_chromium_and_chromium_os.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/business/googles_restriction_for_chromium_and_chromium_os.md)
+
 ## 문제
 아쉽게도 2021-03-15부터 구글은 타사에서 만든 크롬과 크롬 OS에서 Oauth 및 크롬 동기화를 제한할 것이라고 언급했습니다.
 <br>
