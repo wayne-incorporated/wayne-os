@@ -15,7 +15,7 @@
 1) Join Gitlab: https://github.com/join
 2) Go to https://github.com/wayne-incorporated/wayne-os
 3) Press _Request Access_ button that is near the project title "Wayne OS", then wait for approval
-4) After approval, [Check](https://github.com/orgs/wayne-incorporated/people) your [role and permission](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
+4) After approval, check your [role and permission](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
 5) By default, each project member will get *Member* role
 
 ## Directories of repository
