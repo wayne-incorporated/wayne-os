@@ -1,3 +1,6 @@
+## 노토
+원본 문서: [ssh_connection_from_remote.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/ssh_connection_from_remote.md)
+
 ## 참고
 이 문서는 여러분의 기여(문서 작성, 번역, 보고, 제안, 코딩)를 기다리고 있습니다.
 
