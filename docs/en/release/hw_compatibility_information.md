@@ -42,6 +42,10 @@ If you have open source spirit, you can be a contributor.
 - report date: YYYY-MM-DD
 - remark: additional information
 
+#### Desktop PC
+#### Laptop PC
+#### ETC
+
 | PC | category | device | chipset<br>/driver | works | symptom | OS version | reporter | report date | remark |
 | --- | --- | ---  | --- | :---: | --- | --- | --- | --- | --- |
 ||wlan|tp-ink ac600 Archer T2U Plus|Realtek RTL8811AU|X||3q21-r1|Wayne Inc.|2021-11-26||
