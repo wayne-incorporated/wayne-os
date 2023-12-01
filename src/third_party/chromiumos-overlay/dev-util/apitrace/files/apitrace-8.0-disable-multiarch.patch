@@ -1,0 +1,66 @@
+From f078171ed77754e602ba85fb8bcc869bb8ac9ec7 Mon Sep 17 00:00:00 2001
+From: Po-Hsien Wang <pwang@chromium.org>
+Date: Fri, 19 Apr 2019 11:21:38 -0700
+Subject: [PATCH] respect the libdir cmake already set up for us instead of
+ using debian-specific multiarch paths
+
+---
+ CMakeLists.txt | 21 ++++-----------------
+ 1 file changed, 4 insertions(+), 17 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 34b55554..83c12d92 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -255,7 +255,7 @@ if (MSVC)
+     add_compiler_flags (-wd4512) # assignment operator could not be generated
+     add_compiler_flags (-wd4577) # 'noexcept' used with no exception handling mode specified
+     add_compiler_flags (-wd4800) # forcing value to bool 'true' or 'false' (performance warning)
+-    
++
+     # Use static runtime
+     # http://www.cmake.org/Wiki/CMake_FAQ#How_can_I_build_my_MSVC_application_with_a_static_runtime.3F
+     foreach (flag_var
+@@ -429,15 +429,6 @@ endif ()
+ ##############################################################################
+ # Installation directories
+ 
+-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+-    # Debian multiarch support
+-    execute_process(COMMAND dpkg-architecture -qDEB_HOST_MULTIARCH
+-        OUTPUT_VARIABLE ARCH_SUBDIR
+-        ERROR_QUIET
+-        OUTPUT_STRIP_TRAILING_WHITESPACE
+-    )
+-endif()
+-
+ if (WIN32 OR APPLE)
+     # On Windows/MacOSX, applications are usually installed on a directory of
+     # their own
+@@ -446,12 +437,8 @@ if (WIN32 OR APPLE)
+     set (LIB_ARCH_INSTALL_DIR lib)
+ else ()
+     set (DOC_DEFAULT_INSTALL_DIR share/doc/${CMAKE_PROJECT_NAME})
+-    set (LIB_INSTALL_DIR lib${LIB_SUFFIX}/${CMAKE_PROJECT_NAME})
+-    if (ARCH_SUBDIR)
+-        set (LIB_ARCH_INSTALL_DIR lib/${ARCH_SUBDIR}/${CMAKE_PROJECT_NAME})
+-    else ()
+-        set (LIB_ARCH_INSTALL_DIR lib${LIB_SUFFIX}/${CMAKE_PROJECT_NAME})
+-    endif ()
++    set (LIB_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/${CMAKE_PROJECT_NAME})
++    set (LIB_ARCH_INSTALL_DIR ${LIB_INSTALL_DIR})
+ endif ()
+ 
+ # Allow customization of the doc installation dir (Slackware uses different
+@@ -632,7 +619,7 @@ install (
+ set (CPACK_PACKAGE_VERSION_MAJOR "8")
+ set (CPACK_PACKAGE_VERSION_MINOR "0")
+ 
+-# Use current date in YYYYMMDD format as patch number 
++# Use current date in YYYYMMDD format as patch number
+ execute_process (
+     COMMAND ${PYTHON_EXECUTABLE} -c "import time, sys; sys.stdout.write(time.strftime('%Y%m%d'))"
+     OUTPUT_VARIABLE CPACK_PACKAGE_VERSION_PATCH
+-- 
+2.21.0.392.gf8f6787159e-goog
+

@@ -1,0 +1,228 @@
+// Copyright 2022 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module chromeos.faceauth.mojom;
+
+// The top-level interface exported by the Face Authentication Daemon to
+// provide face authentication services to the rest of the system.
+//
+// FaceAuthenticationService interface is to be used by Cryptohome.
+interface FaceAuthenticationService {
+
+  // Only a single client can hold an active session (either authentication or
+  // enrollment) at any time.
+
+  // Create and initialize an enrollment session.
+  //
+  // The remote |delegate| and |session| receiver will be bound on success.
+  CreateEnrollmentSession(EnrollmentSessionConfig config,
+    pending_receiver<FaceEnrollmentSession> session,
+    pending_remote<FaceEnrollmentSessionDelegate> delegate)
+    => (CreateSessionResult result);
+
+  // Create and initialize an authentication session.
+  //
+  // The remote |delegate| and |session| receiver will be bound on success.
+  CreateAuthenticationSession(AuthenticationSessionConfig config,
+    pending_receiver<FaceAuthenticationSession> session,
+    pending_remote<FaceAuthenticationSessionDelegate> delegate)
+    => (CreateSessionResult result);
+
+  // Manage stored enrollments.
+  //
+  // The following APIs take and return sanitized user names. That is,
+  // usernames are strings of hex characters return from
+  // `libbrillo::cryptohome::home::SanitizeUserName()`.
+  //
+
+  // List all enrollments in the system.
+  //
+  // Cannot be called when the active session is anything other than None.
+  ListEnrollments() => (array<EnrollmentMetadata> enrollments);
+
+  // Delete the enrollment of a given user.
+  RemoveEnrollment(string hashed_username) => (Result result);
+
+  // Delete all enrollments.
+  //
+  // ClearEnrollments will make a best effort to delete all enrollments even if
+  // any one of its operations fails. In the event of failing to delete an
+  // enrollment, ClearEnrollments will report an error.
+  ClearEnrollments() => (Result result);
+
+  // Return true if the given user is a valid username and is currently
+  // enrolled.
+  IsUserEnrolled(string hashed_username) => (bool enrolled);
+};
+
+struct EnrollmentMetadata {
+  // A hashed username identifying a user on the system.
+  string hashed_username;
+};
+
+// Result status of a request.
+[Extensible]
+enum Result {
+  OK = 0,
+  [Default] ERROR = 1,
+};
+
+// CreateSessionResult contains |session_info| on successful binding of the
+// remote interface and |error| when unable to create a session.
+union CreateSessionResult {
+  SessionInfo session_info;
+  SessionCreationError error;
+};
+
+struct SessionInfo {
+  // |session_id| is a randomly generated unique id.
+  // It can be used to identify a session across independent interfaces.
+  uint64 session_id;
+};
+
+// Errors indicating why a session could not be created.
+[Extensible]
+enum SessionCreationError {
+  [Default] UNKNOWN = 0,
+  ALREADY_EXISTS,  // An active session already exists.
+};
+
+// Configuration of enrollment session.
+struct EnrollmentSessionConfig {
+  // A hash identifying the user to be enrolled.
+  string user_id;
+
+  // An option to reduce the number of poses required to complete enrollment.
+  bool accessibility;
+};
+
+// Configuration of authentication session.
+struct AuthenticationSessionConfig {
+  // A hash identifying the user to be enrolled.
+  string user_id;
+};
+
+// Status of an enrollment/authentication session update or completion event.
+[Extensible]
+enum FaceOperationStatus {
+  [Default] OK = 0,
+  NO_FACE,
+};
+
+// Unrecoverable enrollment/authentication session errors.
+[Extensible]
+enum SessionError {
+  [Default] UNKNOWN = 0,
+  NO_ENROLLMENT,
+};
+
+// This empty interface represents an enrollment session.
+//
+// The remote can cancel a session by disconnecting from the receiver.
+interface FaceEnrollmentSession {};
+
+// This interface is implemented by the enrollment client and called by the
+// remote session.
+//
+// The remote calls the delegate's handlers to notify of enrollment events.
+interface FaceEnrollmentSessionDelegate {
+  // Called when an enrollment update occurs.
+  //
+  // |message| contains latest status from the enrollment session and
+  // list of completed poses.
+  OnEnrollmentUpdate(EnrollmentUpdateMessage message);
+
+  // Only one of OnEnrollmentComplete, OnEnrollmentCancelled or
+  // OnEnrollmentError will be called to signal the end of a session.
+
+  // Called when enrollment is complete.
+  //
+  // Session remote will close the connection once called.
+  OnEnrollmentComplete(EnrollmentCompleteMessage message);
+
+  // Called when enrollment cancellation is complete.
+  //
+  // Session remote will close the connection once called.
+  //
+  // Cancellation is triggered when the client disconnects from the
+  // |FaceEnrollmentSession| delegate while the session is still active.
+  // However, clients must wait for |OnEnrollmentCancelled| before assuming
+  // that the cancel operation was performed. It is possible that closing
+  // the connection may have raced with the enrollment completing, in which
+  // case |OnEnrollmentComplete| or |OnEnrollmentError| may be called instead.
+  OnEnrollmentCancelled();
+
+  // Called with |error| when an unrecoverable error occurs.
+  //
+  // Session remote will close the connection when an error is emitted. A new
+  // session must be created to perform an enrollment.
+  OnEnrollmentError(SessionError error);
+};
+
+// Update of the enrollment operation.
+struct EnrollmentUpdateMessage {
+  FaceOperationStatus status;
+
+  // List of enrollment poses indicating which are completed.
+  //
+  // An enrollment application must have knowledge of which index represents
+  // a particular pose. The array length can vary depending on configuration.
+  array<bool> poses;
+};
+
+// Result of the enrollment operation.
+struct EnrollmentCompleteMessage {
+};
+
+// This empty interface represents an authentication session.
+//
+// The remote can cancel a session by disconnecting from the receiver.
+interface FaceAuthenticationSession {};
+
+// This interface is implemented by the authentication client and called by
+// the remote session.
+//
+// The remote calls the delegate's handlers to notify of authentication events.
+interface FaceAuthenticationSessionDelegate {
+  // Called when an update occurs.
+  //
+  // |message| contains latest status of authentication session.
+  OnAuthenticationUpdate(AuthenticationUpdateMessage message);
+
+  // Only one of OnAuthenticationComplete, OnAuthenticationCancelled or
+  // OnAuthenticationError will be called to signal the end of a session.
+
+  // Called when authentication is complete.
+  //
+  // Session remote will close the connection once called.
+  OnAuthenticationComplete(AuthenticationCompleteMessage message);
+
+  // Called when authentication cancellation is complete.
+  //
+  // Session remote will close the connection once called.
+  //
+  // Cancellation is triggered when the client disconnects from the
+  // |FaceAuthenticationSession| delegate while the session is still active.
+  // However, clients must wait for |OnAuthenticationCancelled| before assuming
+  // that the cancel operation was performed. It is possible that closing
+  // the connection may have raced with an authentication completing, in which
+  // case |OnAuthenticationComplete| or |OnAuthenticationError| may be called
+  // instead.
+  OnAuthenticationCancelled();
+
+  // Called with |error| when an unrecoverable error occurs.
+  //
+  // Session remote will close the connection when an error is emitted. A new
+  // session must be created to perform authentication.
+  OnAuthenticationError(SessionError error);
+};
+
+// Update of the authentication operation.
+struct AuthenticationUpdateMessage {
+  FaceOperationStatus status;
+};
+
+// Result of the authentication operation.
+struct AuthenticationCompleteMessage {
+};

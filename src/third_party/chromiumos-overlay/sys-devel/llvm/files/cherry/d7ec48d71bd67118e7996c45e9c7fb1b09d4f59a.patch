@@ -1,0 +1,2164 @@
+commit d7ec48d71bd67118e7996c45e9c7fb1b09d4f59a
+Author: Nico Weber <thakis@chromium.org>
+Date:   Tue May 4 09:50:43 2021 -0400
+
+    [clang] accept -fsanitize-ignorelist= in addition to -fsanitize-blacklist=
+    
+    Use that for internal names (including the default ignorelists of the
+    sanitizers).
+    
+    Differential Revision: https://reviews.llvm.org/D101832
+
+diff --git a/clang/docs/AddressSanitizer.rst b/clang/docs/AddressSanitizer.rst
+index 05888dce6a2d..865468342404 100644
+--- a/clang/docs/AddressSanitizer.rst
++++ b/clang/docs/AddressSanitizer.rst
+@@ -208,8 +208,8 @@ compilers, so we suggest to use it together with
+ The same attribute used on a global variable prevents AddressSanitizer
+ from adding redzones around it and detecting out of bounds accesses.
+ 
+-Suppressing Errors in Recompiled Code (Blacklist)
+--------------------------------------------------
++Suppressing Errors in Recompiled Code (Ignorelist)
++--------------------------------------------------
+ 
+ AddressSanitizer supports ``src`` and ``fun`` entity types in
+ :doc:`SanitizerSpecialCaseList`, that can be used to suppress error reports
+diff --git a/clang/docs/ClangCommandLineReference.rst b/clang/docs/ClangCommandLineReference.rst
+index 6b67dc07982b..356da15e67e2 100644
+--- a/clang/docs/ClangCommandLineReference.rst
++++ b/clang/docs/ClangCommandLineReference.rst
+@@ -246,9 +246,9 @@ Specify comma-separated list of triples OpenMP offloading targets to be supporte
+ 
+ Add -rpath with architecture-specific resource directory to the linker flags
+ 
+-.. option:: -fsanitize-system-blacklist=<arg>
++.. option:: -fsanitize-system-ignorelist=<arg>
+ 
+-Path to system blacklist file for sanitizers
++Path to system ignorelist file for sanitizers
+ 
+ .. option:: -fsystem-module
+ 
+@@ -842,9 +842,9 @@ Inline functions which are (explicitly or implicitly) marked inline
+ 
+ Disable auto-generation of preprocessed source files and a script for reproduction during a clang crash
+ 
+-.. option:: -fno-sanitize-blacklist
++.. option:: -fno-sanitize-ignorelist
+ 
+-Don't use blacklist file for sanitizers
++Don't use ignorelist file for sanitizers
+ 
+ .. option:: -fparse-all-comments
+ 
+@@ -881,9 +881,9 @@ Valid options are:
+ * ``global`` - Emit module destructors that are called via a platform specific array (see `llvm.global_dtors`).
+ * ``none`` - Do not emit module destructors.
+ 
+-.. option:: -fsanitize-blacklist=<arg>
++.. option:: -fsanitize-ignorelist=<arg>
+ 
+-Path to blacklist file for sanitizers
++Path to ignorelist file for sanitizers
+ 
+ .. option:: -fsanitize-cfi-canonical-jump-tables, -fno-sanitize-cfi-canonical-jump-tables
+ 
+@@ -897,11 +897,12 @@ Enable control flow integrity (CFI) checks for cross-DSO calls.
+ 
+ Generalize pointers in CFI indirect call type signature checks
+ 
+-.. option:: -fsanitize-coverage-allowlist=<arg>, -fsanitize-coverage-whitelist=<arg>
++.. option:: -fsanitize-coverage-allowlist=<arg>
+ 
+-Restrict sanitizer coverage instrumentation exclusively to modules and functions that match the provided special case list, except the blocked ones
++Restrict sanitizer coverage instrumentation exclusively to modules and
++functions that match the provided special case list, except the blocked ones
+ 
+-.. option:: -fsanitize-coverage-blocklist=<arg>, -fsanitize-coverage-blacklist=<arg>
++.. option:: -fsanitize-coverage-ignorelist=<arg>
+ 
+ Disable sanitizer coverage instrumentation for modules and functions that match the provided special case list, even the allowed ones
+ 
+diff --git a/clang/docs/ControlFlowIntegrity.rst b/clang/docs/ControlFlowIntegrity.rst
+index 97074210aa45..d8537cda1f34 100644
+--- a/clang/docs/ControlFlowIntegrity.rst
++++ b/clang/docs/ControlFlowIntegrity.rst
+@@ -108,7 +108,7 @@ This CFI scheme can be enabled on its own using ``-fsanitize=cfi-vcall``.
+ 
+ For this scheme to work, all translation units containing the definition
+ of a virtual member function (whether inline or not), other than members
+-of :ref:`blacklisted <cfi-blacklist>` types or types with public :doc:`LTO
++of :ref:`ignored <cfi-ignorelist>` types or types with public :doc:`LTO
+ visibility <LTOVisibility>`, must be compiled with ``-flto`` or ``-flto=thin``
+ enabled and be statically linked into the program.
+ 
+@@ -151,11 +151,11 @@ If a program as a matter of policy forbids the second type of cast, that
+ restriction can normally be enforced. However it may in some cases be necessary
+ for a function to perform a forbidden cast to conform with an external API
+ (e.g. the ``allocate`` member function of a standard library allocator). Such
+-functions may be :ref:`blacklisted <cfi-blacklist>`.
++functions may be :ref:`ignored <cfi-ignorelist>`.
+ 
+ For this scheme to work, all translation units containing the definition
+ of a virtual member function (whether inline or not), other than members
+-of :ref:`blacklisted <cfi-blacklist>` types or types with public :doc:`LTO
++of :ref:`ignored <cfi-ignorelist>` types or types with public :doc:`LTO
+ visibility <LTOVisibility>`, must be compiled with ``-flto`` or ``-flto=thin``
+ enabled and be statically linked into the program.
+ 
+@@ -171,7 +171,7 @@ polymorphic class type.  This CFI scheme can be enabled on its own using
+ 
+ For this scheme to work, all translation units containing the definition
+ of a virtual member function (whether inline or not), other than members
+-of :ref:`blacklisted <cfi-blacklist>` types or types with public :doc:`LTO
++of :ref:`ignored <cfi-ignorelist>` types or types with public :doc:`LTO
+ visibility <LTOVisibility>`, must be compiled with ``-flto`` or ``-flto=thin``
+ enabled and be statically linked into the program.
+ 
+@@ -201,7 +201,7 @@ the static type used at the call. This CFI scheme can be enabled on its own
+ using ``-fsanitize=cfi-icall``.
+ 
+ For this scheme to work, each indirect function call in the program, other
+-than calls in :ref:`blacklisted <cfi-blacklist>` functions, must call a
++than calls in :ref:`ignored <cfi-ignorelist>` functions, must call a
+ function which was either compiled with ``-fsanitize=cfi-icall`` enabled,
+ or whose address was taken by a function in a translation unit compiled with
+ ``-fsanitize=cfi-icall``.
+@@ -327,17 +327,17 @@ base types to be complete if they may be used for a call.
+ 
+ For this scheme to work, all translation units containing the definition
+ of a virtual member function (whether inline or not), other than members
+-of :ref:`blacklisted <cfi-blacklist>` types or types with public :doc:`LTO
++of :ref:`ignored <cfi-ignorelist>` types or types with public :doc:`LTO
+ visibility <LTOVisibility>`, must be compiled with ``-flto`` or ``-flto=thin``
+ enabled and be statically linked into the program.
+ 
+ This scheme is currently not compatible with cross-DSO CFI or the
+ Microsoft ABI.
+ 
+-.. _cfi-blacklist:
++.. _cfi-ignorelist:
+ 
+-Blacklist
+-=========
++Ignorelist
++==========
+ 
+ A :doc:`SanitizerSpecialCaseList` can be used to relax CFI checks for certain
+ source files, functions and types using the ``src``, ``fun`` and ``type``
+@@ -373,7 +373,7 @@ built with ``-flto`` or ``-flto=thin``.
+ 
+ Normally, CFI checks will only be performed for classes that have hidden LTO
+ visibility. With this flag enabled, the compiler will emit cross-DSO CFI
+-checks for all classes, except for those which appear in the CFI blacklist
++checks for all classes, except for those which appear in the CFI ignorelist
+ or which use a ``no_sanitize`` attribute.
+ 
+ Design
+diff --git a/clang/docs/MemorySanitizer.rst b/clang/docs/MemorySanitizer.rst
+index 8a88198d3e92..3ba5ce5bed3e 100644
+--- a/clang/docs/MemorySanitizer.rst
++++ b/clang/docs/MemorySanitizer.rst
+@@ -85,8 +85,8 @@ particular function.  MemorySanitizer may still instrument such functions to
+ avoid false positives.  This attribute may not be supported by other compilers,
+ so we suggest to use it together with ``__has_feature(memory_sanitizer)``.
+ 
+-Blacklist
+----------
++Ignorelist
++----------
+ 
+ MemorySanitizer supports ``src`` and ``fun`` entity types in
+ :doc:`SanitizerSpecialCaseList`, that can be used to relax MemorySanitizer
+diff --git a/clang/docs/SanitizerSpecialCaseList.rst b/clang/docs/SanitizerSpecialCaseList.rst
+index a636a02b01a5..cbb00fde9bb7 100644
+--- a/clang/docs/SanitizerSpecialCaseList.rst
++++ b/clang/docs/SanitizerSpecialCaseList.rst
+@@ -26,7 +26,7 @@ certain source-level entities to:
+ 
+ To achieve this, user may create a file listing the entities they want to
+ ignore, and pass it to clang at compile-time using
+-``-fsanitize-blacklist`` flag. See :doc:`UsersManual` for details.
++``-fsanitize-ignorelist`` flag. See :doc:`UsersManual` for details.
+ 
+ Example
+ =======
+@@ -40,19 +40,19 @@ Example
+     a[10] = 1;
+   }
+   int main() { bad_foo(); }
+-  $ cat blacklist.txt
++  $ cat ignorelist.txt
+   # Ignore reports from bad_foo function.
+   fun:bad_foo
+   $ clang -fsanitize=address foo.c ; ./a.out
+   # AddressSanitizer prints an error report.
+-  $ clang -fsanitize=address -fsanitize-blacklist=blacklist.txt foo.c ; ./a.out
++  $ clang -fsanitize=address -fsanitize-ignorelist=ignorelist.txt foo.c ; ./a.out
+   # No error report here.
+ 
+ Format
+ ======
+ 
+-Blacklists consist of entries, optionally grouped into sections. Empty lines and
+-lines starting with "#" are ignored.
++Ignorelists consist of entries, optionally grouped into sections. Empty lines
++and lines starting with "#" are ignored.
+ 
+ Section names are regular expressions written in square brackets that denote
+ which sanitizer the following entries apply to. For example, ``[address]``
+@@ -86,7 +86,7 @@ tool-specific docs.
+     fun:*BadFunction*
+     # Specific sanitizer tools may introduce categories.
+     src:/special/path/*=special_sources
+-    # Sections can be used to limit blacklist entries to specific sanitizers
++    # Sections can be used to limit ignorelist entries to specific sanitizers
+     [address]
+     fun:*BadASanFunc*
+     # Section names are regular expressions
+diff --git a/clang/docs/ThreadSanitizer.rst b/clang/docs/ThreadSanitizer.rst
+index ca5dfaafb45e..92cc9392955c 100644
+--- a/clang/docs/ThreadSanitizer.rst
++++ b/clang/docs/ThreadSanitizer.rst
+@@ -100,13 +100,13 @@ instruments such functions to avoid false positives and provide meaningful stack
+ traces.  This attribute may not be supported by other compilers, so we suggest
+ to use it together with ``__has_feature(thread_sanitizer)``.
+ 
+-Blacklist
+----------
++Ignorelist
++----------
+ 
+ ThreadSanitizer supports ``src`` and ``fun`` entity types in
+ :doc:`SanitizerSpecialCaseList`, that can be used to suppress data race reports
+ in the specified source files or functions. Unlike functions marked with
+-``no_sanitize("thread")`` attribute, blacklisted functions are not instrumented
++``no_sanitize("thread")`` attribute, ignored functions are not instrumented
+ at all. This can lead to false positives due to missed synchronization via
+ atomic operations and missed stack frames in reports.
+ 
+diff --git a/clang/docs/UndefinedBehaviorSanitizer.rst b/clang/docs/UndefinedBehaviorSanitizer.rst
+index 3345536bf821..3d48c38bf221 100644
+--- a/clang/docs/UndefinedBehaviorSanitizer.rst
++++ b/clang/docs/UndefinedBehaviorSanitizer.rst
+@@ -270,8 +270,8 @@ This attribute may not be
+ supported by other compilers, so consider using it together with
+ ``#if defined(__clang__)``.
+ 
+-Suppressing Errors in Recompiled Code (Blacklist)
+--------------------------------------------------
++Suppressing Errors in Recompiled Code (Ignorelist)
++--------------------------------------------------
+ 
+ UndefinedBehaviorSanitizer supports ``src`` and ``fun`` entity types in
+ :doc:`SanitizerSpecialCaseList`, that can be used to suppress error reports
+diff --git a/clang/docs/UsersManual.rst b/clang/docs/UsersManual.rst
+index f84c4eceebb9..244212a1336d 100644
+--- a/clang/docs/UsersManual.rst
++++ b/clang/docs/UsersManual.rst
+@@ -1614,15 +1614,15 @@ are listed below.
+ 
+    This flag is enabled by default for sanitizers in the ``cfi`` group.
+ 
+-.. option:: -fsanitize-blacklist=/path/to/blacklist/file
++.. option:: -fsanitize-ignorelist=/path/to/ignorelist/file
+ 
+    Disable or modify sanitizer checks for objects (source files, functions,
+    variables, types) listed in the file. See
+    :doc:`SanitizerSpecialCaseList` for file format description.
+ 
+-.. option:: -fno-sanitize-blacklist
++.. option:: -fno-sanitize-ignorelist
+ 
+-   Don't use blacklist file, if it was specified earlier in the command line.
++   Don't use ignorelist file, if it was specified earlier in the command line.
+ 
+ **-f[no-]sanitize-coverage=[type,features,...]**
+ 
+@@ -3679,8 +3679,8 @@ Execute ``clang-cl /?`` to see a list of supported options:
+       -fno-sanitize-address-use-after-scope
+                               Disable use-after-scope detection in AddressSanitizer
+       -fno-sanitize-address-use-odr-indicator
+-                              Disable ODR indicator globals
+-      -fno-sanitize-blacklist Don't use blacklist file for sanitizers
++                               Disable ODR indicator globals
++      -fno-sanitize-ignorelist Don't use ignorelist file for sanitizers
+       -fno-sanitize-cfi-cross-dso
+                               Disable control flow integrity (CFI) checks for cross-DSO calls.
+       -fno-sanitize-coverage=<value>
+@@ -3728,8 +3728,8 @@ Execute ``clang-cl /?`` to see a list of supported options:
+                               Enable use-after-scope detection in AddressSanitizer
+       -fsanitize-address-use-odr-indicator
+                               Enable ODR indicator globals to avoid false ODR violation reports in partially sanitized programs at the cost of an increase in binary size
+-      -fsanitize-blacklist=<value>
+-                              Path to blacklist file for sanitizers
++      -fsanitize-ignorelist=<value>
++                              Path to ignorelist file for sanitizers
+       -fsanitize-cfi-cross-dso
+                               Enable control flow integrity (CFI) checks for cross-DSO calls.
+       -fsanitize-cfi-icall-generalize-pointers
+diff --git a/clang/include/clang/Basic/CodeGenOptions.h b/clang/include/clang/Basic/CodeGenOptions.h
+index 778340b34272..8f75886d84d5 100644
+--- a/clang/include/clang/Basic/CodeGenOptions.h
++++ b/clang/include/clang/Basic/CodeGenOptions.h
+@@ -384,10 +384,10 @@ public:
+   /// On x86 this can be "fs" or "gs".
+   std::string StackProtectorGuardReg;
+ 
+-  /// Path to blocklist file specifying which objects
++  /// Path to ignorelist file specifying which objects
+   /// (files, functions) listed for instrumentation by sanitizer
+   /// coverage pass should actually not be instrumented.
+-  std::vector<std::string> SanitizeCoverageBlocklistFiles;
++  std::vector<std::string> SanitizeCoverageIgnorelistFiles;
+ 
+   /// Executable and command-line used to create a given CompilerInvocation.
+   /// Most of the time this will be the full -cc1 command.
+diff --git a/clang/include/clang/Basic/DiagnosticDriverKinds.td b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+index 1ae0df3633b3..92ce91c11b71 100644
+--- a/clang/include/clang/Basic/DiagnosticDriverKinds.td
++++ b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+@@ -167,12 +167,12 @@ def err_drv_invalid_libcxx_deployment : Error<
+   "invalid deployment target for -stdlib=libc++ (requires %0 or later)">;
+ def err_drv_invalid_argument_to_option : Error<
+   "invalid argument '%0' to -%1">;
+-def err_drv_malformed_sanitizer_blacklist : Error<
+-  "malformed sanitizer blacklist: '%0'">;
++def err_drv_malformed_sanitizer_ignorelist : Error<
++  "malformed sanitizer ignorelist: '%0'">;
+ def err_drv_malformed_sanitizer_coverage_whitelist : Error<
+   "malformed sanitizer coverage whitelist: '%0'">;
+-def err_drv_malformed_sanitizer_coverage_blacklist : Error<
+-  "malformed sanitizer coverage blacklist: '%0'">;
++def err_drv_malformed_sanitizer_coverage_ignorelist : Error<
++  "malformed sanitizer coverage ignorelist: '%0'">;
+ def err_drv_duplicate_config : Error<
+   "no more than one option '--config' is allowed">;
+ def err_drv_config_file_not_exist : Error<
+diff --git a/clang/include/clang/Basic/SanitizerSpecialCaseList.h b/clang/include/clang/Basic/SanitizerSpecialCaseList.h
+index c84894dae298..d024b7dfc2e8 100644
+--- a/clang/include/clang/Basic/SanitizerSpecialCaseList.h
++++ b/clang/include/clang/Basic/SanitizerSpecialCaseList.h
+@@ -39,7 +39,7 @@ public:
+   createOrDie(const std::vector<std::string> &Paths,
+               llvm::vfs::FileSystem &VFS);
+ 
+-  // Query blacklisted entries if any bit in Mask matches the entry's section.
++  // Query ignorelisted entries if any bit in Mask matches the entry's section.
+   bool inSection(SanitizerMask Mask, StringRef Prefix, StringRef Query,
+                  StringRef Category = StringRef()) const;
+ 
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index e76cfc3ea21f..016e3eb3776e 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -1481,24 +1481,33 @@ def fsanitize_EQ : CommaJoined<["-"], "fsanitize=">, Group<f_clang_Group>,
+                             "or suspicious behavior. See user manual for available checks">;
+ def fno_sanitize_EQ : CommaJoined<["-"], "fno-sanitize=">, Group<f_clang_Group>,
+                       Flags<[CoreOption, NoXarchOption]>;
+-def fsanitize_blacklist : Joined<["-"], "fsanitize-blacklist=">,
+-                          Group<f_clang_Group>,
+-                          HelpText<"Path to blacklist file for sanitizers">;
+-def fsanitize_system_blacklist : Joined<["-"], "fsanitize-system-blacklist=">,
+-  HelpText<"Path to system blacklist file for sanitizers">,
+-  Flags<[CC1Option]>;
+-def fno_sanitize_blacklist : Flag<["-"], "fno-sanitize-blacklist">,
+-                             Group<f_clang_Group>,
+-                             HelpText<"Don't use blacklist file for sanitizers">;
+-def fsanitize_coverage
+-    : CommaJoined<["-"], "fsanitize-coverage=">,
+-      Group<f_clang_Group>,
+-      HelpText<"Specify the type of coverage instrumentation for Sanitizers">;
+-def fno_sanitize_coverage
+-    : CommaJoined<["-"], "fno-sanitize-coverage=">,
+-      Group<f_clang_Group>, Flags<[CoreOption, NoXarchOption]>,
+-      HelpText<"Disable specified features of coverage instrumentation for "
+-               "Sanitizers">, Values<"func,bb,edge,indirect-calls,trace-bb,trace-cmp,trace-div,trace-gep,8bit-counters,trace-pc,trace-pc-guard,no-prune,inline-8bit-counters,inline-bool-flag">;
++
++def fsanitize_ignorelist_EQ : Joined<["-"], "fsanitize-ignorelist=">,
++  Group<f_clang_Group>, HelpText<"Path to ignorelist file for sanitizers">;
++def : Joined<["-"], "fsanitize-blacklist=">,
++  Group<f_clang_Group>, Flags<[HelpHidden]>, Alias<fsanitize_ignorelist_EQ>,
++  HelpText<"Alias for -fsanitize-ignorelist=">;
++
++def fsanitize_system_ignorelist_EQ : Joined<["-"], "fsanitize-system-ignorelist=">,
++  HelpText<"Path to system ignorelist file for sanitizers">, Flags<[CC1Option]>;
++def : Joined<["-"], "fsanitize-system-blacklist=">,
++  HelpText<"Alias for -fsanitize-system-ignorelist=">,
++  Flags<[CC1Option, HelpHidden]>, Alias<fsanitize_system_ignorelist_EQ>;
++
++def fno_sanitize_ignorelist : Flag<["-"], "fno-sanitize-ignorelist">,
++  Group<f_clang_Group>, HelpText<"Don't use ignorelist file for sanitizers">;
++def : Flag<["-"], "fno-sanitize-blacklist">,
++  Group<f_clang_Group>, Flags<[HelpHidden]>, Alias<fno_sanitize_ignorelist>;
++
++def fsanitize_coverage : CommaJoined<["-"], "fsanitize-coverage=">,
++  Group<f_clang_Group>,
++  HelpText<"Specify the type of coverage instrumentation for Sanitizers">;
++def fno_sanitize_coverage : CommaJoined<["-"], "fno-sanitize-coverage=">,
++  Group<f_clang_Group>, Flags<[CoreOption, NoXarchOption]>,
++  HelpText<"Disable features of coverage instrumentation for Sanitizers">,
++  Values<"func,bb,edge,indirect-calls,trace-bb,trace-cmp,trace-div,trace-gep,"
++         "8bit-counters,trace-pc,trace-pc-guard,no-prune,inline-8bit-counters,"
++         "inline-bool-flag">;
+ def fsanitize_coverage_allowlist : Joined<["-"], "fsanitize-coverage-allowlist=">,
+     Group<f_clang_Group>, Flags<[CoreOption, NoXarchOption]>,
+     HelpText<"Restrict sanitizer coverage instrumentation exclusively to modules and functions that match the provided special case list, except the blocked ones">,
+@@ -1506,13 +1515,19 @@ def fsanitize_coverage_allowlist : Joined<["-"], "fsanitize-coverage-allowlist="
+ def : Joined<["-"], "fsanitize-coverage-whitelist=">,
+   Group<f_clang_Group>, Flags<[CoreOption, HelpHidden]>, Alias<fsanitize_coverage_allowlist>,
+   HelpText<"Deprecated, use -fsanitize-coverage-allowlist= instead">;
+-def fsanitize_coverage_blocklist : Joined<["-"], "fsanitize-coverage-blocklist=">,
++def fsanitize_coverage_ignorelist : Joined<["-"], "fsanitize-coverage-ignorelist=">,
+     Group<f_clang_Group>, Flags<[CoreOption, NoXarchOption]>,
+-    HelpText<"Disable sanitizer coverage instrumentation for modules and functions that match the provided special case list, even the allowed ones">,
+-    MarshallingInfoStringVector<CodeGenOpts<"SanitizeCoverageBlocklistFiles">>;
++    HelpText<"Disable sanitizer coverage instrumentation for modules and functions "
++             "that match the provided special case list, even the allowed ones">,
++    MarshallingInfoStringVector<CodeGenOpts<"SanitizeCoverageIgnorelistFiles">>;
++def : Joined<["-"], "fsanitize-coverage-blocklist=">,
++  Group<f_clang_Group>, Flags<[CoreOption, HelpHidden]>,
++  Alias<fsanitize_coverage_ignorelist>,
++  HelpText<"Deprecated, use -fsanitize-coverage-ignorelist= instead">;
+ def : Joined<["-"], "fsanitize-coverage-blacklist=">,
+-  Group<f_clang_Group>, Flags<[CoreOption, HelpHidden]>, Alias<fsanitize_coverage_blocklist>,
+-  HelpText<"Deprecated, use -fsanitize-coverage-blocklist= instead">;
++  Group<f_clang_Group>, Flags<[CoreOption, HelpHidden]>,
++  Alias<fsanitize_coverage_ignorelist>,
++  HelpText<"Deprecated, use -fsanitize-coverage-ignorelist= instead">;
+ def fsanitize_memory_track_origins_EQ : Joined<["-"], "fsanitize-memory-track-origins=">,
+                                         Group<f_clang_Group>,
+                                         HelpText<"Enable origins tracking in MemorySanitizer">,
+diff --git a/clang/include/clang/Driver/SanitizerArgs.h b/clang/include/clang/Driver/SanitizerArgs.h
+index 6ba5aac0b702..e9609268ecd7 100644
+--- a/clang/include/clang/Driver/SanitizerArgs.h
++++ b/clang/include/clang/Driver/SanitizerArgs.h
+@@ -25,10 +25,10 @@ class SanitizerArgs {
+   SanitizerSet RecoverableSanitizers;
+   SanitizerSet TrapSanitizers;
+ 
+-  std::vector<std::string> UserBlacklistFiles;
+-  std::vector<std::string> SystemBlacklistFiles;
++  std::vector<std::string> UserIgnorelistFiles;
++  std::vector<std::string> SystemIgnorelistFiles;
+   std::vector<std::string> CoverageAllowlistFiles;
+-  std::vector<std::string> CoverageBlocklistFiles;
++  std::vector<std::string> CoverageIgnorelistFiles;
+   int CoverageFeatures = 0;
+   int MsanTrackOrigins = 0;
+   bool MsanUseAfterDtor = true;
+diff --git a/clang/include/clang/Frontend/DependencyOutputOptions.h b/clang/include/clang/Frontend/DependencyOutputOptions.h
+index 0c151935e842..78a2841d1e10 100644
+--- a/clang/include/clang/Frontend/DependencyOutputOptions.h
++++ b/clang/include/clang/Frontend/DependencyOutputOptions.h
+@@ -22,7 +22,7 @@ enum class DependencyOutputFormat { Make, NMake };
+ 
+ /// ExtraDepKind - The kind of extra dependency file.
+ enum ExtraDepKind {
+-  EDK_SanitizeBlacklist,
++  EDK_SanitizeIgnorelist,
+   EDK_ProfileList,
+   EDK_ModuleFile,
+   EDK_DepFileEntry,
+diff --git a/clang/lib/CodeGen/BackendUtil.cpp b/clang/lib/CodeGen/BackendUtil.cpp
+index 8dd510e745ed..fd3ce27bf20d 100644
+--- a/clang/lib/CodeGen/BackendUtil.cpp
++++ b/clang/lib/CodeGen/BackendUtil.cpp
+@@ -244,7 +244,7 @@ static void addSanitizerCoveragePass(const PassManagerBuilder &Builder,
+   auto Opts = getSancovOptsFromCGOpts(CGOpts);
+   PM.add(createModuleSanitizerCoverageLegacyPassPass(
+       Opts, CGOpts.SanitizeCoverageAllowlistFiles,
+-      CGOpts.SanitizeCoverageBlocklistFiles));
++      CGOpts.SanitizeCoverageIgnorelistFiles));
+ }
+ 
+ // Check if ASan should use GC-friendly instrumentation for globals.
+@@ -1111,7 +1111,7 @@ static void addSanitizers(const Triple &TargetTriple,
+       auto SancovOpts = getSancovOptsFromCGOpts(CodeGenOpts);
+       MPM.addPass(ModuleSanitizerCoveragePass(
+           SancovOpts, CodeGenOpts.SanitizeCoverageAllowlistFiles,
+-          CodeGenOpts.SanitizeCoverageBlocklistFiles));
++          CodeGenOpts.SanitizeCoverageIgnorelistFiles));
+     }
+ 
+     auto MSanPass = [&](SanitizerMask Mask, bool CompileKernel) {
+diff --git a/clang/lib/Driver/SanitizerArgs.cpp b/clang/lib/Driver/SanitizerArgs.cpp
+index 8cb4f50eaac4..7bd99e13010a 100644
+--- a/clang/lib/Driver/SanitizerArgs.cpp
++++ b/clang/lib/Driver/SanitizerArgs.cpp
+@@ -133,41 +133,41 @@ static void validateSpecialCaseListFormat(const Driver &D,
+     D.Diag(MalformedSCLErrorDiagID) << BLError;
+ }
+ 
+-static void addDefaultBlacklists(const Driver &D, SanitizerMask Kinds,
+-                                 std::vector<std::string> &BlacklistFiles) {
+-  struct Blacklist {
++static void addDefaultIgnorelists(const Driver &D, SanitizerMask Kinds,
++                                 std::vector<std::string> &IgnorelistFiles) {
++  struct Ignorelist {
+     const char *File;
+     SanitizerMask Mask;
+-  } Blacklists[] = {{"asan_blacklist.txt", SanitizerKind::Address},
+-                    {"hwasan_blacklist.txt", SanitizerKind::HWAddress},
+-                    {"memtag_blacklist.txt", SanitizerKind::MemTag},
+-                    {"msan_blacklist.txt", SanitizerKind::Memory},
+-                    {"tsan_blacklist.txt", SanitizerKind::Thread},
+-                    {"dfsan_abilist.txt", SanitizerKind::DataFlow},
+-                    {"cfi_blacklist.txt", SanitizerKind::CFI},
+-                    {"ubsan_blacklist.txt",
+-                     SanitizerKind::Undefined | SanitizerKind::Integer |
+-                         SanitizerKind::Nullability |
+-                         SanitizerKind::FloatDivideByZero}};
+-
+-  for (auto BL : Blacklists) {
++  } Ignorelists[] = {{"asan_ignorelist.txt", SanitizerKind::Address},
++                     {"hwasan_ignorelist.txt", SanitizerKind::HWAddress},
++                     {"memtag_ignorelist.txt", SanitizerKind::MemTag},
++                     {"msan_ignorelist.txt", SanitizerKind::Memory},
++                     {"tsan_ignorelist.txt", SanitizerKind::Thread},
++                     {"dfsan_abilist.txt", SanitizerKind::DataFlow},
++                     {"cfi_ignorelist.txt", SanitizerKind::CFI},
++                     {"ubsan_ignorelist.txt",
++                      SanitizerKind::Undefined | SanitizerKind::Integer |
++                          SanitizerKind::Nullability |
++                          SanitizerKind::FloatDivideByZero}};
++
++  for (auto BL : Ignorelists) {
+     if (!(Kinds & BL.Mask))
+       continue;
+ 
+     clang::SmallString<64> Path(D.ResourceDir);
+     llvm::sys::path::append(Path, "share", BL.File);
+     if (D.getVFS().exists(Path))
+-      BlacklistFiles.push_back(std::string(Path.str()));
++      IgnorelistFiles.push_back(std::string(Path.str()));
+     else if (BL.Mask == SanitizerKind::CFI)
+-      // If cfi_blacklist.txt cannot be found in the resource dir, driver
++      // If cfi_ignorelist.txt cannot be found in the resource dir, driver
+       // should fail.
+       D.Diag(clang::diag::err_drv_no_such_file) << Path;
+   }
+   validateSpecialCaseListFormat(
+-      D, BlacklistFiles, clang::diag::err_drv_malformed_sanitizer_blacklist);
++      D, IgnorelistFiles, clang::diag::err_drv_malformed_sanitizer_ignorelist);
+ }
+ 
+-/// Parse -f(no-)?sanitize-(coverage-)?(white|black)list argument's values,
++/// Parse -f(no-)?sanitize-(coverage-)?(white|ignore)list argument's values,
+ /// diagnosing any invalid file paths and validating special case list format.
+ static void parseSpecialCaseListArg(const Driver &D,
+                                     const llvm::opt::ArgList &Args,
+@@ -176,7 +176,7 @@ static void parseSpecialCaseListArg(const Driver &D,
+                                     llvm::opt::OptSpecifier NoSCLOptionID,
+                                     unsigned MalformedSCLErrorDiagID) {
+   for (const auto *Arg : Args) {
+-    // Match -fsanitize-(coverage-)?(white|black)list.
++    // Match -fsanitize-(coverage-)?(white|ignore)list.
+     if (Arg->getOption().matches(SCLOptionID)) {
+       Arg->claim();
+       std::string SCLPath = Arg->getValue();
+@@ -185,7 +185,7 @@ static void parseSpecialCaseListArg(const Driver &D,
+       } else {
+         D.Diag(clang::diag::err_drv_no_such_file) << SCLPath;
+       }
+-      // Match -fno-sanitize-blacklist.
++      // Match -fno-sanitize-ignorelist.
+     } else if (Arg->getOption().matches(NoSCLOptionID)) {
+       Arg->claim();
+       SCLFiles.clear();
+@@ -581,18 +581,18 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
+   TrappingKinds &= Kinds;
+   RecoverableKinds &= ~TrappingKinds;
+ 
+-  // Setup blacklist files.
+-  // Add default blacklist from resource directory for activated sanitizers, and
+-  // validate special case lists format.
+-  if (!Args.hasArgNoClaim(options::OPT_fno_sanitize_blacklist))
+-    addDefaultBlacklists(D, Kinds, SystemBlacklistFiles);
++  // Setup ignorelist files.
++  // Add default ignorelist from resource directory for activated sanitizers,
++  // and validate special case lists format.
++  if (!Args.hasArgNoClaim(options::OPT_fno_sanitize_ignorelist))
++    addDefaultIgnorelists(D, Kinds, SystemIgnorelistFiles);
+ 
+-  // Parse -f(no-)?sanitize-blacklist options.
++  // Parse -f(no-)?sanitize-ignorelist options.
+   // This also validates special case lists format.
+-  parseSpecialCaseListArg(D, Args, UserBlacklistFiles,
+-                          options::OPT_fsanitize_blacklist,
+-                          options::OPT_fno_sanitize_blacklist,
+-                          clang::diag::err_drv_malformed_sanitizer_blacklist);
++  parseSpecialCaseListArg(D, Args, UserIgnorelistFiles,
++                          options::OPT_fsanitize_ignorelist_EQ,
++                          options::OPT_fno_sanitize_ignorelist,
++                          clang::diag::err_drv_malformed_sanitizer_ignorelist);
+ 
+   // Parse -f[no-]sanitize-memory-track-origins[=level] options.
+   if (AllAddedKinds & SanitizerKind::Memory) {
+@@ -746,7 +746,7 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
+       CoverageFeatures |= CoverageFunc;
+   }
+ 
+-  // Parse -fsanitize-coverage-(black|white)list options if coverage enabled.
++  // Parse -fsanitize-coverage-(ignore|white)list options if coverage enabled.
+   // This also validates special case lists format.
+   // Here, OptSpecifier() acts as a never-matching command-line argument.
+   // So, there is no way to clear coverage lists but you can append to them.
+@@ -756,9 +756,9 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
+         options::OPT_fsanitize_coverage_allowlist, OptSpecifier(),
+         clang::diag::err_drv_malformed_sanitizer_coverage_whitelist);
+     parseSpecialCaseListArg(
+-        D, Args, CoverageBlocklistFiles,
+-        options::OPT_fsanitize_coverage_blocklist, OptSpecifier(),
+-        clang::diag::err_drv_malformed_sanitizer_coverage_blacklist);
++        D, Args, CoverageIgnorelistFiles,
++        options::OPT_fsanitize_coverage_ignorelist, OptSpecifier(),
++        clang::diag::err_drv_malformed_sanitizer_coverage_ignorelist);
+   }
+ 
+   SharedRuntime =
+@@ -987,8 +987,8 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
+   }
+   addSpecialCaseListOpt(
+       Args, CmdArgs, "-fsanitize-coverage-allowlist=", CoverageAllowlistFiles);
+-  addSpecialCaseListOpt(
+-      Args, CmdArgs, "-fsanitize-coverage-blocklist=", CoverageBlocklistFiles);
++  addSpecialCaseListOpt(Args, CmdArgs, "-fsanitize-coverage-ignorelist=",
++                        CoverageIgnorelistFiles);
+ 
+   if (TC.getTriple().isOSWindows() && needsUbsanRt()) {
+     // Instruct the code generator to embed linker directives in the object file
+@@ -1027,9 +1027,9 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
+         Args.MakeArgString("-fsanitize-trap=" + toString(TrapSanitizers)));
+ 
+   addSpecialCaseListOpt(Args, CmdArgs,
+-                        "-fsanitize-blacklist=", UserBlacklistFiles);
++                        "-fsanitize-ignorelist=", UserIgnorelistFiles);
+   addSpecialCaseListOpt(Args, CmdArgs,
+-                        "-fsanitize-system-blacklist=", SystemBlacklistFiles);
++                        "-fsanitize-system-ignorelist=", SystemIgnorelistFiles);
+ 
+   if (MsanTrackOrigins)
+     CmdArgs.push_back(Args.MakeArgString("-fsanitize-memory-track-origins=" +
+diff --git a/clang/lib/Frontend/CompilerInvocation.cpp b/clang/lib/Frontend/CompilerInvocation.cpp
+index b3e1e06bf8a2..b2fa21e50674 100644
+--- a/clang/lib/Frontend/CompilerInvocation.cpp
++++ b/clang/lib/Frontend/CompilerInvocation.cpp
+@@ -1973,8 +1973,8 @@ GenerateDependencyOutputArgs(const DependencyOutputOptions &Opts,
+ 
+   for (const auto &Dep : Opts.ExtraDeps) {
+     switch (Dep.second) {
+-    case EDK_SanitizeBlacklist:
+-      // Sanitizer blacklist arguments are generated from LanguageOptions.
++    case EDK_SanitizeIgnorelist:
++      // Sanitizer ignorelist arguments are generated from LanguageOptions.
+       continue;
+     case EDK_ModuleFile:
+       // Module file arguments are generated from FrontendOptions and
+@@ -2021,20 +2021,20 @@ static bool ParseDependencyOutputArgs(DependencyOutputOptions &Opts,
+     Opts.ShowIncludesDest = ShowIncludesDestination::None;
+   }
+ 
+-  // Add sanitizer blacklists as extra dependencies.
++  // Add sanitizer ignorelists as extra dependencies.
+   // They won't be discovered by the regular preprocessor, so
+   // we let make / ninja to know about this implicit dependency.
+-  if (!Args.hasArg(OPT_fno_sanitize_blacklist)) {
+-    for (const auto *A : Args.filtered(OPT_fsanitize_blacklist)) {
++  if (!Args.hasArg(OPT_fno_sanitize_ignorelist)) {
++    for (const auto *A : Args.filtered(OPT_fsanitize_ignorelist_EQ)) {
+       StringRef Val = A->getValue();
+       if (Val.find('=') == StringRef::npos)
+-        Opts.ExtraDeps.emplace_back(std::string(Val), EDK_SanitizeBlacklist);
++        Opts.ExtraDeps.emplace_back(std::string(Val), EDK_SanitizeIgnorelist);
+     }
+     if (Opts.IncludeSystemHeaders) {
+-      for (const auto *A : Args.filtered(OPT_fsanitize_system_blacklist)) {
++      for (const auto *A : Args.filtered(OPT_fsanitize_system_ignorelist_EQ)) {
+         StringRef Val = A->getValue();
+         if (Val.find('=') == StringRef::npos)
+-          Opts.ExtraDeps.emplace_back(std::string(Val), EDK_SanitizeBlacklist);
++          Opts.ExtraDeps.emplace_back(std::string(Val), EDK_SanitizeIgnorelist);
+       }
+     }
+   }
+@@ -3485,9 +3485,9 @@ void CompilerInvocation::GenerateLangArgs(const LangOptions &Opts,
+   for (StringRef Sanitizer : serializeSanitizerKinds(Opts.Sanitize))
+     GenerateArg(Args, OPT_fsanitize_EQ, Sanitizer, SA);
+ 
+-  // Conflating '-fsanitize-system-blacklist' and '-fsanitize-blacklist'.
++  // Conflating '-fsanitize-system-ignorelist' and '-fsanitize-ignorelist'.
+   for (const std::string &F : Opts.NoSanitizeFiles)
+-    GenerateArg(Args, OPT_fsanitize_blacklist, F, SA);
++    GenerateArg(Args, OPT_fsanitize_ignorelist_EQ, F, SA);
+ 
+   if (Opts.getClangABICompat() == LangOptions::ClangABI::Ver3_8)
+     GenerateArg(Args, OPT_fclang_abi_compat_EQ, "3.8", SA);
+@@ -3922,11 +3922,12 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
+   // Parse -fsanitize= arguments.
+   parseSanitizerKinds("-fsanitize=", Args.getAllArgValues(OPT_fsanitize_EQ),
+                       Diags, Opts.Sanitize);
+-  Opts.NoSanitizeFiles = Args.getAllArgValues(OPT_fsanitize_blacklist);
+-  std::vector<std::string> systemBlacklists =
+-      Args.getAllArgValues(OPT_fsanitize_system_blacklist);
++  Opts.NoSanitizeFiles = Args.getAllArgValues(OPT_fsanitize_ignorelist_EQ);
++  std::vector<std::string> systemIgnorelists =
++      Args.getAllArgValues(OPT_fsanitize_system_ignorelist_EQ);
+   Opts.NoSanitizeFiles.insert(Opts.NoSanitizeFiles.end(),
+-                              systemBlacklists.begin(), systemBlacklists.end());
++                              systemIgnorelists.begin(),
++                              systemIgnorelists.end());
+ 
+   if (Arg *A = Args.getLastArg(OPT_fclang_abi_compat_EQ)) {
+     Opts.setClangABICompat(LangOptions::ClangABI::Latest);
+diff --git a/clang/test/CodeGen/sanitize-init-order.cpp b/clang/test/CodeGen/sanitize-init-order.cpp
+index f6a414084791..3d83c29bafee 100644
+--- a/clang/test/CodeGen/sanitize-init-order.cpp
++++ b/clang/test/CodeGen/sanitize-init-order.cpp
+@@ -1,11 +1,11 @@
+ // RUN: %clang_cc1 -fsanitize=address -emit-llvm -o - %s | FileCheck %s
+ 
+-// Test blacklist functionality.
+-// RUN: echo "src:%s=init" | sed -e 's/\\/\\\\/g' > %t-file.blacklist
+-// RUN: echo "type:PODWithCtorAndDtor=init" > %t-type.blacklist
+-// RUN: echo "type:NS::PODWithCtor=init" >> %t-type.blacklist
+-// RUN: %clang_cc1 -fsanitize=address -fsanitize-blacklist=%t-file.blacklist -emit-llvm -o - %s | FileCheck %s --check-prefix=BLACKLIST
+-// RUN: %clang_cc1 -fsanitize=address -fsanitize-blacklist=%t-type.blacklist -emit-llvm -o - %s | FileCheck %s --check-prefix=BLACKLIST
++// Test ignorelist functionality.
++// RUN: echo "src:%s=init" | sed -e 's/\\/\\\\/g' > %t-file.ignorelist
++// RUN: echo "type:PODWithCtorAndDtor=init" > %t-type.ignorelist
++// RUN: echo "type:NS::PODWithCtor=init" >> %t-type.ignorelist
++// RUN: %clang_cc1 -fsanitize=address -fsanitize-ignorelist=%t-file.ignorelist -emit-llvm -o - %s | FileCheck %s --check-prefix=IGNORELIST
++// RUN: %clang_cc1 -fsanitize=address -fsanitize-ignorelist=%t-type.ignorelist -emit-llvm -o - %s | FileCheck %s --check-prefix=IGNORELIST
+ 
+ struct PODStruct {
+   int x;
+@@ -42,8 +42,8 @@ const volatile PODWithCtor array[5][5];
+ // CHECK: ![[GLOB_3]] = !{%struct.PODWithCtorAndDtor* {{.*}}, i1 true, i1 false}
+ // CHECK: ![[GLOB_4]] = !{{{.*}}class.NS::PODWithCtor{{.*}}, i1 true, i1 false}
+ 
+-// BLACKLIST: !llvm.asan.globals = !{![[GLOB_1:[0-9]+]], ![[GLOB_2:[0-9]+]], ![[GLOB_3:[0-9]+]], ![[GLOB_4:[0-9]+]]}
+-// BLACKLIST: ![[GLOB_1]] = !{%struct.PODStruct* {{.*}}, i1 false, i1 false}
+-// BLACKLIST: ![[GLOB_2]] = !{%struct.PODWithDtor* {{.*}}, i1 false, i1 false}
+-// BLACKLIST: ![[GLOB_3]] = !{%struct.PODWithCtorAndDtor* {{.*}}, i1 false, i1 false}
+-// BLACKLIST: ![[GLOB_4]] = !{{{.*}}class.NS::PODWithCtor{{.*}}, i1 false, i1 false}
++// IGNORELIST: !llvm.asan.globals = !{![[GLOB_1:[0-9]+]], ![[GLOB_2:[0-9]+]], ![[GLOB_3:[0-9]+]], ![[GLOB_4:[0-9]+]]}
++// IGNORELIST: ![[GLOB_1]] = !{%struct.PODStruct* {{.*}}, i1 false, i1 false}
++// IGNORELIST: ![[GLOB_2]] = !{%struct.PODWithDtor* {{.*}}, i1 false, i1 false}
++// IGNORELIST: ![[GLOB_3]] = !{%struct.PODWithCtorAndDtor* {{.*}}, i1 false, i1 false}
++// IGNORELIST: ![[GLOB_4]] = !{{{.*}}class.NS::PODWithCtor{{.*}}, i1 false, i1 false}
+diff --git a/clang/test/CodeGen/sanitizer-special-case-list.c b/clang/test/CodeGen/sanitizer-special-case-list.c
+index 45cfecd7efb0..493a8e9931da 100644
+--- a/clang/test/CodeGen/sanitizer-special-case-list.c
++++ b/clang/test/CodeGen/sanitizer-special-case-list.c
+@@ -1,11 +1,11 @@
+-// Verify that blacklist sections correctly select sanitizers to apply blacklist entries to.
++// Verify that ignorelist sections correctly select sanitizers to apply ignorelist entries to.
+ //
+-// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-blacklist=%S/Inputs/sanitizer-special-case-list.unsanitized1.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
+-// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-blacklist=%S/Inputs/sanitizer-special-case-list.unsanitized2.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
+-// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-blacklist=%S/Inputs/sanitizer-special-case-list.unsanitized3.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
+-// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-blacklist=%S/Inputs/sanitizer-special-case-list.unsanitized4.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
++// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-ignorelist=%S/Inputs/sanitizer-special-case-list.unsanitized1.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
++// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-ignorelist=%S/Inputs/sanitizer-special-case-list.unsanitized2.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
++// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-ignorelist=%S/Inputs/sanitizer-special-case-list.unsanitized3.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
++// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-ignorelist=%S/Inputs/sanitizer-special-case-list.unsanitized4.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=UNSANITIZED
+ //
+-// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-blacklist=%S/Inputs/sanitizer-special-case-list.sanitized.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=SANITIZED
++// RUN: %clang_cc1 -fsanitize=unsigned-integer-overflow,cfi-icall -fsanitize-ignorelist=%S/Inputs/sanitizer-special-case-list.sanitized.txt -emit-llvm %s -o - | FileCheck %s --check-prefix=SANITIZED
+ 
+ unsigned i;
+ 
+diff --git a/clang/test/CodeGen/shadowcallstack-attr.c b/clang/test/CodeGen/shadowcallstack-attr.c
+index da68251bf26a..e35e8c901ed8 100644
+--- a/clang/test/CodeGen/shadowcallstack-attr.c
++++ b/clang/test/CodeGen/shadowcallstack-attr.c
+@@ -1,23 +1,23 @@
+-// RUN: %clang_cc1 -triple x86_64-linux-unknown -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=UNBLOCKLISTED %s
++// RUN: %clang_cc1 -triple x86_64-linux-unknown -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=NOTIGNORELISTED %s
+ 
+-// RUN: %clang_cc1 -D ATTR -triple x86_64-linux-unknown -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=BLOCKLISTED %s
++// RUN: %clang_cc1 -D ATTR -triple x86_64-linux-unknown -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=IGNORELISTED %s
+ 
+ // RUN: echo -e "[shadow-call-stack]\nfun:foo" > %t
+-// RUN: %clang_cc1 -fsanitize-blacklist=%t -triple x86_64-linux-unknown -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=BLOCKLISTED %s
++// RUN: %clang_cc1 -fsanitize-ignorelist=%t -triple x86_64-linux-unknown -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=IGNORELISTED %s
+ 
+-// RUN: %clang_cc1 -triple riscv32-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=UNBLOCKLISTED %s
++// RUN: %clang_cc1 -triple riscv32-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=NOTIGNORELISTED %s
+ 
+-// RUN: %clang_cc1 -D ATTR -triple riscv32-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=BLOCKLISTED %s
++// RUN: %clang_cc1 -D ATTR -triple riscv32-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=IGNORELISTED %s
+ 
+ // RUN: echo -e "[shadow-call-stack]\nfun:foo" > %t
+-// RUN: %clang_cc1 -fsanitize-blacklist=%t -triple riscv32-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=BLOCKLISTED %s
++// RUN: %clang_cc1 -fsanitize-ignorelist=%t -triple riscv32-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=IGNORELISTED %s
+ 
+-// RUN: %clang_cc1 -triple riscv64-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=UNBLOCKLISTED %s
++// RUN: %clang_cc1 -triple riscv64-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=NOTIGNORELISTED %s
+ 
+-// RUN: %clang_cc1 -D ATTR -triple riscv64-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=BLOCKLISTED %s
++// RUN: %clang_cc1 -D ATTR -triple riscv64-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=IGNORELISTED %s
+ 
+ // RUN: echo -e "[shadow-call-stack]\nfun:foo" > %t
+-// RUN: %clang_cc1 -fsanitize-blacklist=%t -triple riscv64-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=BLOCKLISTED %s
++// RUN: %clang_cc1 -fsanitize-ignorelist=%t -triple riscv64-linux-gnu -emit-llvm -o - %s -fsanitize=shadow-call-stack | FileCheck -check-prefix=IGNORELISTED %s
+ 
+ #ifdef ATTR
+ __attribute__((no_sanitize("shadow-call-stack")))
+@@ -26,5 +26,5 @@ int foo(int *a) { return *a; }
+ 
+ // CHECK: define i32 @foo(i32* %a)
+ 
+-// BLOCKLISTED-NOT: attributes {{.*}}shadowcallstack{{.*}}
+-// UNBLOCKLISTED: attributes {{.*}}shadowcallstack{{.*}}
++// IGNORELISTED-NOT: attributes {{.*}}shadowcallstack{{.*}}
++// NOTIGNORELISTED: attributes {{.*}}shadowcallstack{{.*}}
+diff --git a/clang/test/CodeGen/ubsan-blacklist-vfs.c b/clang/test/CodeGen/ubsan-ignorelist-vfs.c
+similarity index 100%
+rename from clang/test/CodeGen/ubsan-blacklist-vfs.c
+rename to clang/test/CodeGen/ubsan-ignorelist-vfs.c
+diff --git a/clang/test/CodeGen/ubsan-type-blacklist.cpp b/clang/test/CodeGen/ubsan-type-ignorelist.cpp
+similarity index 71%
+rename from clang/test/CodeGen/ubsan-type-blacklist.cpp
+rename to clang/test/CodeGen/ubsan-type-ignorelist.cpp
+index 26b7aa877d15..e64b93be6a3b 100644
+--- a/clang/test/CodeGen/ubsan-type-blacklist.cpp
++++ b/clang/test/CodeGen/ubsan-type-ignorelist.cpp
+@@ -1,7 +1,7 @@
+-// Verify ubsan vptr does not check down-casts on blacklisted types.
+-// RUN: echo "type:_ZTI3Foo" > %t-type.blacklist
++// Verify ubsan vptr does not check down-casts on ignorelisted types.
++// RUN: echo "type:_ZTI3Foo" > %t-type.ignorelist
+ // RUN: %clang_cc1 -triple x86_64-linux-gnu -fsanitize=vptr -fsanitize-recover=vptr -emit-llvm %s -o - | FileCheck %s --check-prefix=DEFAULT
+-// RUN: %clang_cc1 -triple x86_64-linux-gnu -fsanitize=vptr -fsanitize-recover=vptr -fsanitize-blacklist=%t-type.blacklist -emit-llvm %s -o - | FileCheck %s --check-prefix=TYPE
++// RUN: %clang_cc1 -triple x86_64-linux-gnu -fsanitize=vptr -fsanitize-recover=vptr -fsanitize-ignorelist=%t-type.ignorelist -emit-llvm %s -o - | FileCheck %s --check-prefix=TYPE
+ 
+ class Bar {
+ public:
+diff --git a/clang/test/Driver/fsanitize-blacklist.c b/clang/test/Driver/fsanitize-blacklist.c
+deleted file mode 100644
+index f3321611da42..000000000000
+--- a/clang/test/Driver/fsanitize-blacklist.c
++++ /dev/null
+@@ -1,74 +0,0 @@
+-// General blacklist usage.
+-
+-// PR12920
+-// REQUIRES: clang-driver
+-
+-// Make sure we don't match the -NOT lines with the linker invocation.
+-// Delimiters match the start of the cc1 and the start of the linker lines
+-// for fragile tests.
+-// DELIMITERS: {{^ (\(in-process\)|")}}
+-
+-// RUN: echo "fun:foo" > %t.good
+-// RUN: echo "fun:bar" > %t.second
+-// RUN: echo "badline" > %t.bad
+-
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-blacklist=%t.good -fsanitize-blacklist=%t.second %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-BLACKLIST
+-// RUN: %clang -target aarch64-linux-gnu -fsanitize=hwaddress -fsanitize-blacklist=%t.good -fsanitize-blacklist=%t.second %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-BLACKLIST
+-// CHECK-BLACKLIST: -fsanitize-blacklist={{.*}}.good" "-fsanitize-blacklist={{.*}}.second
+-
+-// Check that the default blacklist is not added as an extra dependency.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-BLACKLIST-ASAN --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-// CHECK-DEFAULT-BLACKLIST-ASAN: -fsanitize-system-blacklist={{.*[^w]}}asan_blacklist.txt
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=hwaddress -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-BLACKLIST-HWASAN --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-// CHECK-DEFAULT-BLACKLIST-HWASAN: -fsanitize-system-blacklist={{.*}}hwasan_blacklist.txt
+-
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=integer -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-BLACKLIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=nullability -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-BLACKLIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=undefined -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-BLACKLIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=alignment -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-BLACKLIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-// RUN: %clang -target %itanium_abi_triple -fsanitize=float-divide-by-zero -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-BLACKLIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-// CHECK-DEFAULT-UBSAN-BLACKLIST: -fsanitize-system-blacklist={{.*}}ubsan_blacklist.txt
+-
+-// Check that combining ubsan and another sanitizer results in both blacklists being used.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=undefined,address -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-BLACKLIST --check-prefix=CHECK-DEFAULT-BLACKLIST-ASAN --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-blacklist=
+-
+-// Ignore -fsanitize-blacklist flag if there is no -fsanitize flag.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize-blacklist=%t.good %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-SANITIZE --check-prefix=DELIMITERS
+-// CHECK-NO-SANITIZE-NOT: -fsanitize-blacklist
+-
+-// Ignore -fsanitize-blacklist flag if there is no -fsanitize flag.
+-// Now, check for the absence of -fdepfile-entry flags.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize-blacklist=%t.good %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-SANITIZE2 --check-prefix=DELIMITERS
+-// CHECK-NO-SANITIZE2-NOT: -fdepfile-entry
+-
+-// Flag -fno-sanitize-blacklist wins if it is specified later.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-blacklist=%t.good -fno-sanitize-blacklist %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-BLACKLIST --check-prefix=DELIMITERS
+-// CHECK-NO-BLACKLIST-NOT: -fsanitize-blacklist
+-
+-// Driver barks on unexisting blacklist files.
+-// RUN: %clang -target x86_64-linux-gnu -fno-sanitize-blacklist -fsanitize-blacklist=unexisting.txt %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-SUCH-FILE
+-// CHECK-NO-SUCH-FILE: error: no such file or directory: 'unexisting.txt'
+-
+-// Driver properly reports malformed blacklist files.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-blacklist=%t.second -fsanitize-blacklist=%t.bad -fsanitize-blacklist=%t.good %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-BAD-BLACKLIST
+-// CHECK-BAD-BLACKLIST: error: malformed sanitizer blacklist: 'error parsing file '{{.*}}.bad': malformed line 1: 'badline''
+-
+-// -fno-sanitize-blacklist disables all blacklists specified earlier.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-blacklist=%t.good -fno-sanitize-blacklist -fsanitize-blacklist=%t.second %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-ONLY-FIRST-DISABLED --implicit-check-not=-fsanitize-blacklist=
+-// CHECK-ONLY_FIRST-DISABLED-NOT: good
+-// CHECK-ONLY-FIRST-DISABLED: -fsanitize-blacklist={{.*}}.second
+-// CHECK-ONLY_FIRST-DISABLED-NOT: good
+-
+-// -fno-sanitize-blacklist disables the system blacklists.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fno-sanitize-blacklist %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DISABLED-SYSTEM --check-prefix=DELIMITERS
+-// CHECK-DISABLED-SYSTEM-NOT: -fsanitize-system-blacklist
+-
+-// If cfi_blacklist.txt cannot be found in the resource dir, driver should fail.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -flto -fvisibility=default -resource-dir=/dev/null %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-MISSING-CFI-BLACKLIST
+-// CHECK-MISSING-CFI-BLACKLIST: error: no such file or directory: '{{.*}}cfi_blacklist.txt'
+-
+-// -fno-sanitize-blacklist disables checking for cfi_blacklist.txt in the resource dir.
+-// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -flto -fvisibility=default -fno-sanitize-blacklist -resource-dir=/dev/null %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-MISSING-CFI-NO-BLACKLIST
+-// CHECK-MISSING-CFI-NO-BLACKLIST-NOT: error: no such file or directory: '{{.*}}cfi_blacklist.txt'
+-
+-// DELIMITERS: {{^ *"}}
+diff --git a/clang/test/Driver/fsanitize-ignorelist.c b/clang/test/Driver/fsanitize-ignorelist.c
+new file mode 100644
+index 000000000000..9c9d143bf536
+--- /dev/null
++++ b/clang/test/Driver/fsanitize-ignorelist.c
+@@ -0,0 +1,74 @@
++// General ignorelist usage.
++
++// PR12920
++// REQUIRES: clang-driver
++
++// Make sure we don't match the -NOT lines with the linker invocation.
++// Delimiters match the start of the cc1 and the start of the linker lines
++// for fragile tests.
++// DELIMITERS: {{^ (\(in-process\)|")}}
++
++// RUN: echo "fun:foo" > %t.good
++// RUN: echo "fun:bar" > %t.second
++// RUN: echo "badline" > %t.bad
++
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-ignorelist=%t.good -fsanitize-ignorelist=%t.second %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-IGNORELIST
++// RUN: %clang -target aarch64-linux-gnu -fsanitize=hwaddress -fsanitize-ignorelist=%t.good -fsanitize-ignorelist=%t.second %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-IGNORELIST
++// CHECK-IGNORELIST: -fsanitize-ignorelist={{.*}}.good" "-fsanitize-ignorelist={{.*}}.second
++
++// Check that the default ignorelist is not added as an extra dependency.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-IGNORELIST-ASAN --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++// CHECK-DEFAULT-IGNORELIST-ASAN: -fsanitize-system-ignorelist={{.*[^w]}}asan_ignorelist.txt
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=hwaddress -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-IGNORELIST-HWASAN --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++// CHECK-DEFAULT-IGNORELIST-HWASAN: -fsanitize-system-ignorelist={{.*}}hwasan_ignorelist.txt
++
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=integer -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-IGNORELIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=nullability -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-IGNORELIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=undefined -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-IGNORELIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=alignment -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-IGNORELIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++// RUN: %clang -target %itanium_abi_triple -fsanitize=float-divide-by-zero -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-IGNORELIST --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++// CHECK-DEFAULT-UBSAN-IGNORELIST: -fsanitize-system-ignorelist={{.*}}ubsan_ignorelist.txt
++
++// Check that combining ubsan and another sanitizer results in both ignorelists being used.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=undefined,address -resource-dir=%S/Inputs/resource_dir %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DEFAULT-UBSAN-IGNORELIST --check-prefix=CHECK-DEFAULT-IGNORELIST-ASAN --implicit-check-not=fdepfile-entry --implicit-check-not=-fsanitize-ignorelist=
++
++// Ignore -fsanitize-ignorelist flag if there is no -fsanitize flag.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize-ignorelist=%t.good %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-SANITIZE --check-prefix=DELIMITERS
++// CHECK-NO-SANITIZE-NOT: -fsanitize-ignorelist
++
++// Ignore -fsanitize-ignorelist flag if there is no -fsanitize flag.
++// Now, check for the absence of -fdepfile-entry flags.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize-ignorelist=%t.good %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-SANITIZE2 --check-prefix=DELIMITERS
++// CHECK-NO-SANITIZE2-NOT: -fdepfile-entry
++
++// Flag -fno-sanitize-ignorelist wins if it is specified later.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-ignorelist=%t.good -fno-sanitize-ignorelist %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-IGNORELIST --check-prefix=DELIMITERS
++// CHECK-NO-IGNORELIST-NOT: -fsanitize-ignorelist
++
++// Driver barks on unexisting ignorelist files.
++// RUN: %clang -target x86_64-linux-gnu -fno-sanitize-ignorelist -fsanitize-ignorelist=unexisting.txt %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-SUCH-FILE
++// CHECK-NO-SUCH-FILE: error: no such file or directory: 'unexisting.txt'
++
++// Driver properly reports malformed ignorelist files.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-ignorelist=%t.second -fsanitize-ignorelist=%t.bad -fsanitize-ignorelist=%t.good %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-BAD-IGNORELIST
++// CHECK-BAD-IGNORELIST: error: malformed sanitizer ignorelist: 'error parsing file '{{.*}}.bad': malformed line 1: 'badline''
++
++// -fno-sanitize-ignorelist disables all ignorelists specified earlier.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fsanitize-ignorelist=%t.good -fno-sanitize-ignorelist -fsanitize-ignorelist=%t.second %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-ONLY-FIRST-DISABLED --implicit-check-not=-fsanitize-ignorelist=
++// CHECK-ONLY_FIRST-DISABLED-NOT: good
++// CHECK-ONLY-FIRST-DISABLED: -fsanitize-ignorelist={{.*}}.second
++// CHECK-ONLY_FIRST-DISABLED-NOT: good
++
++// -fno-sanitize-ignorelist disables the system ignorelists.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=address -fno-sanitize-ignorelist %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DISABLED-SYSTEM --check-prefix=DELIMITERS
++// CHECK-DISABLED-SYSTEM-NOT: -fsanitize-system-ignorelist
++
++// If cfi_ignorelist.txt cannot be found in the resource dir, driver should fail.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -flto -fvisibility=default -resource-dir=/dev/null %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-MISSING-CFI-IGNORELIST
++// CHECK-MISSING-CFI-IGNORELIST: error: no such file or directory: '{{.*}}cfi_ignorelist.txt'
++
++// -fno-sanitize-ignorelist disables checking for cfi_ignorelist.txt in the resource dir.
++// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -flto -fvisibility=default -fno-sanitize-ignorelist -resource-dir=/dev/null %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-MISSING-CFI-NO-IGNORELIST
++// CHECK-MISSING-CFI-NO-IGNORELIST-NOT: error: no such file or directory: '{{.*}}cfi_ignorelist.txt'
++
++// DELIMITERS: {{^ *"}}
+diff --git a/clang/test/Frontend/dependency-gen.c b/clang/test/Frontend/dependency-gen.c
+index a42804d9f214..3746b440ec6e 100644
+--- a/clang/test/Frontend/dependency-gen.c
++++ b/clang/test/Frontend/dependency-gen.c
+@@ -20,27 +20,27 @@
+ // RUN: cd a/b
+ // RUN: %clang -MD -MF - %s -fsyntax-only -I ./ | FileCheck -check-prefix=CHECK-SIX %s
+ // CHECK-SIX: {{ }}x.h
+-// RUN: echo "fun:foo" > %t.blacklist
+-// RUN: %clang -MD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_blacklist -fsanitize=undefined -flto -fvisibility=hidden -fsanitize-blacklist=%t.blacklist -I ./ | FileCheck -check-prefix=CHECK-SEVEN %s
+-// CHECK-SEVEN: .blacklist
++// RUN: echo "fun:foo" > %t.ignorelist
++// RUN: %clang -MD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_ignorelist -fsanitize=undefined -flto -fvisibility=hidden -fsanitize-ignorelist=%t.ignorelist -I ./ | FileCheck -check-prefix=CHECK-SEVEN %s
++// CHECK-SEVEN: .ignorelist
+ // CHECK-SEVEN: {{ }}x.h
+ #ifndef INCLUDE_FLAG_TEST
+ #include <x.h>
+ #endif
+ 
+-// RUN: echo "fun:foo" > %t.blacklist1
+-// RUN: echo "fun:foo" > %t.blacklist2
+-// RUN: %clang -MD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_blacklist -fsanitize=undefined -flto -fvisibility=hidden -fsanitize-blacklist=%t.blacklist1 -fsanitize-blacklist=%t.blacklist2 -I ./ | FileCheck -check-prefix=TWO-BLACK-LISTS %s
+-// TWO-BLACK-LISTS: dependency-gen.o:
+-// TWO-BLACK-LISTS-DAG: blacklist1
+-// TWO-BLACK-LISTS-DAG: blacklist2
+-// TWO-BLACK-LISTS-DAG: x.h
+-// TWO-BLACK-LISTS-DAG: dependency-gen.c
++// RUN: echo "fun:foo" > %t.ignorelist1
++// RUN: echo "fun:foo" > %t.ignorelist2
++// RUN: %clang -MD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_ignorelist -fsanitize=undefined -flto -fvisibility=hidden -fsanitize-ignorelist=%t.ignorelist1 -fsanitize-ignorelist=%t.ignorelist2 -I ./ | FileCheck -check-prefix=TWO-IGNORE-LISTS %s
++// TWO-IGNORE-LISTS: dependency-gen.o:
++// TWO-IGNORE-LISTS-DAG: ignorelist1
++// TWO-IGNORE-LISTS-DAG: ignorelist2
++// TWO-IGNORE-LISTS-DAG: x.h
++// TWO-IGNORE-LISTS-DAG: dependency-gen.c
+ 
+-// RUN: %clang -MD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_blacklist -fsanitize=undefined -flto -fvisibility=hidden -I ./ | FileCheck -check-prefix=USER-AND-SYS-DEPS %s
++// RUN: %clang -MD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_ignorelist -fsanitize=undefined -flto -fvisibility=hidden -I ./ | FileCheck -check-prefix=USER-AND-SYS-DEPS %s
+ // USER-AND-SYS-DEPS: dependency-gen.o:
+-// USER-AND-SYS-DEPS-DAG: ubsan_blacklist.txt
++// USER-AND-SYS-DEPS-DAG: ubsan_ignorelist.txt
+ 
+-// RUN: %clang -MMD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_blacklist -fsanitize=undefined -flto -fvisibility=hidden -I ./ | FileCheck -check-prefix=ONLY-USER-DEPS %s
++// RUN: %clang -MMD -MF - %s -fsyntax-only -resource-dir=%S/Inputs/resource_dir_with_sanitizer_ignorelist -fsanitize=undefined -flto -fvisibility=hidden -I ./ | FileCheck -check-prefix=ONLY-USER-DEPS %s
+ // ONLY-USER-DEPS: dependency-gen.o:
+-// NOT-ONLY-USER-DEPS: ubsan_blacklist.txt
++// NOT-ONLY-USER-DEPS: ubsan_ignorelist.txt
+diff --git a/clang/test/Frontend/print-header-includes.c b/clang/test/Frontend/print-header-includes.c
+index 292941d4353e..c210e53ee96c 100644
+--- a/clang/test/Frontend/print-header-includes.c
++++ b/clang/test/Frontend/print-header-includes.c
+@@ -46,16 +46,16 @@
+ // MS-STDERR: Note: including file:  {{[^ ]*test2.h}}
+ // MS-STDERR-NOT: Note
+ 
+-// RUN: echo "fun:foo" > %t.blacklist
++// RUN: echo "fun:foo" > %t.ignorelist
+ // RUN: %clang_cc1 -I%S -isystem %S/Inputs/SystemHeaderPrefix \
+-// RUN:     -fsanitize=address -fdepfile-entry=%t.blacklist \
++// RUN:     -fsanitize=address -fdepfile-entry=%t.ignorelist \
+ // RUN:     --show-includes -o /dev/null %s | \
+-// RUN:     FileCheck --strict-whitespace --check-prefix=MS-BLACKLIST %s
+-// MS-BLACKLIST: Note: including file: {{[^ ]*\.blacklist}}
+-// MS-BLACKLIST-NOT: Note: including file: {{[^ ]*noline.h}}
+-// MS-BLACKLIST: Note: including file: {{[^ ]*test.h}}
+-// MS-BLACKLIST: Note: including file:  {{[^ ]*test2.h}}
+-// MS-BLACKLIST-NOT: Note
++// RUN:     FileCheck --strict-whitespace --check-prefix=MS-IGNORELIST %s
++// MS-IGNORELIST: Note: including file: {{[^ ]*\.ignorelist}}
++// MS-IGNORELIST-NOT: Note: including file: {{[^ ]*noline.h}}
++// MS-IGNORELIST: Note: including file: {{[^ ]*test.h}}
++// MS-IGNORELIST: Note: including file:  {{[^ ]*test2.h}}
++// MS-IGNORELIST-NOT: Note
+ 
+ #include <noline.h>
+ #include "Inputs/test.h"
+diff --git a/clang/unittests/Driver/SanitizerArgsTest.cpp b/clang/unittests/Driver/SanitizerArgsTest.cpp
+index 84bd56852345..2539330126f0 100644
+--- a/clang/unittests/Driver/SanitizerArgsTest.cpp
++++ b/clang/unittests/Driver/SanitizerArgsTest.cpp
+@@ -92,30 +92,30 @@ private:
+   std::unique_ptr<driver::Compilation> CompilationJob;
+ };
+ 
+-TEST_F(SanitizerArgsTest, Blacklists) {
++TEST_F(SanitizerArgsTest, Ignorelists) {
+   const std::string ResourceDir = "/opt/llvm/lib/resources";
+-  const std::string UserBlacklist = "/source/my_blacklist.txt";
+-  const std::string ASanBlacklist =
+-      concatPaths({ResourceDir, "share", "asan_blacklist.txt"});
++  const std::string UserIgnorelist = "/source/my_ignorelist.txt";
++  const std::string ASanIgnorelist =
++      concatPaths({ResourceDir, "share", "asan_ignorelist.txt"});
+ 
+   auto &Command = emulateSingleCompilation(
+       /*ExtraArgs=*/{"-fsanitize=address", "-resource-dir", ResourceDir,
+-                     std::string("-fsanitize-blacklist=") + UserBlacklist},
+-      /*ExtraFiles=*/{ASanBlacklist, UserBlacklist});
++                     std::string("-fsanitize-ignorelist=") + UserIgnorelist},
++      /*ExtraFiles=*/{ASanIgnorelist, UserIgnorelist});
+ 
+-  // System blacklists are added based on resource-dir.
++  // System ignorelists are added based on resource-dir.
+   EXPECT_THAT(Command.getArguments(),
+-              Contains(StrEq(std::string("-fsanitize-system-blacklist=") +
+-                             ASanBlacklist)));
+-  // User blacklists should also be added.
++              Contains(StrEq(std::string("-fsanitize-system-ignorelist=") +
++                             ASanIgnorelist)));
++  // User ignorelists should also be added.
+   EXPECT_THAT(
+       Command.getArguments(),
+-      Contains(StrEq(std::string("-fsanitize-blacklist=") + UserBlacklist)));
++      Contains(StrEq(std::string("-fsanitize-ignorelist=") + UserIgnorelist)));
+ }
+ 
+ TEST_F(SanitizerArgsTest, XRayLists) {
+   const std::string XRayWhitelist = "/source/xray_whitelist.txt";
+-  const std::string XRayBlacklist = "/source/xray_blacklist.txt";
++  const std::string XRayIgnorelist = "/source/xray_ignorelist.txt";
+   const std::string XRayAttrList = "/source/xray_attr_list.txt";
+ 
+   auto &Command = emulateSingleCompilation(
+@@ -123,17 +123,17 @@ TEST_F(SanitizerArgsTest, XRayLists) {
+       {
+           "-fxray-instrument",
+           "-fxray-always-instrument=" + XRayWhitelist,
+-          "-fxray-never-instrument=" + XRayBlacklist,
++          "-fxray-never-instrument=" + XRayIgnorelist,
+           "-fxray-attr-list=" + XRayAttrList,
+       },
+-      /*ExtraFiles=*/{XRayWhitelist, XRayBlacklist, XRayAttrList});
++      /*ExtraFiles=*/{XRayWhitelist, XRayIgnorelist, XRayAttrList});
+ 
+-  // Blacklists exist in the filesystem, so they should be added to the
++  // Ignorelists exist in the filesystem, so they should be added to the
+   // compilation command, produced by the driver.
+   EXPECT_THAT(Command.getArguments(),
+               Contains(StrEq("-fxray-always-instrument=" + XRayWhitelist)));
+   EXPECT_THAT(Command.getArguments(),
+-              Contains(StrEq("-fxray-never-instrument=" + XRayBlacklist)));
++              Contains(StrEq("-fxray-never-instrument=" + XRayIgnorelist)));
+   EXPECT_THAT(Command.getArguments(),
+               Contains(StrEq("-fxray-attr-list=" + XRayAttrList)));
+ }
+diff --git a/compiler-rt/lib/asan/CMakeLists.txt b/compiler-rt/lib/asan/CMakeLists.txt
+index 17214e3f95cb..5500747a5739 100644
+--- a/compiler-rt/lib/asan/CMakeLists.txt
++++ b/compiler-rt/lib/asan/CMakeLists.txt
+@@ -327,7 +327,7 @@ else()
+   endforeach()
+ endif()
+ 
+-add_compiler_rt_resource_file(asan_blacklist asan_blacklist.txt asan)
++add_compiler_rt_resource_file(asan_ignorelist asan_ignorelist.txt asan)
+ 
+ add_subdirectory(scripts)
+ 
+diff --git a/compiler-rt/lib/asan/asan_blacklist.txt b/compiler-rt/lib/asan/asan_ignorelist.txt
+similarity index 59%
+rename from compiler-rt/lib/asan/asan_blacklist.txt
+rename to compiler-rt/lib/asan/asan_ignorelist.txt
+index c25921fd5fe7..5ce59926ce2f 100644
+--- a/compiler-rt/lib/asan/asan_blacklist.txt
++++ b/compiler-rt/lib/asan/asan_ignorelist.txt
+@@ -1,6 +1,6 @@
+-# Blacklist for AddressSanitizer. Turns off instrumentation of particular
+-# functions or sources. Use with care. You may set location of blacklist
+-# at compile-time using -fsanitize-blacklist=<path> flag.
++# Ignorelist for AddressSanitizer. Turns off instrumentation of particular
++# functions or sources. Use with care. You may set location of ignorelist
++# at compile-time using -fsanitize-ignorelist=<path> flag.
+ 
+ # Example usage:
+ # fun:*bad_function_name*
+diff --git a/compiler-rt/lib/asan/tests/CMakeLists.txt b/compiler-rt/lib/asan/tests/CMakeLists.txt
+index e56ae16288ca..d7caf4c861bb 100644
+--- a/compiler-rt/lib/asan/tests/CMakeLists.txt
++++ b/compiler-rt/lib/asan/tests/CMakeLists.txt
+@@ -53,7 +53,7 @@ list(APPEND ASAN_UNITTEST_COMMON_LINK_FLAGS -g)
+ # Use -D instead of definitions to please custom compile command.
+ list(APPEND ASAN_UNITTEST_COMMON_CFLAGS
+   ${COMPILER_RT_ASAN_SHADOW_SCALE_FLAG}
+-  -DASAN_HAS_BLACKLIST=1
++  -DASAN_HAS_IGNORELIST=1
+   -DASAN_HAS_EXCEPTIONS=1
+   -DASAN_UAR=0
+   )
+@@ -68,11 +68,11 @@ if(APPLE)
+   list(APPEND ASAN_UNITTEST_COMMON_LINK_FLAGS ${WEAK_SYMBOL_LINK_FLAGS})
+ endif()
+ 
+-set(ASAN_BLACKLIST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/asan_test.ignore")
++set(ASAN_IGNORELIST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/asan_test.ignore")
+ set(ASAN_UNITTEST_INSTRUMENTED_CFLAGS
+   ${ASAN_UNITTEST_COMMON_CFLAGS}
+   -fsanitize=address
+-  "-fsanitize-blacklist=${ASAN_BLACKLIST_FILE}"
++  "-fsanitize-ignorelist=${ASAN_IGNORELIST_FILE}"
+ )
+ if(NOT MSVC)
+   list(APPEND ASAN_UNITTEST_COMMON_LINK_FLAGS --driver-mode=g++)
+@@ -166,7 +166,7 @@ function(add_asan_tests arch test_runtime)
+   # Closure to keep the values.
+   function(generate_asan_tests test_objects test_suite testname)
+     generate_compiler_rt_tests(${test_objects} ${test_suite} ${testname} ${arch}
+-      COMPILE_DEPS ${ASAN_UNITTEST_HEADERS} ${ASAN_BLACKLIST_FILE}
++      COMPILE_DEPS ${ASAN_UNITTEST_HEADERS} ${ASAN_IGNORELIST_FILE}
+       DEPS gtest asan
+       KIND ${TEST_KIND}
+       ${ARGN}
+diff --git a/compiler-rt/lib/asan/tests/asan_test.cpp b/compiler-rt/lib/asan/tests/asan_test.cpp
+index c0b79bba48ff..eb61410d768f 100644
+--- a/compiler-rt/lib/asan/tests/asan_test.cpp
++++ b/compiler-rt/lib/asan/tests/asan_test.cpp
+@@ -230,13 +230,13 @@ TEST(AddressSanitizer, UAF_Packed5) {
+   delete [] Ident(p);
+ }
+ 
+-#if ASAN_HAS_BLACKLIST
++#if ASAN_HAS_IGNORELIST
+ TEST(AddressSanitizer, IgnoreTest) {
+   int *x = Ident(new int);
+   delete Ident(x);
+   *x = 0;
+ }
+-#endif  // ASAN_HAS_BLACKLIST
++#endif  // ASAN_HAS_IGNORELIST
+ 
+ struct StructWithBitField {
+   int bf1:1;
+diff --git a/compiler-rt/lib/asan/tests/asan_test.ignore b/compiler-rt/lib/asan/tests/asan_test.ignore
+index ea5c26099e75..ed65adf1c487 100644
+--- a/compiler-rt/lib/asan/tests/asan_test.ignore
++++ b/compiler-rt/lib/asan/tests/asan_test.ignore
+@@ -1,3 +1,3 @@
+-# blacklisted functions for instrumented ASan unit test
++# ignorelisted functions for instrumented ASan unit test
+ fun:*IgnoreTest*
+ fun:*SomeOtherFunc*
+diff --git a/compiler-rt/lib/asan/tests/asan_test_config.h b/compiler-rt/lib/asan/tests/asan_test_config.h
+index a0fadf8af9cb..9aac0875987a 100644
+--- a/compiler-rt/lib/asan/tests/asan_test_config.h
++++ b/compiler-rt/lib/asan/tests/asan_test_config.h
+@@ -28,8 +28,8 @@ using std::string;
+ # error "please define ASAN_HAS_EXCEPTIONS"
+ #endif
+ 
+-#ifndef ASAN_HAS_BLACKLIST
+-# error "please define ASAN_HAS_BLACKLIST"
++#ifndef ASAN_HAS_IGNORELIST
++# error "please define ASAN_HAS_IGNORELIST"
+ #endif
+ 
+ #ifndef ASAN_NEEDS_SEGV
+diff --git a/compiler-rt/lib/cfi/CMakeLists.txt b/compiler-rt/lib/cfi/CMakeLists.txt
+index 9a641d33ac48..cfd523778144 100644
+--- a/compiler-rt/lib/cfi/CMakeLists.txt
++++ b/compiler-rt/lib/cfi/CMakeLists.txt
+@@ -40,4 +40,4 @@ if(OS_NAME MATCHES "Linux" OR OS_NAME MATCHES "FreeBSD" OR OS_NAME MATCHES "NetB
+   endforeach()
+ endif()
+ 
+-add_compiler_rt_resource_file(cfi_blacklist cfi_blacklist.txt cfi)
++add_compiler_rt_resource_file(cfi_ignorelist cfi_ignorelist.txt cfi)
+diff --git a/compiler-rt/lib/cfi/cfi_blacklist.txt b/compiler-rt/lib/cfi/cfi_ignorelist.txt
+similarity index 100%
+rename from compiler-rt/lib/cfi/cfi_blacklist.txt
+rename to compiler-rt/lib/cfi/cfi_ignorelist.txt
+diff --git a/compiler-rt/lib/hwasan/CMakeLists.txt b/compiler-rt/lib/hwasan/CMakeLists.txt
+index b20bb441c820..707cbb44233f 100644
+--- a/compiler-rt/lib/hwasan/CMakeLists.txt
++++ b/compiler-rt/lib/hwasan/CMakeLists.txt
+@@ -173,7 +173,7 @@ foreach(arch ${HWASAN_SUPPORTED_ARCH})
+   endif()
+ endforeach()
+ 
+-add_compiler_rt_resource_file(hwasan_blacklist hwasan_blacklist.txt hwasan)
++add_compiler_rt_resource_file(hwasan_ignorelist hwasan_ignorelist.txt hwasan)
+ 
+ add_subdirectory("scripts")
+ 
+diff --git a/compiler-rt/lib/hwasan/hwasan_blacklist.txt b/compiler-rt/lib/hwasan/hwasan_blacklist.txt
+deleted file mode 100644
+index 395ba28f0212..000000000000
+--- a/compiler-rt/lib/hwasan/hwasan_blacklist.txt
++++ /dev/null
+@@ -1,7 +0,0 @@
+-# Blacklist for HWAddressSanitizer. Turns off instrumentation of particular
+-# functions or sources. Use with care. You may set location of blacklist
+-# at compile-time using -fsanitize-blacklist=<path> flag.
+-
+-# Example usage:
+-# fun:*bad_function_name*
+-# src:file_with_tricky_code.cc
+diff --git a/compiler-rt/lib/hwasan/hwasan_ignorelist.txt b/compiler-rt/lib/hwasan/hwasan_ignorelist.txt
+new file mode 100644
+index 000000000000..70590c970f55
+--- /dev/null
++++ b/compiler-rt/lib/hwasan/hwasan_ignorelist.txt
+@@ -0,0 +1,7 @@
++# Ignorelist for HWAddressSanitizer. Turns off instrumentation of particular
++# functions or sources. Use with care. You may set location of ignorelist
++# at compile-time using -fsanitize-ignorelist=<path> flag.
++
++# Example usage:
++# fun:*bad_function_name*
++# src:file_with_tricky_code.cc
+diff --git a/compiler-rt/lib/msan/CMakeLists.txt b/compiler-rt/lib/msan/CMakeLists.txt
+index 86e96a01a118..cb1a784eee8b 100644
+--- a/compiler-rt/lib/msan/CMakeLists.txt
++++ b/compiler-rt/lib/msan/CMakeLists.txt
+@@ -80,8 +80,8 @@ foreach(arch ${MSAN_SUPPORTED_ARCH})
+   endif()
+ endforeach()
+ 
+-add_compiler_rt_resource_file(msan_blacklist msan_blacklist.txt msan)
+-list(APPEND MSAN_RUNTIME_LIBRARIES msan_blacklist)
++add_compiler_rt_resource_file(msan_ignorelist msan_ignorelist.txt msan)
++list(APPEND MSAN_RUNTIME_LIBRARIES msan_ignorelist)
+ 
+ if(COMPILER_RT_INCLUDE_TESTS)
+   add_subdirectory(tests)
+diff --git a/compiler-rt/lib/msan/msan_blacklist.txt b/compiler-rt/lib/msan/msan_blacklist.txt
+deleted file mode 100644
+index 3efef5712185..000000000000
+--- a/compiler-rt/lib/msan/msan_blacklist.txt
++++ /dev/null
+@@ -1,10 +0,0 @@
+-# Blacklist for MemorySanitizer. Turns off instrumentation of particular
+-# functions or sources. Use with care. You may set location of blacklist
+-# at compile-time using -fsanitize-blacklist=<path> flag.
+-
+-# Example usage:
+-# fun:*bad_function_name*
+-# src:file_with_tricky_code.cc
+-
+-# https://bugs.llvm.org/show_bug.cgi?id=31877
+-fun:__gxx_personality_*
+diff --git a/compiler-rt/lib/msan/msan_ignorelist.txt b/compiler-rt/lib/msan/msan_ignorelist.txt
+new file mode 100644
+index 000000000000..1fae64d880bc
+--- /dev/null
++++ b/compiler-rt/lib/msan/msan_ignorelist.txt
+@@ -0,0 +1,10 @@
++# Ignorelist for MemorySanitizer. Turns off instrumentation of particular
++# functions or sources. Use with care. You may set location of ignorelist
++# at compile-time using -fsanitize-ignorelist=<path> flag.
++
++# Example usage:
++# fun:*bad_function_name*
++# src:file_with_tricky_code.cc
++
++# https://bugs.llvm.org/show_bug.cgi?id=31877
++fun:__gxx_personality_*
+diff --git a/compiler-rt/lib/msan/tests/CMakeLists.txt b/compiler-rt/lib/msan/tests/CMakeLists.txt
+index de3d95094848..de2b582281ba 100644
+--- a/compiler-rt/lib/msan/tests/CMakeLists.txt
++++ b/compiler-rt/lib/msan/tests/CMakeLists.txt
+@@ -9,7 +9,7 @@ set(MSAN_LIBCXX_CFLAGS
+   -fsanitize=memory
+   -fsanitize-memory-track-origins
+   -Wno-pedantic
+-  -Xclang -fdepfile-entry=${COMPILER_RT_OUTPUT_DIR}/share/msan_blacklist.txt
++  -Xclang -fdepfile-entry=${COMPILER_RT_OUTPUT_DIR}/share/msan_ignorelist.txt
+   )
+ 
+ # Unittest sources and build flags.
+diff --git a/compiler-rt/lib/msan/tests/msan_test.cpp b/compiler-rt/lib/msan/tests/msan_test.cpp
+index daf80bb23efe..552f7b9eb9d0 100644
+--- a/compiler-rt/lib/msan/tests/msan_test.cpp
++++ b/compiler-rt/lib/msan/tests/msan_test.cpp
+@@ -4832,7 +4832,7 @@ TEST(MemorySanitizer, throw_catch) {
+     // __gxx_personality_v0 is instrumented, libgcc_s is not; as a result,
+     // __msan_param_tls is not updated and __gxx_personality_v0 can find
+     // leftover poison from the previous call.
+-    // A suppression in msan_blacklist.txt makes it work.
++    // A suppression in msan_ignorelist.txt makes it work.
+     throw_stuff();
+   } catch (const int &e) {
+     // pass
+diff --git a/compiler-rt/test/asan/TestCases/Helpers/blacklist-extra.cpp b/compiler-rt/test/asan/TestCases/Helpers/ignorelist-extra.cpp
+similarity index 61%
+rename from compiler-rt/test/asan/TestCases/Helpers/blacklist-extra.cpp
+rename to compiler-rt/test/asan/TestCases/Helpers/ignorelist-extra.cpp
+index 627115cdda2b..1d99df5ae33e 100644
+--- a/compiler-rt/test/asan/TestCases/Helpers/blacklist-extra.cpp
++++ b/compiler-rt/test/asan/TestCases/Helpers/ignorelist-extra.cpp
+@@ -1,4 +1,4 @@
+-// This function is broken, but this file is blacklisted
++// This function is broken, but this file is ignorelisted
+ int externalBrokenFunction(int argc) {
+   char x[10] = {0};
+   return x[argc * 10];  // BOOM
+diff --git a/compiler-rt/test/asan/TestCases/Helpers/initialization-blacklist-extra.cpp b/compiler-rt/test/asan/TestCases/Helpers/initialization-ignorelist-extra.cpp
+similarity index 100%
+rename from compiler-rt/test/asan/TestCases/Helpers/initialization-blacklist-extra.cpp
+rename to compiler-rt/test/asan/TestCases/Helpers/initialization-ignorelist-extra.cpp
+diff --git a/compiler-rt/test/asan/TestCases/Helpers/initialization-blacklist-extra2.cpp b/compiler-rt/test/asan/TestCases/Helpers/initialization-ignorelist-extra2.cpp
+similarity index 100%
+rename from compiler-rt/test/asan/TestCases/Helpers/initialization-blacklist-extra2.cpp
+rename to compiler-rt/test/asan/TestCases/Helpers/initialization-ignorelist-extra2.cpp
+diff --git a/compiler-rt/test/asan/TestCases/Helpers/initialization-blacklist.txt b/compiler-rt/test/asan/TestCases/Helpers/initialization-ignorelist.txt
+similarity index 55%
+rename from compiler-rt/test/asan/TestCases/Helpers/initialization-blacklist.txt
+rename to compiler-rt/test/asan/TestCases/Helpers/initialization-ignorelist.txt
+index 27e49e25f67a..f9201b21f2cb 100644
+--- a/compiler-rt/test/asan/TestCases/Helpers/initialization-blacklist.txt
++++ b/compiler-rt/test/asan/TestCases/Helpers/initialization-ignorelist.txt
+@@ -1,3 +1,3 @@
+ global:*badGlobal*=init
+ type:*badNamespace::BadClass*=init
+-src:*initialization-blacklist-extra2.cpp=init
++src:*initialization-ignorelist-extra2.cpp=init
+diff --git a/compiler-rt/test/asan/TestCases/Windows/iostream_sbo.cpp b/compiler-rt/test/asan/TestCases/Windows/iostream_sbo.cpp
+index 46f452a32522..8c7570f3c7d8 100644
+--- a/compiler-rt/test/asan/TestCases/Windows/iostream_sbo.cpp
++++ b/compiler-rt/test/asan/TestCases/Windows/iostream_sbo.cpp
+@@ -1,9 +1,9 @@
+-// First, check this works with the default blacklist:
++// First, check this works with the default ignorelist:
+ // RUN: %clang_cl_asan -Od %s -Fe%t
+ // RUN: echo "42" | %run %t 2>&1 | FileCheck %s
+ //
+-// Then, make sure it still works when a user uses his own blacklist file:
+-// RUN: %clang_cl_asan -Od %s -fsanitize-blacklist=%p/../Helpers/initialization-blacklist.txt -Fe%t2
++// Then, make sure it still works when a user uses their own ignorelist file:
++// RUN: %clang_cl_asan -Od %s -fsanitize-ignorelist=%p/../Helpers/initialization-ignorelist.txt -Fe%t2
+ // RUN: echo "42" | %run %t2 2>&1 | FileCheck %s
+ 
+ #include <iostream>
+diff --git a/compiler-rt/test/asan/TestCases/blacklist.cpp b/compiler-rt/test/asan/TestCases/blacklist.cpp
+deleted file mode 100644
+index 9508f6f4d971..000000000000
+--- a/compiler-rt/test/asan/TestCases/blacklist.cpp
++++ /dev/null
+@@ -1,38 +0,0 @@
+-// Test the blacklist functionality of ASan
+-
+-// RUN: echo "fun:*brokenFunction*" > %tmp
+-// RUN: echo "global:*badGlobal*" >> %tmp
+-// RUN: echo "src:*blacklist-extra.cpp" >> %tmp
+-// RUN: %clangxx_asan -fsanitize-blacklist=%tmp -O0 %s -o %t \
+-// RUN: %p/Helpers/blacklist-extra.cpp && %run %t 2>&1
+-// RUN: %clangxx_asan -fsanitize-blacklist=%tmp -O1 %s -o %t \
+-// RUN: %p/Helpers/blacklist-extra.cpp && %run %t 2>&1
+-// RUN: %clangxx_asan -fsanitize-blacklist=%tmp -O2 %s -o %t \
+-// RUN: %p/Helpers/blacklist-extra.cpp && %run %t 2>&1
+-// RUN: %clangxx_asan -fsanitize-blacklist=%tmp -O3 %s -o %t \
+-// RUN: %p/Helpers/blacklist-extra.cpp && %run %t 2>&1
+-
+-// badGlobal is accessed improperly, but we blacklisted it. Align
+-// it to make sure memory past the end of badGlobal will be in
+-// the same page.
+-__attribute__((aligned(16))) int badGlobal;
+-int readBadGlobal() {
+-  return (&badGlobal)[1];
+-}
+-
+-// A function which is broken, but excluded in the blacklist.
+-int brokenFunction(int argc) {
+-  char x[10] = {0};
+-  return x[argc * 10];  // BOOM
+-}
+-
+-// This function is defined in Helpers/blacklist-extra.cpp, a source file which
+-// is blacklisted by name
+-int externalBrokenFunction(int x);
+-
+-int main(int argc, char **argv) {
+-  brokenFunction(argc);
+-  int x = readBadGlobal();
+-  externalBrokenFunction(argc);
+-  return 0;
+-}
+diff --git a/compiler-rt/test/asan/TestCases/default_blacklist.cpp b/compiler-rt/test/asan/TestCases/default_ignorelist.cpp
+similarity index 55%
+rename from compiler-rt/test/asan/TestCases/default_blacklist.cpp
+rename to compiler-rt/test/asan/TestCases/default_ignorelist.cpp
+index 4de851ae73fe..8297b51e7680 100644
+--- a/compiler-rt/test/asan/TestCases/default_blacklist.cpp
++++ b/compiler-rt/test/asan/TestCases/default_ignorelist.cpp
+@@ -2,6 +2,6 @@
+ // XFAIL: android
+ // UNSUPPORTED: ios
+ //
+-// Test that ASan uses the default blacklist from resource directory.
++// Test that ASan uses the default ignorelist from resource directory.
+ // RUN: %clangxx_asan -### %s 2>&1 | FileCheck %s
+-// CHECK: fsanitize-system-blacklist={{.*}}asan_blacklist.txt
++// CHECK: fsanitize-system-ignorelist={{.*}}asan_ignorelist.txt
+diff --git a/compiler-rt/test/asan/TestCases/ignorelist.cpp b/compiler-rt/test/asan/TestCases/ignorelist.cpp
+new file mode 100644
+index 000000000000..348ea5d350bf
+--- /dev/null
++++ b/compiler-rt/test/asan/TestCases/ignorelist.cpp
+@@ -0,0 +1,38 @@
++// Test the ignorelist functionality of ASan
++
++// RUN: echo "fun:*brokenFunction*" > %tmp
++// RUN: echo "global:*badGlobal*" >> %tmp
++// RUN: echo "src:*ignorelist-extra.cpp" >> %tmp
++// RUN: %clangxx_asan -fsanitize-ignorelist=%tmp -O0 %s -o %t \
++// RUN: %p/Helpers/ignorelist-extra.cpp && %run %t 2>&1
++// RUN: %clangxx_asan -fsanitize-ignorelist=%tmp -O1 %s -o %t \
++// RUN: %p/Helpers/ignorelist-extra.cpp && %run %t 2>&1
++// RUN: %clangxx_asan -fsanitize-ignorelist=%tmp -O2 %s -o %t \
++// RUN: %p/Helpers/ignorelist-extra.cpp && %run %t 2>&1
++// RUN: %clangxx_asan -fsanitize-ignorelist=%tmp -O3 %s -o %t \
++// RUN: %p/Helpers/ignorelist-extra.cpp && %run %t 2>&1
++
++// badGlobal is accessed improperly, but we ignorelisted it. Align
++// it to make sure memory past the end of badGlobal will be in
++// the same page.
++__attribute__((aligned(16))) int badGlobal;
++int readBadGlobal() {
++  return (&badGlobal)[1];
++}
++
++// A function which is broken, but excluded in the ignorelist.
++int brokenFunction(int argc) {
++  char x[10] = {0};
++  return x[argc * 10];  // BOOM
++}
++
++// This function is defined in Helpers/ignorelist-extra.cpp, a source file which
++// is ignorelisted by name
++int externalBrokenFunction(int x);
++
++int main(int argc, char **argv) {
++  brokenFunction(argc);
++  int x = readBadGlobal();
++  externalBrokenFunction(argc);
++  return 0;
++}
+diff --git a/compiler-rt/test/asan/TestCases/initialization-blacklist.cpp b/compiler-rt/test/asan/TestCases/initialization-blacklist.cpp
+deleted file mode 100644
+index f0b86e57a8c3..000000000000
+--- a/compiler-rt/test/asan/TestCases/initialization-blacklist.cpp
++++ /dev/null
+@@ -1,29 +0,0 @@
+-// Test for blacklist functionality of initialization-order checker.
+-
+-// RUN: %clangxx_asan -O0 %s %p/Helpers/initialization-blacklist-extra.cpp\
+-// RUN:   %p/Helpers/initialization-blacklist-extra2.cpp \
+-// RUN:   -fsanitize-blacklist=%p/Helpers/initialization-blacklist.txt -o %t
+-// RUN: %env_asan_opts=check_initialization_order=true %run %t 2>&1
+-// RUN: %clangxx_asan -O1 %s %p/Helpers/initialization-blacklist-extra.cpp\
+-// RUN:   %p/Helpers/initialization-blacklist-extra2.cpp \
+-// RUN:   -fsanitize-blacklist=%p/Helpers/initialization-blacklist.txt -o %t
+-// RUN: %env_asan_opts=check_initialization_order=true %run %t 2>&1
+-// RUN: %clangxx_asan -O2 %s %p/Helpers/initialization-blacklist-extra.cpp\
+-// RUN:   %p/Helpers/initialization-blacklist-extra2.cpp \
+-// RUN:   -fsanitize-blacklist=%p/Helpers/initialization-blacklist.txt -o %t
+-// RUN: %env_asan_opts=check_initialization_order=true %run %t 2>&1
+-
+-// Function is defined in another TU.
+-int readBadGlobal();
+-int x = readBadGlobal();  // init-order bug.
+-
+-// Function is defined in another TU.
+-int accessBadObject();
+-int y = accessBadObject();  // init-order bug.
+-
+-int readBadSrcGlobal();
+-int z = readBadSrcGlobal();  // init-order bug.
+-
+-int main(int argc, char **argv) {
+-  return argc + x + y + z - 1;
+-}
+diff --git a/compiler-rt/test/asan/TestCases/initialization-ignorelist.cpp b/compiler-rt/test/asan/TestCases/initialization-ignorelist.cpp
+new file mode 100644
+index 000000000000..4ca126dc98e7
+--- /dev/null
++++ b/compiler-rt/test/asan/TestCases/initialization-ignorelist.cpp
+@@ -0,0 +1,29 @@
++// Test for ignorelist functionality of initialization-order checker.
++
++// RUN: %clangxx_asan -O0 %s %p/Helpers/initialization-ignorelist-extra.cpp\
++// RUN:   %p/Helpers/initialization-ignorelist-extra2.cpp \
++// RUN:   -fsanitize-ignorelist=%p/Helpers/initialization-ignorelist.txt -o %t
++// RUN: %env_asan_opts=check_initialization_order=true %run %t 2>&1
++// RUN: %clangxx_asan -O1 %s %p/Helpers/initialization-ignorelist-extra.cpp\
++// RUN:   %p/Helpers/initialization-ignorelist-extra2.cpp \
++// RUN:   -fsanitize-ignorelist=%p/Helpers/initialization-ignorelist.txt -o %t
++// RUN: %env_asan_opts=check_initialization_order=true %run %t 2>&1
++// RUN: %clangxx_asan -O2 %s %p/Helpers/initialization-ignorelist-extra.cpp\
++// RUN:   %p/Helpers/initialization-ignorelist-extra2.cpp \
++// RUN:   -fsanitize-ignorelist=%p/Helpers/initialization-ignorelist.txt -o %t
++// RUN: %env_asan_opts=check_initialization_order=true %run %t 2>&1
++
++// Function is defined in another TU.
++int readBadGlobal();
++int x = readBadGlobal();  // init-order bug.
++
++// Function is defined in another TU.
++int accessBadObject();
++int y = accessBadObject();  // init-order bug.
++
++int readBadSrcGlobal();
++int z = readBadSrcGlobal();  // init-order bug.
++
++int main(int argc, char **argv) {
++  return argc + x + y + z - 1;
++}
+diff --git a/compiler-rt/test/dfsan/flags.c b/compiler-rt/test/dfsan/flags.c
+index 914f54f42b6c..9ac61a2b6d8c 100644
+--- a/compiler-rt/test/dfsan/flags.c
++++ b/compiler-rt/test/dfsan/flags.c
+@@ -1,6 +1,6 @@
+-// RUN: %clang_dfsan %s -fsanitize-blacklist=%S/Inputs/flags_abilist.txt -mllvm -dfsan-debug-nonzero-labels -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang_dfsan %s -fsanitize-blacklist=%S/Inputs/flags_abilist.txt -mllvm -dfsan-debug-nonzero-labels -o %t && DFSAN_OPTIONS=warn_unimplemented=0 %run %t 2>&1 | count 0
+-// RUN: %clang_dfsan %s -fsanitize-blacklist=%S/Inputs/flags_abilist.txt -mllvm -dfsan-debug-nonzero-labels -o %t && DFSAN_OPTIONS=warn_nonzero_labels=1 %run %t 2>&1 | FileCheck --check-prefix=CHECK-NONZERO %s
++// RUN: %clang_dfsan %s -fsanitize-ignorelist=%S/Inputs/flags_abilist.txt -mllvm -dfsan-debug-nonzero-labels -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang_dfsan %s -fsanitize-ignorelist=%S/Inputs/flags_abilist.txt -mllvm -dfsan-debug-nonzero-labels -o %t && DFSAN_OPTIONS=warn_unimplemented=0 %run %t 2>&1 | count 0
++// RUN: %clang_dfsan %s -fsanitize-ignorelist=%S/Inputs/flags_abilist.txt -mllvm -dfsan-debug-nonzero-labels -o %t && DFSAN_OPTIONS=warn_nonzero_labels=1 %run %t 2>&1 | FileCheck --check-prefix=CHECK-NONZERO %s
+ 
+ // Tests that flags work correctly.
+ 
+diff --git a/compiler-rt/test/msan/default_blacklist.cpp b/compiler-rt/test/msan/default_blacklist.cpp
+deleted file mode 100644
+index ea67f942a2d0..000000000000
+--- a/compiler-rt/test/msan/default_blacklist.cpp
++++ /dev/null
+@@ -1,3 +0,0 @@
+-// Test that MSan uses the default blacklist from resource directory.
+-// RUN: %clangxx_msan -### %s 2>&1 | FileCheck %s
+-// CHECK: fsanitize-system-blacklist={{.*}}msan_blacklist.txt
+diff --git a/compiler-rt/test/msan/default_ignorelist.cpp b/compiler-rt/test/msan/default_ignorelist.cpp
+new file mode 100644
+index 000000000000..6def0cb20ab5
+--- /dev/null
++++ b/compiler-rt/test/msan/default_ignorelist.cpp
+@@ -0,0 +1,3 @@
++// Test that MSan uses the default ignorelist from resource directory.
++// RUN: %clangxx_msan -### %s 2>&1 | FileCheck %s
++// CHECK: fsanitize-system-ignorelist={{.*}}msan_ignorelist.txt
+diff --git a/compiler-rt/test/sanitizer_common/TestCases/sanitizer_coverage_allowlist_blocklist.cpp b/compiler-rt/test/sanitizer_common/TestCases/sanitizer_coverage_allowlist_ignorelist.cpp
+similarity index 71%
+rename from compiler-rt/test/sanitizer_common/TestCases/sanitizer_coverage_allowlist_blocklist.cpp
+rename to compiler-rt/test/sanitizer_common/TestCases/sanitizer_coverage_allowlist_ignorelist.cpp
+index 728c0e8e6fbb..02d6f05816c2 100644
+--- a/compiler-rt/test/sanitizer_common/TestCases/sanitizer_coverage_allowlist_blocklist.cpp
++++ b/compiler-rt/test/sanitizer_common/TestCases/sanitizer_coverage_allowlist_ignorelist.cpp
+@@ -1,5 +1,5 @@
+ // Tests -fsanitize-coverage-allowlist=allowlist.txt and
+-// -fsanitize-coverage-blocklist=blocklist.txt with libFuzzer-like coverage
++// -fsanitize-coverage-ignorelist=ignorelist.txt with libFuzzer-like coverage
+ // options
+ 
+ // REQUIRES: has_sancovcc,stable-runtime
+@@ -44,50 +44,50 @@
+ // RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt                                             2>&1 |     grep -f patterns.txt | count 9
+ // RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt                                             2>&1 |     grep -f patterns.txt | count 5
+ 
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager                                           -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-blocklist=bl_all.txt   2>&1 | not grep -f patterns.txt
+-
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-blocklist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 14
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-blocklist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 14
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-blocklist=bl_none.txt  2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-blocklist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 14
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-blocklist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 9
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-blocklist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 5
+-
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-blocklist=bl_file.txt  2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-blocklist=bl_file.txt  2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-blocklist=bl_file.txt  2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-blocklist=bl_file.txt  2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-blocklist=bl_file.txt  2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-blocklist=bl_file.txt  2>&1 | not grep -f patterns.txt
+-
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-blocklist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-blocklist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-blocklist=bl_foo.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-blocklist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-blocklist=bl_foo.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-blocklist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
+-
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-blocklist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-blocklist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-blocklist=bl_bar.txt   2>&1 | not grep -f patterns.txt
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-blocklist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-blocklist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-blocklist=bl_bar.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager                                           -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fexperimental-new-pass-manager -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-ignorelist=bl_all.txt   2>&1 | not grep -f patterns.txt
++
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-ignorelist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 14
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-ignorelist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 14
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-ignorelist=bl_none.txt  2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-ignorelist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 14
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-ignorelist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 9
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-ignorelist=bl_none.txt  2>&1 |     grep -f patterns.txt | count 5
++
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-ignorelist=bl_file.txt  2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-ignorelist=bl_file.txt  2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-ignorelist=bl_file.txt  2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-ignorelist=bl_file.txt  2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-ignorelist=bl_file.txt  2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-ignorelist=bl_file.txt  2>&1 | not grep -f patterns.txt
++
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-ignorelist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-ignorelist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-ignorelist=bl_foo.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-ignorelist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-ignorelist=bl_foo.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-ignorelist=bl_foo.txt   2>&1 |     grep -f patterns.txt | count 5
++
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table                                           -fsanitize-coverage-ignorelist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_all.txt  -fsanitize-coverage-ignorelist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_none.txt -fsanitize-coverage-ignorelist=bl_bar.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_file.txt -fsanitize-coverage-ignorelist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_foo.txt  -fsanitize-coverage-ignorelist=bl_bar.txt   2>&1 |     grep -f patterns.txt | count 9
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-allowlist=al_bar.txt  -fsanitize-coverage-ignorelist=bl_bar.txt   2>&1 | not grep -f patterns.txt
+ 
+ /// The options below are deprecated and will be removed.
+-// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-whitelist=al_bar.txt  -fsanitize-coverage-blacklist=bl_bar.txt   2>&1 | not grep -f patterns.txt
++// RUN: %clangxx -O0 %s -S -o - -emit-llvm -fsanitize-coverage=inline-8bit-counters,indirect-calls,trace-cmp,pc-table -fsanitize-coverage-whitelist=al_bar.txt  -fsanitize-coverage-ignorelist=bl_bar.txt   2>&1 | not grep -f patterns.txt
+ 
+ // RUN: cd -
+ // RUN: rm -rf $DIR
+diff --git a/compiler-rt/test/tsan/blacklist.cpp b/compiler-rt/test/tsan/ignorelist.cpp
+similarity index 54%
+rename from compiler-rt/test/tsan/blacklist.cpp
+rename to compiler-rt/test/tsan/ignorelist.cpp
+index c1bcca60d505..dc7ed6d9f34c 100644
+--- a/compiler-rt/test/tsan/blacklist.cpp
++++ b/compiler-rt/test/tsan/ignorelist.cpp
+@@ -1,7 +1,7 @@
+-// Test blacklist functionality for TSan.
++// Test ignorelist functionality for TSan.
+ 
+-// RUN: echo "fun:*Blacklisted_Thread2*" > %t.blacklist
+-// RUN: %clangxx_tsan -O1 %s -fsanitize-blacklist=%t.blacklist -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: echo "fun:*Ignorelisted_Thread2*" > %t.ignorelist
++// RUN: %clangxx_tsan -O1 %s -fsanitize-ignorelist=%t.ignorelist -o %t && %run %t 2>&1 | FileCheck %s
+ #include <pthread.h>
+ #include <stdio.h>
+ 
+@@ -12,7 +12,7 @@ void *Thread1(void *x) {
+   return NULL;
+ }
+ 
+-void *Blacklisted_Thread2(void *x) {
++void *Ignorelisted_Thread2(void *x) {
+   Global--;
+   return NULL;
+ }
+@@ -20,7 +20,7 @@ void *Blacklisted_Thread2(void *x) {
+ int main() {
+   pthread_t t[2];
+   pthread_create(&t[0], NULL, Thread1, NULL);
+-  pthread_create(&t[1], NULL, Blacklisted_Thread2, NULL);
++  pthread_create(&t[1], NULL, Ignorelisted_Thread2, NULL);
+   pthread_join(t[0], NULL);
+   pthread_join(t[1], NULL);
+   fprintf(stderr, "PASS\n");
+diff --git a/compiler-rt/test/tsan/blacklist2.cpp b/compiler-rt/test/tsan/ignorelist2.cpp
+similarity index 52%
+rename from compiler-rt/test/tsan/blacklist2.cpp
+rename to compiler-rt/test/tsan/ignorelist2.cpp
+index 6442eb0e789d..e2e835819b99 100644
+--- a/compiler-rt/test/tsan/blacklist2.cpp
++++ b/compiler-rt/test/tsan/ignorelist2.cpp
+@@ -1,9 +1,9 @@
+-// Test that blacklisted functions are still contained in the stack trace.
++// Test that ignorelisted functions are still contained in the stack trace.
+ 
+-// RUN: echo "fun:*Blacklisted_Thread2*" > %t.blacklist
+-// RUN: echo "fun:*CallTouchGlobal*" >> %t.blacklist
++// RUN: echo "fun:*Ignorelisted_Thread2*" > %t.ignorelist
++// RUN: echo "fun:*CallTouchGlobal*" >> %t.ignorelist
+ 
+-// RUN: %clangxx_tsan -O1 %s -fsanitize-blacklist=%t.blacklist -o %t
++// RUN: %clangxx_tsan -O1 %s -fsanitize-ignorelist=%t.ignorelist -o %t
+ // RUN: %deflake %run %t 2>&1 | FileCheck %s
+ #include "test.h"
+ 
+@@ -13,25 +13,25 @@ void *Thread1(void *x) {
+   barrier_wait(&barrier);
+   // CHECK: ThreadSanitizer: data race
+   // CHECK: Write of size 4
+-  // CHECK: #0 Thread1{{.*}}blacklist2.cpp:[[@LINE+1]]
++  // CHECK: #0 Thread1{{.*}}ignorelist2.cpp:[[@LINE+1]]
+   Global++;
+   return NULL;
+ }
+ 
+ void TouchGlobal() __attribute__((noinline)) {
+   // CHECK: Previous write of size 4
+-  // CHECK: #0 TouchGlobal{{.*}}blacklist2.cpp:[[@LINE+1]]
++  // CHECK: #0 TouchGlobal{{.*}}ignorelist2.cpp:[[@LINE+1]]
+   Global--;
+ }
+ 
+ void CallTouchGlobal() __attribute__((noinline)) {
+-  // CHECK: #1 CallTouchGlobal{{.*}}blacklist2.cpp:[[@LINE+1]]
++  // CHECK: #1 CallTouchGlobal{{.*}}ignorelist2.cpp:[[@LINE+1]]
+   TouchGlobal();
+ }
+ 
+-void *Blacklisted_Thread2(void *x) {
++void *Ignorelisted_Thread2(void *x) {
+   Global--;
+-  // CHECK: #2 Blacklisted_Thread2{{.*}}blacklist2.cpp:[[@LINE+1]]
++  // CHECK: #2 Ignorelisted_Thread2{{.*}}ignorelist2.cpp:[[@LINE+1]]
+   CallTouchGlobal();
+   barrier_wait(&barrier);
+   return NULL;
+@@ -41,7 +41,7 @@ int main() {
+   barrier_init(&barrier, 2);
+   pthread_t t[2];
+   pthread_create(&t[0], NULL, Thread1, NULL);
+-  pthread_create(&t[1], NULL, Blacklisted_Thread2, NULL);
++  pthread_create(&t[1], NULL, Ignorelisted_Thread2, NULL);
+   pthread_join(t[0], NULL);
+   pthread_join(t[1], NULL);
+   fprintf(stderr, "PASS\n");
+diff --git a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/integer-sign-change-blacklist.c b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/integer-sign-change-ignorelist.c
+similarity index 67%
+rename from compiler-rt/test/ubsan/TestCases/ImplicitConversion/integer-sign-change-blacklist.c
+rename to compiler-rt/test/ubsan/TestCases/ImplicitConversion/integer-sign-change-ignorelist.c
+index e77b94e5e692..23e73a36cd30 100644
+--- a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/integer-sign-change-blacklist.c
++++ b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/integer-sign-change-ignorelist.c
+@@ -6,10 +6,10 @@
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-integer-sign-change]" >> %tmp
+ // RUN: echo "fun:implicitSignChange" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-ignorelacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-ignorelacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-ignorelacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-sign-change -fno-sanitize-recover=implicit-integer-sign-change -fsanitize-ignorelacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -19,7 +19,7 @@ int32_t implicitSignChange(uint32_t argc) {
+   // CHECK-NOT: runtime error
+   // CHECK-LABEL: TEST
+   return argc; // BOOM
+-  // ERROR: {{.*}}integer-sign-change-blacklist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}}' (aka 'unsigned int') of value 4294967295 (32-bit, unsigned) to type '{{.*}}' (aka 'int') changed the value to -1 (32-bit, signed)
++  // ERROR: {{.*}}integer-sign-change-ignorelacklist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}}' (aka 'unsigned int') of value 4294967295 (32-bit, unsigned) to type '{{.*}}' (aka 'int') changed the value to -1 (32-bit, signed)
+   // CHECK-NOT: runtime error
+ }
+ 
+diff --git a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-blacklist.c b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-ignorelist.c
+similarity index 53%
+rename from compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-blacklist.c
+rename to compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-ignorelist.c
+index 144c3b9376d7..5e914b4c6316 100644
+--- a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-blacklist.c
++++ b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-ignorelist.c
+@@ -6,42 +6,42 @@
+ // RUN: rm -f %tmp
+ // RUN: echo "[integer]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-conversion]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-integer-truncation]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-signed-integer-truncation]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-unsigned-integer-truncation]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelacklist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+ 
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -51,7 +51,7 @@ uint8_t implicitUnsignedTruncation(int32_t argc) {
+   // CHECK-NOT: runtime error
+   // CHECK-LABEL: TEST
+   return argc; // BOOM
+-  // ERROR: {{.*}}signed-integer-truncation-blacklist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}} (aka 'int') of value -1 (32-bit, signed) to type '{{.*}}' (aka 'unsigned char') changed the value to 255 (8-bit, unsigned)
++  // ERROR: {{.*}}signed-integer-truncation-ignorelacklist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}} (aka 'int') of value -1 (32-bit, signed) to type '{{.*}}' (aka 'unsigned char') changed the value to 255 (8-bit, unsigned)
+   // CHECK-NOT: runtime error
+ }
+ 
+diff --git a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-or-sign-change-blacklist.c b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-or-sign-change-ignorelist.c
+similarity index 62%
+rename from compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-or-sign-change-blacklist.c
+rename to compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-or-sign-change-ignorelist.c
+index 34a75707a314..8937676669b0 100644
+--- a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-or-sign-change-blacklist.c
++++ b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/signed-integer-truncation-or-sign-change-ignorelist.c
+@@ -8,37 +8,37 @@
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-signed-integer-truncation]" >> %tmp
+ // RUN: echo "fun:implicitConversion" >> %tmp
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-signed-integer-truncation,implicit-integer-sign-change]" >> %tmp
+ // RUN: echo "fun:implicitConversion" >> %tmp
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+ 
+ // The only two way it works:
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-integer-sign-change]" >> %tmp
+ // RUN: echo "fun:implicitConversion" >> %tmp
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-signed-integer-truncation]" >> %tmp
+ // RUN: echo "[implicit-integer-sign-change]" >> %tmp
+ // RUN: echo "fun:implicitConversion" >> %tmp
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-signed-integer-truncation,implicit-integer-sign-change -fno-sanitize-recover=implicit-signed-integer-truncation,implicit-integer-sign-change -fsanitize-ignorelist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -48,7 +48,7 @@ int8_t implicitConversion(uint32_t argc) {
+   // CHECK-NOT: runtime error
+   // CHECK-LABEL: TEST
+   return argc; // BOOM
+-  // ERROR: {{.*}}signed-integer-truncation-or-sign-change-blacklist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}}' (aka 'unsigned int') of value 4294967295 (32-bit, unsigned) to type '{{.*}}' (aka '{{(signed )?}}char') changed the value to -1 (8-bit, signed)
++  // ERROR: {{.*}}signed-integer-truncation-or-sign-change-ignorelist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}}' (aka 'unsigned int') of value 4294967295 (32-bit, unsigned) to type '{{.*}}' (aka '{{(signed )?}}char') changed the value to -1 (8-bit, signed)
+   // CHECK-NOT: runtime error
+ }
+ 
+diff --git a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/unsigned-integer-truncation-blacklist.c b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/unsigned-integer-truncation-ignorelist.c
+similarity index 53%
+rename from compiler-rt/test/ubsan/TestCases/ImplicitConversion/unsigned-integer-truncation-blacklist.c
+rename to compiler-rt/test/ubsan/TestCases/ImplicitConversion/unsigned-integer-truncation-ignorelist.c
+index 374c4c2c91cb..a2b1cc1cc177 100644
+--- a/compiler-rt/test/ubsan/TestCases/ImplicitConversion/unsigned-integer-truncation-blacklist.c
++++ b/compiler-rt/test/ubsan/TestCases/ImplicitConversion/unsigned-integer-truncation-ignorelist.c
+@@ -6,42 +6,42 @@
+ // RUN: rm -f %tmp
+ // RUN: echo "[integer]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-conversion]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-integer-truncation]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-unsigned-integer-truncation]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O0 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O1 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O2 %s -o %t && %run %t 2>&1 | FileCheck %s
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O3 %s -o %t && %run %t 2>&1 | FileCheck %s
+ 
+ // RUN: rm -f %tmp
+ // RUN: echo "[implicit-signed-integer-truncation]" >> %tmp
+ // RUN: echo "fun:implicitUnsignedTruncation" >> %tmp
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+-// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-blacklist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O0 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O2 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
++// RUN: %clang -fsanitize=implicit-integer-truncation -fno-sanitize-recover=implicit-integer-truncation -fsanitize-ignorelist=%tmp -O3 %s -o %t && not %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,ERROR
+ 
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -51,7 +51,7 @@ uint8_t implicitUnsignedTruncation(uint32_t argc) {
+   // CHECK-NOT: runtime error
+   // CHECK-LABEL: TEST
+   return argc; // BOOM
+-  // ERROR: {{.*}}unsigned-integer-truncation-blacklist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}}' (aka 'unsigned int') of value 4294967295 (32-bit, unsigned) to type '{{.*}}' (aka 'unsigned char') changed the value to 255 (8-bit, unsigned)
++  // ERROR: {{.*}}unsigned-integer-truncation-ignorelist.c:[[@LINE-1]]:10: runtime error: implicit conversion from type '{{.*}}' (aka 'unsigned int') of value 4294967295 (32-bit, unsigned) to type '{{.*}}' (aka 'unsigned char') changed the value to 255 (8-bit, unsigned)
+   // CHECK-NOT: runtime error
+ }
+ 
+diff --git a/compiler-rt/test/ubsan/TestCases/Pointer/alignment-assumption-blacklist.cpp b/compiler-rt/test/ubsan/TestCases/Pointer/alignment-assumption-ignorelist.cppp
+similarity index 73%
+rename from compiler-rt/test/ubsan/TestCases/Pointer/alignment-assumption-blacklist.cpp
+rename to compiler-rt/test/ubsan/TestCases/Pointer/alignment-assumption-ignorelist.cppp
+index c0c7b373f623..e5c166497dcf 100644
+--- a/compiler-rt/test/ubsan/TestCases/Pointer/alignment-assumption-blacklist.cpp
++++ b/compiler-rt/test/ubsan/TestCases/Pointer/alignment-assumption-ignorelist.cppp
+@@ -3,7 +3,7 @@
+ // RUN: rm -f %tmp
+ // RUN: echo "[alignment]" >> %tmp
+ // RUN: echo "fun:main" >> %tmp
+-// RUN: %clang -fsanitize=alignment -fno-sanitize-recover=alignment -fsanitize-blacklist=%tmp -O0 %s -o %t && %run %t 2>&1
++// RUN: %clang -fsanitize=alignment -fno-sanitize-recover=alignment -fsanitize-ignorelist=%tmp -O0 %s -o %t && %run %t 2>&1
+ 
+ #include <stdlib.h>
+ 
+@@ -11,7 +11,7 @@ int main(int argc, char* argv[]) {
+   char *ptr = (char *)malloc(2);
+ 
+   __builtin_assume_aligned(ptr + 1, 0x8000);
+-  // CHECK: {{.*}}alignment-assumption-blacklist.cpp:[[@LINE-1]]:32: runtime error: assumption of 32768 byte alignment for pointer of type 'char *' failed
++  // CHECK: {{.*}}alignment-assumption-ignorelist.cpp:[[@LINE-1]]:32: runtime error: assumption of 32768 byte alignment for pointer of type 'char *' failed
+   // CHECK: 0x{{.*}}: note: address is {{.*}} aligned, misalignment offset is {{.*}} byte
+ 
+   free(ptr);
+diff --git a/llvm/utils/gn/secondary/compiler-rt/lib/asan/BUILD.gn b/llvm/utils/gn/secondary/compiler-rt/lib/asan/BUILD.gn
+index 3593d1fcba53..c1f134fadcd3 100644
+--- a/llvm/utils/gn/secondary/compiler-rt/lib/asan/BUILD.gn
++++ b/llvm/utils/gn/secondary/compiler-rt/lib/asan/BUILD.gn
+@@ -120,7 +120,7 @@ target(asan_target_type, "asan") {
+   # FIXME: add_sanitizer_rt_version_list (cf hwasan)
+   # FIXME: need libclang_rt.asan*.a.syms?
+   # FIXME: windows flags (-Zl -nodefaultlibs)
+-  # FIXME: asan_blacklist.txt
++  # FIXME: asan_ignorelist.txt
+ 
+   if (target_os == "android") {
+     ldflags = [ "-Wl,-z,global" ]
+diff --git a/llvm/utils/gn/secondary/compiler-rt/lib/cfi/BUILD.gn b/llvm/utils/gn/secondary/compiler-rt/lib/cfi/BUILD.gn
+index 3ff5f3f9a5f9..b9ff5c530105 100644
+--- a/llvm/utils/gn/secondary/compiler-rt/lib/cfi/BUILD.gn
++++ b/llvm/utils/gn/secondary/compiler-rt/lib/cfi/BUILD.gn
+@@ -6,7 +6,7 @@ source_set("sources") {
+   sources = [ "cfi.cpp" ]
+ }
+ 
+-copy("blacklist") {
+-  sources = [ "cfi_blacklist.txt" ]
++copy("ignorelist") {
++  sources = [ "cfi_ignorelist.txt" ]
+   outputs = [ "$clang_resource_dir/share/{{source_target_relative}}" ]
+ }
+diff --git a/llvm/utils/gn/secondary/compiler-rt/test/hwasan/BUILD.gn b/llvm/utils/gn/secondary/compiler-rt/test/hwasan/BUILD.gn
+index de601b8d6122..7ee67a270090 100644
+--- a/llvm/utils/gn/secondary/compiler-rt/test/hwasan/BUILD.gn
++++ b/llvm/utils/gn/secondary/compiler-rt/test/hwasan/BUILD.gn
+@@ -33,7 +33,7 @@ if (current_toolchain != host_toolchain) {
+     deps = [
+       ":lit_site_cfg",
+       "//compiler-rt/include($host_toolchain)",
+-      "//compiler-rt/lib/cfi:blacklist($host_toolchain)",
++      "//compiler-rt/lib/cfi:ignorelist($host_toolchain)",
+       "//compiler-rt/lib/hwasan:hwasan_shared",
+       "//compiler-rt/test:lit_common_configured",
+       "//llvm/utils/FileCheck($host_toolchain)",

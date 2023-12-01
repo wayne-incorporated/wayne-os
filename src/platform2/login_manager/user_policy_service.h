@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,8 +43,7 @@ class UserPolicyService : public PolicyService {
   bool Store(const PolicyNamespace& ns,
              const std::vector<uint8_t>& policy_blob,
              int key_flags,
-             SignatureCheck signature_check,
-             const Completion& completion) override;
+             Completion completion) override;
 
   // Invoked after a new key has been persisted. This creates a copy of the key
   // at |key_copy_path_| that is readable by chronos, and notifies the delegate.

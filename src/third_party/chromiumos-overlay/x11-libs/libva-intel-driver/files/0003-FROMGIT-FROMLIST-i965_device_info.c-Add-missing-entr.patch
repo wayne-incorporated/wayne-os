@@ -1,0 +1,64 @@
+From 336eead449293206e5c7e2e411e23a1d4541561a Mon Sep 17 00:00:00 2001
+From: Gareth Yu <gareth.yu@intel.com>
+Date: Fri, 14 Oct 2022 09:03:49 +0800
+Subject: [PATCH] FROMGIT: FROMLIST: i965_device_info.c: Add missing entries to
+ gen7_cpu_hook_list
+
+Based on https://ark.intel.com/content/www/us/en/ark/products/graphics/96744/intel-hd-graphics-for-3rd-generation-intel-processors.html#@nofilter these processors do not support h264 hardware encoding and should be added to the gen7_cpu_hook_list.
+
+Signed-off-by: Patrick Thompson ptf@google.com
+(cherry picked from commit a923a997d9fbb4a34e8ff18974116b125413ba03 https://github.com/intel/intel-vaapi-driver.git)
+
+BUG=b:253075278
+TEST=emerge- libva-intel-driver
+
+Signed-off-by: Gareth Yu <gareth.yu@intel.com>
+---
+ src/i965_device_info.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/src/i965_device_info.c b/src/i965_device_info.c
+index a6adcf5c9b32..6c7bfd9ad40a 100644
+--- a/src/i965_device_info.c
++++ b/src/i965_device_info.c
+@@ -1065,9 +1065,37 @@ static void gen6_hw_codec_preinit(VADriverContextP ctx, struct hw_codec_info *co
+  * It is captured by /proc/cpuinfo and the space character is stripped.
+  */
+ const static char *gen7_cpu_hook_list[] =  {
++    "Intel(R)Celeron(R)CPUG1620T",
++    "Intel(R)Celeron(R)CPUG1630",
++    "Intel(R)Celeron(R)CPU1005M",
++    "Intel(R)Celeron(R)CPU1017U",
++    "Intel(R)Celeron(R)CPU1019Y",
++    "Intel(R)Celeron(R)CPU1000M",
+     "Intel(R)Celeron(R)CPU1007U",
++    "Intel(R)Celeron(R)CPU1020E",
++    "Intel(R)Celeron(R)CPU1020M",
+     "Intel(R)Celeron(R)CPU1037U",
++    "Intel(R)Celeron(R)CPU1047UE",
++    "Intel(R)Celeron(R)CPU927UE",
++    "Intel(R)Celeron(R)CPUG1610",
++    "Intel(R)Celeron(R)CPUG1610T",
++    "Intel(R)Celeron(R)CPUG1620",
++    "Intel(R)Pentium(R)CPU2020M",
++    "Intel(R)Pentium(R)CPU2030M",
++    "Intel(R)Pentium(R)CPU2117U",
++    "Intel(R)Pentium(R)CPU2127U",
++    "Intel(R)Pentium(R)CPU2129Y",
++    "Intel(R)Pentium(R)CPUA1018",
++    "Intel(R)Pentium(R)CPUG2010",
++    "Intel(R)Pentium(R)CPUG2020",
++    "Intel(R)Pentium(R)CPUG2020T",
++    "Intel(R)Pentium(R)CPUG2030",
++    "Intel(R)Pentium(R)CPUG2030T",
++    "Intel(R)Pentium(R)CPUG2100T",
++    "Intel(R)Pentium(R)CPUG2120",
++    "Intel(R)Pentium(R)CPUG2120T",
+     "Intel(R)Pentium(R)CPUG2130",
++    "Intel(R)Pentium(R)CPUG2140",
+ };
+ 
+ static void gen7_hw_codec_preinit(VADriverContextP ctx, struct hw_codec_info *codec_info)
+-- 
+2.37.3
+

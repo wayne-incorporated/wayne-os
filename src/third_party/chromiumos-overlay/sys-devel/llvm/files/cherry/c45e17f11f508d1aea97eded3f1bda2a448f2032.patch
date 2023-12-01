@@ -1,0 +1,69 @@
+commit c45e17f11f508d1aea97eded3f1bda2a448f2032
+Author: Pirama Arumuga Nainar <pirama@google.com>
+Date:   Fri Jul 23 12:16:22 2021 -0700
+
+    [NewPM] Add CrossDSOCFI pass irrespective of LTO optimization level
+    
+    This pass is not an optimization and is needed for CFI functionality
+    (cross-dso verification).
+    
+    Differential Revision: https://reviews.llvm.org/D106699
+
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index 0e0607c552ef..ec081e9e0f78 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -1647,6 +1647,10 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
+   // Convert @llvm.global.annotations to !annotation metadata.
+   MPM.addPass(Annotation2MetadataPass());
+ 
++  // Create a function that performs CFI checks for cross-DSO calls with targets
++  // in the current module.
++  MPM.addPass(CrossDSOCFIPass());
++
+   if (Level == OptimizationLevel::O0) {
+     // The WPD and LowerTypeTest passes need to run at -O0 to lower type
+     // metadata and intrinsics.
+@@ -1865,10 +1869,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
+   MainFPM.addPass(JumpThreadingPass(/*InsertFreezeWhenUnfoldingSelect*/ true));
+   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(MainFPM)));
+ 
+-  // Create a function that performs CFI checks for cross-DSO calls with
+-  // targets in the current module.
+-  MPM.addPass(CrossDSOCFIPass());
+-
+   // Lower type metadata and the type.test intrinsic. This pass supports
+   // clang's control flow integrity mechanisms (-fsanitize=cfi*) and needs
+   // to be run at link time if CFI is enabled. This pass does nothing if
+diff --git a/llvm/test/Other/new-pm-O0-defaults.ll b/llvm/test/Other/new-pm-O0-defaults.ll
+index 43198f515569..e7c4dfdbc758 100644
+--- a/llvm/test/Other/new-pm-O0-defaults.ll
++++ b/llvm/test/Other/new-pm-O0-defaults.ll
+@@ -53,6 +53,7 @@
+ ; CHECK-THINLTO-NEXT: Running pass: EliminateAvailableExternallyPass
+ ; CHECK-THINLTO-NEXT: Running pass: GlobalDCEPass
+ ; CHECK-LTO: Running pass: Annotation2MetadataPass
++; CHECK-LTO-NEXT: Running pass: CrossDSOCFIPass on [module]
+ ; CHECK-LTO-NEXT: Running pass: WholeProgramDevirtPass
+ ; CHECK-LTO-NEXT: Running analysis: InnerAnalysisManagerProxy
+ ; CHECK-LTO-NEXT: Running pass: LowerTypeTestsPass
+diff --git a/llvm/test/Other/new-pm-lto-defaults.ll b/llvm/test/Other/new-pm-lto-defaults.ll
+index d1e7fc969b95..8f1830dbc610 100644
+--- a/llvm/test/Other/new-pm-lto-defaults.ll
++++ b/llvm/test/Other/new-pm-lto-defaults.ll
+@@ -26,6 +26,7 @@
+ ; RUN:     --check-prefix=CHECK-O3 --check-prefix=CHECK-EP-Peephole
+ 
+ ; CHECK-O: Running pass: Annotation2Metadata
++; CHECK-O-NEXT: Running pass: CrossDSOCFIPass
+ ; CHECK-O-NEXT: Running pass: GlobalDCEPass
+ ; CHECK-O-NEXT: Running pass: ForceFunctionAttrsPass
+ ; CHECK-O-NEXT: Running pass: InferFunctionAttrsPass
+@@ -123,7 +124,6 @@
+ ; CHECK-O23SZ-NEXT: Running pass: InstCombinePass on foo
+ ; CHECK-EP-Peephole-NEXT: Running pass: NoOpFunctionPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: JumpThreadingPass on foo
+-; CHECK-O23SZ-NEXT: Running pass: CrossDSOCFIPass
+ ; CHECK-O23SZ-NEXT: Running pass: LowerTypeTestsPass
+ ; CHECK-O-NEXT: Running pass: LowerTypeTestsPass
+ ; CHECK-O23SZ-NEXT: Running pass: SimplifyCFGPass

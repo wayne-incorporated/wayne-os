@@ -1,0 +1,40 @@
+#! /bin/sh
+
+# Copyright 2012 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+if [ `eval whoami` != "root" ]; then
+    echo "Must run as root."
+    exit 1
+fi
+
+# Directory where powerd's runtime-settable pref files are stored.
+DIR=/var/lib/power_manager
+
+if [ "$1" = "--reset" ]; then
+    rm -f $DIR/*_ms
+    rm -f $DIR/disable_idle_suspend
+    rm -f $DIR/ignore_external_policy
+elif [ -z "$1" ]; then
+    echo 1 >$DIR/ignore_external_policy
+
+    echo 10000 >$DIR/plugged_dim_ms
+    echo 15000 >$DIR/plugged_off_ms
+    echo 20000 >$DIR/plugged_suspend_ms
+
+    echo 10000 >$DIR/unplugged_dim_ms
+    echo 15000 >$DIR/unplugged_off_ms
+    echo 20000 >$DIR/unplugged_suspend_ms
+
+    echo 0 >$DIR/disable_idle_suspend
+else
+    echo "Usage: $0: [OPTION]"
+    echo "Sets short timeout values for the power manager."
+    echo "  --help   display this message"
+    echo "  --reset  reset to default timeout values"
+    exit 1
+fi
+
+( (status powerd | fgrep -q "start/running" ) && restart powerd ) || \
+    start powerd

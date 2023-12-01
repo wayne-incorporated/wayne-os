@@ -1,0 +1,126 @@
+commit 0298cce257f8f8070377baab790eb8cc277904fc
+Author: Karl Meakin <karl.meakin@arm.com>
+Date:   Thu May 12 22:21:20 2022 +0100
+
+    [AArch64] Add `foldADCToCINC` DAG combine.
+    
+    Differential revision: https://reviews.llvm.org/D123781
+
+diff --git a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+index a651f8a682c4..023e91f33e0f 100644
+--- a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+@@ -15512,6 +15512,23 @@ static SDValue foldOverflowCheck(SDNode *Op, SelectionDAG &DAG, bool IsAdd) {
+                      CsetOp.getOperand(3));
+ }
+ 
++// (ADC x 0 cond) => (CINC x HS cond)
++static SDValue foldADCToCINC(SDNode *N, SelectionDAG &DAG) {
++  SDValue LHS = N->getOperand(0);
++  SDValue RHS = N->getOperand(1);
++  SDValue Cond = N->getOperand(2);
++
++  if (!isNullConstant(RHS))
++    return SDValue();
++
++  EVT VT = N->getValueType(0);
++  SDLoc DL(N);
++
++  // (CINC x cc cond) <=> (CSINC x x !cc cond)
++  SDValue CC = DAG.getConstant(AArch64CC::LO, DL, MVT::i32);
++  return DAG.getNode(AArch64ISD::CSINC, DL, VT, LHS, LHS, CC, Cond);
++}
++
+ static SDValue performAddSubCombine(SDNode *N,
+                                     TargetLowering::DAGCombinerInfo &DCI,
+                                     SelectionDAG &DAG) {
+@@ -18721,7 +18738,9 @@ SDValue AArch64TargetLowering::PerformDAGCombine(SDNode *N,
+   case AArch64ISD::ANDS:
+     return performFlagSettingCombine(N, DCI, ISD::AND);
+   case AArch64ISD::ADC:
+-    return foldOverflowCheck(N, DAG, /* IsAdd */ true);
++    if (auto R = foldOverflowCheck(N, DAG, /* IsAdd */ true))
++      return R;
++    return foldADCToCINC(N, DAG);
+   case AArch64ISD::SBC:
+     return foldOverflowCheck(N, DAG, /* IsAdd */ false);
+   case AArch64ISD::ADCS:
+diff --git a/llvm/test/CodeGen/AArch64/adc.ll b/llvm/test/CodeGen/AArch64/adc.ll
+index faa43d665d25..4b1393ffc624 100644
+--- a/llvm/test/CodeGen/AArch64/adc.ll
++++ b/llvm/test/CodeGen/AArch64/adc.ll
+@@ -30,13 +30,13 @@ define i128 @test_imm(i128 %a) {
+ ; CHECK-LE-LABEL: test_imm:
+ ; CHECK-LE:       ; %bb.0:
+ ; CHECK-LE-NEXT:    adds x0, x0, #12
+-; CHECK-LE-NEXT:    adc x1, x1, xzr
++; CHECK-LE-NEXT:    cinc x1, x1, hs
+ ; CHECK-LE-NEXT:    ret
+ ;
+ ; CHECK-BE-LABEL: test_imm:
+ ; CHECK-BE:       // %bb.0:
+ ; CHECK-BE-NEXT:    adds x1, x1, #12
+-; CHECK-BE-NEXT:    adc x0, x0, xzr
++; CHECK-BE-NEXT:    cinc x0, x0, hs
+ ; CHECK-BE-NEXT:    ret
+ 
+   %val = add i128 %a, 12
+diff --git a/llvm/test/CodeGen/AArch64/addcarry-crash.ll b/llvm/test/CodeGen/AArch64/addcarry-crash.ll
+index be48fb79e704..91c7ee7292c6 100644
+--- a/llvm/test/CodeGen/AArch64/addcarry-crash.ll
++++ b/llvm/test/CodeGen/AArch64/addcarry-crash.ll
+@@ -9,7 +9,7 @@ define i64 @foo(i64* nocapture readonly %ptr, i64 %a, i64 %b, i64 %c) local_unna
+ ; CHECK-NEXT:    lsr x9, x1, #32
+ ; CHECK-NEXT:    cmn x3, x2
+ ; CHECK-NEXT:    mul x8, x8, x9
+-; CHECK-NEXT:    adc x0, x8, xzr
++; CHECK-NEXT:    cinc x0, x8, hs
+ ; CHECK-NEXT:    ret
+ entry:
+   %0 = lshr i64 %a, 32
+diff --git a/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll b/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll
+index 71a4ed000c7e..af8a46a598a2 100644
+--- a/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll
++++ b/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll
+@@ -219,8 +219,7 @@ define i128 @test_rmw_add_128(i128* %dst)   {
+ ; NOLSE-NEXT:    ldr x8, [sp, #32] // 8-byte Folded Reload
+ ; NOLSE-NEXT:    ldr x13, [sp, #24] // 8-byte Folded Reload
+ ; NOLSE-NEXT:    adds x14, x8, #1
+-; NOLSE-NEXT:    mov x9, xzr
+-; NOLSE-NEXT:    adc x15, x11, x9
++; NOLSE-NEXT:    cinc x15, x11, hs
+ ; NOLSE-NEXT:  .LBB4_2: // %atomicrmw.start
+ ; NOLSE-NEXT:    // Parent Loop BB4_1 Depth=1
+ ; NOLSE-NEXT:    // => This Inner Loop Header: Depth=2
+@@ -271,14 +270,13 @@ define i128 @test_rmw_add_128(i128* %dst)   {
+ ; LSE-NEXT:    ldr x10, [sp, #72] // 8-byte Folded Reload
+ ; LSE-NEXT:    ldr x8, [sp, #64] // 8-byte Folded Reload
+ ; LSE-NEXT:    ldr x9, [sp, #56] // 8-byte Folded Reload
+-; LSE-NEXT:    adds x2, x8, #1
+-; LSE-NEXT:    mov x11, xzr
+-; LSE-NEXT:    adc x11, x10, x11
+-; LSE-NEXT:    // kill: def $x2 killed $x2 def $x2_x3
+-; LSE-NEXT:    mov x3, x11
+ ; LSE-NEXT:    mov x0, x8
+ ; LSE-NEXT:    mov x1, x10
+ ; LSE-NEXT:    stp x0, x1, [sp, #8] // 16-byte Folded Spill
++; LSE-NEXT:    adds x2, x8, #1
++; LSE-NEXT:    cinc x11, x10, hs
++; LSE-NEXT:    // kill: def $x2 killed $x2 def $x2_x3
++; LSE-NEXT:    mov x3, x11
+ ; LSE-NEXT:    caspal x0, x1, x2, x3, [x9]
+ ; LSE-NEXT:    stp x0, x1, [sp, #24] // 16-byte Folded Spill
+ ; LSE-NEXT:    mov x9, x1
+diff --git a/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll b/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll
+index f095ee8a4abe..74a1c28032d8 100644
+--- a/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll
++++ b/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll
+@@ -11,7 +11,7 @@ define i128 @opt_setcc_lt_power_of_2(i128 %a) nounwind {
+ ; CHECK-NEXT:  .LBB0_1: // %loop
+ ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    adds x0, x0, #1
+-; CHECK-NEXT:    adc x1, x1, xzr
++; CHECK-NEXT:    cinc x1, x1, hs
+ ; CHECK-NEXT:    orr x8, x1, x0, lsr #60
+ ; CHECK-NEXT:    cbnz x8, .LBB0_1
+ ; CHECK-NEXT:  // %bb.2: // %exit

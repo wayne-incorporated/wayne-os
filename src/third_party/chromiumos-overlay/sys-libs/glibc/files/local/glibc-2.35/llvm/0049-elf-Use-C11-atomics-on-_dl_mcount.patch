@@ -1,0 +1,63 @@
+From 16cdd0719649b70230789d754a13fb44fe2220b5 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 09:32:38 -0300
+Subject: [PATCH 049/163] elf: Use C11 atomics on _dl_mcount
+
+All atomic operation are counters, so relaxed MO should be suffice.
+
+Checked on x86_64-linux-gnu.
+---
+ elf/dl-profile.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/elf/dl-profile.c b/elf/dl-profile.c
+index ec57e3a965..7b69375c41 100644
+--- a/elf/dl-profile.c
++++ b/elf/dl-profile.c
+@@ -548,7 +548,7 @@ _dl_mcount (ElfW(Addr) frompc, ElfW(Addr) selfpc)
+ 	      size_t newfromidx;
+ 	      to_index = (data[narcs].self_pc
+ 			  / (HASHFRACTION * sizeof (*tos)));
+-	      newfromidx = catomic_exchange_and_add (&fromidx, 1) + 1;
++	      newfromidx = atomic_fetch_add_relaxed (&fromidx, 1) + 1;
+ 	      froms[newfromidx].here = &data[narcs];
+ 	      froms[newfromidx].link = tos[to_index];
+ 	      tos[to_index] = newfromidx;
+@@ -558,14 +558,14 @@ _dl_mcount (ElfW(Addr) frompc, ElfW(Addr) selfpc)
+ 	  /* If we still have no entry stop searching and insert.  */
+ 	  if (*topcindex == 0)
+ 	    {
+-	      unsigned int newarc = catomic_exchange_and_add (narcsp, 1);
++	      unsigned int newarc = atomic_fetch_add_relaxed (narcsp, 1) + 1;
+ 
+ 	      /* In rare cases it could happen that all entries in FROMS are
+ 		 occupied.  So we cannot count this anymore.  */
+ 	      if (newarc >= fromlimit)
+ 		goto done;
+ 
+-	      *topcindex = catomic_exchange_and_add (&fromidx, 1) + 1;
++	      *topcindex = atomic_fetch_and_acquire (&fromidx, 1) + 1;
+ 	      fromp = &froms[*topcindex];
+ 
+ 	      fromp->here = &data[newarc];
+@@ -573,7 +573,7 @@ _dl_mcount (ElfW(Addr) frompc, ElfW(Addr) selfpc)
+ 	      data[newarc].self_pc = selfpc;
+ 	      data[newarc].count = 0;
+ 	      fromp->link = 0;
+-	      catomic_increment (&narcs);
++	      atomic_fetch_add_relaxed (&narcs, 1);
+ 
+ 	      break;
+ 	    }
+@@ -586,7 +586,7 @@ _dl_mcount (ElfW(Addr) frompc, ElfW(Addr) selfpc)
+     }
+ 
+   /* Increment the counter.  */
+-  catomic_increment (&fromp->here->count);
++  atomic_fetch_add_relaxed (&fromp->here->count, 1);
+ 
+  done:
+   ;
+-- 
+2.37.2
+

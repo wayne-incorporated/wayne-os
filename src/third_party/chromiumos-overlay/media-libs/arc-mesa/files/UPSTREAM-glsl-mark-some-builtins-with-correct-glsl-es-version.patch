@@ -1,0 +1,50 @@
+From 12567de2be7291467e023a6c7fe2eca19ae5f820 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Tapani=20P=C3=A4lli?= <tapani.palli@intel.com>
+Date: Tue, 25 Aug 2020 11:28:06 +0300
+Subject: [PATCH] glsl: mark some builtins with correct glsl(es) version check
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+GLSL Desktop spec 1.30.x:
+   "New built-ins: trunc(), round(), roundEven(), isnan(), isinf(), modf()"
+
+For ES, 3.00.x is the first ES spec that mentions the builtins.
+
+Signed-off-by: Tapani Pälli <tapani.palli@intel.com>
+Reviewed-by: Eric Anholt <eric@anholt.net>
+Reviewed-by: Danylo Piliaiev <danylo.piliaiev@globallogic.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/6455>
+---
+ src/compiler/glsl/builtin_functions.cpp | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/compiler/glsl/builtin_functions.cpp b/src/compiler/glsl/builtin_functions.cpp
+index f6c208e60c1..2731cee3f2e 100644
+--- a/src/compiler/glsl/builtin_functions.cpp
++++ b/src/compiler/glsl/builtin_functions.cpp
+@@ -1796,9 +1796,9 @@ builtin_builder::create_builtins()
+    FI64(abs)
+    FI64(sign)
+    FD(floor)
+-   FD(trunc)
+-   FD(round)
+-   FD(roundEven)
++   FD130(trunc)
++   FD130(round)
++   FD130(roundEven)
+    FD(ceil)
+    FD(fract)
+ 
+@@ -1830,7 +1830,7 @@ builtin_builder::create_builtins()
+                 _mod(fp64, glsl_type::dvec4_type,  glsl_type::dvec4_type),
+                 NULL);
+ 
+-   FD(modf)
++   FD130(modf)
+ 
+    FIUD2_MIXED(min)
+    FIUD2_MIXED(max)
+-- 
+2.31.1.295.g9ea45b61b8-goog
+

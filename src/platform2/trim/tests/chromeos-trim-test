@@ -1,0 +1,78 @@
+#!/bin/bash
+# Copyright 2015 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Works only in the chromium chroot.
+
+export LC_ALL=C
+TRIM_TEMP_TEMPLACE=test_trim.XXXXXX
+TRIM_TEMP=$(mktemp -d --tmpdir "${TRIM_TEMP_TEMPLACE}")
+
+CHROMEOS_TRIM_DIR="${TRIM_TEMP}"
+
+# Source the script to test.
+. scripts/chromeos-trim --test
+
+# Global variable to know if the trim operation has been launched.
+worker_triggered=false
+
+do_trim() {
+  worker_triggered=true
+}
+
+error() {
+  echo "$*"
+  exit 1
+}
+
+get_device_block_size() {
+  echo 512
+}
+
+get_stateful_free_space_blocks() {
+  echo 1024
+}
+
+DEVICE_STATS="./tests/partition_stats"
+PARTITION_DEV_STATS="./tests/partition_low_write_stats"
+
+# Check non existent status file triggers a trim.
+worker_triggered=false
+main
+${worker_triggered} || error "Non-existent status file should trigger a trim."
+
+# File exists, but date_last_trim was "long" time ago. Trim should be scheduled.
+echo "date_last_trim=$(date +%s)" >  "${CHROMEOS_TRIM_DATA}"
+MAX_DELAY=-2
+worker_triggered=false
+main
+${worker_triggered} || error "Old file should trigger trim."
+MAX_DELAY=1000
+
+# File exists, trim done not so long ago: We check the number of byte written.
+# In partition stats, the number of write is now low, so trim should not start.
+PARTITION_DEV_STATS="./tests/partition_low_write_stats"
+worker_triggered=false
+main
+! ${worker_triggered} || error "Few writes should not trigger trim."
+
+# In partition stats, the number of write is high, so trim should start.
+PARTITION_DEV_STATS="./tests/partition_high_write_stats"
+worker_triggered=false
+main
+${worker_triggered} || error "Lot of writes should trigger trim."
+
+# If not too many write happen since the last trim, trim should not trigger.
+echo "write_last_trim=24752" >> "${CHROMEOS_TRIM_DATA}"
+worker_triggered=false
+main
+! ${worker_triggered} || error "Few writes since last trim should not trigger trim."
+
+# Check partial trim trigger a trim.
+echo "current_offset=1" >> "${CHROMEOS_TRIM_DATA}"
+worker_triggered=false
+main
+${worker_triggered} || error "Partial trim schedule a trim."
+
+rm -rf "${TRIM_TEMP}"

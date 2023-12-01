@@ -1,0 +1,36 @@
+From af790cf12fa768d0138a6b8d1690ab778deaf98a Mon Sep 17 00:00:00 2001
+From: Nataraj Deshpande <nataraj.deshpande@intel.com>
+Date: Tue, 4 Jun 2019 19:24:28 -0700
+Subject: [PATCH] Add HAL_PIXEL_FORMAT_YCbCr_420_888 in vk_format
+
+Fixes android.graphics.cts.MediaVulkanGpuTest#testMediaImportAndRendering.
+
+Change-Id: I0c07e7a84cc2b5b01037d023b3c44440000133a0
+---
+ src/intel/vulkan/vk_format_info.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/intel/vulkan/vk_format_info.h b/src/intel/vulkan/vk_format_info.h
+index 555c67704b..198c3de4f6 100644
+--- a/src/intel/vulkan/vk_format_info.h
++++ b/src/intel/vulkan/vk_format_info.h
+@@ -48,6 +48,7 @@ vk_format_from_android(unsigned android_format)
+    case AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM:
+       return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    case HAL_PIXEL_FORMAT_NV12_Y_TILED_INTEL:
++   case HAL_PIXEL_FORMAT_YCbCr_420_888:
+       return VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    case AHARDWAREBUFFER_FORMAT_BLOB:
+    default:
+@@ -70,7 +71,7 @@ android_format_from_vk(unsigned vk_format)
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+       return AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM;
+    case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+-      return HAL_PIXEL_FORMAT_NV12_Y_TILED_INTEL;
++      return HAL_PIXEL_FORMAT_YCbCr_420_888;
+    default:
+       return AHARDWAREBUFFER_FORMAT_BLOB;
+    }
+--
+2.20.1
+

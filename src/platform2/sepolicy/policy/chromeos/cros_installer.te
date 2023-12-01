@@ -1,0 +1,53 @@
+type cros_installer, domain, chromeos_domain;
+
+domain_auto_trans_nnp(cros_chromeos_install, cros_installer_exec, cros_installer)
+domain_auto_trans_nnp(cros_chromeos_postinst, cros_installer_exec, cros_installer)
+allow cros_chromeos_postinst cros_installer:process2 { nosuid_transition };
+
+uma_writer(cros_installer)
+
+allow cros_installer self:capability sys_admin;
+
+allow cros_installer {
+  cros_chromeos_postinst
+  cros_os_install_service
+}:fd use;
+allow cros_installer cros_os_install_service:fifo_file { getattr write };
+
+allow cros_installer {
+  cros_coreutils_exec
+  cros_mount_exec
+  cros_udevadm_exec
+  cros_umount_exec
+}:file rx_file_perms;
+
+r_dir_file(cros_installer, sysfs)
+r_dir_file(cros_installer, unlabeled)
+rw_dir_file(cros_installer, cros_stateful_partition)
+rw_dir_file(cros_installer, vfat)
+allow cros_installer cros_stateful_partition:file create_file_perms;
+allow cros_installer proc_cmdline:file r_file_perms;
+allow cros_installer cros_var_lib_ureadahead:dir rw_dir_perms;
+allow cros_installer cros_var_lib_ureadahead:file unlink;
+allow cros_installer {
+  cros_stateful_partition_unencrypted
+  cros_stateful_partition_unencrypted_cache
+}:dir r_dir_perms;
+
+allow cros_installer cros_run:dir w_dir_perms;
+allow cros_installer cros_var_lib_preload_network_drivers:file unlink;
+allow cros_installer device:blk_file rw_file_perms;
+allow cros_installer kernel:system module_request;
+allow cros_installer proc_filesystems:file r_file_perms;
+allow cros_installer tmpfs:dir mounton;
+allow cros_installer vfat:file create;
+allow cros_installer vfat:filesystem { mount unmount };
+
+# Special handling for permissions that conflict with CTS neverallow
+# rules. CTS neverallow rules are only tested on the ARC Container
+# and these permissions are only needed for the no_arc board reven.
+no_arc(`
+  rw_dir_file(cros_installer, efivarfs)
+  allow cros_installer efivarfs:filesystem getattr;
+  allow cros_installer efivarfs:file { create unlink };
+')

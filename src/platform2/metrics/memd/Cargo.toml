@@ -1,0 +1,36 @@
+[package]
+name = "memd"
+version = "0.1.0"
+authors = ["The ChromiumOS Authors"]
+build = "build.rs"
+include = ["Cargo.toml", "*.rs", "src/**/*"]
+
+[dependencies]
+chrono = "0.4.2"
+dbus = "0.6.1"
+env_logger = { version = "0.9", default-features = false }
+libc = "0.2.40"
+libchromeos = { path = "../../libchromeos-rs" } # provided by ebuild
+log = "0.4.1"
+protobuf = "3.2"
+syslog = "6.0.1"
+tempfile = "3.0"
+time = "0.3"
+
+[profile.release]
+debug = true
+lto = true
+panic = 'abort'
+
+[build-dependencies]
+protobuf-codegen = "3.2"
+
+[workspace]
+
+[patch.crates-io] # ignored by ebuild
+audio_streams = { path = "../../../../chroot/usr/lib/cros_rust_registry/registry/audio_streams-0.1.0/" } # ignored by ebuild
+base_event_token_derive = { path = "../../../../chroot/usr/lib/cros_rust_registry/registry/base_event_token_derive-0.1.0/" } # ignored by ebuild
+crosvm-base = { path = "../../../../chroot/usr/lib/cros_rust_registry/registry/crosvm-base-0.1.0/" } # ignored by ebuild
+data_model = { path = "../../../../chroot/usr/lib/cros_rust_registry/registry/data_model-0.1.50/" } # ignored by ebuild
+minijail = { path = "../../../platform/minijail/rust/minijail/" } # ignored by ebuild
+sync = { path = "../../../../chroot/usr/lib/cros_rust_registry/registry/sync-0.1.149/" } # ignored by ebuild

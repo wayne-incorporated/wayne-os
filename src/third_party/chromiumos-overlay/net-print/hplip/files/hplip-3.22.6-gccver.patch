@@ -1,0 +1,18 @@
+Remove a check for gcc version that uses a hardcoded
+command name instead of environment variables.  Replace
+the result with unconditional true since we always have
+newer gcc available.
+
+Bug: https://bugs.gentoo.org/760594
+
+--- a/configure.in
++++ b/configure.in
+@@ -95,7 +95,7 @@
+       ;;
+ esac
+ AM_CONDITIONAL(DARWIN_BUILD, test x$darwin_build = xyes)
+-AM_CONDITIONAL(GCC_GE_47, test `g++ -dumpversion | gawk '{print $1>=4.7?"1":"0"}'` = 1)
++AM_CONDITIONAL(GCC_GE_47, test 1 = 1)
+ 
+ AC_MSG_CHECKING([for documentation build])
+ AC_ARG_ENABLE(doc_build,

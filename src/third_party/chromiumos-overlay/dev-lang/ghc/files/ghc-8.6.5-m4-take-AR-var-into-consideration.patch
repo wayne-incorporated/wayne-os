@@ -1,0 +1,35 @@
+From 5484825d31d5d92b0ad68682f584f5232e6849cc Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Mon, 14 Feb 2022 15:40:58 +0200
+Subject: [PATCH] fp_prog_ar.m4: take AR var into consideration
+
+Upstream-Status: Backport from commit fb65e6e3e27a56cd161
+
+In ChromeOS and Gentoo we want the ability to use LLVM ar
+instead of GNU ar even though both are installed, thus we
+pass (for eg) AR=llvm-ar to configure.
+
+Unfortunately GNU ar always gets picked regardless of the
+AR setting because the check does not consider the AR var
+when setting fp_prog_ar, hence this fix.
+---
+ aclocal.m4 | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/aclocal.m4 b/aclocal.m4
+index 6eda094315..d5db95ab40 100644
+--- a/aclocal.m4
++++ b/aclocal.m4
+@@ -1130,7 +1130,8 @@ AC_DEFUN([FP_PROG_AR],
+       fp_prog_ar=$(cygpath -m $fp_prog_ar)
+     fi
+   else
+-    AC_CHECK_TARGET_TOOL([fp_prog_ar], [ar])
++    AC_CHECK_TARGET_TOOL([AR], [ar])
++    fp_prog_ar="$AR"
+   fi
+ fi
+ if test -z "$fp_prog_ar"; then
+-- 
+2.35.1
+

@@ -1,0 +1,36 @@
+From 6431488bbd96ca7d3c3f19641cebe7ef8626074a Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Thu, 26 Aug 2021 17:44:11 +0300
+Subject: [PATCH 2/2] cmake: lemon: allow builds to specify a different
+ compiler
+
+Lemon is a host build tool used to generate some syntax files.
+When cross-compiling, it needs to be built for the host machine
+so allow the build to configure a different compiler for it.
+
+The alternative would be to create a cmake spec for each
+toolchain and build lemon separately which is overkill for
+such a simple tool compared to just pointing it to $HOST_CC.
+---
+ tools/lemon/CMakeLists.txt | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/tools/lemon/CMakeLists.txt b/tools/lemon/CMakeLists.txt
+index af62d4596e..8742aa9fc9 100644
+--- a/tools/lemon/CMakeLists.txt
++++ b/tools/lemon/CMakeLists.txt
+@@ -9,6 +9,11 @@
+ 
+ add_executable(lemon lemon.c)
+ 
++if(DEFINED LEMON_C_COMPILER)
++	set(CMAKE_C_COMPILER "${LEMON_C_COMPILER}")
++	set(CMAKE_C_FLAGS "")
++endif()
++
+ # To keep lemon.c as close to upstream as possible, deliberately ignore
+ # some stylistic issues.
+ set(lemon_cflags)
+-- 
+2.32.0
+

@@ -1,0 +1,1 @@
+rust-analyzer-2022.06.06.ebuild

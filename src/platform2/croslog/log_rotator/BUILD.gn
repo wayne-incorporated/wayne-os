@@ -1,0 +1,52 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":log_rotator" ]
+  if (use.test) {
+    deps += [ ":log_rotator_testrunner" ]
+  }
+}
+
+static_library("log_rotator_static") {
+  sources = [
+    "log_rotator.cc",
+    "log_rotator.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ "//croslog:log_constants" ]
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+executable("log_rotator") {
+  sources = [ "main.cc" ]
+  install_path = "sbin"
+  configs += [ ":target_defaults" ]
+  deps = [ ":log_rotator_static" ]
+}
+
+if (use.test) {
+  executable("log_rotator_testrunner") {
+    sources = [
+      "log_rotator_test.cc",
+      "main_testrunner.cc",
+    ]
+    run_test = true
+    defines = [ "UNIT_TEST" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    pkg_deps = [ "libchrome-test" ]
+    deps = [ ":log_rotator_static" ]
+  }
+}

@@ -1,0 +1,59 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/install_seccomp_policy.gni")
+
+_check_seccomp_script =
+    "${platform2_root}/diagnostics/cros_healthd/seccomp/check_seccomp.py"
+
+# Install and check seccomp policy files. This run the check script and forward
+# to `install_seccomp_policy`. Arguments should be the same as
+# `install_seccomp_policy`.
+
+template("install_and_check_seccomp_policy") {
+  target_install_name = target_name + "_install"
+  install_seccomp_policy(target_install_name) {
+    forward_variables_from(invoker,
+                           "*",
+                           [
+                             "required_syscalls",
+                             "denied_syscalls",
+                           ])
+  }
+
+  action_foreach(target_name) {
+    forward_variables_from(invoker,
+                           [
+                             "sources",
+                             "required_syscalls",
+                             "denied_syscalls",
+                           ])
+    assert(defined(required_syscalls))
+    assert(defined(denied_syscalls))
+
+    inputs = [ _check_seccomp_script ]
+    outputs = [ "$target_gen_dir/{{source_name_part}}.policy-check" ]
+
+    script = _check_seccomp_script
+    args = [
+      "--seccomp",
+      "{{source}}",
+      "--output",
+      "$target_gen_dir/{{source_name_part}}.policy-check",
+    ]
+    foreach(syscall, required_syscalls) {
+      args += [
+        "--required-syscalls",
+        syscall,
+      ]
+    }
+    foreach(syscall, denied_syscalls) {
+      args += [
+        "--denied-syscalls",
+        syscall,
+      ]
+    }
+    deps = [ ":${target_install_name}" ]
+  }
+}

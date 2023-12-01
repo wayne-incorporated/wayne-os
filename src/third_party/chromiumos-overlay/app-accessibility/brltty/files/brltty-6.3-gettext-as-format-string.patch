@@ -1,0 +1,37 @@
+commit c84843f822a3cedf97a96f200cd55b38f5c1f147
+Author: Dave Mielke <Dave@Mielke.cc>
+Date:   Sat Feb 6 17:10:21 2021 -0500
+
+    Tell gcc that our gettext() returns a format string. (dm)
+
+diff --git a/Headers/prologue.h b/Headers/prologue.h
+index bd2f1c233..0ac9dcd77 100644
+--- a/Headers/prologue.h
++++ b/Headers/prologue.h
+@@ -23,6 +23,12 @@
+ extern "C" {
+ #endif /* __cplusplus */
+ 
++#ifdef __GNUC__
++#define FORMAT_ARG(n) __attribute__((format_arg((n))))
++#else /* __GNUC__ */
++#define FORMAT_ARG(n)
++#endif /* __GNUC__ */
++
+ #undef HAVE_BUILTIN_POPCOUNT
+ #ifdef __has_builtin
+ #if __has_builtin(__builtin_popcount)
+@@ -429,8 +435,11 @@ mempcpy (void *dest, const void *src, size_t size) {
+ #ifdef ENABLE_I18N_SUPPORT
+ #include <libintl.h>
+ #else /* ENABLE_I18N_SUPPORT */
+-extern char *gettext (const char *text);
+-extern char *ngettext (const char *singular, const char *plural, unsigned long int count);
++extern char *gettext (const char *text) FORMAT_ARG(1);
++
++extern char *ngettext (
++  const char *singular, const char *plural, unsigned long int count
++) FORMAT_ARG(1) FORMAT_ARG(2);
+ #endif /* ENABLE_I18N_SUPPORT */
+ #define strtext(string) string
+ 

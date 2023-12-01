@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <string>
 
 #include <base/files/file_path.h>
-#include <base/macros.h>
 #include <base/time/time.h>
 #include <metrics/metrics_library.h>
 
@@ -30,11 +29,19 @@ class LoginMetrics {
     NUM_VALUES  // Keep last
   };
   enum AllowedUsersState { ANY_USER_ALLOWED = 0, ONLY_ALLOWLISTED = 1 };
-  enum PolicyFileState {
-    GOOD = 0,
-    MALFORMED = 1,
-    NOT_PRESENT = 2,
-    NUM_STATES = 3
+  // The result of loading and parsing a policy file. The data is used to
+  // be sent to metrics server. The metrics doesn't support adding new values
+  // so this enum must not be extended.
+  enum PolicyFileState { kGood = 0, kMalformed = 1, kNotPresent = 2 };
+  // The state of the device ownership according to install attributes. The
+  // data is used to be sent to metrics server. The metrics doesn't support
+  // adding new values so this enum must not be extended.
+  enum OwnershipState {
+    kConsumer = 0,
+    kEnterprise = 1,
+    kLegacyRetail = 2,
+    kConsumerKiosk = 3,
+    kOther = 4,
   };
   enum UserType {
     GUEST = 0,
@@ -48,10 +55,13 @@ class LoginMetrics {
   enum StateKeyGenerationStatus {
     STATE_KEY_STATUS_GENERATION_METHOD_IDENTIFIER_HASH = 0,
     STATE_KEY_STATUS_GENERATION_METHOD_HMAC_DEVICE_SECRET = 1,
-    STATE_KEY_STATUS_MISSING_IDENTIFIERS = 2,
+    DEPRECATED_STATE_KEY_STATUS_MISSING_IDENTIFIERS = 2,
     STATE_KEY_STATUS_BAD_DEVICE_SECRET = 3,
     STATE_KEY_STATUS_HMAC_INIT_FAILURE = 4,
     STATE_KEY_STATUS_HMAC_SIGN_FAILURE = 5,
+    STATE_KEY_STATUS_MISSING_MACHINE_SERIAL_NUMBER = 6,
+    STATE_KEY_STATUS_MISSING_DISK_SERIAL_NUMBER = 7,
+    STATE_KEY_STATUS_MISSING_ALL_IDENTIFIERS = 8,
     STATE_KEY_STATUS_COUNT  // must be last.
   };
   enum InvalidDevicePolicyFilesStatus {
@@ -66,34 +76,45 @@ class LoginMetrics {
     SWITCHES_INVALID = 2,
     NUM_SWITCHES_STATUSES = 3,
   };
-  // Holds the state of several policy-related files on disk.
-  // We leave an extra bit for future state-space expansion.
-  // Treat as, essentially, a base-4 number that we encode in decimal before
-  // sending to chrome as a metric.
-  // Digits are in this order:
-  // Key file state - policy file state - old prefs file state.
-  //
-  // Some codes of interest:
-  // CODE | Key | Policy | Prefs
-  // -----+-----+--------+-------
-  //  0   |  G  |   G    |  G     (Healthy, long-running users)
-  //  2   |  G  |   G    |  N     (Healthy, newer users)
-  //  8   |  G  |   N    |  G     (http://crosbug.com/24361)
-  //  42  |  N  |   N    |  N     (As-yet unowned devices)
-  //
-  // Also, codes in the 9-17 range indicate a horked owner key with other files
-  // in various states.  3-5, 12-14, and 21-23 indicate broken policy files.
-  struct PolicyFilesStatus {
-   public:
-    PolicyFilesStatus()
-        : owner_key_file_state(NOT_PRESENT),
-          policy_file_state(NOT_PRESENT),
-          defunct_prefs_file_state(NOT_PRESENT) {}
-    virtual ~PolicyFilesStatus() {}
+  // Current state of the browser process at the moment we decide to abort it.
+  // Includes the standard Linux process states. Also includes an error bucket
+  // so we can see if LivenessCheckerImpl::GetBrowserState() is failing. Used by
+  // the "ChromeOS.Liveness.BrowserStateAtTimeout" UMA.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused. Update Chrome's enums.xml if new
+  // values are added.
+  enum class BrowserState {
+    kRunning = 0,                   // State: R
+    kSleeping = 1,                  // State: S
+    kUninterruptibleWait = 2,       // State: D
+    kZombie = 3,                    // State: Z
+    kTracedOrStopped = 4,           // State: T
+    kUnknown = 5,                   // Got a State character from status file
+                                    // but it wasn't R, S, D, Z, or T
+    kErrorGettingState = 6,         // Failed to read status file from /proc.
+    kMaxValue = kErrorGettingState  // Must be equal to the largest value
+  };
+  enum class ArcContinueBootImpulseStatus {
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    kArcContinueBootImpulseStatusSuccess = 0,
+    kArcContinueBootImpulseStatusFailed = 1,
+    kArcContinueBootImpulseStatusTimedOut = 2,
+    kMaxValue = kArcContinueBootImpulseStatusTimedOut
+  };
 
+  // Holds the state of several policy files on disk.
+  struct DevicePolicyFilesStatus {
+   public:
+    // Refers to the state of the file containing the owner key, used to check
+    // the policy data signature.
     PolicyFileState owner_key_file_state;
+    // Refers to the state of the files containing the device policy. If at
+    // least one device policy file managed to be read and validated, it's
+    // good.
     PolicyFileState policy_file_state;
-    PolicyFileState defunct_prefs_file_state;
+    // Refers to the device ownership as stated by install attributes.
+    OwnershipState ownership_state;
   };
 
   explicit LoginMetrics(const base::FilePath& per_boot_flag_dir);
@@ -105,19 +126,6 @@ class LoginMetrics {
   // Sends metric reporting whether the mount namespace creation succeeded or
   // failed.
   virtual void SendNamespaceCreationResult(bool status);
-
-  // Sends metric reporting whether the Owner of this non-enrolled device has
-  // chosen to allow arbitrary users to sign in or not.
-  virtual void SendConsumerAllowsNewUsers(bool allowed);
-
-  // Sends the type of user that logs in (guest, owner or other) and the mode
-  // (developer or normal) to UMA by using the metrics library.
-  virtual void SendLoginUserType(bool dev_mode, bool guest, bool owner);
-
-  // Sends info about the state of the Owner key, device policy, and legacy
-  // prefs file to UMA using the metrics library.
-  // Returns true if stats are sent.
-  virtual bool SendPolicyFilesStatus(const PolicyFilesStatus& status);
 
   // Writes a histogram indicating the state key generation method used.
   virtual void SendStateKeyGenerationStatus(StateKeyGenerationStatus status);
@@ -146,9 +154,9 @@ class LoginMetrics {
   // Submits to UMA the browser shutdown time of normal exit.
   virtual void SendBrowserShutdownTime(base::TimeDelta browser_shutdown_time);
 
-  // Submits to UMA the time to backup ARC bug report.
-  virtual void SendArcBugReportBackupTime(
-      base::TimeDelta arc_bug_report_backup_time);
+  // Submits to UMA the status of the Arc Continue Boot time.
+  virtual void SendArcContinueBootImpulseStatus(
+      ArcContinueBootImpulseStatus status);
 
   // Submits to UMA the time to execute continue-arc-boot impulse.
   virtual void SendArcContinueBootImpulseTime(
@@ -158,20 +166,28 @@ class LoginMetrics {
   virtual void SendSwitchToFeatureFlagMappingStatus(
       SwitchToFeatureFlagMappingStatus status);
 
+  // Submits to UMA the time it took for a response to be received after a
+  // liveness ping was sent.
+  virtual void SendLivenessPingResponseTime(base::TimeDelta response_time);
+
+  // Submits to UMA the liveness ping result.
+  virtual void SendLivenessPingResult(bool success);
+
   // CrOS events are translated to an enum and reported to the generic
   // "Platform.CrOSEvent" enum histogram. The |event| string must be registered
   // in metrics/metrics_library.cc:kCrosEventNames.
   virtual void ReportCrosEvent(const std::string& event);
+
+  // Submits to UMA the state of the device policy, key and device ownership.
+  virtual void SendDevicePolicyFilesMetrics(DevicePolicyFilesStatus status);
 
  private:
   friend class LoginMetricsTest;
   friend class UserTypeTest;
 
   // Returns code to send to the metrics library based on the state of
-  // several policy-related files on disk.
-  // As each file has three possible states, treat as a base-3 number and
-  // convert to decimal.
-  static int PolicyFilesStatusCode(const PolicyFilesStatus& status);
+  // several policy-related files on disk and device ownership.
+  static int DevicePolicyStatusCode(const DevicePolicyFilesStatus& status);
 
   // Returns code to send to the metrics library based on the type of user
   // (owner, guest or other) and the mode (normal or developer).

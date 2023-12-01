@@ -1,0 +1,35 @@
+#!/bin/sh
+# Copyright 2022 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Collect 'dfd_dump' if hardware watchdog resets.
+
+DFD_SRC="/proc/dfd_dump"
+DFD_DEST_PATH="/var/log/dfd_dump/dfd_dump.$(date +'%Y%m%d.%H%M%S')"
+
+main() {
+  if ! [ -e "${DFD_SRC}" ]; then
+    echo "DFD (${DFD_SRC}) is not available."
+    return 0
+  fi
+
+  # For systems with developer mode turned on, we may see these in eventlog:
+  #  System boot
+  #  Hardware watchdog reset
+  #  Chrome OS Developer Mode
+  #
+  # So to detect a watchdog reset, we should look at "messages after last System
+  # boot".
+  if elogtool list --utc | cut -d'|' -f3 |
+     awk 's{s=s"\n"$0;} /System boot/{s=$0;} END{print s;}' |
+     grep -q 'Hardware watchdog reset'; then
+    echo "HW watchdog detected in previous boot; preserving to ${DFD_DEST_PATH}"
+    mkdir -p "$(dirname "${DFD_DEST_PATH}")"
+    dd if="${DFD_SRC}" of="${DFD_DEST_PATH}"
+    sync
+  else
+    echo "No HW watchdog detected."
+  fi
+}
+main "$@"

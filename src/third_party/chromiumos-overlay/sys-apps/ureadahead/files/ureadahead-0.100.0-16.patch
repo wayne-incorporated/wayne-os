@@ -1,0 +1,36 @@
+Author: Alan Ding <alanding@google.com>
+Date:   Fri Mar 19 12:30:34 2021 -0700
+
+    ureadahead: Integrate upstream 16 patch.
+    
+    https://launchpad.net/ubuntu/+source/ureadahead/0.100.0-16
+    ----------------
+    ureadahead (0.100.0-16) raring; urgency=low
+    
+      * src/trace.c: update to ignore symlinks when tracing + cleanup extra
+    stat()
+        (LP: #969926)
+      -- Bryan Fullerton <email address hidden> Mon, 25 Mar 2013 10:09:18
+      +0100
+    ----------------
+
+diff --git a/src/trace.c b/src/trace.c
+index 7b6a6dd..dd1c585 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -535,12 +535,11 @@ trace_add_path (const void *parent,
+ 		nih_hash_add (path_hash, &entry->entry);
+ 	}
+ 
+-	/* Make sure that we have an ordinary file, or a symlink to an
+-	 * ordinary file.  This avoids us opening a fifo or socket.
++	/* Make sure that we have an ordinary file
++	 * This avoids us opening a fifo or socket or symlink.
+ 	 */
+ 	if ((lstat (pathname, &statbuf) < 0)
+-	    || (S_ISLNK (statbuf.st_mode)
+-		&& (stat (pathname, &statbuf) < 0))
++	    || (S_ISLNK (statbuf.st_mode))
+ 	    || (! S_ISREG (statbuf.st_mode)))
+ 		return 0;
+ 

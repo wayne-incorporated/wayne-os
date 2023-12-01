@@ -1,0 +1,166 @@
+From db757a21a04957aa74445bc6858346d4e5e909cf Mon Sep 17 00:00:00 2001
+From: Paul Stewart <pstew@chromium.org>
+Date: Tue, 1 Jun 2021 19:36:23 +0000
+Subject: [PATCH 07/19] Track and validate disputed addresses
+
+Keep track of whether we have received a NAK response.  If we
+accept an ACK shortly after a NAK, although we accept this
+address, it must be more carefully evaluated by using the "ARP
+for self" method.  If this method succeeds, the system should
+proceed as normal (either doing a gateway ARP or sending the
+success notification via D-Bus).
+
+Moreover, if the "ARP self" method fails, it will DECLINE the
+lease and restart the DHCP process.  When examining any messages
+from the DHCP server in this restarted session, ignore the
+first OFFER if it is for the previously declined IP address.
+In scenarios where there may be more than one conflicting DHCP
+server on the network, this allows the possibility to accept
+a more viable offer.
+
+BUG=chromium:384897
+TEST=New network_DhcpNak test subcase in CL:208248
+
+Reviewed-on: https://chromium-review.googlesource.com/208273
+---
+ src/arp.c  |  4 ++++
+ src/dhcp.c | 28 +++++++++++++++++++++++-----
+ src/dhcp.h |  3 +++
+ 3 files changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/src/arp.c b/src/arp.c
+index 98081865..f3b2e8ad 100644
+--- a/src/arp.c
++++ b/src/arp.c
+@@ -45,6 +45,7 @@
+ #include "bpf.h"
+ #include "ipv4.h"
+ #include "common.h"
++#include "dhcp.h"
+ #include "dhcpcd.h"
+ #include "eloop.h"
+ #include "if.h"
+@@ -119,6 +120,7 @@ arp_packet(struct interface *ifp, uint8_t *data, size_t len)
+ 	const struct iarp_state *state;
+ 	struct arp_state *astate, *astaten;
+ 	uint8_t *hw_s, *hw_t;
++	struct dhcp_state *d_state;
+ 
+ 	/* We must have a full ARP header */
+ 	if (len < sizeof(ar))
+@@ -171,6 +173,8 @@ arp_packet(struct interface *ifp, uint8_t *data, size_t len)
+ 
+ 	/* Run the conflicts */
+ 	state = ARP_CSTATE(ifp);
++	d_state = D_STATE(ifp);
++	d_state->failed.s_addr = 0;
+ 	TAILQ_FOREACH_SAFE(astate, &state->arp_states, next, astaten) {
+ 		if (arm.sip.s_addr != astate->addr.s_addr &&
+ 		    arm.tip.s_addr != astate->addr.s_addr)
+diff --git a/src/dhcp.c b/src/dhcp.c
+index 782eb231..97722a48 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -1966,6 +1966,8 @@ dhcp_discover(void *arg)
+ 	struct if_options *ifo = ifp->options;
+ 
+ 	state->state = DHS_DISCOVER;
++	state->nak_receive_count = 0;
++	state->failed_address_offer_count = 0;
+ 	dhcp_new_xid(ifp);
+ 	eloop_timeout_delete(ifp->ctx->eloop, NULL, ifp);
+ 	if (ifo->fallback)
+@@ -1992,6 +1994,7 @@ dhcp_request(void *arg)
+ 	struct dhcp_state *state = D_STATE(ifp);
+ 
+ 	state->state = DHS_REQUEST;
++	state->nak_receive_count = 0;
+ 	send_request(ifp);
+ }
+ 
+@@ -2082,6 +2085,7 @@ dhcp_startrenew(void *arg)
+ 	logdebugx("%s: renewing lease of %s", ifp->name,
+ 	    inet_ntoa(lease->addr));
+ 	state->state = DHS_RENEW;
++	state->nak_receive_count = 0;
+ 	dhcp_new_xid(ifp);
+ 	state->interval = 0;
+ 	send_renew(ifp);
+@@ -2107,6 +2111,7 @@ dhcp_rebind(void *arg)
+ 	state->state = DHS_REBIND;
+ 	eloop_timeout_delete(ifp->ctx->eloop, send_renew, ifp);
+ 	state->lease.server.s_addr = INADDR_ANY;
++	state->nak_receive_count = 0;
+ 	state->interval = 0;
+ 	ifp->options->options &= ~(DHCPCD_CSR_WARNED |
+ 	    DHCPCD_ROUTER_HOST_ROUTE_WARNED);
+@@ -2320,10 +2325,13 @@ dhcp_arp_conflicted(struct arp_state *astate, const struct arp_msg *amsg)
+ 		struct ipv4_addr *ia;
+ #endif
+ 
+-		if (amsg)
++		if (amsg) {
+ 			astate->failed.s_addr = state->offer->yiaddr;
+-		else
++			state->failed.s_addr = state->offer->yiaddr;
++		} else {
+ 			astate->failed = astate->addr;
++			state->failed = astate->addr;
++		}
+ 		arp_report_conflicted(astate, amsg);
+ 		unlink(state->leasefile);
+ #ifdef ARP
+@@ -2608,7 +2616,9 @@ dhcp_arp_address(struct interface *ifp)
+ 		return 0;
+ 	}
+ #else
+-	if (ifp->options->options & DHCPCD_ARP && ia == NULL) {
++	if ((ifp->options->options & DHCPCD_ARP && ia == NULL) ||
++	    state->nak_receive_count > 0 ||
++	    state->offer->yiaddr == state->failed.s_addr) {
+ 		struct dhcp_lease l;
+ 
+ 		state->state = DHS_PROBE;
+@@ -3299,8 +3309,10 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 		if (state->state == DHS_INFORM) /* INFORM should not be NAKed */
+ 			return;
+                 LOGDHCP(logwarnx, "NAK (deferred)");
+-		eloop_timeout_add_sec(ifp->ctx->eloop, DHCP_BASE,
+-                                      handle_nak, ifp);
++		if (state->nak_receive_count == 0)
++			eloop_timeout_add_sec(ifp->ctx->eloop, DHCP_BASE,
++					      handle_nak, ifp);
++		state->nak_receive_count++;
+ 		return;
+ 	}
+ 
+@@ -3388,6 +3400,12 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 
+ 	bootp_copied = false;
+ 	if ((type == 0 || type == DHCP_OFFER) && state->state == DHS_DISCOVER) {
++		if (bootp->yiaddr == state->failed.s_addr &&
++		    state->failed_address_offer_count == 0) {
++			LOGDHCP(logwarnx, "reject previously declined address");
++			state->failed_address_offer_count++;
++			return;
++		}
+ 		lease->frominfo = 0;
+ 		lease->addr.s_addr = bootp->yiaddr;
+ 		memcpy(&lease->cookie, bootp->vend, sizeof(lease->cookie));
+diff --git a/src/dhcp.h b/src/dhcp.h
+index becf27c2..21716505 100644
+--- a/src/dhcp.h
++++ b/src/dhcp.h
+@@ -237,6 +237,9 @@ struct dhcp_state {
+ #ifdef ARPING
+ 	ssize_t arping_index;
+ #endif
++	int nak_receive_count;
++	int failed_address_offer_count;
++	struct in_addr failed;
+ 	struct dhcp_server_info server_info;
+ };
+ 
+-- 
+2.33.0.800.g4c38ced690-goog
+

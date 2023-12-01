@@ -1,0 +1,55 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("libexecutor_pkg_deps") {
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+    "libmojo",
+  ]
+}
+
+source_set("libexecutor") {
+  sources = [
+    "executor.cc",
+    "mojo_adaptor.cc",
+    "upstart_tools.cc",
+  ]
+  configs += [ ":libexecutor_pkg_deps" ]
+  deps = [ "//printscanmgr/mojom:mojo_bindings" ]
+}
+
+if (use.test) {
+  pkg_config("mock_executor_pkg_deps") {
+    pkg_deps = [
+      "libchrome",
+      "libchrome-test",
+      "libmojo",
+    ]
+  }
+
+  source_set("mock_executor") {
+    sources = [ "mock_executor.cc" ]
+    configs += [ ":mock_executor_pkg_deps" ]
+    deps = [ "//printscanmgr/mojom:mojo_bindings" ]
+  }
+
+  pkg_config("libexecutor_test_pkg_deps") {
+    pkg_deps = [
+      "dbus-1",
+      "libbrillo",
+      "libchrome",
+      "libchrome-test",
+    ]
+  }
+
+  source_set("libexecutor_test") {
+    sources = [ "upstart_tools_test.cc" ]
+    configs += [ ":libexecutor_test_pkg_deps" ]
+    deps = [ ":libexecutor" ]
+  }
+}

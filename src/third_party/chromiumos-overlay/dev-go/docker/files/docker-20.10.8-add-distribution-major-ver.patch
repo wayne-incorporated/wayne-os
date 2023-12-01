@@ -1,0 +1,167 @@
+From a08aa194d1140010e07cba5391f6a979a53c1e23 Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Sat, 16 Apr 2022 17:11:25 +0300
+Subject: [PATCH] client: add distribution module major version
+
+Upstream docker does not yet support Go modules but in ChromeOS
+we want to enable modules across the tree. Doing this is
+relatively straightforward in projects, we just need to
+update the import paths to respect module requirements.
+
+The main requirement docker upstream does not respect is
+adding the major version of dependencies as suffixes in
+the import paths. For github.com/docker/distribution the
+major version suffix is v2.
+
+Fixing all docker code to properly support modules is a
+much bigger effort, but this is enough to get ChromeOS
+working. This patch should be dropped when docker finally
+supports modules.
+
+Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.com>
+---
+ client/container_commit.go | 2 +-
+ client/image_create.go     | 2 +-
+ client/image_import.go     | 2 +-
+ client/image_pull.go       | 2 +-
+ client/image_push.go       | 2 +-
+ client/image_tag.go        | 2 +-
+ client/plugin_install.go   | 2 +-
+ client/plugin_upgrade.go   | 2 +-
+ client/service_create.go   | 2 +-
+ errdefs/http_helpers.go    | 2 +-
+ 10 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/src/github.com/docker/docker/client/container_commit.go b/src/github.com/docker/docker/client/container_commit.go
+index 2966e88c8e..e14e1f783f 100644
+--- a/src/github.com/docker/docker/client/container_commit.go
++++ b/src/github.com/docker/docker/client/container_commit.go
+@@ -6,7 +6,7 @@ import (
+ 	"errors"
+ 	"net/url"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ )
+ 
+diff --git a/src/github.com/docker/docker/client/image_create.go b/src/github.com/docker/docker/client/image_create.go
+index 239380474e..4166a29c56 100644
+--- a/src/github.com/docker/docker/client/image_create.go
++++ b/src/github.com/docker/docker/client/image_create.go
+@@ -6,7 +6,7 @@ import (
+ 	"net/url"
+ 	"strings"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ )
+ 
+diff --git a/src/github.com/docker/docker/client/image_import.go b/src/github.com/docker/docker/client/image_import.go
+index d3336d4106..474abc731e 100644
+--- a/src/github.com/docker/docker/client/image_import.go
++++ b/src/github.com/docker/docker/client/image_import.go
+@@ -6,7 +6,7 @@ import (
+ 	"net/url"
+ 	"strings"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ )
+ 
+diff --git a/src/github.com/docker/docker/client/image_pull.go b/src/github.com/docker/docker/client/image_pull.go
+index a23975591b..2aa3460079 100644
+--- a/src/github.com/docker/docker/client/image_pull.go
++++ b/src/github.com/docker/docker/client/image_pull.go
+@@ -6,7 +6,7 @@ import (
+ 	"net/url"
+ 	"strings"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ 	"github.com/docker/docker/errdefs"
+ )
+diff --git a/src/github.com/docker/docker/client/image_push.go b/src/github.com/docker/docker/client/image_push.go
+index 845580d4a4..81963e6e8a 100644
+--- a/src/github.com/docker/docker/client/image_push.go
++++ b/src/github.com/docker/docker/client/image_push.go
+@@ -6,7 +6,7 @@ import (
+ 	"io"
+ 	"net/url"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ 	"github.com/docker/docker/errdefs"
+ )
+diff --git a/src/github.com/docker/docker/client/image_tag.go b/src/github.com/docker/docker/client/image_tag.go
+index 5652bfc252..5f3dac1706 100644
+--- a/src/github.com/docker/docker/client/image_tag.go
++++ b/src/github.com/docker/docker/client/image_tag.go
+@@ -4,7 +4,7 @@ import (
+ 	"context"
+ 	"net/url"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/pkg/errors"
+ )
+ 
+diff --git a/src/github.com/docker/docker/client/plugin_install.go b/src/github.com/docker/docker/client/plugin_install.go
+index 012afe61ca..a2d20a265f 100644
+--- a/src/github.com/docker/docker/client/plugin_install.go
++++ b/src/github.com/docker/docker/client/plugin_install.go
+@@ -6,7 +6,7 @@ import (
+ 	"io"
+ 	"net/url"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ 	"github.com/docker/docker/errdefs"
+ 	"github.com/pkg/errors"
+diff --git a/src/github.com/docker/docker/client/plugin_upgrade.go b/src/github.com/docker/docker/client/plugin_upgrade.go
+index 115cea945b..48787e2b1f 100644
+--- a/src/github.com/docker/docker/client/plugin_upgrade.go
++++ b/src/github.com/docker/docker/client/plugin_upgrade.go
+@@ -5,7 +5,7 @@ import (
+ 	"io"
+ 	"net/url"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ 	"github.com/pkg/errors"
+ )
+diff --git a/src/github.com/docker/docker/client/service_create.go b/src/github.com/docker/docker/client/service_create.go
+index e0428bf98b..b84c241338 100644
+--- a/src/github.com/docker/docker/client/service_create.go
++++ b/src/github.com/docker/docker/client/service_create.go
+@@ -6,7 +6,7 @@ import (
+ 	"fmt"
+ 	"strings"
+ 
+-	"github.com/docker/distribution/reference"
++	"github.com/docker/distribution/v2/reference"
+ 	"github.com/docker/docker/api/types"
+ 	"github.com/docker/docker/api/types/swarm"
+ 	digest "github.com/opencontainers/go-digest"
+diff --git a/errdefs/http_helpers.go b/errdefs/http_helpers.go
+index 07552f1cc1..49bb663ed8 100644
+--- a/src/github.com/docker/docker/errdefs/http_helpers.go
++++ b/src/github.com/docker/docker/errdefs/http_helpers.go
+@@ -5,7 +5,7 @@ import (
+ 	"net/http"
+ 
+ 	containerderrors "github.com/containerd/containerd/errdefs"
+-	"github.com/docker/distribution/registry/api/errcode"
++	"github.com/docker/distribution/v2/registry/api/errcode"
+ 	"github.com/sirupsen/logrus"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+-- 
+2.35.1
+

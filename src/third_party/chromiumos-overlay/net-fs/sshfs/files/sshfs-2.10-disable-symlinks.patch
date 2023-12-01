@@ -1,0 +1,28 @@
+From a6595490d167d53294742930a9c76012c7a56c85 Mon Sep 17 00:00:00 2001
+From: Austin Tankiang <austinct@google.com>
+Date: Tue, 28 Apr 2020 17:40:10 +1000
+Subject: [PATCH] Disable symlinks on the client side
+
+With |follow_symlinks| set, symlinks should never be readable despite
+what the server returns.
+---
+ sshfs.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/sshfs.c b/sshfs.c
+index 97eaf06..461b749 100644
+--- a/sshfs.c
++++ b/sshfs.c
+@@ -1999,6 +1999,9 @@ static int sshfs_readlink(const char *path, char *linkbuf, size_t size)
+ 	if (sshfs.server_version < 3)
+ 		return -EPERM;
+ 
++	if (sshfs.follow_symlinks)
++		return -EPERM;
++
+ 	buf_init(&buf, 0);
+ 	buf_add_path(&buf, path);
+ 	err = sftp_request(SSH_FXP_READLINK, &buf, SSH_FXP_NAME, &name);
+-- 
+2.26.2.303.gf8c07b1a785-goog
+

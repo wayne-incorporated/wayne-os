@@ -1,0 +1,37 @@
+diff --git a/Makefile b/Makefile
+index 02176ec..a3ace28 100644
+--- a/Makefile
++++ b/Makefile
+@@ -62,8 +62,10 @@ regulatory.bin: db.txt $(REGDB_PRIVKEY) $(REGDB_PUBKEY)
+ regulatory.db: db.txt db2fw.py
+ 	@echo "Generating $@"
+ 	./db2fw.py regulatory.db db.txt
++	@echo "Validating regulatory.db: $$(pwd && df -h . && ls -la regulatory.db)"
+ 
+ regulatory.db.p7s: regulatory.db $(REGDB_PRIVKEY) $(REGDB_PUBCERT)
++	@echo "Validating regulatory.db: $$(pwd && df -h . && ls -la regulatory.db)"
+ 	@echo "Signing regulatory.db (by $(REGDB_AUTHOR))..."
+ 	@openssl smime -sign \
+ 		-signer $(REGDB_PUBCERT) \
+diff --git a/db2fw.py b/db2fw.py
+index 3affd5a..f0d391c 100755
+--- a/db2fw.py
++++ b/db2fw.py
+@@ -6,6 +6,7 @@ import hashlib
+ from dbparse import DBParser
+ import sys
+ from math import log
++import os
+ 
+ MAGIC = 0x52474442
+ VERSION = 20
+@@ -154,5 +155,7 @@ for coll in collections:
+ for alpha2 in countrynames:
+     assert country_ptrs[alpha2].written
+ 
+-outfile = open(sys.argv[1], 'wb')
+-outfile.write(output.getvalue())
++with open(sys.argv[1], 'wb') as outfile:
++    outfile.write(output.getvalue())
++    outfile.flush()
++    os.fsync(outfile.fileno())

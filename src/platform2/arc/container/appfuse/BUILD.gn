@@ -1,0 +1,86 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":arc-appfuse-provider",
+    ":arc-appfuse-provider-adaptors",
+    ":install_init",
+    ":install_policy",
+    ":install_system.d",
+    ":libarcappfuse",
+  ]
+  if (use.test) {
+    deps += [ ":arc-appfuse_testrunner" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "fuse",
+    "libbrillo",
+    "libchrome",
+  ]
+  defines = [ "FUSE_USE_VERSION=26" ]
+}
+
+static_library("libarcappfuse") {
+  sources = [
+    "appfuse_mount.cc",
+    "data_filter.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+generate_dbus_adaptors("arc-appfuse-provider-adaptors") {
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/appfuse/dbus_adaptors"
+  sources = [ "dbus_bindings/org.chromium.ArcAppfuseProvider.xml" ]
+}
+
+executable("arc-appfuse-provider") {
+  sources = [ "arc_appfuse_provider.cc" ]
+  install_path = "bin"
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":arc-appfuse-provider-adaptors",
+    ":libarcappfuse",
+  ]
+}
+
+if (use.test) {
+  executable("arc-appfuse_testrunner") {
+    sources = [ "data_filter_test.cc" ]
+    run_test = true
+    configs += [
+      ":target_defaults",
+      "//common-mk:test",
+    ]
+    defines = [ "UNIT_TEST" ]
+    deps = [
+      ":libarcappfuse",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+install_config("install_system.d") {
+  sources = [ "org.chromium.ArcAppfuseProvider.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_init") {
+  sources = [ "init/arc-appfuse-provider.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_policy") {
+  arch = getenv("ARCH")
+  sources = [ "seccomp/arc-appfuse-provider-seccomp-${arch}.policy" ]
+  outputs = [ "arc-appfuse-provider-seccomp.policy" ]
+  install_path = "/usr/share/policy"
+}

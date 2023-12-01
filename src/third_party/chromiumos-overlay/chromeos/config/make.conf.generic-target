@@ -1,0 +1,87 @@
+# Copyright 2013 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Settings that are common to all target boards.  Do not place any board
+# specific settings in here, or settings for the sdk.
+#
+# See "man make.conf" for the available options.
+
+# Pull in definition of at least { ROOT, CHOST, [BOARD_OVERLAY] }
+source make.conf.board_setup
+
+# TODO: This will have to come from somewhere else when we support a 32-bit
+# build host environment.
+CBUILD=x86_64-pc-linux-gnu
+
+# We need a dummy setting here as make.conf files expect to expand ${USE}.
+# When we don't have this, they get the USE from the profile, and that has
+# a very different meaning when expanded at the make.conf level as it will
+# override all profile settings.
+USE=""
+
+# Be sure we don't overwrite pkgs from another sysroot.
+PKGDIR=${ROOT}packages/
+PORTAGE_TMPDIR=${ROOT}tmp/
+
+PORT_LOGDIR=${ROOT}tmp/portage/logs/
+
+PORTAGE_WORKDIR_MODE="0755"
+
+PORTDIR_OVERLAY="
+  /mnt/host/source/src/third_party/chromiumos-overlay
+  /mnt/host/source/src/third_party/eclass-overlay
+  ${BOARD_OVERLAY}
+"
+
+# Print a checkpoint message every 10MB while archiving.
+PORTAGE_BINPKG_TAR_OPTS="--checkpoint=1000"
+
+# Our chromium mirror should be more stable since we won't discard packages.
+GENTOO_MIRRORS="https://commondatastorage.googleapis.com/chromeos-localmirror"
+GENTOO_MIRRORS="$GENTOO_MIRRORS https://commondatastorage.googleapis.com/chromeos-mirror/gentoo"
+
+# Remove all .la files for non-plugin libraries.
+# Remove Gentoo init files since we use upstart.
+# Remove logrotate.d files since we don't use logrotate.
+# Remove sandbox files since we don't use that in the sysroot.
+# Remove bash-completion files as we don't install bash-completion.
+# Remove locale files as we don't use them.
+INSTALL_MASK="
+  /usr/lib*/*.la
+  /etc/init.d /etc/conf.d
+  /etc/logrotate.d
+  /etc/sandbox.d
+  /usr/share/bash-completion
+  /usr/share/locale
+"
+PKG_INSTALL_MASK="${INSTALL_MASK}"
+
+source /mnt/host/source/src/third_party/chromiumos-overlay/chromeos/config/make.conf.common
+
+# Recommended MARCH_TUNE, CFLAGS, etc.
+MARCH_TUNE=""
+
+# We maintain the list of SDK packages explicitly and update them in parallel.
+# Disable BDEPEND support when building for boards to speed things up.
+EMERGE_DEFAULT_OPTS="${EMERGE_DEFAULT_OPTS} --with-bdepends=n"
+
+# Allow a board to override or define additional settings.
+source make.conf.board
+
+# NOTE: Flags here apply to all of our C and C++ toolchains, including GCC,
+# clang, and ARC++'s clang (which notably uses ld.bfd at times). Please tread
+# carefully and test thoroughly before adding flags here.
+COMMON_COMPILER_FLAGS="-Os -pipe ${MARCH_TUNE} ${BOARD_COMPILER_FLAGS} \
+-g ${CXXEXCEPTIONS_FLAGS} -ffunction-sections -fdata-sections"
+CFLAGS="${CFLAGS} ${COMMON_COMPILER_FLAGS}"
+CXXFLAGS="${CXXFLAGS} ${COMMON_COMPILER_FLAGS}"
+# Clear the variable so people don't try to rely on it.
+COMMON_COMPILER_FLAGS=""
+
+LDFLAGS="${LDFLAGS} -Wl,--gc-sections -Wl,--icf=all"
+
+CROS_BASE_RUSTFLAGS="${BOARD_RUSTFLAGS}"
+
+# Allow the user to override or define additional settings.
+source make.conf.user

@@ -1,0 +1,35 @@
+From bb1711b7fba42f2a0c7d1c09beee241a1b2bcc30 Mon Sep 17 00:00:00 2001
+From: Peter Hutterer <peter.hutterer@who-t.net>
+Date: Mon, 19 Dec 2022 10:06:45 +1000
+Subject: [PATCH xserver] Xext: fix invalid event type mask in
+ XTestSwapFakeInput
+
+In commit b320ca0 the mask was inadvertently changed from octal 0177 to
+hexadecimal 0x177.
+
+Fixes commit b320ca0ffe4c0c872eeb3a93d9bde21f765c7c63
+  Xtest: disallow GenericEvents in XTestSwapFakeInput
+
+Found by Stuart Cassoff
+
+Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
+---
+ Xext/xtest.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Xext/xtest.c b/Xext/xtest.c
+index 2985a4ce6e..dde5c4cf9d 100644
+--- a/Xext/xtest.c
++++ b/Xext/xtest.c
+@@ -502,7 +502,7 @@ XTestSwapFakeInput(ClientPtr client, xReq * req)
+ 
+     nev = ((req->length << 2) - sizeof(xReq)) / sizeof(xEvent);
+     for (ev = (xEvent *) &req[1]; --nev >= 0; ev++) {
+-        int evtype = ev->u.u.type & 0x177;
++        int evtype = ev->u.u.type & 0177;
+         /* Swap event */
+         proc = EventSwapVector[evtype];
+         /* no swapping proc; invalid event type? */
+-- 
+2.38.1
+

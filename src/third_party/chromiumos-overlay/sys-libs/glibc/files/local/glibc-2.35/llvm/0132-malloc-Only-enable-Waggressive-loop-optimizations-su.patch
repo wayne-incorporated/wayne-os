@@ -1,0 +1,35 @@
+From 240fa9da81c3b7a7bf115bf367072ff317907cbb Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 09:00:12 -0300
+Subject: [PATCH 132/163] malloc: Only enable -Waggressive-loop-optimizations
+ suppression for gcc
+
+---
+ malloc/tst-dynarray.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/malloc/tst-dynarray.c b/malloc/tst-dynarray.c
+index 51b99e2a5a..c3a0e925f9 100644
+--- a/malloc/tst-dynarray.c
++++ b/malloc/tst-dynarray.c
+@@ -482,7 +482,7 @@ test_long_overflow (void)
+        iteration would invoke undefined behavior.  That loop iteration
+        can never be executed because an allocation of this size must
+        fail.  */
+-    DIAG_IGNORE_NEEDS_COMMENT (12, "-Waggressive-loop-optimizations");
++    DIAG_IGNORE_NEEDS_COMMENT_GCC (12, "-Waggressive-loop-optimizations");
+     TEST_VERIFY (!dynarray_long_resize
+                  (&dyn, (SIZE_MAX / sizeof (long)) + 1));
+     DIAG_POP_NEEDS_COMMENT;
+@@ -499,7 +499,7 @@ test_long_overflow (void)
+        iteration would invoke undefined behavior.  That loop iteration
+        can never be executed because an allocation of this size must
+        fail.  */
+-    DIAG_IGNORE_NEEDS_COMMENT (12, "-Waggressive-loop-optimizations");
++    DIAG_IGNORE_NEEDS_COMMENT_GCC (12, "-Waggressive-loop-optimizations");
+     TEST_VERIFY (!dynarray_long_noscratch_resize
+                  (&dyn, (SIZE_MAX / sizeof (long)) + 1));
+     DIAG_POP_NEEDS_COMMENT;
+-- 
+2.37.2
+

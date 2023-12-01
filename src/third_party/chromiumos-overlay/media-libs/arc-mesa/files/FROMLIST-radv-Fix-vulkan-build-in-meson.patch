@@ -1,0 +1,34 @@
+From 8319f31b5776e939db50b06e5c8592346f5dc232 Mon Sep 17 00:00:00 2001
+From: Bas Nieuwenhuizen <bas@basnieuwenhuizen.nl>
+Date: Wed, 19 Jun 2019 15:03:43 +0200
+Subject: [PATCH] radv: Fix vulkan build in meson.
+
+Apparently the android part was never ported to meson.
+
+CC: <mesa-stable@lists.freedesktop.org>
+Reviewed-by: Samuel Pitoiset <samuel.pitoiset@gmail.com>
+---
+ src/amd/vulkan/meson.build | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/amd/vulkan/meson.build b/src/amd/vulkan/meson.build
+index faa5f32eba3..2ff2fb34465 100644
+--- a/src/amd/vulkan/meson.build
++++ b/src/amd/vulkan/meson.build
+@@ -129,6 +129,13 @@ if with_xlib_lease
+   radv_flags += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
+ endif
+ 
++if with_platform_android
++  radv_flags += [
++    '-DVK_USE_PLATFORM_ANDROID_KHR'
++  ]
++  libradv_files += files('radv_android.c')
++endif
++
+ libvulkan_radeon = shared_library(
+   'vulkan_radeon',
+   [libradv_files, radv_entrypoints, radv_extensions_c, amd_vk_format_table_c, sha1_h, xmlpool_options_h],
+-- 
+2.21.0
+

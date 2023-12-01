@@ -1,0 +1,91 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [ ":ml_benchmark" ]
+  if (use.test) {
+    deps += [
+      ":ml_benchmark_test",
+      "driver_common:driver_common_test",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "re2",
+  ]
+}
+
+proto_library("ml_benchmark_config_proto") {
+  proto_in_dir = "proto"
+  proto_out_dir = "include/proto"
+  sources = [ "${proto_in_dir}/benchmark_config.proto" ]
+  standalone = true
+  use_pic = true
+}
+
+shared_library("libmlbenchmark_proto") {
+  configs += [ ":target_defaults" ]
+  install_path = "lib"
+  public_deps = [ ":ml_benchmark_config_proto" ]
+}
+
+static_library("libmlbenchmark") {
+  sources = [
+    "benchmark_functions.h",
+    "json_serializer.cc",
+    "json_serializer.h",
+    "memory_sampler.cc",
+    "memory_sampler.h",
+    "shared_library_benchmark.cc",
+    "shared_library_benchmark.h",
+    "shared_library_benchmark_functions.cc",
+    "shared_library_benchmark_functions.h",
+    "sysmetrics.cc",
+    "sysmetrics.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libmlbenchmark_proto" ]
+}
+
+executable("ml_benchmark") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libmlbenchmark" ]
+  pkg_deps = [ "protobuf" ]
+}
+
+if (use.test) {
+  pkg_config("ml_benchmark_test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("ml_benchmark_test") {
+    sources = [
+      "json_serializer_test.cc",
+      "memory_sampler_test.cc",
+      "shared_library_benchmark_test.cc",
+      "sysmetrics_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":ml_benchmark_test_config",
+      ":target_defaults",
+    ]
+    run_test = true
+    deps = [
+      ":libmlbenchmark",
+      ":ml_benchmark_config_proto",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [ "protobuf" ]
+  }
+}

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include <base/callback.h>
+#include <base/functional/callback.h>
 
 #include "login_manager/child_exit_handler.h"
 #include "login_manager/subprocess.h"
@@ -33,7 +33,7 @@ class VpdProcessImpl : public VpdProcess, public ChildExitHandler {
   // Implementation of VpdProcess.
   bool RunInBackground(const KeyValuePairs& updates,
                        bool sync_cache,
-                       const CompletionCallback& completion) override;
+                       CompletionCallback completion) override;
 
   // Implementation of ChildExitHandler.
   bool HandleExit(const siginfo_t& status) override;

@@ -1,0 +1,128 @@
+From 1dfcfa2f987afdf6c05ac747811dd246bcef27e6 Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Thu, 24 Jan 2019 17:10:02 -0800
+Subject: [PATCH 09/12] BACKPORT: dri: Add fp16 formats
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add dri formats for RGBA ordered 64 bpp IEEE 754 half precision floating
+point. Leverage existing offscreen render support for
+MESA_FORMAT_RGBA_FLOAT16 and MESA_FORMAT_RGBX_FLOAT16.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Adam Jackson <ajax@redhat.com>
+Reviewed-by: Marek Olšák <marek.olsak@amd.com>
+Reviewed-by: Emil Velikov <emil.velikov@collabora.com>
+(cherry picked from commit a427c200801d8f0b3b15f3238e0767504d5bc4c0)
+
+ Conflicts:Trivial changes.
+	include/GL/internal/dri_interface.h
+
+Change-Id: Ica1f9a649ef08828b258ab1aef3c284480929d27
+---
+ include/GL/internal/dri_interface.h    |  4 ++++
+ src/loader/loader_dri3_helper.c        |  5 +++++
+ src/mesa/drivers/dri/common/dri_util.c |  8 ++++++++
+ src/mesa/drivers/dri/common/utils.c    | 14 ++++++++++++++
+ 4 files changed, 31 insertions(+)
+
+diff --git a/include/GL/internal/dri_interface.h b/include/GL/internal/dri_interface.h
+index 6ffb86e8c7f..56d33c84e48 100644
+--- a/include/GL/internal/dri_interface.h
++++ b/include/GL/internal/dri_interface.h
+@@ -1294,6 +1294,8 @@ struct __DRIdri2ExtensionRec {
+ #define __DRI_IMAGE_FORMAT_XBGR2101010  0x1010
+ #define __DRI_IMAGE_FORMAT_ABGR2101010  0x1011
+ #define __DRI_IMAGE_FORMAT_SABGR8       0x1012
++#define __DRI_IMAGE_FORMAT_XBGR16161616F 0x1014
++#define __DRI_IMAGE_FORMAT_ABGR16161616F 0x1015
+ 
+ #define __DRI_IMAGE_USE_SHARE		0x0001
+ #define __DRI_IMAGE_USE_SCANOUT		0x0002
+@@ -1339,6 +1341,8 @@ struct __DRIdri2ExtensionRec {
+ #define __DRI_IMAGE_FOURCC_RGBX1010102	0x30335852
+ #define __DRI_IMAGE_FOURCC_BGRA1010102	0x30334142
+ #define __DRI_IMAGE_FOURCC_BGRX1010102	0x30335842
++#define __DRI_IMAGE_FOURCC_ABGR16161616F 0x48344241
++#define __DRI_IMAGE_FOURCC_XBGR16161616F 0x48344258
+ #define __DRI_IMAGE_FOURCC_YUV410	0x39565559
+ #define __DRI_IMAGE_FOURCC_YUV411	0x31315559
+ #define __DRI_IMAGE_FOURCC_YUV420	0x32315559
+diff --git a/src/loader/loader_dri3_helper.c b/src/loader/loader_dri3_helper.c
+index 7d61c1df4fc..d045f80d120 100644
+--- a/src/loader/loader_dri3_helper.c
++++ b/src/loader/loader_dri3_helper.c
+@@ -1120,6 +1120,9 @@ dri3_cpp_for_format(uint32_t format) {
+    case  __DRI_IMAGE_FORMAT_SARGB8:
+    case  __DRI_IMAGE_FORMAT_SABGR8:
+       return 4;
++   case __DRI_IMAGE_FORMAT_XBGR16161616F:
++   case __DRI_IMAGE_FORMAT_ABGR16161616F:
++      return 8;
+    case  __DRI_IMAGE_FORMAT_NONE:
+    default:
+       return 0;
+@@ -1178,6 +1181,8 @@ image_format_to_fourcc(int format)
+    case __DRI_IMAGE_FORMAT_ARGB2101010: return __DRI_IMAGE_FOURCC_ARGB2101010;
+    case __DRI_IMAGE_FORMAT_XBGR2101010: return __DRI_IMAGE_FOURCC_XBGR2101010;
+    case __DRI_IMAGE_FORMAT_ABGR2101010: return __DRI_IMAGE_FOURCC_ABGR2101010;
++   case __DRI_IMAGE_FORMAT_XBGR16161616F: return __DRI_IMAGE_FOURCC_XBGR16161616F;
++   case __DRI_IMAGE_FORMAT_ABGR16161616F: return __DRI_IMAGE_FOURCC_ABGR16161616F;
+    }
+    return 0;
+ }
+diff --git a/src/mesa/drivers/dri/common/dri_util.c b/src/mesa/drivers/dri/common/dri_util.c
+index ac3a04bceff..a384cadd557 100644
+--- a/src/mesa/drivers/dri/common/dri_util.c
++++ b/src/mesa/drivers/dri/common/dri_util.c
+@@ -886,6 +886,14 @@ static const struct {
+       .image_format = __DRI_IMAGE_FORMAT_XRGB8888,
+       .mesa_format  =        MESA_FORMAT_B8G8R8X8_UNORM,
+    },
++   {
++      .image_format = __DRI_IMAGE_FORMAT_ABGR16161616F,
++      .mesa_format  =        MESA_FORMAT_RGBA_FLOAT16,
++   },
++   {
++      .image_format = __DRI_IMAGE_FORMAT_XBGR16161616F,
++      .mesa_format  =        MESA_FORMAT_RGBX_FLOAT16,
++   },
+    {
+       .image_format = __DRI_IMAGE_FORMAT_ARGB2101010,
+       .mesa_format  =        MESA_FORMAT_B10G10R10A2_UNORM,
+diff --git a/src/mesa/drivers/dri/common/utils.c b/src/mesa/drivers/dri/common/utils.c
+index 97955d7aa99..f9a4acefed1 100644
+--- a/src/mesa/drivers/dri/common/utils.c
++++ b/src/mesa/drivers/dri/common/utils.c
+@@ -212,6 +212,12 @@ driCreateConfigs(mesa_format format,
+       /* MESA_FORMAT_R10G10B10A2_UNORM */
+       {{ 0x000003FF, 0x000FFC00, 0x3FF00000, 0xC0000000 },
+        { 0, 10, 20, 30 }},
++      /* MESA_FORMAT_RGBX_FLOAT16 */
++      {{ 0, 0, 0, 0},
++       { 0, 16, 32, -1 }},
++      /* MESA_FORMAT_RGBA_FLOAT16 */
++      {{ 0, 0, 0, 0},
++       { 0, 16, 32, 48 }},
+    };
+ 
+    const uint32_t * masks;
+@@ -260,6 +266,14 @@ driCreateConfigs(mesa_format format,
+       masks = format_table[4].masks;
+       shifts = format_table[4].shifts;
+       break;
++   case MESA_FORMAT_RGBX_FLOAT16:
++      masks = format_table[9].masks;
++      shifts = format_table[9].shifts;
++      break;
++   case MESA_FORMAT_RGBA_FLOAT16:
++      masks = format_table[10].masks;
++      shifts = format_table[10].shifts;
++      break;
+    case MESA_FORMAT_R10G10B10X2_UNORM:
+       masks = format_table[7].masks;
+       shifts = format_table[7].shifts;
+-- 
+2.21.0
+

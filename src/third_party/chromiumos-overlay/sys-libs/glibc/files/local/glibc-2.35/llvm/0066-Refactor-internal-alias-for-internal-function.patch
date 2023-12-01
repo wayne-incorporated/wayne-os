@@ -1,0 +1,179 @@
+From a5218bff898547f770b132f37608cc328dedd100 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 11 Mar 2022 15:37:57 -0300
+Subject: [PATCH 066/163] Refactor internal alias for internal function
+
+Instead of defining the internal alias with hidden_proto macros, adds
+a new hidden_proto3 which defines the macro on function prototype
+(so there is only one function prototype).
+---
+ include/alloc_buffer.h  | 33 ++++++++++++++++-----------------
+ include/allocate_once.h | 17 ++++++++---------
+ include/libc-symbols.h  | 10 ++++++++++
+ 3 files changed, 34 insertions(+), 26 deletions(-)
+
+diff --git a/include/alloc_buffer.h b/include/alloc_buffer.h
+index be33e8b68c..5660642d73 100644
+--- a/include/alloc_buffer.h
++++ b/include/alloc_buffer.h
+@@ -83,6 +83,10 @@
+ #include <stdlib.h>
+ #include <sys/param.h>
+ 
++#ifdef _ISOMAC
++# define libc_hidden_proto3(name, proto) name proto
++#endif
++
+ /* struct alloc_buffer objects refer to a region of bytes in memory of a
+    fixed size.  The functions below can be used to allocate single
+    objects and arrays from this memory region, or write to its end.
+@@ -113,7 +117,8 @@ enum
+   };
+ 
+ /* Internal function.  Terminate the process using __libc_fatal.  */
+-void __libc_alloc_buffer_create_failure (void *start, size_t size);
++void libc_hidden_proto3 (__libc_alloc_buffer_create_failure,
++			 (void *start, size_t size));
+ 
+ /* Create a new allocation buffer.  The byte range from START to START
+    + SIZE - 1 must be valid, and the allocation buffer allocates
+@@ -130,7 +135,8 @@ alloc_buffer_create (void *start, size_t size)
+ }
+ 
+ /* Internal function.  See alloc_buffer_allocate below.  */
+-struct alloc_buffer __libc_alloc_buffer_allocate (size_t size, void **pptr)
++struct alloc_buffer libc_hidden_proto3 (__libc_alloc_buffer_allocate,
++					(size_t size, void **pptr))
+   __attribute__ ((nonnull (2)));
+ 
+ /* Allocate a buffer of SIZE bytes using malloc.  The returned buffer
+@@ -329,9 +335,9 @@ __alloc_buffer_next (struct alloc_buffer *buf, size_t align)
+    (buf, __alloc_buffer_assert_align (__alignof__ (type))))
+ 
+ /* Internal function.  Allocate an array.  */
+-void * __libc_alloc_buffer_alloc_array (struct alloc_buffer *buf,
+-					size_t size, size_t align,
+-					size_t count)
++void * libc_hidden_proto3 (__libc_alloc_buffer_alloc_array,
++			   (struct alloc_buffer *buf, size_t size, size_t align,
++			    size_t count))
+   __attribute__ ((nonnull (1)));
+ 
+ /* Obtain a TYPE * pointer to an array of COUNT objects in BUF of
+@@ -346,8 +352,9 @@ void * __libc_alloc_buffer_alloc_array (struct alloc_buffer *buf,
+     count))
+ 
+ /* Internal function.  See alloc_buffer_copy_bytes below.  */
+-struct alloc_buffer __libc_alloc_buffer_copy_bytes (struct alloc_buffer,
+-						    const void *, size_t)
++struct alloc_buffer libc_hidden_proto3 (__libc_alloc_buffer_copy_bytes,
++					(struct alloc_buffer, const void *,
++					 size_t))
+   __attribute__ ((nonnull (2)));
+ 
+ /* Copy SIZE bytes starting at SRC into the buffer.  If there is not
+@@ -360,8 +367,8 @@ alloc_buffer_copy_bytes (struct alloc_buffer *buf, const void *src, size_t size)
+ }
+ 
+ /* Internal function.  See alloc_buffer_copy_string below.  */
+-struct alloc_buffer __libc_alloc_buffer_copy_string (struct alloc_buffer,
+-						     const char *)
++struct alloc_buffer libc_hidden_proto3 (__libc_alloc_buffer_copy_string,
++					(struct alloc_buffer, const char *))
+   __attribute__ ((nonnull (2)));
+ 
+ /* Copy the string at SRC into the buffer, including its null
+@@ -377,12 +384,4 @@ alloc_buffer_copy_string (struct alloc_buffer *buf, const char *src)
+   return result;
+ }
+ 
+-#ifndef _ISOMAC
+-libc_hidden_proto (__libc_alloc_buffer_alloc_array)
+-libc_hidden_proto (__libc_alloc_buffer_allocate)
+-libc_hidden_proto (__libc_alloc_buffer_copy_bytes)
+-libc_hidden_proto (__libc_alloc_buffer_copy_string)
+-libc_hidden_proto (__libc_alloc_buffer_create_failure)
+-#endif
+-
+ #endif /* _ALLOC_BUFFER_H */
+diff --git a/include/allocate_once.h b/include/allocate_once.h
+index a487d641d5..3d267fafe4 100644
+--- a/include/allocate_once.h
++++ b/include/allocate_once.h
+@@ -21,12 +21,15 @@
+ 
+ #include <atomic.h>
+ 
++#ifdef _ISOMAC
++# define hidden_proto3(name, proto) name proto
++#endif
++
+ /* Slow path for allocate_once; see below.  */
+-void *__libc_allocate_once_slow (void **__place,
+-                                 void *(*__allocate) (void *__closure),
+-                                 void (*__deallocate) (void *__closure,
+-                                                       void *__ptr),
+-                                 void *__closure);
++void * hidden_proto3 (__libc_allocate_once_slow,
++		      (void **__place, void *(*__allocate) (void *__closure),
++		       void (*__deallocate) (void *__closure, void *__ptr),
++		       void *__closure));
+ 
+ /* Return an a pointer to an allocated and initialized data structure.
+    If this function returns a non-NULL value, the caller can assume
+@@ -88,8 +91,4 @@ allocate_once (void **__place, void *(*__allocate) (void *__closure),
+                                       __closure);
+ }
+ 
+-#ifndef _ISOMAC
+-libc_hidden_proto (__libc_allocate_once_slow)
+-#endif
+-
+ #endif /* _ALLOCATE_ONCE_H */
+diff --git a/include/libc-symbols.h b/include/libc-symbols.h
+index ac9a302cb6..882852eb91 100644
+--- a/include/libc-symbols.h
++++ b/include/libc-symbols.h
+@@ -536,6 +536,10 @@ for linking")
+   __hidden_proto (name, , __GI_##name, ##attrs)
+ #  define hidden_proto2(type, name, attrs...) \
+   __hidden_proto2 (type, name, , __GI_##name, ##attrs)
++#  define __hidden_proto3(internal) \
++  __asm__(__hidden_asmname (#internal))
++#  define hidden_proto3(name, proto, attrs...) \
++  name proto __hidden_proto3 (__GI_##name) __hidden_proto_hiddenattr (##attrs)
+ #  define hidden_tls_proto(name, attrs...) \
+   __hidden_proto (name, __thread, __GI_##name, ##attrs)
+ #  define __hidden_proto(name, thread, internal, attrs...)	     \
+@@ -607,8 +611,12 @@ for linking")
+   __hidden_proto (name, __thread, name, ##attrs)
+ #  define __hidden_proto(name, thread, internal, attrs...)	     \
+   extern thread __typeof (name) name __hidden_proto_hiddenattr (attrs);
++# define hidden_proto3(name, proto, attrs...) \
++  name proto __hidden_proto_hiddenattr (##attrs)
+ # else
+ #   define hidden_proto(name, attrs...)
++#   define hidden_proto3(name, proto, attrs...) name proto
++#   define hidden_proto_alias(name, alias, attrs...)
+ #   define hidden_tls_proto(name, attrs...)
+ # endif
+ # define __hidden_proto2(type, name, thread, attrs...)     \
+@@ -630,6 +638,7 @@ for linking")
+ 
+ #if IS_IN (libc)
+ # define libc_hidden_proto(name, attrs...) hidden_proto (name, ##attrs)
++# define libc_hidden_proto3(name, proto, attrs...) hidden_proto3 (name, proto, ##attrs)
+ # define libc_hidden_tls_proto(name, attrs...) hidden_tls_proto (name, ##attrs)
+ # define libc_hidden_def(name) hidden_def (name)
+ # define libc_hidden_weak(name) hidden_weak (name)
+@@ -641,6 +650,7 @@ for linking")
+ # define libc_hidden_data_ver(local, name) hidden_data_ver (local, name)
+ #else
+ # define libc_hidden_proto(name, attrs...)
++# define libc_hidden_proto3(name, proto, attrs...) name proto
+ # define libc_hidden_tls_proto(name, attrs...)
+ # define libc_hidden_def(name)
+ # define libc_hidden_weak(name)
+-- 
+2.37.2
+

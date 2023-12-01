@@ -1,0 +1,1 @@
+autotest-capability-2.ebuild

@@ -1,0 +1,46 @@
+From 17549843478fa83a38a2c3f621566fe0528442bf Mon Sep 17 00:00:00 2001
+From: Chia-I Wu <olvaffe@gmail.com>
+Date: Thu, 7 Feb 2019 15:14:19 -0800
+Subject: [PATCH 4/4] FROMLIST: egl/android: require ANDROID_native_fence_sync
+ for buffer age
+
+Querying buffer age requires a buffer to be dequeued.  But dequeuing
+without ANDROID_native_fence_sync might imply eglClientWaitSync,
+which results in a deadlock as the display lock is already held by
+eglQuerySurface.
+
+Signed-off-by: Chia-I Wu <olvaffe@gmail.com>
+(cherry picked from commit af4c400dd59a0dd70a412c159db5c0b30074d86c)
+Signed-off-by: Gurchetan Singh <gurchetansingh@chromium.org>
+---
+ src/egl/drivers/dri2/platform_android.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 2ef68c4d1b29..232064b9e87e 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -1617,10 +1617,18 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *disp)
+    disp->Extensions.ANDROID_framebuffer_target = EGL_TRUE;
+    disp->Extensions.ANDROID_image_native_buffer = EGL_TRUE;
+    disp->Extensions.ANDROID_recordable = EGL_TRUE;
+-   disp->Extensions.EXT_buffer_age = EGL_TRUE;
++
++   /* Querying buffer age requires a buffer to be dequeued.  Without
++    * EGL_ANDROID_native_fence_sync, dequeue might call eglClientWaitSync and
++    * result in a deadlock (the lock is already held by eglQuerySurface).
++    */
++   if (disp->Extensions.ANDROID_native_fence_sync) {
++      disp->Extensions.EXT_buffer_age = EGL_TRUE;
+ #if ANDROID_API_LEVEL >= 23
+-   disp->Extensions.KHR_partial_update = EGL_TRUE;
++      disp->Extensions.KHR_partial_update = EGL_TRUE;
+ #endif
++   }
++
+    disp->Extensions.KHR_image = EGL_TRUE;
+ #if ANDROID_API_LEVEL >= 24
+    if (dri2_dpy->mutable_render_buffer &&
+-- 
+2.20.1
+

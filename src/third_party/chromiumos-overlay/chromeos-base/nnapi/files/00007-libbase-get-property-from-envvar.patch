@@ -1,0 +1,60 @@
+Retrieves android properties from system environment varaibles.
+
+- Converts the key names to capital letters.
+- Replaces '.' with '-', as '.' is not supported in env variable names.
+
+
+diff --git a/platform2/aosp/system/libbase/properties.cpp b/platform2/aosp/system/libbase/properties.cpp
+index 8190987..34bd3e4 100644
+--- a/platform2/aosp/system/libbase/properties.cpp
++++ b/platform2/aosp/system/libbase/properties.cpp
+@@ -20,6 +20,9 @@
+ #define _REALLY_INCLUDE_SYS__SYSTEM_PROPERTIES_H_
+ #include <sys/system_properties.h>
+ #include <sys/_system_properties.h>
++#else
++#include <stdlib.h>
++#include <cstring>
+ #endif
+
+ #include <algorithm>
+@@ -53,6 +56,23 @@ int __system_property_set(const char* key, const char* value) {
+   return 0;
+ }
+
++// Convert a key name to a format acceptible for an envronment variable
++std::string ConvertKeyToEnvVar(const std::string& key) {
++  std::string result = key;
++  // Convert to upper case
++  std::transform(result.begin(), result.end(), result.begin(), ::toupper);
++  // Convert '.' to '_'
++  std::replace(result.begin(), result.end(), '.', '_');
++
++  return result;
++}
++
++std::string GetPropertyFromEnvVar(const std::string& key, const std::string& default_value) {
++  std::string env_key = ConvertKeyToEnvVar(key);
++  char* env_value = getenv(env_key.c_str());
++  return env_value ? std::string(env_value) : default_value;
++}
++
+ int __system_property_get(const char* key, char* value) {
+   auto it = g_properties.find(key);
+   if (it == g_properties.end()) {
+@@ -119,10 +139,12 @@ std::string GetProperty(const std::string& key, const std::string& default_value
+                                   },
+                                   &property_value);
+ #else
+-  // TODO: implement host __system_property_find()/__system_property_read_callback()?
+   auto it = g_properties.find(key);
+-  if (it == g_properties.end()) return default_value;
+-  property_value = it->second;
++  if (it != g_properties.end()) {
++    property_value = it->second;
++  } else {
++    property_value = GetPropertyFromEnvVar(key, default_value);
++  }
+ #endif
+   // If the property exists but is empty, also return the default value.
+   // Since we can't remove system properties, "empty" is traditionally

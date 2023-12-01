@@ -1,0 +1,225 @@
+From 72af0c1cac9250e97f95773bdc89d1a95020492c Mon Sep 17 00:00:00 2001
+From: Dmitry Torokhov <dtor@chromium.org>
+Date: Tue, 4 Jun 2019 12:51:45 -0700
+Subject: [PATCH 1/6] CHROMIUM: linux_usbfs: tease apart linux_device_address()
+
+The function has become a kitchen sink and is hard to follow, split
+it apart so that individual parts can be invoked separately, as needed.
+
+Signed-off-by: Dmitry Torokhov <dtor@chromium.org>
+---
+ libusb/os/linux_udev.c  |   2 +-
+ libusb/os/linux_usbfs.c | 142 ++++++++++++++++++++++++----------------
+ libusb/os/linux_usbfs.h |   2 +-
+ 3 files changed, 88 insertions(+), 58 deletions(-)
+
+diff --git a/libusb/os/linux_udev.c b/libusb/os/linux_udev.c
+index 9ec9eb17..6a245e0a 100644
+--- a/libusb/os/linux_udev.c
++++ b/libusb/os/linux_udev.c
+@@ -222,7 +222,7 @@ static int udev_device_info(struct libusb_context *ctx, int detached,
+ 	}
+ 
+ 	return linux_get_device_address(ctx, detached, busnum, devaddr,
+-					dev_node, *sys_name, -1);
++					dev_node, *sys_name);
+ }
+ 
+ static void udev_hotplug_event(struct udev_device *udev_dev)
+diff --git a/libusb/os/linux_usbfs.c b/libusb/os/linux_usbfs.c
+index 285d9caa..a9989bad 100644
+--- a/libusb/os/linux_usbfs.c
++++ b/libusb/os/linux_usbfs.c
+@@ -560,18 +560,6 @@ static int read_sysfs_attr(struct libusb_context *ctx,
+ 	return 0;
+ }
+ 
+-static int sysfs_scan_device(struct libusb_context *ctx, const char *devname)
+-{
+-	uint8_t busnum, devaddr;
+-	int ret;
+-
+-	ret = linux_get_device_address(ctx, 0, &busnum, &devaddr, NULL, devname, -1);
+-	if (ret != LIBUSB_SUCCESS)
+-		return ret;
+-
+-	return linux_enumerate_device(ctx, busnum, devaddr, devname);
+-}
+-
+ /* read the bConfigurationValue for a device */
+ static int sysfs_get_active_config(struct libusb_device *dev, int *config)
+ {
+@@ -581,41 +569,14 @@ static int sysfs_get_active_config(struct libusb_device *dev, int *config)
+ 			UINT8_MAX, config);
+ }
+ 
+-int linux_get_device_address(struct libusb_context *ctx, int detached,
+-	uint8_t *busnum, uint8_t *devaddr, const char *dev_node,
+-	const char *sys_name, int fd)
++static int device_address_from_sysfs(struct libusb_context *ctx,
++	const char *sys_name, uint8_t *busnum, uint8_t *devaddr)
+ {
+ 	int sysfs_val;
+ 	int r;
+ 
+-	usbi_dbg(ctx, "getting address for device: %s detached: %d", sys_name, detached);
+-	/* can't use sysfs to read the bus and device number if the
+-	 * device has been detached */
+-	if (!sysfs_available || detached || !sys_name) {
+-		if (!dev_node && fd >= 0) {
+-			char *fd_path = alloca(PATH_MAX);
+-			char proc_path[32];
+-
+-			/* try to retrieve the device node from fd */
+-			sprintf(proc_path, "/proc/self/fd/%d", fd);
+-			r = readlink(proc_path, fd_path, PATH_MAX - 1);
+-			if (r > 0) {
+-				fd_path[r] = '\0';
+-				dev_node = fd_path;
+-			}
+-		}
+-
+-		if (!dev_node)
+-			return LIBUSB_ERROR_OTHER;
+-
+-		/* will this work with all supported kernel versions? */
+-		if (!strncmp(dev_node, "/dev/bus/usb", 12))
+-			sscanf(dev_node, "/dev/bus/usb/%hhu/%hhu", busnum, devaddr);
+-		else
+-			return LIBUSB_ERROR_OTHER;
+-
+-		return LIBUSB_SUCCESS;
+-	}
++	if (!sysfs_available || !sys_name)
++		return LIBUSB_ERROR_OTHER;
+ 
+ 	usbi_dbg(ctx, "scan %s", sys_name);
+ 
+@@ -634,6 +595,85 @@ int linux_get_device_address(struct libusb_context *ctx, int detached,
+ 	return LIBUSB_SUCCESS;
+ }
+ 
++static int device_address_from_path(struct libusb_context *ctx,
++	const char *path, uint8_t *busnum, uint8_t *devaddr)
++{
++	if (!path)
++		return LIBUSB_ERROR_OTHER;
++
++	/* will this work with all supported kernel versions? */
++	if (strncmp(path, "/dev/bus/usb", 12))
++		return LIBUSB_ERROR_OTHER;
++
++	sscanf(path, "/dev/bus/usb/%hhu/%hhu", busnum, devaddr);
++
++	usbi_dbg(ctx, "bus=%u dev=%u", *busnum, *devaddr);
++
++	return LIBUSB_SUCCESS;
++}
++
++static int device_address_from_fd(struct libusb_context *ctx,
++	int fd, uint8_t *busnum, uint8_t *devaddr)
++{
++	struct usbfs_connectinfo ci;
++	char proc_path[PATH_MAX], fd_path[PATH_MAX];
++	ssize_t nb;
++	int r;
++
++	/* Try to see if we can deduce the address from usbfs file
++	 * descriptor. */
++	snprintf(proc_path, PATH_MAX, "/proc/self/fd/%d", fd);
++	nb = readlink(proc_path, fd_path, PATH_MAX - 1);
++	if (nb > 0) {
++		fd_path[nb] = '\0';
++		r = device_address_from_path(ctx, fd_path, busnum, devaddr);
++		if (r == LIBUSB_SUCCESS)
++			return r;
++	}
++
++	r = ioctl(fd, IOCTL_USBFS_CONNECTINFO, &ci);
++	if (r < 0) {
++		usbi_err(ctx, "connectinfo failed, errno=%d", errno);
++		return LIBUSB_ERROR_IO;
++	}
++
++	/* IOCTL_USBFS_CONNECTINFO does not return the bus number.
++	 * We choose 0 here as linux starts numbering buses from 1. */
++	*busnum = 0;
++	*devaddr = ci.devnum;
++
++	return LIBUSB_SUCCESS;
++}
++
++static int sysfs_scan_device(struct libusb_context *ctx, const char *devname)
++{
++	uint8_t busnum, devaddr;
++	int ret;
++
++	ret = device_address_from_sysfs(ctx, devname, &busnum, &devaddr);
++	if (ret != LIBUSB_SUCCESS)
++		return ret;
++
++	return linux_enumerate_device(ctx, busnum, devaddr, devname);
++}
++
++int linux_get_device_address(struct libusb_context *ctx, int detached,
++	uint8_t *busnum, uint8_t *devaddr, const char *dev_node,
++	const char *sys_name)
++{
++	usbi_dbg(ctx, "getting address for device: %s detached: %d", sys_name, detached);
++	/* can't use sysfs to read the bus and device number if the
++	 * device has been detached */
++	if (!sysfs_available || detached) {
++		if (dev_node)
++			return device_address_from_path(ctx, dev_node,
++							busnum, devaddr);
++		return LIBUSB_ERROR_OTHER;
++	}
++
++	return device_address_from_sysfs(ctx, sys_name, busnum, devaddr);
++}
++
+ /* Return offset of the next config descriptor */
+ static int seek_to_next_config(struct libusb_context *ctx,
+ 	uint8_t *buffer, size_t len)
+@@ -1343,22 +1383,12 @@ static int op_wrap_sys_device(struct libusb_context *ctx,
+ 	struct linux_device_handle_priv *hpriv = usbi_get_device_handle_priv(handle);
+ 	int fd = (int)sys_dev;
+ 	uint8_t busnum, devaddr;
+-	struct usbfs_connectinfo ci;
+ 	struct libusb_device *dev;
+ 	int r;
+ 
+-	r = linux_get_device_address(ctx, 1, &busnum, &devaddr, NULL, NULL, fd);
+-	if (r < 0) {
+-		r = ioctl(fd, IOCTL_USBFS_CONNECTINFO, &ci);
+-		if (r < 0) {
+-			usbi_err(ctx, "connectinfo failed, errno=%d", errno);
+-			return LIBUSB_ERROR_IO;
+-		}
+-		/* There is no ioctl to get the bus number. We choose 0 here
+-		 * as linux starts numbering buses from 1. */
+-		busnum = 0;
+-		devaddr = ci.devnum;
+-	}
++	r = device_address_from_fd(ctx, fd, &busnum, &devaddr);
++	if (r != LIBUSB_SUCCESS)
++		return r;
+ 
+ 	/* Session id is unused as we do not add the device to the list of
+ 	 * connected devices. */
+diff --git a/libusb/os/linux_usbfs.h b/libusb/os/linux_usbfs.h
+index 1238ffac..4a2ffaf5 100644
+--- a/libusb/os/linux_usbfs.h
++++ b/libusb/os/linux_usbfs.h
+@@ -204,7 +204,7 @@ void linux_device_disconnected(uint8_t busnum, uint8_t devaddr);
+ 
+ int linux_get_device_address(struct libusb_context *ctx, int detached,
+ 	uint8_t *busnum, uint8_t *devaddr, const char *dev_node,
+-	const char *sys_name, int fd);
++	const char *sys_name);
+ int linux_enumerate_device(struct libusb_context *ctx,
+ 	uint8_t busnum, uint8_t devaddr, const char *sysfs_dir);
+ 
+-- 
+2.38.1.584.g0f3c55d4c2-goog
+

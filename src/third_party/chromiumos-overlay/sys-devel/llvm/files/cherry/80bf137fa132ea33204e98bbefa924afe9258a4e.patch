@@ -1,0 +1,740 @@
+commit 80bf137fa132ea33204e98bbefa924afe9258a4e
+Author: Teresa Johnson <tejohnson@google.com>
+Date:   Mon Mar 2 13:09:56 2020 -0800
+
+    Revert "Restore "[WPD/LowerTypeTests] Delay lowering/removal of type tests until after ICP""
+    
+    This reverts commit 80d0a137a5aba6998fadb764f1e11cb901aae233, and the
+    follow on fix in 873c0d0786dcf22f4af39f65df824917f70f2170. It is
+    causing test failures after a multi-stage clang bootstrap. See
+    discussion on D73242 and D75201.
+
+diff --git a/llvm/include/llvm/IR/ModuleSummaryIndex.h b/llvm/include/llvm/IR/ModuleSummaryIndex.h
+index 56874ecf9d1..8259df10117 100644
+--- a/llvm/include/llvm/IR/ModuleSummaryIndex.h
++++ b/llvm/include/llvm/IR/ModuleSummaryIndex.h
+@@ -833,8 +833,7 @@ struct TypeTestResolution {
+     Single,    ///< Single element (last example in "Short Inline Bit Vectors")
+     AllOnes,   ///< All-ones bit vector ("Eliminating Bit Vector Checks for
+                ///  All-Ones Bit Vectors")
+-    Unknown,   ///< Unknown (analysis not performed, don't lower)
+-  } TheKind = Unknown;
++  } TheKind = Unsat;
+ 
+   /// Range of size-1 expressed as a bit width. For example, if the size is in
+   /// range [1,256], this number will be 8. This helps generate the most compact
+@@ -1028,7 +1027,7 @@ public:
+   // in the way some record are interpreted, like flags for instance.
+   // Note that incrementing this may require changes in both BitcodeReader.cpp
+   // and BitcodeWriter.cpp.
+-  static constexpr uint64_t BitcodeSummaryVersion = 9;
++  static constexpr uint64_t BitcodeSummaryVersion = 8;
+ 
+   // Regular LTO module name for ASM writer
+   static constexpr const char *getRegularLTOModuleName() {
+diff --git a/llvm/include/llvm/IR/ModuleSummaryIndexYAML.h b/llvm/include/llvm/IR/ModuleSummaryIndexYAML.h
+index e51ec67b4c9..7dcb455274f 100644
+--- a/llvm/include/llvm/IR/ModuleSummaryIndexYAML.h
++++ b/llvm/include/llvm/IR/ModuleSummaryIndexYAML.h
+@@ -17,7 +17,6 @@ namespace yaml {
+ 
+ template <> struct ScalarEnumerationTraits<TypeTestResolution::Kind> {
+   static void enumeration(IO &io, TypeTestResolution::Kind &value) {
+-    io.enumCase(value, "Unknown", TypeTestResolution::Unknown);
+     io.enumCase(value, "Unsat", TypeTestResolution::Unsat);
+     io.enumCase(value, "ByteArray", TypeTestResolution::ByteArray);
+     io.enumCase(value, "Inline", TypeTestResolution::Inline);
+diff --git a/llvm/lib/AsmParser/LLParser.cpp b/llvm/lib/AsmParser/LLParser.cpp
+index ad74303a784..1279e936607 100644
+--- a/llvm/lib/AsmParser/LLParser.cpp
++++ b/llvm/lib/AsmParser/LLParser.cpp
+@@ -7665,9 +7665,6 @@ bool LLParser::ParseTypeTestResolution(TypeTestResolution &TTRes) {
+     return true;
+ 
+   switch (Lex.getKind()) {
+-  case lltok::kw_unknown:
+-    TTRes.TheKind = TypeTestResolution::Unknown;
+-    break;
+   case lltok::kw_unsat:
+     TTRes.TheKind = TypeTestResolution::Unsat;
+     break;
+diff --git a/llvm/lib/IR/AsmWriter.cpp b/llvm/lib/IR/AsmWriter.cpp
+index 7c0b79fcabd..c2added23de 100644
+--- a/llvm/lib/IR/AsmWriter.cpp
++++ b/llvm/lib/IR/AsmWriter.cpp
+@@ -2780,8 +2780,6 @@ static const char *getWholeProgDevirtResByArgKindName(
+ 
+ static const char *getTTResKindName(TypeTestResolution::Kind K) {
+   switch (K) {
+-  case TypeTestResolution::Unknown:
+-    return "unknown";
+   case TypeTestResolution::Unsat:
+     return "unsat";
+   case TypeTestResolution::ByteArray:
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index eb5b3a61fa8..446d349500b 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -761,12 +761,6 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
+   }
+   MPM.addPass(AttributorPass());
+ 
+-  // Lower type metadata and the type.test intrinsic in the ThinLTO
+-  // post link pipeline after ICP. This is to enable usage of the type
+-  // tests in ICP sequences.
+-  if (Phase == ThinLTOPhase::PostLink)
+-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
+-
+   // Interprocedural constant propagation now that basic cleanup has occurred
+   // and prior to optimizing globals.
+   // FIXME: This position in the pipeline hasn't been carefully considered in
+@@ -1211,9 +1205,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
+     // metadata and intrinsics.
+     MPM.addPass(WholeProgramDevirtPass(ExportSummary, nullptr));
+     MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
+-    // Run a second time to clean up any type tests left behind by WPD for use
+-    // in ICP.
+-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
+     return MPM;
+   }
+ 
+@@ -1280,10 +1271,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
+     // The LowerTypeTestsPass needs to run to lower type metadata and the
+     // type.test intrinsics. The pass does nothing if CFI is disabled.
+     MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
+-    // Run a second time to clean up any type tests left behind by WPD for use
+-    // in ICP (which is performed earlier than this in the regular LTO
+-    // pipeline).
+-    MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
+     return MPM;
+   }
+ 
+@@ -1411,9 +1398,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
+   // to be run at link time if CFI is enabled. This pass does nothing if
+   // CFI is disabled.
+   MPM.addPass(LowerTypeTestsPass(ExportSummary, nullptr));
+-  // Run a second time to clean up any type tests left behind by WPD for use
+-  // in ICP (which is performed earlier than this in the regular LTO pipeline).
+-  MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
+ 
+   // Enable splitting late in the FullLTO post-link pipeline. This is done in
+   // the same stage in the old pass manager (\ref addLateLTOOptimizationPasses).
+diff --git a/llvm/lib/Transforms/IPO/LowerTypeTests.cpp b/llvm/lib/Transforms/IPO/LowerTypeTests.cpp
+index cb9b29a7189..6f38a312393 100644
+--- a/llvm/lib/Transforms/IPO/LowerTypeTests.cpp
++++ b/llvm/lib/Transforms/IPO/LowerTypeTests.cpp
+@@ -735,9 +735,6 @@ static bool isKnownTypeIdMember(Metadata *TypeId, const DataLayout &DL,
+ /// replace the call with.
+ Value *LowerTypeTestsModule::lowerTypeTestCall(Metadata *TypeId, CallInst *CI,
+                                                const TypeIdLowering &TIL) {
+-  // Delay lowering if the resolution is currently unknown.
+-  if (TIL.TheKind == TypeTestResolution::Unknown)
+-    return nullptr;
+   if (TIL.TheKind == TypeTestResolution::Unsat)
+     return ConstantInt::getFalse(M.getContext());
+ 
+@@ -1040,18 +1037,14 @@ void LowerTypeTestsModule::importTypeTest(CallInst *CI) {
+     report_fatal_error("Second argument of llvm.type.test must be metadata");
+ 
+   auto TypeIdStr = dyn_cast<MDString>(TypeIdMDVal->getMetadata());
+-  // If this is a local unpromoted type, which doesn't have a metadata string,
+-  // treat as Unknown and delay lowering, so that we can still utilize it for
+-  // later optimizations.
+   if (!TypeIdStr)
+-    return;
++    report_fatal_error(
++        "Second argument of llvm.type.test must be a metadata string");
+ 
+   TypeIdLowering TIL = importTypeId(TypeIdStr->getString());
+   Value *Lowered = lowerTypeTestCall(TypeIdStr, CI, TIL);
+-  if (Lowered) {
+-    CI->replaceAllUsesWith(Lowered);
+-    CI->eraseFromParent();
+-  }
++  CI->replaceAllUsesWith(Lowered);
++  CI->eraseFromParent();
+ }
+ 
+ // ThinLTO backend: the function F has a jump table entry; update this module
+@@ -1174,10 +1167,8 @@ void LowerTypeTestsModule::lowerTypeTestCalls(
+     for (CallInst *CI : TIUI.CallSites) {
+       ++NumTypeTestCallsLowered;
+       Value *Lowered = lowerTypeTestCall(TypeId, CI, TIL);
+-      if (Lowered) {
+-        CI->replaceAllUsesWith(Lowered);
+-        CI->eraseFromParent();
+-      }
++      CI->replaceAllUsesWith(Lowered);
++      CI->eraseFromParent();
+     }
+   }
+ }
+diff --git a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+index 5b9cf7296df..d321aa055a1 100644
+--- a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
++++ b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+@@ -504,7 +504,6 @@ void PassManagerBuilder::populateModulePassManager(
+       MPM.add(createBarrierNoopPass());
+ 
+     if (PerformThinLTO) {
+-      MPM.add(createLowerTypeTestsPass(nullptr, nullptr, true));
+       // Drop available_externally and unreferenced globals. This is necessary
+       // with ThinLTO in order to avoid leaving undefined references to dead
+       // globals in the object file.
+@@ -538,11 +537,9 @@ void PassManagerBuilder::populateModulePassManager(
+   // inter-module indirect calls. For that we perform indirect call promotion
+   // earlier in the pass pipeline, here before globalopt. Otherwise imported
+   // available_externally functions look unreferenced and are removed.
+-  if (PerformThinLTO) {
++  if (PerformThinLTO)
+     MPM.add(createPGOIndirectCallPromotionLegacyPass(/*InLTO = */ true,
+                                                      !PGOSampleUse.empty()));
+-    MPM.add(createLowerTypeTestsPass(nullptr, nullptr, true));
+-  }
+ 
+   // For SamplePGO in ThinLTO compile phase, we do not want to unroll loops
+   // as it will change the CFG too much to make the 2nd profile annotation
+@@ -1063,8 +1060,8 @@ void PassManagerBuilder::populateThinLTOPassManager(
+     PM.add(createVerifierPass());
+ 
+   if (ImportSummary) {
+-    // This pass imports type identifier resolutions for whole-program
+-    // devirtualization and CFI. It must run early because other passes may
++    // These passes import type identifier resolutions for whole-program
++    // devirtualization and CFI. They must run early because other passes may
+     // disturb the specific instruction patterns that these passes look for,
+     // creating dependencies on resolutions that may not appear in the summary.
+     //
+@@ -1112,9 +1109,6 @@ void PassManagerBuilder::populateLTOPassManager(legacy::PassManagerBase &PM) {
+   // control flow integrity mechanisms (-fsanitize=cfi*) and needs to run at
+   // link time if CFI is enabled. The pass does nothing if CFI is disabled.
+   PM.add(createLowerTypeTestsPass(ExportSummary, nullptr));
+-  // Run a second time to clean up any type tests left behind by WPD for use
+-  // in ICP (which is performed earlier than this in the regular LTO pipeline).
+-  PM.add(createLowerTypeTestsPass(nullptr, nullptr, true));
+ 
+   if (OptLevel != 0)
+     addLateLTOOptimizationPasses(PM);
+diff --git a/llvm/lib/Transforms/IPO/WholeProgramDevirt.cpp b/llvm/lib/Transforms/IPO/WholeProgramDevirt.cpp
+index 26beb54c205..bbc1433a22e 100644
+--- a/llvm/lib/Transforms/IPO/WholeProgramDevirt.cpp
++++ b/llvm/lib/Transforms/IPO/WholeProgramDevirt.cpp
+@@ -510,9 +510,7 @@ struct DevirtModule {
+ 
+   bool areRemarksEnabled();
+ 
+-  void
+-  scanTypeTestUsers(Function *TypeTestFunc,
+-                    DenseMap<Metadata *, std::set<TypeMemberInfo>> &TypeIdMap);
++  void scanTypeTestUsers(Function *TypeTestFunc);
+   void scanTypeCheckedLoadUsers(Function *TypeCheckedLoadFunc);
+ 
+   void buildTypeIdentifierMap(
+@@ -1668,9 +1666,7 @@ bool DevirtModule::areRemarksEnabled() {
+   return false;
+ }
+ 
+-void DevirtModule::scanTypeTestUsers(
+-    Function *TypeTestFunc,
+-    DenseMap<Metadata *, std::set<TypeMemberInfo>> &TypeIdMap) {
++void DevirtModule::scanTypeTestUsers(Function *TypeTestFunc) {
+   // Find all virtual calls via a virtual table pointer %p under an assumption
+   // of the form llvm.assume(llvm.type.test(%p, %md)). This indicates that %p
+   // points to a member of the type identifier %md. Group calls by (type ID,
+@@ -1690,10 +1686,10 @@ void DevirtModule::scanTypeTestUsers(
+     auto &DT = LookupDomTree(*CI->getFunction());
+     findDevirtualizableCallsForTypeTest(DevirtCalls, Assumes, CI, DT);
+ 
+-    Metadata *TypeId =
+-        cast<MetadataAsValue>(CI->getArgOperand(1))->getMetadata();
+     // If we found any, add them to CallSlots.
+     if (!Assumes.empty()) {
++      Metadata *TypeId =
++          cast<MetadataAsValue>(CI->getArgOperand(1))->getMetadata();
+       Value *Ptr = CI->getArgOperand(0)->stripPointerCasts();
+       for (DevirtCallSite Call : DevirtCalls) {
+         // Only add this CallSite if we haven't seen it before. The vtable
+@@ -1706,13 +1702,6 @@ void DevirtModule::scanTypeTestUsers(
+       }
+     }
+ 
+-    // If we have any uses on type metadata, keep the type test assumes for
+-    // later analysis. Otherwise remove as they aren't useful, and
+-    // LowerTypeTests will think they are Unsat and lower to False, which
+-    // breaks any uses on assumes.
+-    if (TypeIdMap.count(TypeId))
+-      continue;
+-
+     // We no longer need the assumes or the type test.
+     for (auto Assume : Assumes)
+       Assume->eraseFromParent();
+@@ -1911,13 +1900,8 @@ bool DevirtModule::run() {
+       (!TypeCheckedLoadFunc || TypeCheckedLoadFunc->use_empty()))
+     return false;
+ 
+-  // Rebuild type metadata into a map for easy lookup.
+-  std::vector<VTableBits> Bits;
+-  DenseMap<Metadata *, std::set<TypeMemberInfo>> TypeIdMap;
+-  buildTypeIdentifierMap(Bits, TypeIdMap);
+-
+   if (TypeTestFunc && AssumeFunc)
+-    scanTypeTestUsers(TypeTestFunc, TypeIdMap);
++    scanTypeTestUsers(TypeTestFunc);
+ 
+   if (TypeCheckedLoadFunc)
+     scanTypeCheckedLoadUsers(TypeCheckedLoadFunc);
+@@ -1939,6 +1923,10 @@ bool DevirtModule::run() {
+     return true;
+   }
+ 
++  // Rebuild type metadata into a map for easy lookup.
++  std::vector<VTableBits> Bits;
++  DenseMap<Metadata *, std::set<TypeMemberInfo>> TypeIdMap;
++  buildTypeIdentifierMap(Bits, TypeIdMap);
+   if (TypeIdMap.empty())
+     return true;
+ 
+@@ -1995,18 +1983,14 @@ bool DevirtModule::run() {
+     // function implementation at offset S.first.ByteOffset, and add to
+     // TargetsForSlot.
+     std::vector<VirtualCallTarget> TargetsForSlot;
+-    WholeProgramDevirtResolution *Res = nullptr;
+-    if (ExportSummary && isa<MDString>(S.first.TypeID) &&
+-        TypeIdMap.count(S.first.TypeID))
+-      // For any type id used on a global's type metadata, create the type id
+-      // summary resolution regardless of whether we can devirtualize, so that
+-      // lower type tests knows the type id is not Unsat.
+-      Res = &ExportSummary
+-                 ->getOrInsertTypeIdSummary(
+-                     cast<MDString>(S.first.TypeID)->getString())
+-                 .WPDRes[S.first.ByteOffset];
+     if (tryFindVirtualCallTargets(TargetsForSlot, TypeIdMap[S.first.TypeID],
+                                   S.first.ByteOffset)) {
++      WholeProgramDevirtResolution *Res = nullptr;
++      if (ExportSummary && isa<MDString>(S.first.TypeID))
++        Res = &ExportSummary
++                   ->getOrInsertTypeIdSummary(
++                       cast<MDString>(S.first.TypeID)->getString())
++                   .WPDRes[S.first.ByteOffset];
+ 
+       if (!trySingleImplDevirt(ExportSummary, TargetsForSlot, S.second, Res)) {
+         DidVirtualConstProp |=
+@@ -2120,14 +2104,11 @@ void DevirtIndex::run() {
+     std::vector<ValueInfo> TargetsForSlot;
+     auto TidSummary = ExportSummary.getTypeIdCompatibleVtableSummary(S.first.TypeID);
+     assert(TidSummary);
+-    // Create the type id summary resolution regardlness of whether we can
+-    // devirtualize, so that lower type tests knows the type id is used on
+-    // a global and not Unsat.
+-    WholeProgramDevirtResolution *Res =
+-        &ExportSummary.getOrInsertTypeIdSummary(S.first.TypeID)
+-             .WPDRes[S.first.ByteOffset];
+     if (tryFindVirtualCallTargets(TargetsForSlot, *TidSummary,
+                                   S.first.ByteOffset)) {
++      WholeProgramDevirtResolution *Res =
++          &ExportSummary.getOrInsertTypeIdSummary(S.first.TypeID)
++               .WPDRes[S.first.ByteOffset];
+ 
+       if (!trySingleImplDevirt(TargetsForSlot, S.first, S.second, Res,
+                                DevirtTargets))
+diff --git a/llvm/test/Bitcode/summary_version.ll b/llvm/test/Bitcode/summary_version.ll
+index 98feab6fe2f..2a67073713c 100644
+--- a/llvm/test/Bitcode/summary_version.ll
++++ b/llvm/test/Bitcode/summary_version.ll
+@@ -2,7 +2,7 @@
+ ; RUN: opt  -module-summary  %s -o - | llvm-bcanalyzer -dump | FileCheck %s
+ 
+ ; CHECK: <GLOBALVAL_SUMMARY_BLOCK
+-; CHECK: <VERSION op0=9/>
++; CHECK: <VERSION op0=8/>
+ 
+ 
+ 
+diff --git a/llvm/test/Other/new-pm-lto-defaults.ll b/llvm/test/Other/new-pm-lto-defaults.ll
+index bab23c924d6..4bfee73720f 100644
+--- a/llvm/test/Other/new-pm-lto-defaults.ll
++++ b/llvm/test/Other/new-pm-lto-defaults.ll
+@@ -92,7 +92,6 @@
+ ; CHECK-O2-NEXT: Running analysis: DemandedBitsAnalysis
+ ; CHECK-O2-NEXT: Running pass: CrossDSOCFIPass
+ ; CHECK-O2-NEXT: Running pass: LowerTypeTestsPass
+-; CHECK-O-NEXT: Running pass: LowerTypeTestsPass
+ ; CHECK-O2-NEXT: Running pass: ModuleToFunctionPassAdaptor<{{.*}}SimplifyCFGPass>
+ ; CHECK-O2-NEXT: Running pass: EliminateAvailableExternallyPass
+ ; CHECK-O2-NEXT: Running pass: GlobalDCEPass
+diff --git a/llvm/test/Other/new-pm-thinlto-defaults.ll b/llvm/test/Other/new-pm-thinlto-defaults.ll
+index 6326bec87a5..a6faeccb30d 100644
+--- a/llvm/test/Other/new-pm-thinlto-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-defaults.ll
+@@ -80,7 +80,6 @@
+ ; CHECK-O3-NEXT: Running pass: CallSiteSplittingPass
+ ; CHECK-O-NEXT: Finished llvm::Function pass manager run.
+ ; CHECK-O-NEXT: Running pass: AttributorPass
+-; CHECK-POSTLINK-O-NEXT: Running pass: LowerTypeTestsPass
+ ; CHECK-O-NEXT: Running pass: IPSCCPPass
+ ; CHECK-O-NEXT: Running pass: CalledValuePropagationPass
+ ; CHECK-O-NEXT: Running pass: GlobalOptPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+index 9c5fdc6458a..0c2e9328c11 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+@@ -49,7 +49,6 @@
+ ; CHECK-O3-NEXT: Running pass: CallSiteSplittingPass
+ ; CHECK-O-NEXT: Finished {{.*}}Function pass manager run.
+ ; CHECK-O-NEXT: Running pass: AttributorPass
+-; CHECK-O-NEXT: Running pass: LowerTypeTestsPass
+ ; CHECK-O-NEXT: Running pass: IPSCCPPass
+ ; CHECK-O-NEXT: Running pass: CalledValuePropagationPass
+ ; CHECK-O-NEXT: Running pass: GlobalOptPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+index 01d951703a6..29d379ab54a 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+@@ -60,7 +60,6 @@
+ ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}ProfileSummaryAnalysis
+ ; CHECK-O-NEXT: Running pass: PGOIndirectCallPromotion
+ ; CHECK-O-NEXT: Running pass: AttributorPass
+-; CHECK-O-NEXT: Running pass: LowerTypeTestsPass
+ ; CHECK-O-NEXT: Running pass: IPSCCPPass
+ ; CHECK-O-NEXT: Running pass: CalledValuePropagationPass
+ ; CHECK-O-NEXT: Running pass: GlobalOptPass
+diff --git a/llvm/test/ThinLTO/X86/Inputs/cfi-unsat.ll b/llvm/test/ThinLTO/X86/Inputs/cfi-unsat.ll
+deleted file mode 100644
+index bc7a0e36dfa..00000000000
+--- a/llvm/test/ThinLTO/X86/Inputs/cfi-unsat.ll
++++ /dev/null
+@@ -1,50 +0,0 @@
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-grtev4-linux-gnu"
+-
+-%struct.A = type { i32 (...)** }
+-%struct.B = type { i32 (...)** }
+-
+-@_ZTV1B = linkonce_odr constant { [4 x i8*] } { [4 x i8*] [i8* null, i8* undef, i8* bitcast (i32 (%struct.B*, i32)* @_ZN1B1fEi to i8*), i8* bitcast (i32 (%struct.B*, i32)* @_ZN1B1nEi to i8*)] }, !type !0
+-
+-$test = comdat any
+-
+-; CHECK-IR-LABEL: define i32 @test
+-define linkonce_odr i32 @test(%struct.A* %obj, i32 %a) comdat {
+-entry:
+-  %0 = bitcast %struct.A* %obj to i8**
+-  %vtable5 = load i8*, i8** %0
+-
+-  %1 = tail call { i8*, i1 } @llvm.type.checked.load(i8* %vtable5, i32 8, metadata !"_ZTS1A")
+-  %2 = extractvalue { i8*, i1 } %1, 1
+-  br i1 %2, label %cont, label %trap
+-
+-trap:
+-  tail call void @llvm.trap()
+-  unreachable
+-
+-cont:
+-  %3 = extractvalue { i8*, i1 } %1, 0
+-  %4 = bitcast i8* %3 to i32 (%struct.A*, i32)*
+-
+-  ; Check that the call was devirtualized.
+-  ; CHECK-IR: %call = tail call i32 @_ZN1A1nEi
+-  %call = tail call i32 %4(%struct.A* nonnull %obj, i32 %a)
+-
+-  ret i32 %call
+-}
+-; CHECK-IR-LABEL: ret i32
+-; CHECK-IR-LABEL: }
+-
+-declare { i8*, i1 } @llvm.type.checked.load(i8*, i32, metadata)
+-declare void @llvm.trap()
+-
+-define internal i32 @_ZN1B1fEi(%struct.B* %this, i32 %a) {
+-entry:
+-   ret i32 0
+-}
+-define internal i32 @_ZN1B1nEi(%struct.B* %this, i32 %a) {
+-entry:
+-   ret i32 0
+-}
+-
+-!0 = !{i64 16, !"_ZTS1B"}
+diff --git a/llvm/test/ThinLTO/X86/cfi-unsat.ll b/llvm/test/ThinLTO/X86/cfi-unsat.ll
+deleted file mode 100644
+index 24e837303c2..00000000000
+--- a/llvm/test/ThinLTO/X86/cfi-unsat.ll
++++ /dev/null
+@@ -1,74 +0,0 @@
+-; REQUIRES: x86-registered-target
+-
+-; Test CFI devirtualization through the thin link and backend when
+-; a type id is Unsat (not used on any global's type metadata).
+-;
+-; In this test case, the first module is split and will import a resolution
+-; for its type test. The resolution would be exported by the second
+-; module, which is set up so that it does not get split (treated as regular
+-; LTO because it does not have any external globals from which to create
+-; a unique module ID). We should not actually get any resolution for the
+-; type id in this case, since no globals include it in their type metadata,
+-; so the resolution is Unsat and the type.checked.load instructions are
+-; converted to type tests that evaluate to false.
+-
+-; RUN: opt -thinlto-bc -thinlto-split-lto-unit -o %t.o %s
+-; RUN: opt -thinlto-bc -thinlto-split-lto-unit -o %t1.o %p/Inputs/cfi-unsat.ll
+-
+-; RUN: llvm-lto2 run %t.o %t1.o -save-temps -use-new-pm -pass-remarks=. \
+-; RUN:   -whole-program-visibility \
+-; RUN:   -o %t3 \
+-; RUN:   -r=%t.o,test2,px \
+-; RUN:   -r=%t1.o,_ZTV1B,px \
+-; RUN:   -r=%t1.o,test,px
+-; RUN: llvm-dis %t3.index.bc -o - | FileCheck %s --check-prefix=INDEX
+-; RUN: llvm-dis %t3.0.4.opt.bc -o - | FileCheck %s --check-prefix=CHECK-IR0
+-; RUN: llvm-dis %t3.1.4.opt.bc -o - | FileCheck %s --check-prefix=CHECK-IR1
+-
+-; INDEX-NOT: "typeid:"
+-
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-grtev4-linux-gnu"
+-
+-%struct.A = type { i32 (...)** }
+-
+-$test2 = comdat any
+-
+-; CHECK-IR0: define weak_odr i32 @test
+-define linkonce_odr i32 @test2(%struct.A* %obj, i32 %a) comdat {
+-; CHECK-IR0-NEXT: entry:
+-entry:
+-; CHECK-IR0-NEXT: %0 = bitcast
+-  %0 = bitcast %struct.A* %obj to i8**
+-; CHECK-IR0-NEXT: %vtable5 =
+-  %vtable5 = load i8*, i8** %0
+-
+-; CHECK-IR0-NEXT: tail call void @llvm.trap()
+-; CHECK-IR0-NEXT: unreachable
+-
+-  %1 = tail call { i8*, i1 } @llvm.type.checked.load(i8* %vtable5, i32 8, metadata !"_ZTS1A")
+-  %2 = extractvalue { i8*, i1 } %1, 1
+-  br i1 %2, label %cont, label %trap
+-
+-trap:
+-  tail call void @llvm.trap()
+-  unreachable
+-
+-cont:
+-  %3 = extractvalue { i8*, i1 } %1, 0
+-  %4 = bitcast i8* %3 to i32 (%struct.A*, i32)*
+-
+-  %call = tail call i32 %4(%struct.A* nonnull %obj, i32 %a)
+-
+-  ret i32 %call
+-; CHECK-IR0-NEXT: }
+-}
+-
+-; CHECK-IR1: define weak_odr i32 @test2
+-; CHECK-IR1-NEXT:   entry:
+-; CHECK-IR1-NEXT:     tail call void @llvm.trap()
+-; CHECK-IR1-NEXT:     unreachable
+-; CHECK-IR1-NEXT:   }
+-
+-declare { i8*, i1 } @llvm.type.checked.load(i8*, i32, metadata)
+-declare void @llvm.trap()
+diff --git a/llvm/test/ThinLTO/X86/nodevirt-nonpromoted-typeid.ll b/llvm/test/ThinLTO/X86/nodevirt-nonpromoted-typeid.ll
+index 3669db72fa0..611a424143a 100644
+--- a/llvm/test/ThinLTO/X86/nodevirt-nonpromoted-typeid.ll
++++ b/llvm/test/ThinLTO/X86/nodevirt-nonpromoted-typeid.ll
+@@ -33,8 +33,6 @@
+ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+ target triple = "x86_64-grtev4-linux-gnu"
+ 
+-@llvm.global_ctors = appending global [1 x { i32, void ()*, i8* }] [{ i32, void ()*, i8* } { i32 65535, void ()* @g, i8* null }]
+-
+ %struct.D = type { i32 (...)** }
+ 
+ @_ZTV1D = internal constant { [3 x i8*] } { [3 x i8*] [i8* null, i8* undef, i8* bitcast (i32 (%struct.D*, i32)* @_ZN1D1mEi to i8*)] }, !type !3
+@@ -59,23 +57,6 @@ entry:
+ ; CHECK-IR-LABEL: ret i32
+ ; CHECK-IR-LABEL: }
+ 
+-; Function Attrs: inlinehint nounwind uwtable
+-define internal void @_ZN1DC2Ev(%struct.D* %this) unnamed_addr align 2 {
+-entry:
+-  %this.addr = alloca %struct.D*, align 8
+-  store %struct.D* %this, %struct.D** %this.addr, align 8
+-  %this1 = load %struct.D*, %struct.D** %this.addr
+-  %0 = bitcast %struct.D* %this1 to i32 (...)***
+-  store i32 (...)** bitcast (i8** getelementptr inbounds ({ [3 x i8*] }, { [3 x i8*] }* @_ZTV1D, i64 0, inrange i32 0, i64 2) to i32 (...)**), i32 (...)*** %0, align 8
+-  ret void
+-}
+-
+-define internal void @g() section ".text.startup" {
+-  %d = alloca %struct.D, align 8
+-  call void @_ZN1DC2Ev(%struct.D* %d)
+-  ret void
+-}
+-
+ declare i1 @llvm.type.test(i8*, metadata)
+ declare void @llvm.assume(i1)
+ 
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/branch-funnel.ll b/llvm/test/Transforms/WholeProgramDevirt/branch-funnel.ll
+index bf7c8547f27..32d964819fe 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/branch-funnel.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/branch-funnel.ll
+@@ -10,7 +10,7 @@
+ ; SUMMARY:      TypeIdMap:       
+ ; SUMMARY-NEXT:   typeid3:
+ ; SUMMARY-NEXT:     TTRes:           
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+@@ -23,7 +23,7 @@
+ ; SUMMARY-NEXT:         ResByArg:        
+ ; SUMMARY-NEXT:   typeid1:
+ ; SUMMARY-NEXT:     TTRes:           
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+@@ -36,7 +36,7 @@
+ ; SUMMARY-NEXT:         ResByArg:        
+ ; SUMMARY-NEXT:   typeid2:
+ ; SUMMARY-NEXT:     TTRes:           
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/devirt-single-impl2.ll b/llvm/test/Transforms/WholeProgramDevirt/devirt-single-impl2.ll
+index 7c85114239c..63ccfb833d4 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/devirt-single-impl2.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/devirt-single-impl2.ll
+@@ -14,7 +14,7 @@
+ ; RUN:     -wholeprogramdevirt-summary-action=export -o /dev/null 2>&1 | FileCheck %s --check-prefix=MISSING-MODULE
+ 
+ ; Check single impl devirtulation in summary
+-; CHECK: typeid: (name: "_ZTS1A", summary: (typeTestRes: (kind: unknown, sizeM1BitWidth: 0), wpdResolutions: ((offset: 0, wpdRes: (kind: singleImpl, singleImplName: "_ZNK1A1fEv"))))) ; guid
++; CHECK: typeid: (name: "_ZTS1A", summary: (typeTestRes: (kind: unsat, sizeM1BitWidth: 0), wpdResolutions: ((offset: 0, wpdRes: (kind: singleImpl, singleImplName: "_ZNK1A1fEv"))))) ; guid
+ 
+ ; MISSING-MODULE: combined summary should contain Regular LTO module
+ 
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/export-single-impl.ll b/llvm/test/Transforms/WholeProgramDevirt/export-single-impl.ll
+index 861f5f65848..33ff9e1afe5 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/export-single-impl.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/export-single-impl.ll
+@@ -4,7 +4,7 @@
+ ; SUMMARY:      TypeIdMap:
+ ; SUMMARY-NEXT:   typeid3:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+@@ -17,7 +17,7 @@
+ ; SUMMARY-NEXT:         ResByArg:
+ ; SUMMARY-NEXT:   typeid1:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+@@ -30,7 +30,7 @@
+ ; SUMMARY-NEXT:         ResByArg:
+ ; SUMMARY-NEXT:   typeid2:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+@@ -43,7 +43,7 @@
+ ; SUMMARY-NEXT:         ResByArg:
+ ; SUMMARY-NEXT:   typeid4:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/export-uniform-ret-val.ll b/llvm/test/Transforms/WholeProgramDevirt/export-uniform-ret-val.ll
+index 634eaa12196..cb2fddd75d1 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/export-uniform-ret-val.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/export-uniform-ret-val.ll
+@@ -6,7 +6,7 @@
+ ; SUMMARY:      TypeIdMap:
+ ; SUMMARY-NEXT:   typeid4:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/export-unique-ret-val.ll b/llvm/test/Transforms/WholeProgramDevirt/export-unique-ret-val.ll
+index 7b646341ece..0f780a38736 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/export-unique-ret-val.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/export-unique-ret-val.ll
+@@ -6,7 +6,7 @@
+ ; SUMMARY:      TypeIdMap:
+ ; SUMMARY-NEXT:   typeid3:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+@@ -24,7 +24,7 @@
+ ; SUMMARY-NEXT:             Bit:             0
+ ; SUMMARY-NEXT:   typeid4:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/export-vcp.ll b/llvm/test/Transforms/WholeProgramDevirt/export-vcp.ll
+index e33abd25962..eb7b36e87dd 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/export-vcp.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/export-vcp.ll
+@@ -9,7 +9,7 @@ target datalayout = "e-p:64:64"
+ ; SUMMARY:      TypeIdMap:
+ ; SUMMARY-NEXT:   typeid3:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+@@ -29,7 +29,7 @@ target datalayout = "e-p:64:64"
+ ; SUMMARY-ARM-NEXT:         Bit:             1
+ ; SUMMARY-NEXT:   typeid4:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/import-indir.ll b/llvm/test/Transforms/WholeProgramDevirt/import-indir.ll
+index 19ee68be955..5c2be7d8629 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/import-indir.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/import-indir.ll
+@@ -32,7 +32,7 @@
+ ; SUMMARY-NEXT: TypeIdMap:
+ ; SUMMARY-NEXT:   typeid1:
+ ; SUMMARY-NEXT:     TTRes:
+-; SUMMARY-NEXT:       Kind:            Unknown
++; SUMMARY-NEXT:       Kind:            Unsat
+ ; SUMMARY-NEXT:       SizeM1BitWidth:  0
+ ; SUMMARY-NEXT:       AlignLog2:       0
+ ; SUMMARY-NEXT:       SizeM1:          0
+diff --git a/llvm/test/Transforms/WholeProgramDevirt/uniform-retval.ll b/llvm/test/Transforms/WholeProgramDevirt/uniform-retval.ll
+index 16f9ef822d6..7626aba24c1 100644
+--- a/llvm/test/Transforms/WholeProgramDevirt/uniform-retval.ll
++++ b/llvm/test/Transforms/WholeProgramDevirt/uniform-retval.ll
+@@ -25,7 +25,7 @@ define i32 @call(i8* %obj) {
+   %fptr = load i8*, i8** %fptrptr
+   %fptr_casted = bitcast i8* %fptr to i32 (i8*)*
+   %result = call i32 %fptr_casted(i8* %obj)
+-  ; CHECK-NOT: call i32 %
++  ; CHECK-NOT: call
+   ; CHECK: ret i32 123
+   ret i32 %result
+ }

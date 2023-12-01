@@ -1,0 +1,39 @@
+# This patch is only applied if SymbiYosys isn't installed. Not sure if all
+# `GrayCoderTestCase` will require it but it is probable all `FIFOFormalCase`
+# will as SymbiYosys allows formal hardware verification.
+#
+# It isn't currently available in ChromiumOS and only 11 out of 605 tests are
+# skipped so let's not depend on SymbiYosys for testing.
+
+--- a/tests/test_lib_coding.py
++++ b/tests/test_lib_coding.py
+@@ -116,12 +116,14 @@ class HammingDistanceSpec(Elaboratable):
+         ]
+         return m
+ 
+-
++import unittest
+ class GrayCoderTestCase(FHDLTestCase):
++    @unittest.skip("No SymbiYosys")
+     def test_reversible(self):
+         spec = ReversibleSpec(encoder_cls=GrayEncoder, decoder_cls=GrayDecoder, args=(16,))
+         self.assertFormal(spec, mode="prove")
+ 
++    @unittest.skip("No SymbiYosys")
+     def test_distance(self):
+         spec = HammingDistanceSpec(distance=1, encoder_cls=GrayEncoder, args=(16,))
+         self.assertFormal(spec, mode="prove")
+diff --git a/tests/test_lib_fifo.py b/tests/test_lib_fifo.py
+index 0e322c1..6d00922 100644
+--- a/tests/test_lib_fifo.py
++++ b/tests/test_lib_fifo.py
+@@ -236,7 +236,8 @@ class FIFOContractSpec(Elaboratable):
+ 
+         return m
+ 
+-
++import unittest
++@unittest.skip("No SymbiYosys")
+ class FIFOFormalCase(FHDLTestCase):
+     def check_sync_fifo(self, fifo):
+         self.assertFormal(FIFOModelEquivalenceSpec(fifo, r_domain="sync", w_domain="sync"),

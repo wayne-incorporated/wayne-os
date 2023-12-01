@@ -1,0 +1,16 @@
+type cros_sshd, chromeos_domain, domain;
+
+permissive cros_sshd;
+
+domain_auto_trans(cros_init_scripts, cros_sshd_exec, cros_sshd)
+domain_auto_trans(cros_sshd, sh_exec, cros_ssh_session)
+
+use_init_fd(cros_sshd)
+cros_net(cros_sshd)
+cros_tcp_create(cros_sshd)
+cros_udp_create(cros_sshd)
+cros_netlink(cros_sshd, netlink_route_socket)
+
+allow cros_sshd devpts:chr_file rw_file_perms;
+
+pid_file(cros_sshd, cros_run, "sshd.pid")

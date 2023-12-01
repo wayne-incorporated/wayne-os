@@ -1,0 +1,72 @@
+From 929b6b798ec233da55f4d00b39507cb9e0ec9ac2 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 26 Jul 2022 08:44:37 -0300
+Subject: [PATCH 016/163] i386: Use cmpl instead of cmp
+
+Clang cannot assemble cmp in the AT&T dialect mode.
+
+(cherry picked from commit 26a3499cdbc537de1b6305ed5e6bcff02734f51e)
+---
+ sysdeps/i386/i686/multiarch/wcscpy-ssse3.S |  8 ++++----
+ sysdeps/i386/i686/multiarch/wcslen-sse2.S  | 16 ++++++++--------
+ 2 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/sysdeps/i386/i686/multiarch/wcscpy-ssse3.S b/sysdeps/i386/i686/multiarch/wcscpy-ssse3.S
+index 601e0f0138..fa6598c54d 100644
+--- a/sysdeps/i386/i686/multiarch/wcscpy-ssse3.S
++++ b/sysdeps/i386/i686/multiarch/wcscpy-ssse3.S
+@@ -41,13 +41,13 @@ ENTRY (__wcscpy_ssse3)
+ 	mov	STR1(%esp), %edx
+ 	mov	STR2(%esp), %ecx
+ 
+-	cmp	$0, (%ecx)
++	cmpl	$0, (%ecx)
+ 	jz	L(ExitTail4)
+-	cmp	$0, 4(%ecx)
++	cmpl	$0, 4(%ecx)
+ 	jz	L(ExitTail8)
+-	cmp	$0, 8(%ecx)
++	cmpl	$0, 8(%ecx)
+ 	jz	L(ExitTail12)
+-	cmp	$0, 12(%ecx)
++	cmpl	$0, 12(%ecx)
+ 	jz	L(ExitTail16)
+ 
+ 	PUSH	(%edi)
+diff --git a/sysdeps/i386/i686/multiarch/wcslen-sse2.S b/sysdeps/i386/i686/multiarch/wcslen-sse2.S
+index 5337286d41..d49a7ce355 100644
+--- a/sysdeps/i386/i686/multiarch/wcslen-sse2.S
++++ b/sysdeps/i386/i686/multiarch/wcslen-sse2.S
+@@ -24,21 +24,21 @@
+ ENTRY (__wcslen_sse2)
+ 	mov	STR(%esp), %edx
+ 
+-	cmp	$0, (%edx)
++	cmpl	$0, (%edx)
+ 	jz	L(exit_tail0)
+-	cmp	$0, 4(%edx)
++	cmpl	$0, 4(%edx)
+ 	jz	L(exit_tail1)
+-	cmp	$0, 8(%edx)
++	cmpl	$0, 8(%edx)
+ 	jz	L(exit_tail2)
+-	cmp	$0, 12(%edx)
++	cmpl	$0, 12(%edx)
+ 	jz	L(exit_tail3)
+-	cmp	$0, 16(%edx)
++	cmpl	$0, 16(%edx)
+ 	jz	L(exit_tail4)
+-	cmp	$0, 20(%edx)
++	cmpl	$0, 20(%edx)
+ 	jz	L(exit_tail5)
+-	cmp	$0, 24(%edx)
++	cmpl	$0, 24(%edx)
+ 	jz	L(exit_tail6)
+-	cmp	$0, 28(%edx)
++	cmpl	$0, 28(%edx)
+ 	jz	L(exit_tail7)
+ 
+ 	pxor	%xmm0, %xmm0
+-- 
+2.37.2
+

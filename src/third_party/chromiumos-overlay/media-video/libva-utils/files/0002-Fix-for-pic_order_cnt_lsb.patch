@@ -1,0 +1,49 @@
+From dcd3de5138f801f75612f756a397651ee1e99ee4 Mon Sep 17 00:00:00 2001
+From: Pradeep Kumar <pradeep.kumar@intel.com>
+Date: Mon, 17 Apr 2023 10:51:39 +0530
+Subject: [PATCH 1/2] Fix for pic_order_cnt_lsb to accept larger GOP
+
+Signed-off-by: Pradeep Kumar <pradeep.kumar@intel.com>
+---
+ encode/h264encode.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/encode/h264encode.c b/encode/h264encode.c
+index 96e05271..80096c84 100644
+--- a/encode/h264encode.c
++++ b/encode/h264encode.c
+@@ -1483,6 +1483,7 @@ static int render_sequence(void)
+     seq_param.seq_fields.bits.frame_mbs_only_flag = 1;
+     seq_param.time_scale = 900;
+     seq_param.num_units_in_tick = 15; /* Tc = num_units_in_tick / time_sacle */
++    Log2MaxPicOrderCntLsb = ceil(log2(intra_idr_period*2));
+     seq_param.seq_fields.bits.log2_max_pic_order_cnt_lsb_minus4 = Log2MaxPicOrderCntLsb - 4;
+     seq_param.seq_fields.bits.log2_max_frame_num_minus4 = Log2MaxFrameNum - 4;;
+     seq_param.seq_fields.bits.frame_mbs_only_flag = 1;
+
+From 2fbad9e0a4a914c527a707921508f8abc2a4d421 Mon Sep 17 00:00:00 2001
+From: Pradeep Kumar <pradeep.kumar@intel.com>
+Date: Wed, 31 May 2023 15:02:29 +0530
+Subject: [PATCH 2/2] Adding the check for log2_max_pic_order_cnt_lsb_minus4 to
+ not cross the max limit 12
+
+Signed-off-by: Pradeep Kumar <pradeep.kumar@intel.com>
+---
+ encode/h264encode.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/encode/h264encode.c b/encode/h264encode.c
+index 80096c84..fa72b891 100644
+--- a/encode/h264encode.c
++++ b/encode/h264encode.c
+@@ -1485,6 +1485,10 @@ static int render_sequence(void)
+     seq_param.num_units_in_tick = 15; /* Tc = num_units_in_tick / time_sacle */
+     Log2MaxPicOrderCntLsb = ceil(log2(intra_idr_period*2));
+     seq_param.seq_fields.bits.log2_max_pic_order_cnt_lsb_minus4 = Log2MaxPicOrderCntLsb - 4;
++    if(seq_param.seq_fields.bits.log2_max_pic_order_cnt_lsb_minus4 > 12)
++    {
++        seq_param.seq_fields.bits.log2_max_pic_order_cnt_lsb_minus4 = 12;
++    }
+     seq_param.seq_fields.bits.log2_max_frame_num_minus4 = Log2MaxFrameNum - 4;;
+     seq_param.seq_fields.bits.frame_mbs_only_flag = 1;
+     seq_param.seq_fields.bits.chroma_format_idc = 1;

@@ -1,0 +1,533 @@
+From f4865c7c1795eb17b079e116791eb1419fea1620 Mon Sep 17 00:00:00 2001
+From: Shengchen Kan <shengchen.kan@intel.com>
+Date: Fri, 12 May 2023 22:41:17 +0800
+Subject: [PATCH] Revert "[X86][AsmParser] Refactor code in AsmParser"
+
+This reverts commit 8d657c461a5aa43e882071b3b5e0496961aa44a1.
+
+Reverts it due to the regression reported in D150068.
+---
+ .../lib/Target/X86/AsmParser/X86AsmParser.cpp | 181 ++++++++++++++++--
+ .../Target/X86/MCTargetDesc/CMakeLists.txt    |   1 -
+ .../MCTargetDesc/X86EncodingOptimization.cpp  | 135 -------------
+ .../MCTargetDesc/X86EncodingOptimization.h    |  22 ---
+ llvm/lib/Target/X86/X86InstrAsmAlias.td       |  28 +++
+ llvm/lib/Target/X86/X86MCInstLower.cpp        |  57 +++++-
+ 6 files changed, 251 insertions(+), 173 deletions(-)
+ delete mode 100644 llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.cpp
+ delete mode 100644 llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.h
+
+diff --git a/llvm/lib/Target/X86/AsmParser/X86AsmParser.cpp b/llvm/lib/Target/X86/AsmParser/X86AsmParser.cpp
+index b30a6466992a..656cf6d5b9c5 100644
+--- a/llvm/lib/Target/X86/AsmParser/X86AsmParser.cpp
++++ b/llvm/lib/Target/X86/AsmParser/X86AsmParser.cpp
+@@ -7,7 +7,6 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "MCTargetDesc/X86BaseInfo.h"
+-#include "MCTargetDesc/X86EncodingOptimization.h"
+ #include "MCTargetDesc/X86IntelInstPrinter.h"
+ #include "MCTargetDesc/X86MCExpr.h"
+ #include "MCTargetDesc/X86MCTargetDesc.h"
+@@ -3634,12 +3633,7 @@ bool X86AsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
+ }
+ 
+ bool X86AsmParser::processInstruction(MCInst &Inst, const OperandVector &Ops) {
+-  if (ForcedVEXEncoding != VEXEncoding_VEX3 &&
+-      X86::optimizeInstFromVEX3ToVEX2(Inst))
+-    return true;
+-
+-  if (X86::optimizeShiftRotateWithImmediateOne(Inst))
+-    return true;
++  const MCRegisterInfo *MRI = getContext().getRegisterInfo();
+ 
+   switch (Inst.getOpcode()) {
+   default: return false;
+@@ -3663,13 +3657,178 @@ bool X86AsmParser::processInstruction(MCInst &Inst, const OperandVector &Ops) {
+     }
+ 
+     return false;
++  case X86::VMOVZPQILo2PQIrr:
++  case X86::VMOVAPDrr:
++  case X86::VMOVAPDYrr:
++  case X86::VMOVAPSrr:
++  case X86::VMOVAPSYrr:
++  case X86::VMOVDQArr:
++  case X86::VMOVDQAYrr:
++  case X86::VMOVDQUrr:
++  case X86::VMOVDQUYrr:
++  case X86::VMOVUPDrr:
++  case X86::VMOVUPDYrr:
++  case X86::VMOVUPSrr:
++  case X86::VMOVUPSYrr: {
++    // We can get a smaller encoding by using VEX.R instead of VEX.B if one of
++    // the registers is extended, but other isn't.
++    if (ForcedVEXEncoding == VEXEncoding_VEX3 ||
++        MRI->getEncodingValue(Inst.getOperand(0).getReg()) >= 8 ||
++        MRI->getEncodingValue(Inst.getOperand(1).getReg()) < 8)
++      return false;
++
++    unsigned NewOpc;
++    switch (Inst.getOpcode()) {
++    default: llvm_unreachable("Invalid opcode");
++    case X86::VMOVZPQILo2PQIrr: NewOpc = X86::VMOVPQI2QIrr;   break;
++    case X86::VMOVAPDrr:        NewOpc = X86::VMOVAPDrr_REV;  break;
++    case X86::VMOVAPDYrr:       NewOpc = X86::VMOVAPDYrr_REV; break;
++    case X86::VMOVAPSrr:        NewOpc = X86::VMOVAPSrr_REV;  break;
++    case X86::VMOVAPSYrr:       NewOpc = X86::VMOVAPSYrr_REV; break;
++    case X86::VMOVDQArr:        NewOpc = X86::VMOVDQArr_REV;  break;
++    case X86::VMOVDQAYrr:       NewOpc = X86::VMOVDQAYrr_REV; break;
++    case X86::VMOVDQUrr:        NewOpc = X86::VMOVDQUrr_REV;  break;
++    case X86::VMOVDQUYrr:       NewOpc = X86::VMOVDQUYrr_REV; break;
++    case X86::VMOVUPDrr:        NewOpc = X86::VMOVUPDrr_REV;  break;
++    case X86::VMOVUPDYrr:       NewOpc = X86::VMOVUPDYrr_REV; break;
++    case X86::VMOVUPSrr:        NewOpc = X86::VMOVUPSrr_REV;  break;
++    case X86::VMOVUPSYrr:       NewOpc = X86::VMOVUPSYrr_REV; break;
++    }
++    Inst.setOpcode(NewOpc);
++    return true;
++  }
++  case X86::VMOVSDrr:
++  case X86::VMOVSSrr: {
++    // We can get a smaller encoding by using VEX.R instead of VEX.B if one of
++    // the registers is extended, but other isn't.
++    if (ForcedVEXEncoding == VEXEncoding_VEX3 ||
++        MRI->getEncodingValue(Inst.getOperand(0).getReg()) >= 8 ||
++        MRI->getEncodingValue(Inst.getOperand(2).getReg()) < 8)
++      return false;
++
++    unsigned NewOpc;
++    switch (Inst.getOpcode()) {
++    default: llvm_unreachable("Invalid opcode");
++    case X86::VMOVSDrr: NewOpc = X86::VMOVSDrr_REV; break;
++    case X86::VMOVSSrr: NewOpc = X86::VMOVSSrr_REV; break;
++    }
++    Inst.setOpcode(NewOpc);
++    return true;
++  }
++  case X86::RCR8ri: case X86::RCR16ri: case X86::RCR32ri: case X86::RCR64ri:
++  case X86::RCL8ri: case X86::RCL16ri: case X86::RCL32ri: case X86::RCL64ri:
++  case X86::ROR8ri: case X86::ROR16ri: case X86::ROR32ri: case X86::ROR64ri:
++  case X86::ROL8ri: case X86::ROL16ri: case X86::ROL32ri: case X86::ROL64ri:
++  case X86::SAR8ri: case X86::SAR16ri: case X86::SAR32ri: case X86::SAR64ri:
++  case X86::SHR8ri: case X86::SHR16ri: case X86::SHR32ri: case X86::SHR64ri:
++  case X86::SHL8ri: case X86::SHL16ri: case X86::SHL32ri: case X86::SHL64ri: {
++    // Optimize s{hr,ar,hl} $1, <op> to "shift <op>". Similar for rotate.
++    // FIXME: It would be great if we could just do this with an InstAlias.
++    if (!Inst.getOperand(2).isImm() || Inst.getOperand(2).getImm() != 1)
++      return false;
++
++    unsigned NewOpc;
++    switch (Inst.getOpcode()) {
++    default: llvm_unreachable("Invalid opcode");
++    case X86::RCR8ri:  NewOpc = X86::RCR8r1;  break;
++    case X86::RCR16ri: NewOpc = X86::RCR16r1; break;
++    case X86::RCR32ri: NewOpc = X86::RCR32r1; break;
++    case X86::RCR64ri: NewOpc = X86::RCR64r1; break;
++    case X86::RCL8ri:  NewOpc = X86::RCL8r1;  break;
++    case X86::RCL16ri: NewOpc = X86::RCL16r1; break;
++    case X86::RCL32ri: NewOpc = X86::RCL32r1; break;
++    case X86::RCL64ri: NewOpc = X86::RCL64r1; break;
++    case X86::ROR8ri:  NewOpc = X86::ROR8r1;  break;
++    case X86::ROR16ri: NewOpc = X86::ROR16r1; break;
++    case X86::ROR32ri: NewOpc = X86::ROR32r1; break;
++    case X86::ROR64ri: NewOpc = X86::ROR64r1; break;
++    case X86::ROL8ri:  NewOpc = X86::ROL8r1;  break;
++    case X86::ROL16ri: NewOpc = X86::ROL16r1; break;
++    case X86::ROL32ri: NewOpc = X86::ROL32r1; break;
++    case X86::ROL64ri: NewOpc = X86::ROL64r1; break;
++    case X86::SAR8ri:  NewOpc = X86::SAR8r1;  break;
++    case X86::SAR16ri: NewOpc = X86::SAR16r1; break;
++    case X86::SAR32ri: NewOpc = X86::SAR32r1; break;
++    case X86::SAR64ri: NewOpc = X86::SAR64r1; break;
++    case X86::SHR8ri:  NewOpc = X86::SHR8r1;  break;
++    case X86::SHR16ri: NewOpc = X86::SHR16r1; break;
++    case X86::SHR32ri: NewOpc = X86::SHR32r1; break;
++    case X86::SHR64ri: NewOpc = X86::SHR64r1; break;
++    case X86::SHL8ri:  NewOpc = X86::SHL8r1;  break;
++    case X86::SHL16ri: NewOpc = X86::SHL16r1; break;
++    case X86::SHL32ri: NewOpc = X86::SHL32r1; break;
++    case X86::SHL64ri: NewOpc = X86::SHL64r1; break;
++    }
++
++    MCInst TmpInst;
++    TmpInst.setOpcode(NewOpc);
++    TmpInst.addOperand(Inst.getOperand(0));
++    TmpInst.addOperand(Inst.getOperand(1));
++    Inst = TmpInst;
++    return true;
++  }
++  case X86::RCR8mi: case X86::RCR16mi: case X86::RCR32mi: case X86::RCR64mi:
++  case X86::RCL8mi: case X86::RCL16mi: case X86::RCL32mi: case X86::RCL64mi:
++  case X86::ROR8mi: case X86::ROR16mi: case X86::ROR32mi: case X86::ROR64mi:
++  case X86::ROL8mi: case X86::ROL16mi: case X86::ROL32mi: case X86::ROL64mi:
++  case X86::SAR8mi: case X86::SAR16mi: case X86::SAR32mi: case X86::SAR64mi:
++  case X86::SHR8mi: case X86::SHR16mi: case X86::SHR32mi: case X86::SHR64mi:
++  case X86::SHL8mi: case X86::SHL16mi: case X86::SHL32mi: case X86::SHL64mi: {
++    // Optimize s{hr,ar,hl} $1, <op> to "shift <op>". Similar for rotate.
++    // FIXME: It would be great if we could just do this with an InstAlias.
++    if (!Inst.getOperand(X86::AddrNumOperands).isImm() ||
++        Inst.getOperand(X86::AddrNumOperands).getImm() != 1)
++      return false;
++
++    unsigned NewOpc;
++    switch (Inst.getOpcode()) {
++    default: llvm_unreachable("Invalid opcode");
++    case X86::RCR8mi:  NewOpc = X86::RCR8m1;  break;
++    case X86::RCR16mi: NewOpc = X86::RCR16m1; break;
++    case X86::RCR32mi: NewOpc = X86::RCR32m1; break;
++    case X86::RCR64mi: NewOpc = X86::RCR64m1; break;
++    case X86::RCL8mi:  NewOpc = X86::RCL8m1;  break;
++    case X86::RCL16mi: NewOpc = X86::RCL16m1; break;
++    case X86::RCL32mi: NewOpc = X86::RCL32m1; break;
++    case X86::RCL64mi: NewOpc = X86::RCL64m1; break;
++    case X86::ROR8mi:  NewOpc = X86::ROR8m1;  break;
++    case X86::ROR16mi: NewOpc = X86::ROR16m1; break;
++    case X86::ROR32mi: NewOpc = X86::ROR32m1; break;
++    case X86::ROR64mi: NewOpc = X86::ROR64m1; break;
++    case X86::ROL8mi:  NewOpc = X86::ROL8m1;  break;
++    case X86::ROL16mi: NewOpc = X86::ROL16m1; break;
++    case X86::ROL32mi: NewOpc = X86::ROL32m1; break;
++    case X86::ROL64mi: NewOpc = X86::ROL64m1; break;
++    case X86::SAR8mi:  NewOpc = X86::SAR8m1;  break;
++    case X86::SAR16mi: NewOpc = X86::SAR16m1; break;
++    case X86::SAR32mi: NewOpc = X86::SAR32m1; break;
++    case X86::SAR64mi: NewOpc = X86::SAR64m1; break;
++    case X86::SHR8mi:  NewOpc = X86::SHR8m1;  break;
++    case X86::SHR16mi: NewOpc = X86::SHR16m1; break;
++    case X86::SHR32mi: NewOpc = X86::SHR32m1; break;
++    case X86::SHR64mi: NewOpc = X86::SHR64m1; break;
++    case X86::SHL8mi:  NewOpc = X86::SHL8m1;  break;
++    case X86::SHL16mi: NewOpc = X86::SHL16m1; break;
++    case X86::SHL32mi: NewOpc = X86::SHL32m1; break;
++    case X86::SHL64mi: NewOpc = X86::SHL64m1; break;
++    }
++
++    MCInst TmpInst;
++    TmpInst.setOpcode(NewOpc);
++    for (int i = 0; i != X86::AddrNumOperands; ++i)
++      TmpInst.addOperand(Inst.getOperand(i));
++    Inst = TmpInst;
++    return true;
++  }
+   case X86::INT: {
+-    // Transforms "int $3" into "int3" as a size optimization.
+-    // We can't write this as an InstAlias.
++    // Transforms "int $3" into "int3" as a size optimization.  We can't write an
++    // instalias with an immediate operand yet.
+     if (!Inst.getOperand(0).isImm() || Inst.getOperand(0).getImm() != 3)
+       return false;
+-    Inst.clear();
+-    Inst.setOpcode(X86::INT3);
++
++    MCInst TmpInst;
++    TmpInst.setOpcode(X86::INT3);
++    Inst = TmpInst;
+     return true;
+   }
+   }
+diff --git a/llvm/lib/Target/X86/MCTargetDesc/CMakeLists.txt b/llvm/lib/Target/X86/MCTargetDesc/CMakeLists.txt
+index cacc2afa727b..4db4721bfe29 100644
+--- a/llvm/lib/Target/X86/MCTargetDesc/CMakeLists.txt
++++ b/llvm/lib/Target/X86/MCTargetDesc/CMakeLists.txt
+@@ -4,7 +4,6 @@ add_llvm_component_library(LLVMX86Desc
+   X86InstComments.cpp
+   X86InstPrinterCommon.cpp
+   X86InstrRelaxTables.cpp
+-  X86EncodingOptimization.cpp
+   X86ShuffleDecode.cpp
+   X86AsmBackend.cpp
+   X86MCTargetDesc.cpp
+diff --git a/llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.cpp b/llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.cpp
+deleted file mode 100644
+index 4c2180c82b7c..000000000000
+--- a/llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.cpp
++++ /dev/null
+@@ -1,135 +0,0 @@
+-//===-- X86EncodingOptimization.cpp - X86 Encoding optimization -*- C++ -*-===//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-//
+-// This file contains the implementation of the X86 encoding optimization
+-//
+-//===----------------------------------------------------------------------===//
+-
+-#include "X86EncodingOptimization.h"
+-#include "X86BaseInfo.h"
+-#include "llvm/MC/MCInst.h"
+-
+-using namespace llvm;
+-
+-bool X86::optimizeInstFromVEX3ToVEX2(MCInst &MI) {
+-  unsigned OpIdx1, OpIdx2;
+-  unsigned NewOpc;
+-#define FROM_TO(FROM, TO, IDX1, IDX2)                                          \
+-  case X86::FROM:                                                              \
+-    NewOpc = X86::TO;                                                          \
+-    OpIdx1 = IDX1;                                                             \
+-    OpIdx2 = IDX2;                                                             \
+-    break;
+-#define TO_REV(FROM) FROM_TO(FROM, FROM##_REV, 0, 1)
+-  switch (MI.getOpcode()) {
+-  default:
+-    return false;
+-    // Commute operands to get a smaller encoding by using VEX.R instead of
+-    // VEX.B if one of the registers is extended, but other isn't.
+-    FROM_TO(VMOVZPQILo2PQIrr, VMOVPQI2QIrr, 0, 1)
+-    TO_REV(VMOVAPDrr)
+-    TO_REV(VMOVAPDYrr)
+-    TO_REV(VMOVAPSrr)
+-    TO_REV(VMOVAPSYrr)
+-    TO_REV(VMOVDQArr)
+-    TO_REV(VMOVDQAYrr)
+-    TO_REV(VMOVDQUrr)
+-    TO_REV(VMOVDQUYrr)
+-    TO_REV(VMOVUPDrr)
+-    TO_REV(VMOVUPDYrr)
+-    TO_REV(VMOVUPSrr)
+-    TO_REV(VMOVUPSYrr)
+-#undef TO_REV
+-#define TO_REV(FROM) FROM_TO(FROM, FROM##_REV, 0, 2)
+-    TO_REV(VMOVSDrr)
+-    TO_REV(VMOVSSrr)
+-#undef TO_REV
+-#undef FROM_TO
+-  }
+-  if (X86II::isX86_64ExtendedReg(MI.getOperand(OpIdx1).getReg()) ||
+-      !X86II::isX86_64ExtendedReg(MI.getOperand(OpIdx2).getReg()))
+-    return false;
+-  MI.setOpcode(NewOpc);
+-  return true;
+-}
+-
+-// NOTE: We may write this as an InstAlias if it's only used by AsmParser. See
+-// validateTargetOperandClass.
+-bool X86::optimizeShiftRotateWithImmediateOne(MCInst &MI) {
+-  unsigned NewOpc;
+-#define TO_IMM1(FROM)                                                          \
+-  case X86::FROM##i:                                                           \
+-    NewOpc = X86::FROM##1;                                                     \
+-    break;
+-  switch (MI.getOpcode()) {
+-  default:
+-    return false;
+-    TO_IMM1(RCR8r)
+-    TO_IMM1(RCR16r)
+-    TO_IMM1(RCR32r)
+-    TO_IMM1(RCR64r)
+-    TO_IMM1(RCL8r)
+-    TO_IMM1(RCL16r)
+-    TO_IMM1(RCL32r)
+-    TO_IMM1(RCL64r)
+-    TO_IMM1(ROR8r)
+-    TO_IMM1(ROR16r)
+-    TO_IMM1(ROR32r)
+-    TO_IMM1(ROR64r)
+-    TO_IMM1(ROL8r)
+-    TO_IMM1(ROL16r)
+-    TO_IMM1(ROL32r)
+-    TO_IMM1(ROL64r)
+-    TO_IMM1(SAR8r)
+-    TO_IMM1(SAR16r)
+-    TO_IMM1(SAR32r)
+-    TO_IMM1(SAR64r)
+-    TO_IMM1(SHR8r)
+-    TO_IMM1(SHR16r)
+-    TO_IMM1(SHR32r)
+-    TO_IMM1(SHR64r)
+-    TO_IMM1(SHL8r)
+-    TO_IMM1(SHL16r)
+-    TO_IMM1(SHL32r)
+-    TO_IMM1(SHL64r)
+-    TO_IMM1(RCR8m)
+-    TO_IMM1(RCR16m)
+-    TO_IMM1(RCR32m)
+-    TO_IMM1(RCR64m)
+-    TO_IMM1(RCL8m)
+-    TO_IMM1(RCL16m)
+-    TO_IMM1(RCL32m)
+-    TO_IMM1(RCL64m)
+-    TO_IMM1(ROR8m)
+-    TO_IMM1(ROR16m)
+-    TO_IMM1(ROR32m)
+-    TO_IMM1(ROR64m)
+-    TO_IMM1(ROL8m)
+-    TO_IMM1(ROL16m)
+-    TO_IMM1(ROL32m)
+-    TO_IMM1(ROL64m)
+-    TO_IMM1(SAR8m)
+-    TO_IMM1(SAR16m)
+-    TO_IMM1(SAR32m)
+-    TO_IMM1(SAR64m)
+-    TO_IMM1(SHR8m)
+-    TO_IMM1(SHR16m)
+-    TO_IMM1(SHR32m)
+-    TO_IMM1(SHR64m)
+-    TO_IMM1(SHL8m)
+-    TO_IMM1(SHL16m)
+-    TO_IMM1(SHL32m)
+-    TO_IMM1(SHL64m)
+-  }
+-  MCOperand &LastOp = MI.getOperand(MI.getNumOperands() - 1);
+-  if (!LastOp.isImm() || LastOp.getImm() != 1)
+-    return false;
+-  MI.setOpcode(NewOpc);
+-  MI.erase(&LastOp);
+-  return true;
+-}
+diff --git a/llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.h b/llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.h
+deleted file mode 100644
+index 7fc975714ea6..000000000000
+--- a/llvm/lib/Target/X86/MCTargetDesc/X86EncodingOptimization.h
++++ /dev/null
+@@ -1,22 +0,0 @@
+-//===-- X86EncodingOptimization.h - X86 Encoding optimization ---*- C++ -*-===//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-//
+-// This file contains the declarations of the X86 encoding optimization
+-//
+-//===----------------------------------------------------------------------===//
+-
+-#ifndef LLVM_LIB_TARGET_X86_X86ENCODINGOPTIMIZATION_H
+-#define LLVM_LIB_TARGET_X86_X86ENCODINGOPTIMIZATION_H
+-namespace llvm {
+-class MCInst;
+-namespace X86 {
+-bool optimizeInstFromVEX3ToVEX2(MCInst &MI);
+-bool optimizeShiftRotateWithImmediateOne(MCInst &MI);
+-} // namespace X86
+-} // namespace llvm
+-#endif
+diff --git a/llvm/lib/Target/X86/X86InstrAsmAlias.td b/llvm/lib/Target/X86/X86InstrAsmAlias.td
+index 9d0735c9cbba..c31ba1cd26f4 100644
+--- a/llvm/lib/Target/X86/X86InstrAsmAlias.td
++++ b/llvm/lib/Target/X86/X86InstrAsmAlias.td
+@@ -551,6 +551,34 @@ def : InstAlias<"shrd{w}\t{$reg, $mem|$mem, $reg}", (SHRD16mrCL i16mem:$mem, GR1
+ def : InstAlias<"shrd{l}\t{$reg, $mem|$mem, $reg}", (SHRD32mrCL i32mem:$mem, GR32:$reg), 0>;
+ def : InstAlias<"shrd{q}\t{$reg, $mem|$mem, $reg}", (SHRD64mrCL i64mem:$mem, GR64:$reg), 0>;
+ 
++/*  FIXME: This is disabled because the asm matcher is currently incapable of
++ *  matching a fixed immediate like $1.
++// "shl X, $1" is an alias for "shl X".
++multiclass ShiftRotateByOneAlias<string Mnemonic, string Opc> {
++ def : InstAlias<!strconcat(Mnemonic, "b $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "8r1")) GR8:$op)>;
++ def : InstAlias<!strconcat(Mnemonic, "w $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "16r1")) GR16:$op)>;
++ def : InstAlias<!strconcat(Mnemonic, "l $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "32r1")) GR32:$op)>;
++ def : InstAlias<!strconcat(Mnemonic, "q $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "64r1")) GR64:$op)>;
++ def : InstAlias<!strconcat(Mnemonic, "b $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "8m1")) i8mem:$op)>;
++ def : InstAlias<!strconcat(Mnemonic, "w $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "16m1")) i16mem:$op)>;
++ def : InstAlias<!strconcat(Mnemonic, "l $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "32m1")) i32mem:$op)>;
++ def : InstAlias<!strconcat(Mnemonic, "q $op, $$1"),
++                 (!cast<Instruction>(!strconcat(Opc, "64m1")) i64mem:$op)>;
++}
++
++defm : ShiftRotateByOneAlias<"rcl", "RCL">;
++defm : ShiftRotateByOneAlias<"rcr", "RCR">;
++defm : ShiftRotateByOneAlias<"rol", "ROL">;
++defm : ShiftRotateByOneAlias<"ror", "ROR">;
++FIXME */
++
+ // test: We accept "testX <reg>, <mem>" and "testX <mem>, <reg>" as synonyms.
+ def : InstAlias<"test{b}\t{$mem, $val|$val, $mem}",
+                 (TEST8mr  i8mem :$mem, GR8 :$val), 0>;
+diff --git a/llvm/lib/Target/X86/X86MCInstLower.cpp b/llvm/lib/Target/X86/X86MCInstLower.cpp
+index 8ab989eef6fe..dbf64cc40107 100644
+--- a/llvm/lib/Target/X86/X86MCInstLower.cpp
++++ b/llvm/lib/Target/X86/X86MCInstLower.cpp
+@@ -13,7 +13,6 @@
+ 
+ #include "MCTargetDesc/X86ATTInstPrinter.h"
+ #include "MCTargetDesc/X86BaseInfo.h"
+-#include "MCTargetDesc/X86EncodingOptimization.h"
+ #include "MCTargetDesc/X86InstComments.h"
+ #include "MCTargetDesc/X86ShuffleDecode.h"
+ #include "MCTargetDesc/X86TargetStreamer.h"
+@@ -502,9 +501,6 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
+     if (auto MaybeMCOp = LowerMachineOperand(MI, MO))
+       OutMI.addOperand(*MaybeMCOp);
+ 
+-  if (X86::optimizeInstFromVEX3ToVEX2(OutMI))
+-    return;
+-
+   // Handle a few special cases to eliminate operand modifiers.
+   switch (OutMI.getOpcode()) {
+   case X86::LEA64_32r:
+@@ -538,6 +534,59 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
+     break;
+   }
+ 
++  // Commute operands to get a smaller encoding by using VEX.R instead of VEX.B
++  // if one of the registers is extended, but other isn't.
++  case X86::VMOVZPQILo2PQIrr:
++  case X86::VMOVAPDrr:
++  case X86::VMOVAPDYrr:
++  case X86::VMOVAPSrr:
++  case X86::VMOVAPSYrr:
++  case X86::VMOVDQArr:
++  case X86::VMOVDQAYrr:
++  case X86::VMOVDQUrr:
++  case X86::VMOVDQUYrr:
++  case X86::VMOVUPDrr:
++  case X86::VMOVUPDYrr:
++  case X86::VMOVUPSrr:
++  case X86::VMOVUPSYrr: {
++    if (!X86II::isX86_64ExtendedReg(OutMI.getOperand(0).getReg()) &&
++        X86II::isX86_64ExtendedReg(OutMI.getOperand(1).getReg())) {
++      unsigned NewOpc;
++      switch (OutMI.getOpcode()) {
++      default: llvm_unreachable("Invalid opcode");
++      case X86::VMOVZPQILo2PQIrr: NewOpc = X86::VMOVPQI2QIrr;   break;
++      case X86::VMOVAPDrr:        NewOpc = X86::VMOVAPDrr_REV;  break;
++      case X86::VMOVAPDYrr:       NewOpc = X86::VMOVAPDYrr_REV; break;
++      case X86::VMOVAPSrr:        NewOpc = X86::VMOVAPSrr_REV;  break;
++      case X86::VMOVAPSYrr:       NewOpc = X86::VMOVAPSYrr_REV; break;
++      case X86::VMOVDQArr:        NewOpc = X86::VMOVDQArr_REV;  break;
++      case X86::VMOVDQAYrr:       NewOpc = X86::VMOVDQAYrr_REV; break;
++      case X86::VMOVDQUrr:        NewOpc = X86::VMOVDQUrr_REV;  break;
++      case X86::VMOVDQUYrr:       NewOpc = X86::VMOVDQUYrr_REV; break;
++      case X86::VMOVUPDrr:        NewOpc = X86::VMOVUPDrr_REV;  break;
++      case X86::VMOVUPDYrr:       NewOpc = X86::VMOVUPDYrr_REV; break;
++      case X86::VMOVUPSrr:        NewOpc = X86::VMOVUPSrr_REV;  break;
++      case X86::VMOVUPSYrr:       NewOpc = X86::VMOVUPSYrr_REV; break;
++      }
++      OutMI.setOpcode(NewOpc);
++    }
++    break;
++  }
++  case X86::VMOVSDrr:
++  case X86::VMOVSSrr: {
++    if (!X86II::isX86_64ExtendedReg(OutMI.getOperand(0).getReg()) &&
++        X86II::isX86_64ExtendedReg(OutMI.getOperand(2).getReg())) {
++      unsigned NewOpc;
++      switch (OutMI.getOpcode()) {
++      default: llvm_unreachable("Invalid opcode");
++      case X86::VMOVSDrr: NewOpc = X86::VMOVSDrr_REV; break;
++      case X86::VMOVSSrr: NewOpc = X86::VMOVSSrr_REV; break;
++      }
++      OutMI.setOpcode(NewOpc);
++    }
++    break;
++  }
++
+   case X86::VPCMPBZ128rmi:  case X86::VPCMPBZ128rmik:
+   case X86::VPCMPBZ128rri:  case X86::VPCMPBZ128rrik:
+   case X86::VPCMPBZ256rmi:  case X86::VPCMPBZ256rmik:
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

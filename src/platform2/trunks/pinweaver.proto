@@ -1,0 +1,42 @@
+// Copyright 2018 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+
+option optimize_for = LITE_RUNTIME;
+
+package trunks;
+
+message PinWeaverInsertLeafLogEntry {
+  bytes hmac = 1;
+}
+
+message PinWeaverRemoveLeafLogEntry {
+}
+
+message PinWeaverResetTreeLogEntry {
+}
+
+message PinWeaverAuthLogEntry {
+}
+
+message PinWeaverLogEntry {
+  bytes root = 1;
+  uint64 label = 2;
+  oneof type {
+    PinWeaverInsertLeafLogEntry insert_leaf = 3;
+    PinWeaverRemoveLeafLogEntry remove_leaf = 4;
+    PinWeaverAuthLogEntry auth = 5;
+    PinWeaverResetTreeLogEntry reset_tree = 6;
+  }
+}
+
+message ValidPcrValue {
+    bytes bitmask = 1;
+    string digest = 2;
+}
+
+message ValidPcrCriteria {
+    repeated ValidPcrValue valid_pcr_values = 1;
+}

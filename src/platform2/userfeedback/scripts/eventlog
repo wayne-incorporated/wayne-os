@@ -1,0 +1,18 @@
+#!/bin/sh
+
+# Copyright 2012 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# NOTE: This script is invoked by powerd_suspend each time the system resumes.
+# If any changes are made to this script, remember to update powerd_suspend,
+# as needed.
+
+# File to store firmware information derived from firmware event log
+EVENTLOG_FILE="/var/log/eventlog.txt"
+
+# Set up bios information for chrome://system and userfeedback
+# Need to do this before user can request it in Chrome.
+# Moved here to keep out of critical boot path
+
+elogtool list --utc >"${EVENTLOG_FILE}" 2>&1 || true

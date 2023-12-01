@@ -1,0 +1,91 @@
+commit 9e1131b70b4b6002cd1904401946ef0b22cf7d33
+Author: Liming Gao <liming.gao@intel.com>
+Date:   Tue Nov 28 11:18:51 2017 +0800
+
+    BaseTools: Update BaseTools top GNUMakefile with the clear dependency
+    
+    https://bugzilla.tianocore.org/show_bug.cgi?id=786
+    
+    After GNUmakefile dependency is fixed up, it can make with -j N to enable
+    multiple thread build in base tools C source and save build time.
+    
+    In my linux host machine, make -j 4 to compile BaseTools and save ~60% time.
+    
+    Contributed-under: TianoCore Contribution Agreement 1.1
+    Signed-off-by: Liming Gao <liming.gao@intel.com>
+    Reviewed-by: Yonghong Zhu <yonghong.zhu@intel.com>
+
+diff --git a/BaseTools/GNUmakefile b/BaseTools/GNUmakefile
+index 790d33a2f3..6325e409c7 100644
+--- a/BaseTools/GNUmakefile
++++ b/BaseTools/GNUmakefile
+@@ -1,7 +1,7 @@
+ ## @file
+ # GNU/Linux makefile for Base Tools project build.
+ #
+-# Copyright (c) 2009 - 2010, Intel Corporation. All rights reserved.<BR>
++# Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+ # This program and the accompanying materials
+ # are licensed and made available under the terms and conditions of the BSD License
+ # which accompanies this distribution.  The full text of the license may be found at
+@@ -24,12 +24,10 @@ subdirs: $(SUBDIRS)
+ $(SUBDIRS):
+ 	$(MAKE) -C $@
+ 
++Tests: $(SOURCE_SUBDIRS)
++
+ .PHONY: $(CLEAN_SUBDIRS)
+ $(CLEAN_SUBDIRS):
+ 	-$(MAKE) -C $(@:-clean=) clean
+ 
+ clean:  $(CLEAN_SUBDIRS)
+-
+-test:
+-	@$(MAKE) -C Tests
+-
+diff --git a/BaseTools/Source/C/GNUmakefile b/BaseTools/Source/C/GNUmakefile
+index 53ddb67439..50b675900f 100644
+--- a/BaseTools/Source/C/GNUmakefile
++++ b/BaseTools/Source/C/GNUmakefile
+@@ -1,7 +1,7 @@
+ ## @file
+ #  GNU/Linux makefile for C tools build.
+ #
+-#  Copyright (c) 2007 - 2012, Intel Corporation. All rights reserved.<BR>
++#  Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
+ #
+ #  This program and the accompanying materials
+ #  are licensed and made available under the terms and conditions of the BSD License
+@@ -44,10 +44,11 @@ MAKEROOT = .
+ 
+ include Makefiles/header.makefile
+ 
+-all: makerootdir subdirs $(MAKEROOT)/libs
++all: makerootdir subdirs
+ 	@echo Finished building BaseTools C Tools with ARCH=$(ARCH)
+ 
+ LIBRARIES = Common
++VFRAUTOGEN = VfrCompile/VfrLexer.h
+ # NON_BUILDABLE_APPLICATIONS = GenBootSector BootSectImage
+ APPLICATIONS = \
+   GnuGenBootSector \
+@@ -70,6 +71,9 @@ APPLICATIONS = \
+ 
+ SUBDIRS := $(LIBRARIES) $(APPLICATIONS)
+ 
++$(LIBRARIES): $(MAKEROOT)/libs
++$(APPLICATIONS): $(LIBRARIES) $(MAKEROOT)/bin $(VFRAUTOGEN)
++
+ .PHONY: outputdirs
+ makerootdir:
+ 	-mkdir -p $(MAKEROOT)
+@@ -83,6 +87,9 @@ $(SUBDIRS):
+ $(patsubst %,%-clean,$(sort $(SUBDIRS))):
+ 	-$(MAKE) -C $(@:-clean=) clean
+ 
++$(VFRAUTOGEN): VfrCompile/VfrSyntax.g 
++	$(MAKE) -C VfrCompile VfrLexer.h
++
+ clean:  $(patsubst %,%-clean,$(sort $(SUBDIRS)))
+ 
+ clean: localClean

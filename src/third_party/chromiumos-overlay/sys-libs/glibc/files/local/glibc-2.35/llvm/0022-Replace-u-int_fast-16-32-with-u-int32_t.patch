@@ -1,0 +1,390 @@
+From 513b52462e81e2893e51e33cc2f7811a8831019c Mon Sep 17 00:00:00 2001
+From: Noah Goldstein <goldstein.w.n@gmail.com>
+Date: Wed, 13 Apr 2022 19:46:03 -0500
+Subject: [PATCH 022/163] Replace {u}int_fast{16|32} with {u}int32_t
+
+On 32-bit machines this has no affect. On 64-bit machines
+{u}int_fast{16|32} are set as {u}int64_t which is often not
+ideal. Particularly x86_64 this change both saves code size and
+may save instruction cost.
+
+Full xcheck passes on x86_64.
+
+(cherry picked from commit 535e935a284b2ec96659d1ac40eebf61321f2362)
+---
+ elf/dl-load.c                         |  2 +-
+ elf/dl-lookup.c                       | 12 ++++++------
+ elf/dl-machine-reject-phdr.h          |  2 +-
+ elf/dl-profile.c                      |  2 +-
+ elf/setup-vdso.h                      |  2 +-
+ hurd/hurdselect.c                     |  2 +-
+ iconv/gconv_simple.c                  |  4 ++--
+ iconv/gconv_trans.c                   | 10 +++++-----
+ iconvdata/cp932.c                     |  2 +-
+ iconvdata/johab.c                     |  6 +++---
+ iconvdata/sjis.c                      |  2 +-
+ locale/elem-hash.h                    |  2 +-
+ locale/weight.h                       |  2 +-
+ posix/regex_internal.h                |  2 +-
+ resolv/nss_dns/dns-canon.c            |  2 +-
+ string/strcoll_l.c                    |  2 +-
+ string/strxfrm_l.c                    |  8 ++++----
+ sysdeps/mips/dl-machine-reject-phdr.h |  2 +-
+ sysdeps/unix/sysv/linux/dl-sysdep.c   |  2 +-
+ 19 files changed, 34 insertions(+), 34 deletions(-)
+
+diff --git a/elf/dl-load.c b/elf/dl-load.c
+index 0ebcd81be8..6bae9e96c9 100644
+--- a/elf/dl-load.c
++++ b/elf/dl-load.c
+@@ -1120,7 +1120,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd, off_t of
+    /* On most platforms presume that PT_GNU_STACK is absent and the stack is
+     * executable.  Other platforms default to a nonexecutable stack and don't
+     * need PT_GNU_STACK to do so.  */
+-   uint_fast16_t stack_flags = DEFAULT_STACK_PERMS;
++   unsigned int stack_flags = DEFAULT_STACK_PERMS;
+ 
+   {
+     /* Scan the program header table, collecting its load commands.  */
+diff --git a/elf/dl-lookup.c b/elf/dl-lookup.c
+index cbf46fda62..2dc7452135 100644
+--- a/elf/dl-lookup.c
++++ b/elf/dl-lookup.c
+@@ -208,7 +208,7 @@ is_nodelete (struct link_map *map, int flags)
+    in the unique symbol table, creating a new entry if necessary.
+    Return the matching symbol in RESULT.  */
+ static void
+-do_lookup_unique (const char *undef_name, uint_fast32_t new_hash,
++do_lookup_unique (const char *undef_name, unsigned int new_hash,
+ 		  struct link_map *map, struct sym_val *result,
+ 		  int type_class, const ElfW(Sym) *sym, const char *strtab,
+ 		  const ElfW(Sym) *ref, const struct link_map *undef_map,
+@@ -355,7 +355,7 @@ marking %s [%lu] as NODELETE due to unique symbol\n",
+    something bad happened.  */
+ static int
+ __attribute_noinline__
+-do_lookup_x (const char *undef_name, uint_fast32_t new_hash,
++do_lookup_x (const char *undef_name, unsigned int new_hash,
+ 	     unsigned long int *old_hash, const ElfW(Sym) *ref,
+ 	     struct sym_val *result, struct r_scope_elem *scope, size_t i,
+ 	     const struct r_found_version *const version, int flags,
+@@ -574,13 +574,13 @@ skip:
+ }
+ 
+ 
+-static uint_fast32_t
++static uint32_t
+ dl_new_hash (const char *s)
+ {
+-  uint_fast32_t h = 5381;
++  uint32_t h = 5381;
+   for (unsigned char c = *s; c != '\0'; c = *++s)
+     h = h * 33 + c;
+-  return h & 0xffffffff;
++  return h;
+ }
+ 
+ 
+@@ -838,7 +838,7 @@ _dl_lookup_symbol_x (const char *undef_name, struct link_map *undef_map,
+ 		     const struct r_found_version *version,
+ 		     int type_class, int flags, struct link_map *skip_map)
+ {
+-  const uint_fast32_t new_hash = dl_new_hash (undef_name);
++  const unsigned int new_hash = dl_new_hash (undef_name);
+   unsigned long int old_hash = 0xffffffff;
+   struct sym_val current_value = { NULL, NULL };
+   struct r_scope_elem **scope = symbol_scope;
+diff --git a/elf/dl-machine-reject-phdr.h b/elf/dl-machine-reject-phdr.h
+index ea18289fda..ad64cf40ea 100644
+--- a/elf/dl-machine-reject-phdr.h
++++ b/elf/dl-machine-reject-phdr.h
+@@ -24,7 +24,7 @@
+ /* Return true iff ELF program headers are incompatible with the running
+    host.  */
+ static inline bool
+-elf_machine_reject_phdr_p (const ElfW(Phdr) *phdr, uint_fast16_t phnum,
++elf_machine_reject_phdr_p (const ElfW(Phdr) *phdr, unsigned int phnum,
+ 			   const char *buf, size_t len, struct link_map *map,
+ 			   int fd)
+ {
+diff --git a/elf/dl-profile.c b/elf/dl-profile.c
+index 9359be7c33..ec57e3a965 100644
+--- a/elf/dl-profile.c
++++ b/elf/dl-profile.c
+@@ -558,7 +558,7 @@ _dl_mcount (ElfW(Addr) frompc, ElfW(Addr) selfpc)
+ 	  /* If we still have no entry stop searching and insert.  */
+ 	  if (*topcindex == 0)
+ 	    {
+-	      uint_fast32_t newarc = catomic_exchange_and_add (narcsp, 1);
++	      unsigned int newarc = catomic_exchange_and_add (narcsp, 1);
+ 
+ 	      /* In rare cases it could happen that all entries in FROMS are
+ 		 occupied.  So we cannot count this anymore.  */
+diff --git a/elf/setup-vdso.h b/elf/setup-vdso.h
+index db639b0d4f..c0807ea82b 100644
+--- a/elf/setup-vdso.h
++++ b/elf/setup-vdso.h
+@@ -36,7 +36,7 @@ setup_vdso (struct link_map *main_map __attribute__ ((unused)),
+       l->l_phdr = ((const void *) GLRO(dl_sysinfo_dso)
+ 		   + GLRO(dl_sysinfo_dso)->e_phoff);
+       l->l_phnum = GLRO(dl_sysinfo_dso)->e_phnum;
+-      for (uint_fast16_t i = 0; i < l->l_phnum; ++i)
++      for (unsigned int i = 0; i < l->l_phnum; ++i)
+ 	{
+ 	  const ElfW(Phdr) *const ph = &l->l_phdr[i];
+ 	  if (ph->p_type == PT_DYNAMIC)
+diff --git a/hurd/hurdselect.c b/hurd/hurdselect.c
+index e9d5c64bf3..ddeaf6c0c7 100644
+--- a/hurd/hurdselect.c
++++ b/hurd/hurdselect.c
+@@ -575,7 +575,7 @@ _hurd_select (int nfds,
+     for (i = 0; i < nfds; ++i)
+       {
+ 	int type = d[i].type;
+-	int_fast16_t revents = 0;
++	int revents = 0;
+ 
+ 	if (type & SELECT_ERROR)
+ 	  switch (d[i].error)
+diff --git a/iconv/gconv_simple.c b/iconv/gconv_simple.c
+index be8504791b..640068d9ba 100644
+--- a/iconv/gconv_simple.c
++++ b/iconv/gconv_simple.c
+@@ -959,8 +959,8 @@ ucs4le_internal_loop_single (struct __gconv_step *step,
+       }									      \
+     else								      \
+       {									      \
+-	uint_fast32_t cnt;						      \
+-	uint_fast32_t i;						      \
++	unsigned int cnt;						      \
++	unsigned int i;						      \
+ 									      \
+ 	if (ch >= 0xc2 && ch < 0xe0)					      \
+ 	  {								      \
+diff --git a/iconv/gconv_trans.c b/iconv/gconv_trans.c
+index 0101332d61..1ebbbfd51b 100644
+--- a/iconv/gconv_trans.c
++++ b/iconv/gconv_trans.c
+@@ -37,15 +37,15 @@ __gconv_transliterate (struct __gconv_step *step,
+ 		       unsigned char **outbufstart, size_t *irreversible)
+ {
+   /* Find out about the locale's transliteration.  */
+-  uint_fast32_t size;
++  uint32_t size;
+   const uint32_t *from_idx;
+   const uint32_t *from_tbl;
+   const uint32_t *to_idx;
+   const uint32_t *to_tbl;
+   const uint32_t *winbuf;
+   const uint32_t *winbufend;
+-  uint_fast32_t low;
+-  uint_fast32_t high;
++  uint32_t low;
++  uint32_t high;
+ 
+   /* The input buffer.  There are actually 4-byte values.  */
+   winbuf = (const uint32_t *) *inbufp;
+@@ -85,7 +85,7 @@ __gconv_transliterate (struct __gconv_step *step,
+   high = size;
+   while (low < high)
+     {
+-      uint_fast32_t med = (low + high) / 2;
++      uint32_t med = (low + high) / 2;
+       uint32_t idx;
+       int cnt;
+ 
+@@ -111,7 +111,7 @@ __gconv_transliterate (struct __gconv_step *step,
+ 	  do
+ 	    {
+ 	      /* Determine length of replacement.  */
+-	      uint_fast32_t len = 0;
++	      unsigned int len = 0;
+ 	      int res;
+ 	      const unsigned char *toinptr;
+ 	      unsigned char *outptr;
+diff --git a/iconvdata/cp932.c b/iconvdata/cp932.c
+index 91487fa34c..f40f8e2a9d 100644
+--- a/iconvdata/cp932.c
++++ b/iconvdata/cp932.c
+@@ -4572,7 +4572,7 @@ static const char from_ucs4_extra[229][2] =
+ 	/* Two-byte character.  First test whether the next character	      \
+ 	   is also available.  */					      \
+ 	uint32_t ch2;							      \
+-	uint_fast32_t idx;						      \
++	uint32_t idx;						      \
+ 									      \
+ 	if (__glibc_unlikely (inptr + 1 >= inend))			      \
+ 	  {								      \
+diff --git a/iconvdata/johab.c b/iconvdata/johab.c
+index 33ec7b9a62..8dd5eba4a1 100644
+--- a/iconvdata/johab.c
++++ b/iconvdata/johab.c
+@@ -130,7 +130,7 @@ static const uint16_t jamo_from_ucs_table[51] =
+ 
+ 
+ static uint32_t
+-johab_sym_hanja_to_ucs (uint_fast32_t idx, uint_fast32_t c1, uint_fast32_t c2)
++johab_sym_hanja_to_ucs (uint32_t idx, uint32_t c1, uint32_t c2)
+ {
+   if (idx <= 0xdefe)
+     return (uint32_t) __ksc5601_sym_to_ucs[(c1 - 0xd9) * 188 + c2
+@@ -189,7 +189,7 @@ johab_sym_hanja_to_ucs (uint_fast32_t idx, uint_fast32_t c1, uint_fast32_t c2)
+ 	    /* Two-byte character.  First test whether the next		      \
+ 	       character is also available.  */				      \
+ 	    uint32_t ch2;						      \
+-	    uint_fast32_t idx;						      \
++	    uint32_t idx;						      \
+ 									      \
+ 	    if (__glibc_unlikely (inptr + 1 >= inend))			      \
+ 	      {								      \
+@@ -204,7 +204,7 @@ johab_sym_hanja_to_ucs (uint_fast32_t idx, uint_fast32_t c1, uint_fast32_t c2)
+ 	    if (__glibc_likely (ch <= 0xd3))				      \
+ 	      {								      \
+ 		/* Hangul */						      \
+-		int_fast32_t i, m, f;					      \
++		int i, m, f;					      \
+ 									      \
+ 		i = init[(idx & 0x7c00) >> 10];				      \
+ 		m = mid[(idx & 0x03e0) >> 5];				      \
+diff --git a/iconvdata/sjis.c b/iconvdata/sjis.c
+index e1bdb3025c..5aea18b314 100644
+--- a/iconvdata/sjis.c
++++ b/iconvdata/sjis.c
+@@ -4359,7 +4359,7 @@ static const char from_ucs4_extra[0x100][2] =
+ 	/* Two-byte character.  First test whether the next byte	      \
+ 	   is also available.  */					      \
+ 	uint32_t ch2;							      \
+-	uint_fast32_t idx;						      \
++	uint32_t idx;						      \
+ 									      \
+ 	if (__glibc_unlikely (inptr + 1 >= inend))			      \
+ 	  {								      \
+diff --git a/locale/elem-hash.h b/locale/elem-hash.h
+index 8bccfcb6d0..08dc3da77a 100644
+--- a/locale/elem-hash.h
++++ b/locale/elem-hash.h
+@@ -18,7 +18,7 @@
+ 
+ /* The hashing function used for the table with collation symbols.  */
+ static int32_t __attribute__ ((pure, unused))
+-elem_hash (const char *str, int_fast32_t n)
++elem_hash (const char *str, int32_t n)
+ {
+   int32_t result = n;
+ 
+diff --git a/locale/weight.h b/locale/weight.h
+index c49f4e6d90..8be2d220f8 100644
+--- a/locale/weight.h
++++ b/locale/weight.h
+@@ -27,7 +27,7 @@ findidx (const int32_t *table,
+ 	 const unsigned char *extra,
+ 	 const unsigned char **cpp, size_t len)
+ {
+-  int_fast32_t i = table[*(*cpp)++];
++  int32_t i = table[*(*cpp)++];
+   const unsigned char *cp;
+   const unsigned char *usrc;
+ 
+diff --git a/posix/regex_internal.h b/posix/regex_internal.h
+index 5827597d2c..cb079b16f7 100644
+--- a/posix/regex_internal.h
++++ b/posix/regex_internal.h
+@@ -814,7 +814,7 @@ re_string_elem_size_at (const re_string_t *pstr, Idx idx)
+ # ifdef _LIBC
+   const unsigned char *p, *extra;
+   const int32_t *table, *indirect;
+-  uint_fast32_t nrules = _NL_CURRENT_WORD (LC_COLLATE, _NL_COLLATE_NRULES);
++  uint32_t nrules = _NL_CURRENT_WORD (LC_COLLATE, _NL_COLLATE_NRULES);
+ 
+   if (nrules != 0)
+     {
+diff --git a/resolv/nss_dns/dns-canon.c b/resolv/nss_dns/dns-canon.c
+index 3151e50ae1..9aaa2c45bc 100644
+--- a/resolv/nss_dns/dns-canon.c
++++ b/resolv/nss_dns/dns-canon.c
+@@ -118,7 +118,7 @@ _nss_dns_getcanonname_r (const char *name, char *buffer, size_t buflen,
+ 		goto unavail;
+ 
+ 	      /* Check whether type and class match.  */
+-	      uint_fast16_t type;
++	      short int type;
+ 	      NS_GET16 (type, ptr);
+ 	      if (type == qtypes[i])
+ 		{
+diff --git a/string/strcoll_l.c b/string/strcoll_l.c
+index 1b08f11b99..b366020fc7 100644
+--- a/string/strcoll_l.c
++++ b/string/strcoll_l.c
+@@ -257,7 +257,7 @@ int
+ STRCOLL (const STRING_TYPE *s1, const STRING_TYPE *s2, locale_t l)
+ {
+   struct __locale_data *current = l->__locales[LC_COLLATE];
+-  uint_fast32_t nrules = current->values[_NL_ITEM_INDEX (_NL_COLLATE_NRULES)].word;
++  uint32_t nrules = current->values[_NL_ITEM_INDEX (_NL_COLLATE_NRULES)].word;
+   /* We don't assign the following values right away since it might be
+      unnecessary in case there are no rules.  */
+   const unsigned char *rulesets;
+diff --git a/string/strxfrm_l.c b/string/strxfrm_l.c
+index 5519c3cf8f..188a3d826a 100644
+--- a/string/strxfrm_l.c
++++ b/string/strxfrm_l.c
+@@ -49,7 +49,7 @@
+ /* Group locale data for shorter parameter lists.  */
+ typedef struct
+ {
+-  uint_fast32_t nrules;
++  uint32_t nrules;
+   unsigned char *rulesets;
+   USTRING_TYPE *weights;
+   int32_t *table;
+@@ -135,7 +135,7 @@ do_xfrm (const USTRING_TYPE *usrc, STRING_TYPE *dest, size_t n,
+ {
+   int32_t weight_idx;
+   unsigned char rule_idx;
+-  uint_fast32_t pass;
++  uint32_t pass;
+   size_t needed = 0;
+   size_t last_needed;
+ 
+@@ -404,10 +404,10 @@ static size_t
+ do_xfrm_cached (STRING_TYPE *dest, size_t n, const locale_data_t *l_data,
+ 		size_t idxmax, int32_t *idxarr, const unsigned char *rulearr)
+ {
+-  uint_fast32_t nrules = l_data->nrules;
++  uint32_t nrules = l_data->nrules;
+   unsigned char *rulesets = l_data->rulesets;
+   USTRING_TYPE *weights = l_data->weights;
+-  uint_fast32_t pass;
++  uint32_t pass;
+   size_t needed = 0;
+   size_t last_needed;
+   size_t idxcnt;
+diff --git a/sysdeps/mips/dl-machine-reject-phdr.h b/sysdeps/mips/dl-machine-reject-phdr.h
+index e784320234..45b6bcaeac 100644
+--- a/sysdeps/mips/dl-machine-reject-phdr.h
++++ b/sysdeps/mips/dl-machine-reject-phdr.h
+@@ -152,7 +152,7 @@ static const struct abi_req none_req = { true, true, true, false, true };
+    impact of dlclose.  */
+ 
+ static bool __attribute_used__
+-elf_machine_reject_phdr_p (const ElfW(Phdr) *phdr, uint_fast16_t phnum,
++elf_machine_reject_phdr_p (const ElfW(Phdr) *phdr, unsigned int phnum,
+ 			   const char *buf, size_t len, struct link_map *map,
+ 			   int fd)
+ {
+diff --git a/sysdeps/unix/sysv/linux/dl-sysdep.c b/sysdeps/unix/sysv/linux/dl-sysdep.c
+index c90f109b11..a67c454673 100644
+--- a/sysdeps/unix/sysv/linux/dl-sysdep.c
++++ b/sysdeps/unix/sysv/linux/dl-sysdep.c
+@@ -269,7 +269,7 @@ _dl_discover_osversion (void)
+       } expected_note = { { sizeof "Linux", sizeof (ElfW(Word)), 0 }, "Linux" };
+       const ElfW(Phdr) *const phdr = GLRO(dl_sysinfo_map)->l_phdr;
+       const ElfW(Word) phnum = GLRO(dl_sysinfo_map)->l_phnum;
+-      for (uint_fast16_t i = 0; i < phnum; ++i)
++      for (unsigned int i = 0; i < phnum; ++i)
+ 	if (phdr[i].p_type == PT_NOTE)
+ 	  {
+ 	    const ElfW(Addr) start = (phdr[i].p_vaddr
+-- 
+2.37.2
+

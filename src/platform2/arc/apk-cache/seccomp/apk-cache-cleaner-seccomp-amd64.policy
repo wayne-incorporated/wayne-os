@@ -1,0 +1,66 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+lstat: 1
+open: 1
+openat: 1
+# Make sure PROT_WRITE (bit 1) and PROT_EXEC (bit 2) are not both set.
+mmap: arg2 in 0xfffffffb || arg2 in 0xfffffffd
+fstat: 1
+newfstatat: 1
+stat: 1
+close: 1
+# Make sure PROT_WRITE (bit 1) and PROT_EXEC (bit 2) are not both set.
+mprotect: arg2 in 0xfffffffb || arg2 in 0xfffffffd
+getdents: 1
+getdents64: 1
+read: 1
+unlink: 1
+write: 1
+rmdir: 1
+brk: 1
+futex: 1
+rt_sigaction: 1
+restart_syscall: 1
+exit: 1
+exit_group: 1
+rt_sigreturn: 1
+set_robust_list: 1
+set_tid_address: 1
+access: 1
+faccessat: 1
+faccessat2: 1
+lseek: 1
+munmap: 1
+arch_prctl: 1
+execve: 1
+getpid: 1
+getrlimit: 1
+rt_sigprocmask: 1
+connect: 1
+sendto: 1
+socket: arg0 == AF_UNIX
+# Used by libbrillo to know whether stderr is a TTY.
+ioctl: arg1 == TCGETS
+prlimit64: arg2 == 0 && arg3 != 0
+# Used by sqlite3 to do random I/O.
+pread64: 1
+pwrite64: 1
+ftruncate: 1
+# Used by sqlite3 to sync file to the disk.
+fdatasync: 1
+# Used by sqlite3 to lock database file.
+fcntl: 1
+# Used by sqlite3 to make sure shm file has the same ownership as db file.
+geteuid: 1
+fchmod: 1
+# Used by sqlite3 to get thread id.
+gettid: 1
+clock_gettime: 1
+gettimeofday: 1
+dup: 1
+unlinkat: 1

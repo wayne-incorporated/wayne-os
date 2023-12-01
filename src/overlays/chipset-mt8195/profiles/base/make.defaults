@@ -1,0 +1,59 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+CHROMEOS_KERNEL_SPLITCONFIG="chromiumos-mediatek"
+CHROMEOS_KERNEL_ARCH="arm64"
+
+# MT8195 has 4 Cortex-A55 and 4 Cortex-A78.
+# Note that the compiler may or may not support tuning for our big.LITTLE
+# combination, so for simplicity we tune the code against the little cores,
+# which is not perfect but should give us good enough tuning granularity.
+# TODO(b/244126739): Use cortex-a78.cortex-a55 when the compiler is upgraded
+# and supports that.
+BOARD_COMPILER_FLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a55 -ftree-vectorize"
+
+# TODO(gbiv): Porting -mtune may be interesting, but clang seems to currently
+# entirely ignore this flag for ARM (notably: not aarch64) builds.
+BOARD_RUSTFLAGS="-Ctarget-feature=+armv8-a,+crc"
+
+# Initial value just for style purposes.
+USE=""
+
+# Use hardware FPU instead of software
+USE="${USE} hardfp"
+# Support for neon-vfpv3
+USE="${USE} neon"
+
+# For the device tree installation
+USE="${USE} device_tree"
+
+# use kernel 5.10
+USE="${USE} kernel-5_10"
+
+# Enables WebGL rendering
+USE="${USE} drm_atomic"
+
+# Set raster thread number=2
+USE="${USE} big_little"
+
+# Turn on the video cards this board uses.
+VIDEO_CARDS="mediatek"
+
+# MT8195 minigbm
+USE="${USE} minigbm_platform_mt8195"
+
+# Enable HW codecs using V4L2 API.
+USE="${USE} v4l2_codec"
+
+# Enable fscrypt v2 usage on 5.4+
+USE="${USE} direncription_allow_v2"
+
+# Enable GpuMemoryBuffers backed by dma-bufs.
+USE="${USE} native_gpu_memory_buffers"
+
+# Mali drivers require this
+USE="${USE} gpu_sandbox_start_early"
+
+# Enable VMs
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"

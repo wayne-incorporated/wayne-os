@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <base/bind.h>
+#include <base/functional/bind.h>
 #include <chromeos/dbus/service_constants.h>
 #include <gmock/gmock.h>
 
@@ -25,31 +25,28 @@ class MockPolicyService : public PolicyService {
  public:
   MockPolicyService();
   ~MockPolicyService() override;
-  MOCK_METHOD(bool,
-              Store,
-              (const PolicyNamespace&,
-               const std::vector<uint8_t>&,
-               int,
-               SignatureCheck,
-               const Completion&),
-              (override));
+  MOCK_METHOD(
+      bool,
+      Store,
+      (const PolicyNamespace&, const std::vector<uint8_t>&, int, Completion),
+      (override));
   MOCK_METHOD(bool,
               Retrieve,
               (const PolicyNamespace&, std::vector<uint8_t>*),
               (override));
 
   static Completion CreateDoNothing() {
-    return base::Bind(&MockPolicyService::DoNothingWithError);
+    return base::BindOnce(&MockPolicyService::DoNothingWithError);
   }
 
   static Completion CreateExpectSuccessCallback() {
-    return base::Bind(&ExpectingErrorHandler::HandleError,
-                      base::Owned(new ExpectingErrorHandler(true)));
+    return base::BindOnce(&ExpectingErrorHandler::HandleError,
+                          base::Owned(new ExpectingErrorHandler(true)));
   }
 
   static Completion CreateExpectFailureCallback() {
-    return base::Bind(&ExpectingErrorHandler::HandleError,
-                      base::Owned(new ExpectingErrorHandler(false)));
+    return base::BindOnce(&ExpectingErrorHandler::HandleError,
+                          base::Owned(new ExpectingErrorHandler(false)));
   }
 
  private:

@@ -1,0 +1,41 @@
+#!/bin/bash
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Wrapper for execution of cross-compiled introspection binaries.
+#
+# gobject-introspection compiles small binaries for the target and executes them
+# at build time in order to dump introspection metadata for various libraries on
+# the target. Since these binaries are compiled for the target and not the build
+# host they cannot be run normally. This script uses the platform2_test wrapper
+# to find the appropriate QEMU wrapper to emulate the target and to chroot into
+# the sysroot in order to be able to succesfully execute these cross-compiled
+# binaries.
+#
+# We pass the sysroot as an explicit argument to the platform2_test wrapper as
+# well as the following arguments:
+#
+# 1. The platform2_test wrapper filters environment variables by a small
+#    allow-list. We explicitly forward the default value of LD_LIBRARY_PATH
+#    through the wrapper and add an additional value: Some of the introspection
+#    binaries need to link against a shared object built in
+#    gobject-introspection itself, which hasn't yet been installed to the
+#    sysroot since we're still in the compile phase of the package itself. So we
+#    add a subdirectory of the package's WORKDIR to LD_LIBRARY_PATH that we know
+#    contains the build artifacts so that the loader can properly discover them.
+#    We strip any leading instances of $SYSROOT from the WORKDIR path since we
+#    will be chroot-ing into the sysoot as part of the introspection binary
+#    execution.
+#
+# 2. Remove all instances of $SYSROOT from arguments to the introspection
+#    binaries. This also done because we are chroot-ing into sysroot already.
+#    `/build/$board` becomes `/`, so
+#    `--library-path='/build/$board/usr/lib/libfoo'` needs to become
+#    `--library-path='/usr/lib/libfoo'`.
+
+"${CHROOT_SOURCE_ROOT}"/src/platform2/common-mk/platform2_test.py \
+    --sysroot="${SYSROOT}" \
+    --env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${WORKDIR/${SYSROOT}/}/${P}-build/girepository/" \
+    -- \
+    "${@//${SYSROOT}/}"

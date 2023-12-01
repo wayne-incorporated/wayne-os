@@ -1,0 +1,29 @@
+From 0f86271811dabd47e4ff74b7a04a6492a208c3a5 Mon Sep 17 00:00:00 2001
+From: Abhishek Kumar <abhishek4.kumar@intel.com>
+Date: Fri, 12 Jun 2020 11:29:18 +0530
+Subject: [PATCH 2/2] change slice header prefix for AVC Vdenc
+
+Currently in case of Vdenc slice header prefix is 0x000001 (3bytes)
+and in case of VME it is 0x00000001 (4 bytes) , so change slice header
+prefix to 4 bytes for vdenc(same as i965 driver).
+---
+ .../agnostic/common/codec/hal/codechal_encode_avc_base.cpp     | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/media_driver/agnostic/common/codec/hal/codechal_encode_avc_base.cpp b/media_driver/agnostic/common/codec/hal/codechal_encode_avc_base.cpp
+index d536eda8c7f6..bf3a812c820a 100644
+--- a/media_driver/agnostic/common/codec/hal/codechal_encode_avc_base.cpp
++++ b/media_driver/agnostic/common/codec/hal/codechal_encode_avc_base.cpp
+@@ -1762,8 +1762,7 @@ MOS_STATUS CodecHalAvcEncode_PackSliceHeader(
+ 
+     // zero byte shall exist when the byte stream NAL unit syntax structure contains the first
+     // NAL unit of an access unit in decoding order, as specified by subclause 7.4.1.2.3.
+-    // VDEnc Slice header packing handled by PAK does not need the 0 byte inserted
+-    if (params->UserFlags.bDisableAcceleratorHeaderPacking && (!params->bVdencEnabled))
++    if (params->UserFlags.bDisableAcceleratorHeaderPacking)
+     {
+         *bsbuffer->pCurrent = 0;
+         bsbuffer->pCurrent++;
+-- 
+2.29.0
+

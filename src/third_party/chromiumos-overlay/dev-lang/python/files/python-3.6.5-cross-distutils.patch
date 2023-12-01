@@ -1,0 +1,128 @@
+Extensions should be installed to the targets libdir. This is important if e.g. host
+has a 64bit /usr/lib64, but the target is 32bit and has $ROOT/usr/lib. Make sure we
+respect the target's lib structure by getting the libdir name from Makefile.
+
+--- a/Lib/distutils/command/install.py
++++ b/Lib/distutils/command/install.py
+@@ -38,8 +38,8 @@
+ 
+ INSTALL_SCHEMES = {
+     'unix_prefix': {
+-        'purelib': '$base/@@GENTOO_LIBDIR@@/python$py_version_short/site-packages',
+-        'platlib': '$platbase/@@GENTOO_LIBDIR@@/python$py_version_short/site-packages',
++        'purelib': '$base/$libdirname/python$py_version_short/site-packages',
++        'platlib': '$platbase/$libdirname/python$py_version_short/site-packages',
+         'headers': '$base/include/python$py_version_short$abiflags/$dist_name',
+         'scripts': '$base/bin',
+         'data'   : '$base',
+@@ -289,6 +289,8 @@
+         # everything else.
+         self.config_vars['base'] = self.install_base
+         self.config_vars['platbase'] = self.install_platbase
++        if not self.user and self.home is None:
++            self.config_vars['libdirname'] = self.install_libdirname
+ 
+         if DEBUG:
+             from pprint import pprint
+@@ -394,6 +396,10 @@
+ 
+             self.install_base = self.prefix
+             self.install_platbase = self.exec_prefix
++            self.install_libdirname = os.path.basename(get_config_vars('LIBDIR')[0])
++            if self.install_libdirname is None:
++                self.install_libdirname = '@@GENTOO_LIBDIR@@'
++
+             self.select_scheme("unix_prefix")
+ 
+     def finalize_other(self):
+--- a/Lib/distutils/command/build_ext.py
++++ b/Lib/distutils/command/build_ext.py
+@@ -201,7 +201,8 @@
+         if (sysconfig.get_config_var('Py_ENABLE_SHARED')):
+             if not sysconfig.python_build:
+                 # building third party extensions
+-                self.library_dirs.append(sysconfig.get_config_var('LIBDIR'))
++                sysroot = os.getenv('SYSROOT', '')
++                self.library_dirs.append(sysroot + sysconfig.get_config_var('LIBDIR'))
+             else:
+                 # building python standard extensions
+                 self.library_dirs.append('.')
+--- a/Lib/distutils/sysconfig.py
++++ b/Lib/distutils/sysconfig.py
+@@ -12,6 +12,8 @@
+ """
+ 
+ import _imp
++import glob
++import imp
+ import os
+ import re
+ import sys
+@@ -19,11 +20,20 @@
+ from .errors import DistutilsPlatformError
+ 
+ # These are needed in a couple of spots, so just compute them once.
++SYSROOT = os.getenv('SYSROOT', '')
+ PREFIX = os.path.normpath(sys.prefix)
+ EXEC_PREFIX = os.path.normpath(sys.exec_prefix)
+ BASE_PREFIX = os.path.normpath(sys.base_prefix)
+ BASE_EXEC_PREFIX = os.path.normpath(sys.base_exec_prefix)
+ 
++# Make sure we respect the user specified SYSROOT environment variable.
++# This is the first step to get distutils to crosscompile stuff.
++if SYSROOT:
++    PREFIX = os.path.normpath(SYSROOT + os.path.sep + PREFIX)
++    EXEC_PREFIX = os.path.normpath(SYSROOT + os.path.sep + EXEC_PREFIX)
++    BASE_PREFIX = os.path.normpath(SYSROOT + os.path.sep + BASE_PREFIX)
++    BASE_EXEC_PREFIX = os.path.normpath(SYSROOT + os.path.sep + BASE_EXEC_PREFIX)
++
+ # Path to the base directory of the project. On Windows the binary may
+ # live in project/PCBuild/win32 or project/PCBuild/amd64.
+ # set for cross builds
+@@ -114,6 +122,12 @@ def get_python_lib(
+ 
+     If 'prefix' is supplied, use it instead of sys.base_prefix or
+     sys.base_exec_prefix -- i.e., ignore 'plat_specific'.
++
++    For the posix system we can not always assume the host's notion of the
++    libdir is the same for the target.  e.g. compiling on an x86_64 system
++    will use 'lib64' but an arm 32bit target will use 'lib'.  So encode all
++    the known lists of dirs and search them all (starting with the host one
++    so that native builds work just fine).
+     """
+     if prefix is None:
+         if standard_lib:
+@@ -130,8 +144,19 @@ def get_python_lib(
+             prefix = plat_specific and EXEC_PREFIX or PREFIX
+ 
+     if os.name == "posix":
+-        libpython = os.path.join(prefix,
+-                                 "@@GENTOO_LIBDIR@@", "python" + get_python_version())
++        # Search known Gentoo vars first.
++        libpython = None
++        if SYSROOT:
++            abi = os.environ.get('ABI')
++            libdir = os.environ.get('LIBDIR_%s' % abi)
++            if libdir:
++                libpython = os.path.join(prefix, libdir, "python" + get_python_version())
++        if not libpython:
++            # Fallback to hardcoded search.
++            for libdir in ['@@GENTOO_LIBDIR@@', 'lib64', 'lib32', 'libx32', 'lib']:
++                libpython = os.path.join(prefix, libdir, "python" + get_python_version())
++                if os.path.exists(libpython):
++                    break
+         if standard_lib:
+             return libpython
+         else:
+@@ -409,6 +434,11 @@
+     ))
+     _temp = __import__(name, globals(), locals(), ['build_time_vars'], 0)
+     build_time_vars = _temp.build_time_vars
++    lib_dir = get_python_lib(plat_specific=1, standard_lib=1)
++    sysconfig_path = glob.glob(os.path.join(lib_dir, '_sysconfigdata_*.py'))
++    if sysconfig_path:
++        sysconfig_module = imp.load_source('_sysconfigdata', sysconfig_path[0])
++        build_time_vars = sysconfig_module.build_time_vars
+     global _config_vars
+     _config_vars = {}
+     _config_vars.update(build_time_vars)

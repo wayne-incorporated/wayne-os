@@ -1,0 +1,90 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+bind: 1
+brk: 1
+clock_getres: 1
+clock_gettime: 1
+clock_nanosleep: 1
+clone: 1
+close: 1
+connect: 1
+dup3: 1
+dup: 1
+epoll_create1: 1
+epoll_ctl: 1
+epoll_pwait: 1
+eventfd2: 1
+execve: 1
+exit: 1
+exit_group: 1
+faccessat: 1
+fcntl: 1
+flock: 1
+fstat: 1
+fstatfs: 1
+futex: 1
+getcwd: 1
+getdents64: 1
+getegid: 1
+geteuid: 1
+getgid: 1
+getgroups: 1
+getpgid: 1
+getpid: 1
+getppid: 1
+getpriority: 1
+getrandom: 1
+getresgid: 1
+getresuid: 1
+getrlimit: 1
+getsid: 1
+getsockname: 1
+gettimeofday: 1
+gettid: 1
+getuid: 1
+ioctl: arg1 == TCGETS || arg1 == TIOCGPGRP || arg1 == TIOCGWINSZ
+lseek: 1
+madvise: 1
+memfd_create: 1
+mlock: 1
+mmap: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+mprotect: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+munlock: 1
+munmap: 1
+nanosleep: 1
+newfstatat: 1
+openat: 1
+pipe2: 1
+ppoll: 1
+prctl: arg0 == PR_SET_DUMPABLE || arg0 == PR_GET_DUMPABLE
+prlimit64: 1
+process_vm_readv: 1
+read: 1
+recvmsg: 1
+restart_syscall: 1
+rt_sigaction: 1
+rt_sigprocmask: 1
+rt_sigreturn: 1
+sendmsg: 1
+sendto: 1
+set_robust_list: 1
+set_tid_address: 1
+setgid: 1
+setgroups: 1
+setpriority: 1
+setresgid: 1
+setresuid: 1
+signalfd4: 1
+socket: arg0 == AF_UNIX || arg0 == AF_NETLINK
+sysinfo: 1
+# tgkill is used by abort() and CHECK()/LOG(FATAL).
+tgkill: 1
+umask: 1
+uname: 1
+wait4: 1
+write: 1

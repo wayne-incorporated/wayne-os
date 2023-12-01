@@ -1,0 +1,270 @@
+From 4fc260248b9878b585f7e5477e9f4670aa0e8132 Mon Sep 17 00:00:00 2001
+From: Nikita Popov <npopov@redhat.com>
+Date: Tue, 12 Jul 2022 11:20:49 +0200
+Subject: [PATCH] [InlineAsm] Improve error messages for invalid constraint
+ strings
+
+InlineAsm constraint string verification can fail for many reasons,
+but used to always print a generic "invalid type for inline asm
+constraint string" message -- which is especially confusing if
+the actual error is unrelated to the type, e.g. a failure to parse
+the constraint string.
+
+Change the verify API to return an Error with a more specific
+error message, and print that in the IR parser.
+---
+ llvm/include/llvm/IR/InlineAsm.h              |  9 ++-
+ llvm/lib/AsmParser/LLParser.cpp               |  9 ++-
+ llvm/lib/IR/InlineAsm.cpp                     | 43 +++++++++-----
+ llvm/test/Assembler/inline-asm-clobber.ll     | 10 ----
+ .../Assembler/inline-asm-constraint-error.ll  | 58 +++++++++++++++++++
+ .../Assembler/invalid-inline-constraint.ll    |  2 +-
+ 6 files changed, 100 insertions(+), 31 deletions(-)
+ delete mode 100644 llvm/test/Assembler/inline-asm-clobber.ll
+ create mode 100644 llvm/test/Assembler/inline-asm-constraint-error.ll
+
+diff --git a/llvm/include/llvm/IR/InlineAsm.h b/llvm/include/llvm/IR/InlineAsm.h
+index 57f2da27e04e..032a70efdceb 100644
+--- a/llvm/include/llvm/IR/InlineAsm.h
++++ b/llvm/include/llvm/IR/InlineAsm.h
+@@ -24,6 +24,7 @@
+ 
+ namespace llvm {
+ 
++class Error;
+ class FunctionType;
+ class PointerType;
+ template <class ConstantClass> class ConstantUniqueMap;
+@@ -83,11 +84,9 @@ public:
+   const std::string &getAsmString() const { return AsmString; }
+   const std::string &getConstraintString() const { return Constraints; }
+ 
+-  /// Verify - This static method can be used by the parser to check to see if
+-  /// the specified constraint string is legal for the type.  This returns true
+-  /// if legal, false if not.
+-  ///
+-  static bool Verify(FunctionType *Ty, StringRef Constraints);
++  /// This static method can be used by the parser to check to see if the
++  /// specified constraint string is legal for the type.
++  static Error verify(FunctionType *Ty, StringRef Constraints);
+ 
+   // Constraint String Parsing
+   enum ConstraintPrefix {
+diff --git a/llvm/lib/AsmParser/LLParser.cpp b/llvm/lib/AsmParser/LLParser.cpp
+index 29ef40a59d14..2e28b63870cb 100644
+--- a/llvm/lib/AsmParser/LLParser.cpp
++++ b/llvm/lib/AsmParser/LLParser.cpp
+@@ -5414,8 +5414,15 @@ bool LLParser::convertValIDToValue(Type *Ty, ValID &ID, Value *&V,
+     V = PFS->getVal(ID.StrVal, Ty, ID.Loc);
+     return V == nullptr;
+   case ValID::t_InlineAsm: {
+-    if (!ID.FTy || !InlineAsm::Verify(ID.FTy, ID.StrVal2))
++    if (!ID.FTy)
+       return error(ID.Loc, "invalid type for inline asm constraint string");
++    if (Error Err = InlineAsm::verify(ID.FTy, ID.StrVal2)) {
++      std::string Str;
++      raw_string_ostream OS(Str);
++      OS << Err;
++      consumeError(std::move(Err));
++      return error(ID.Loc, Str.c_str());
++    }
+     V = InlineAsm::get(
+         ID.FTy, ID.StrVal, ID.StrVal2, ID.UIntVal & 1, (ID.UIntVal >> 1) & 1,
+         InlineAsm::AsmDialect((ID.UIntVal >> 2) & 1), (ID.UIntVal >> 3) & 1);
+diff --git a/llvm/lib/IR/InlineAsm.cpp b/llvm/lib/IR/InlineAsm.cpp
+index 203ad6dae1ff..c75b1aa7c1d6 100644
+--- a/llvm/lib/IR/InlineAsm.cpp
++++ b/llvm/lib/IR/InlineAsm.cpp
+@@ -19,6 +19,7 @@
+ #include "llvm/IR/Value.h"
+ #include "llvm/Support/Casting.h"
+ #include "llvm/Support/Compiler.h"
++#include "llvm/Support/Errc.h"
+ #include <algorithm>
+ #include <cassert>
+ #include <cctype>
+@@ -33,9 +34,10 @@ InlineAsm::InlineAsm(FunctionType *FTy, const std::string &asmString,
+       AsmString(asmString), Constraints(constraints), FTy(FTy),
+       HasSideEffects(hasSideEffects), IsAlignStack(isAlignStack),
+       Dialect(asmDialect), CanThrow(canThrow) {
++#ifndef NDEBUG
+   // Do various checks on the constraint string and type.
+-  assert(Verify(getFunctionType(), constraints) &&
+-         "Function type not legal for constraints!");
++  cantFail(verify(getFunctionType(), constraints));
++#endif
+ }
+ 
+ InlineAsm *InlineAsm::get(FunctionType *FTy, StringRef AsmString,
+@@ -248,15 +250,19 @@ InlineAsm::ParseConstraints(StringRef Constraints) {
+   return Result;
+ }
+ 
+-/// Verify - Verify that the specified constraint string is reasonable for the
+-/// specified function type, and otherwise validate the constraint string.
+-bool InlineAsm::Verify(FunctionType *Ty, StringRef ConstStr) {
+-  if (Ty->isVarArg()) return false;
++static Error makeStringError(const char *Msg) {
++  return createStringError(errc::invalid_argument, Msg);
++}
++
++Error InlineAsm::verify(FunctionType *Ty, StringRef ConstStr) {
++  if (Ty->isVarArg())
++    return makeStringError("inline asm cannot be variadic");
+ 
+   ConstraintInfoVector Constraints = ParseConstraints(ConstStr);
+ 
+   // Error parsing constraints.
+-  if (Constraints.empty() && !ConstStr.empty()) return false;
++  if (Constraints.empty() && !ConstStr.empty())
++    return makeStringError("failed to parse constraints");
+ 
+   unsigned NumOutputs = 0, NumInputs = 0, NumClobbers = 0;
+   unsigned NumIndirect = 0;
+@@ -265,7 +271,9 @@ bool InlineAsm::Verify(FunctionType *Ty, StringRef ConstStr) {
+     switch (Constraint.Type) {
+     case InlineAsm::isOutput:
+       if ((NumInputs-NumIndirect) != 0 || NumClobbers != 0)
+-        return false;  // outputs before inputs and clobbers.
++        return makeStringError("output constraint occurs after input "
++                               "or clobber constraint");
++
+       if (!Constraint.isIndirect) {
+         ++NumOutputs;
+         break;
+@@ -273,7 +281,9 @@ bool InlineAsm::Verify(FunctionType *Ty, StringRef ConstStr) {
+       ++NumIndirect;
+       LLVM_FALLTHROUGH; // We fall through for Indirect Outputs.
+     case InlineAsm::isInput:
+-      if (NumClobbers) return false;               // inputs before clobbers.
++      if (NumClobbers)
++        return makeStringError("input constraint occurs after clobber "
++                               "constraint");
+       ++NumInputs;
+       break;
+     case InlineAsm::isClobber:
+@@ -284,18 +294,23 @@ bool InlineAsm::Verify(FunctionType *Ty, StringRef ConstStr) {
+ 
+   switch (NumOutputs) {
+   case 0:
+-    if (!Ty->getReturnType()->isVoidTy()) return false;
++    if (!Ty->getReturnType()->isVoidTy())
++      return makeStringError("inline asm without outputs must return void");
+     break;
+   case 1:
+-    if (Ty->getReturnType()->isStructTy()) return false;
++    if (Ty->getReturnType()->isStructTy())
++      return makeStringError("inline asm with one output cannot return struct");
+     break;
+   default:
+     StructType *STy = dyn_cast<StructType>(Ty->getReturnType());
+     if (!STy || STy->getNumElements() != NumOutputs)
+-      return false;
++      return makeStringError("number of output constraints does not match "
++                             "number of return struct elements");
+     break;
+   }
+ 
+-  if (Ty->getNumParams() != NumInputs) return false;
+-  return true;
++  if (Ty->getNumParams() != NumInputs)
++    return makeStringError("number of input constraints does not match number "
++                           "of parameters");
++  return Error::success();
+ }
+diff --git a/llvm/test/Assembler/inline-asm-clobber.ll b/llvm/test/Assembler/inline-asm-clobber.ll
+deleted file mode 100644
+index 65c8e444e808..000000000000
+--- a/llvm/test/Assembler/inline-asm-clobber.ll
++++ /dev/null
+@@ -1,10 +0,0 @@
+-; RUN: not llvm-as <%s 2>&1  | FileCheck %s
+-
+-; "~x{21}" is not a valid clobber constraint.
+-
+-; CHECK: invalid type for inline asm constraint string
+-
+-define void @foo() nounwind {
+-  call void asm sideeffect "mov x0, #42", "~{x0},~{x19},~x{21}"() nounwind
+-  ret void
+-}
+diff --git a/llvm/test/Assembler/inline-asm-constraint-error.ll b/llvm/test/Assembler/inline-asm-constraint-error.ll
+new file mode 100644
+index 000000000000..5ecf67ab34ad
+--- /dev/null
++++ b/llvm/test/Assembler/inline-asm-constraint-error.ll
+@@ -0,0 +1,58 @@
++; RUN: split-file %s %t
++; RUN: not llvm-as < %t/parse-fail.ll 2>&1 | FileCheck %s --check-prefix=CHECK-PARSE-FAIL
++; RUN: not llvm-as < %t/input-before-output.ll 2>&1 | FileCheck %s --check-prefix=CHECK-INPUT-BEFORE-OUTPUT
++; RUN: not llvm-as < %t/input-after-clobber.ll 2>&1 | FileCheck %s --check-prefix=CHECK-INPUT-AFTER-CLOBBER
++; RUN: not llvm-as < %t/must-return-void.ll 2>&1 | FileCheck %s --check-prefix=CHECK-MUST-RETURN-VOID
++; RUN: not llvm-as < %t/cannot-be-struct.ll 2>&1 | FileCheck %s --check-prefix=CHECK-CANNOT-BE-STRUCT
++; RUN: not llvm-as < %t/incorrect-struct-elements.ll 2>&1 | FileCheck %s --check-prefix=CHECK-INCORRECT-STRUCT-ELEMENTS
++; RUN: not llvm-as < %t/incorrect-arg-num.ll 2>&1 | FileCheck %s --check-prefix=CHECK-INCORRECT-ARG-NUM
++
++;--- parse-fail.ll
++; CHECK-PARSE-FAIL: failed to parse constraints
++define void @foo() {
++  ; "~x{21}" is not a valid clobber constraint.
++  call void asm sideeffect "mov x0, #42", "~{x0},~{x19},~x{21}"()
++  ret void
++}
++
++;--- input-before-output.ll
++; CHECK-INPUT-BEFORE-OUTPUT: output constraint occurs after input or clobber constraint
++define void @foo() {
++  call void asm sideeffect "mov x0, #42", "r,=r"()
++  ret void
++}
++
++;--- input-after-clobber.ll
++; CHECK-INPUT-AFTER-CLOBBER: input constraint occurs after clobber constraint
++define void @foo() {
++  call void asm sideeffect "mov x0, #42", "~{x0},r"()
++  ret void
++}
++
++;--- must-return-void.ll
++; CHECK-MUST-RETURN-VOID: inline asm without outputs must return void
++define void @foo() {
++  call i32 asm sideeffect "mov x0, #42", ""()
++  ret void
++}
++
++;--- cannot-be-struct.ll
++; CHECK-CANNOT-BE-STRUCT: inline asm with one output cannot return struct
++define void @foo() {
++  call { i32 } asm sideeffect "mov x0, #42", "=r"()
++  ret void
++}
++
++;--- incorrect-struct-elements.ll
++; CHECK-INCORRECT-STRUCT-ELEMENTS: number of output constraints does not match number of return struct elements
++define void @foo() {
++  call { i32 } asm sideeffect "mov x0, #42", "=r,=r"()
++  ret void
++}
++
++;--- incorrect-arg-num.ll
++; CHECK-INCORRECT-ARG-NUM: number of input constraints does not match number of parameters
++define void @foo() {
++  call void asm sideeffect "mov x0, #42", "r"()
++  ret void
++}
+diff --git a/llvm/test/Assembler/invalid-inline-constraint.ll b/llvm/test/Assembler/invalid-inline-constraint.ll
+index 000fb86a8f79..dda32702852e 100644
+--- a/llvm/test/Assembler/invalid-inline-constraint.ll
++++ b/llvm/test/Assembler/invalid-inline-constraint.ll
+@@ -1,7 +1,7 @@
+ ; RUN: not llvm-as < %s 2>&1 | FileCheck %s
+ 
+ ; Tests bug: https://llvm.org/bugs/show_bug.cgi?id=24646
+-; CHECK: error: invalid type for inline asm constraint string
++; CHECK: error: failed to parse constraints
+ 
+ define void @foo() nounwind {
+ call void asm sideeffect "mov x0, #42","=~{x0},~{x19},mov |0,{x19},mov x0, #4~x{21}"()ounwi #4~x{21}"()ounwindret
+-- 
+2.38.1.431.g37b22c650d-goog
+

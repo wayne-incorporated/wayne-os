@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,15 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <base/files/scoped_file.h>
 #include <base/memory/ref_counted.h>
 #include <base/time/tick_clock.h>
+#include <base/time/time.h>
 #include <brillo/dbus/dbus_method_response.h>
 #include <brillo/errors/error.h>
 #include <chromeos/dbus/service_constants.h>
@@ -26,21 +29,28 @@
 #include "login_manager/arc_sideload_status_interface.h"
 #include "login_manager/container_manager_interface.h"
 #include "login_manager/dbus_adaptors/org.chromium.SessionManagerInterface.h"
+#include "login_manager/dev_mode_unblock_broker.h"
+#include "login_manager/device_identifier_generator.h"
 #include "login_manager/device_local_account_manager.h"
 #include "login_manager/device_policy_service.h"
 #include "login_manager/key_generator.h"
+#include "login_manager/login_metrics.h"
 #include "login_manager/login_screen_storage.h"
 #include "login_manager/policy_service.h"
 #include "login_manager/regen_mitigator.h"
-#include "login_manager/server_backed_state_key_generator.h"
 
 class Crossystem;
 class InstallAttributesReader;
+
+namespace arc {
+class UpgradeArcContainerRequest;
+}  // namespace arc
 
 namespace dbus {
 class Bus;
 class ObjectProxy;
 class Response;
+class ScopedDBusError;
 }  // namespace dbus
 
 namespace login_manager {
@@ -54,7 +64,6 @@ class PolicyKey;
 class ProcessManagerServiceInterface;
 class StartArcMiniContainerRequest;
 class SystemUtils;
-class UpgradeArcContainerRequest;
 class UserPolicyServiceFactory;
 class VpdProcess;
 
@@ -116,6 +125,12 @@ class SessionManagerImpl
   static const char kContinueArcBootImpulse[];
   static const char kArcBootedImpulse[];
 
+  // TODO(b/205032502): Because upgrading the container from mini to full often
+  // takes more than 25 seconds, increasing it to accommodate P99.9.
+  // Considering its cyclic nature setting it to 40 sec should cover majority
+  // of P99.9 cases.
+  static constexpr base::TimeDelta kArcBootContinueTimeout = base::Seconds(40);
+
   // Lock screen state messages.
   static const char kScreenLockedImpulse[];
   static const char kScreenUnlockedImpulse[];
@@ -125,9 +140,6 @@ class SessionManagerImpl
 
   // How much time to wait for the key generator job to stop before killing it.
   static const base::TimeDelta kKeyGenTimeout;
-
-  // How much time to give the browser to shutdown cleanly before killing it.
-  static const base::TimeDelta kBrowserTimeout;
 
   // Time window before or after suspend/resume in which the session should be
   // ended if Chrome crashes. This is done as a precaution to avoid showing an
@@ -154,11 +166,11 @@ class SessionManagerImpl
                      std::unique_ptr<InitDaemonController> init_controller,
                      const scoped_refptr<dbus::Bus>& bus,
                      KeyGenerator* key_gen,
-                     ServerBackedStateKeyGenerator* state_key_generator,
+                     DeviceIdentifierGenerator* device_identifier_generator,
                      ProcessManagerServiceInterface* manager,
                      LoginMetrics* metrics,
                      NssUtil* nss,
-                     base::Optional<base::FilePath> ns_path,
+                     std::optional<base::FilePath> ns_path,
                      SystemUtils* utils,
                      Crossystem* crossystem,
                      VpdProcess* vpd_process,
@@ -168,6 +180,7 @@ class SessionManagerImpl
                      dbus::ObjectProxy* powerd_proxy,
                      dbus::ObjectProxy* system_clock_proxy,
                      dbus::ObjectProxy* debugd_proxy,
+                     dbus::ObjectProxy* fwmp_proxy,
                      ArcSideloadStatusInterface* arc_sideload_status);
   SessionManagerImpl(const SessionManagerImpl&) = delete;
   SessionManagerImpl& operator=(const SessionManagerImpl&) = delete;
@@ -222,32 +235,33 @@ class SessionManagerImpl
                                const std::vector<uint8_t>& in_metadata,
                                uint64_t in_value_size,
                                const base::ScopedFD& in_value_fd) override;
-  bool LoginScreenStorageRetrieve(
-      brillo::ErrorPtr* error,
-      const std::string& in_key,
-      uint64_t* out_value_size,
-      brillo::dbus_utils::FileDescriptor* out_value_fd) override;
+  bool LoginScreenStorageRetrieve(brillo::ErrorPtr* error,
+                                  const std::string& in_key,
+                                  uint64_t* out_value_size,
+                                  base::ScopedFD* out_value_fd) override;
   bool LoginScreenStorageListKeys(brillo::ErrorPtr* error,
                                   std::vector<std::string>* out_keys) override;
   void LoginScreenStorageDelete(const std::string& in_key) override;
   bool StartSession(brillo::ErrorPtr* error,
                     const std::string& in_account_id,
                     const std::string& in_unique_identifier) override;
+  bool StartSessionEx(brillo::ErrorPtr* error,
+                      const std::string& in_account_id,
+                      const std::string& in_unique_identifier,
+                      bool chrome_owner_key) override;
   void StopSession(const std::string& in_unique_identifier) override;
   void StopSessionWithReason(uint32_t reason) override;
   bool StartBrowserDataMigration(brillo::ErrorPtr* error,
-                                 const std::string& in_account_id) override;
-
+                                 const std::string& in_account_id,
+                                 const std::string& mode) override;
+  bool StartBrowserDataBackwardMigration(
+      brillo::ErrorPtr* error, const std::string& in_account_id) override;
   bool LoadShillProfile(brillo::ErrorPtr* error,
                         const std::string& in_account_id) override;
 
   // Interface for storing and retrieving policy.
   // TODO(crbug.com/765644): Remove 'Ex', see bug description.
   void StorePolicyEx(
-      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response,
-      const std::vector<uint8_t>& in_descriptor_blob,
-      const std::vector<uint8_t>& in_policy_blob) override;
-  void StoreUnsignedPolicyEx(
       std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response,
       const std::vector<uint8_t>& in_descriptor_blob,
       const std::vector<uint8_t>& in_policy_blob) override;
@@ -279,9 +293,14 @@ class SessionManagerImpl
                   uint32_t mode) override;
 
   bool StartDeviceWipe(brillo::ErrorPtr* error) override;
-  bool StartRemoteDeviceWipe(
-      brillo::ErrorPtr* error,
-      const std::vector<uint8_t>& in_signed_command) override;
+
+  // TODO(b/226330226): Taking |method_call| to ensure backwards compatibility.
+  // Revert the method to <arg /> instead of raw, once the clients are
+  // migrated back to a single argument call.
+  void StartRemoteDeviceWipe(
+      dbus::MethodCall* method_call,
+      dbus::ExportedObject::ResponseSender sender) override;
+
   void ClearForcedReEnrollmentVpd(
       std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response)
       override;
@@ -297,6 +316,10 @@ class SessionManagerImpl
   void GetServerBackedStateKeys(
       std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<
           std::vector<std::vector<uint8_t>>>> response) override;
+
+  void GetPsmDeviceActiveSecret(
+      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<std::string>>
+          response) override;
 
   bool InitMachineInfo(brillo::ErrorPtr* error,
                        const std::string& in_data) override;
@@ -317,6 +340,19 @@ class SessionManagerImpl
       std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<bool>> response)
       override;
   void QueryAdbSideload(
+      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<bool>> response)
+      override;
+
+  void UnblockDevModeForInitialStateDetermination(
+      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response)
+      override;
+  void UnblockDevModeForEnrollment(
+      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response)
+      override;
+  void UnblockDevModeForCarrierLock(
+      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response)
+      override;
+  void IsDevModeBlockedForCarrierLock(
       std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<bool>> response)
       override;
 
@@ -381,32 +417,21 @@ class SessionManagerImpl
   std::unique_ptr<UserSession> CreateUserSession(
       const std::string& username,
       const OptionalFilePath& ns_mnt_path,
+      bool might_be_owner_user,
       bool is_incognito,
       brillo::ErrorPtr* error);
 
-  // Verifies whether unsigned policies are permitted to be stored.
-  // Returns nullptr on success. Otherwise, an error that should be used in a
-  // reply to the D-Bus method call is returned.
-  brillo::ErrorPtr VerifyUnsignedPolicyStore();
-
-  // Returns the appropriate PolicyService for the given |descriptor|. |storage|
-  // is only set for some |descriptor|s. If set, it controls the lifetime of the
-  // returned pointer. Returns nullptr and sets |error| if no PolicyService
-  // could be found.
+  // Returns the appropriate PolicyService for the given |descriptor|.
+  // Returns nullptr and sets |error| if no PolicyService could be found.
   PolicyService* GetPolicyService(const PolicyDescriptor& descriptor,
-                                  std::unique_ptr<PolicyService>* storage,
                                   brillo::ErrorPtr* error);
+
+  // Returns true if the owner (accord to the device policies) is signed in.
+  bool OwnerIsSignedIn();
 
   // Returns the appropriate PolicyService::KeyInstallFlags for the given
   // |descriptor|.
   int GetKeyInstallFlags(const PolicyDescriptor& descriptor);
-
-  // Shared implementation of StorePolicyEx() and StoreUnsignedPolicyEx().
-  void StorePolicyInternalEx(
-      const std::vector<uint8_t>& descriptor_blob,
-      const std::vector<uint8_t>& policy_blob,
-      SignatureCheck signature_check,
-      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response);
 
   // Requests a reboot. Formats the actual reason string to name session_manager
   // as the source of the request.
@@ -435,7 +460,7 @@ class SessionManagerImpl
 
   // Creates environment variables passed to upstart for container upgrade.
   std::vector<std::string> CreateUpgradeArcEnvVars(
-      const UpgradeArcContainerRequest& request,
+      const arc::UpgradeArcContainerRequest& request,
       const std::string& account_id,
       pid_t pid);
 
@@ -447,6 +472,9 @@ class SessionManagerImpl
 
   // Called when the Android container is stopped.
   void OnAndroidContainerStopped(pid_t pid, ArcContainerStopReason reason);
+
+  LoginMetrics::ArcContinueBootImpulseStatus GetArcContinueBootImpulseStatus(
+      dbus::ScopedDBusError* dbus_error);
 #endif
 
   bool session_started_ = false;
@@ -479,11 +507,11 @@ class SessionManagerImpl
   // Ownership of all of these raw pointers remains elsewhere.
   Delegate* delegate_;
   KeyGenerator* key_gen_;
-  ServerBackedStateKeyGenerator* state_key_generator_;
+  DeviceIdentifierGenerator* device_identifier_generator_;
   ProcessManagerServiceInterface* manager_;
   LoginMetrics* login_metrics_;
   NssUtil* nss_;
-  base::Optional<base::FilePath> chrome_mount_ns_path_;
+  std::optional<base::FilePath> chrome_mount_ns_path_;
   SystemUtils* system_;
   Crossystem* crossystem_;
   VpdProcess* vpd_process_;
@@ -493,18 +521,20 @@ class SessionManagerImpl
   dbus::ObjectProxy* powerd_proxy_;
   dbus::ObjectProxy* system_clock_proxy_;
   dbus::ObjectProxy* debugd_proxy_;
+  dbus::ObjectProxy* fwmp_proxy_;
   std::unique_ptr<DevicePolicyService> device_policy_;
   std::unique_ptr<UserPolicyServiceFactory> user_policy_factory_;
   std::unique_ptr<DeviceLocalAccountManager> device_local_account_manager_;
+  std::unique_ptr<DevModeUnblockBroker> dev_mode_unblock_broker_;
 
   std::unique_ptr<ArcSideloadStatusInterface> arc_sideload_status_;
 
   RegenMitigator mitigator_;
 
   // Callbacks passed to RequestServerBackedStateKeys() while
-  // |system_clock_synchrononized_| was false. They will be run by
+  // |system_clock_synchronized_| was false. They will be run by
   // OnGotSystemClockLastSyncInfo() once the clock is synchronized.
-  std::vector<ServerBackedStateKeyGenerator::StateKeyCallback>
+  std::vector<DeviceIdentifierGenerator::StateKeyCallback>
       pending_state_key_callbacks_;
 
   // Map of the currently signed-in users to their state.

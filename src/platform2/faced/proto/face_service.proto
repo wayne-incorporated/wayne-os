@@ -1,0 +1,196 @@
+// Copyright 2022 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// Defines the protocol implemented by the FaceService TEE app to implement
+// enrollment and authentication.
+
+syntax = "proto2";
+
+package faceauth.eora;
+
+message FaceStatusCode {
+  // Status code. Zero represents success, other codes are in `face_status.h`.
+  optional int32 status = 1;
+}
+
+enum FrameType {
+  UNKNOWN = 0;
+  // YUV NV12 format (https://wiki.videolan.org/YUV#NV12).
+  YUV_NV12 = 1;
+  MJPG = 2;
+}
+
+// A single frame from a camera.
+message CameraFrame {
+  // Format of `payload`.
+  optional FrameType type = 1;
+
+  // Height and width of the image, in pixels.
+  optional int32 height = 2;
+  optional int32 width = 3;
+
+  // Payload data.
+  optional bytes payload = 4;
+}
+
+// Per-user enrollment data.
+//
+// This encrypted blob stores the user's biometric information that can be
+// later used for authentication. It is initially generated during enrollment,
+// and then passed in during authentication. Authentication operations may
+// optionally also update the data.
+message UserData {
+  optional bytes payload = 1;
+}
+
+message StartEnrollmentRequest {}
+
+message StartEnrollmentResponse {
+  optional FaceStatusCode status = 1;
+}
+
+message ProcessFrameForEnrollmentRequest {
+  optional CameraFrame frame = 1;
+}
+
+message ProcessFrameForEnrollmentResponse {
+  optional FaceStatusCode status = 1;
+
+  // Whether or not the enrollment is completed.
+  optional bool enrollment_completed = 2;
+}
+
+message CompleteEnrollmentRequest {}
+
+message CompleteEnrollmentResponse {
+  optional FaceStatusCode status = 1;
+
+  // The new user enrollment.
+  //
+  // Present if and only if the enrollment was successful.
+  optional UserData user_data = 2;
+}
+
+message AbortEnrollmentRequest {}
+
+message AbortEnrollmentResponse {
+  optional FaceStatusCode status = 1;
+}
+
+message StartAuthenticationRequest {
+  // The user enrollment to authenticate against.
+  optional UserData user_data = 1;
+}
+
+message StartAuthenticationResponse {
+  optional FaceStatusCode status = 1;
+}
+
+message ProcessFrameForAuthenticationRequest {
+  // Camera frame to process for authentication.
+  optional CameraFrame frame = 1;
+}
+
+message ProcessFrameForAuthenticationResponse {
+  optional FaceStatusCode status = 1;
+
+  // True if more frames are required for authentication.
+  //
+  // If no more data is required, then `CompleteAuthentication`
+  // may be called.
+  optional bool need_more_data = 2;
+}
+
+message CompleteAuthenticationRequest {}
+
+message CompleteAuthenticationResponse {
+  optional FaceStatusCode status = 1;
+
+  // Outcome of the authentication.
+  //
+  // If true, the current user matches the user that enrolled.
+  // Otherwise, false is returned.
+  optional bool authorized = 2;
+
+  // The updated user enrollment.
+  //
+  // Updates are only made if status is OK. User data may still be updated if
+  // authorized is "false".
+  optional UserData user_data = 3;
+}
+
+message AbortAuthenticationRequest {}
+
+message AbortAuthenticationResponse {
+  optional FaceStatusCode status = 1;
+}
+
+message EnrollmentExistsRequest {}
+
+message EnrollmentExistsResponse {
+  optional FaceStatusCode status = 1;
+
+  // True if an enrollment has been made.
+  optional bool enrollment_exists = 2;
+}
+
+message DeleteEnrollmentRequest {}
+
+message DeleteEnrollmentResponse {
+  optional FaceStatusCode status = 1;
+}
+
+service FaceService {
+  // Start an enrollment operation.
+  //
+  // No other operation may be in progress. Overwrites any previous enrollment.
+  rpc StartEnrollment(StartEnrollmentRequest) returns (StartEnrollmentResponse);
+
+  // Process a frame for enrollment.
+  //
+  // An existing enrollment operation must be in progress.
+  rpc ProcessFrameForEnrollment(ProcessFrameForEnrollmentRequest)
+      returns (ProcessFrameForEnrollmentResponse);
+
+  // Complete an enrollment operation.
+  //
+  // Must only be called after ProcessFrameForEnrollment indicates that
+  // enrollment is complete.
+  rpc CompleteEnrollment(CompleteEnrollmentRequest)
+      returns (CompleteEnrollmentResponse);
+
+  // Abort an enrollment operation and return to an idle state.
+  rpc AbortEnrollment(AbortEnrollmentRequest) returns (AbortEnrollmentResponse);
+
+  // Start an authentication operation.
+  //
+  // No other operation may be in progress.
+  rpc StartAuthentication(StartAuthenticationRequest)
+      returns (StartAuthenticationResponse);
+
+  // Process a frame for authentication.
+  //
+  // An existing authentication operation must be in progress.
+  rpc ProcessFrameForAuthentication(ProcessFrameForAuthenticationRequest)
+      returns (ProcessFrameForAuthenticationResponse);
+
+  // Complete an authentication operation.
+  //
+  // Must only be called after ProcessFrameForAuthentication indicates that
+  // authentication is complete.
+  rpc CompleteAuthentication(CompleteAuthenticationRequest)
+      returns (CompleteAuthenticationResponse);
+
+  // Abort an authentication operation and return to an idle state.
+  rpc AbortAuthentication(AbortAuthenticationRequest)
+      returns (AbortAuthenticationResponse);
+
+  // Return whether an enrollment exists.
+  rpc EnrollmentExists(EnrollmentExistsRequest)
+      returns (EnrollmentExistsResponse);
+
+  // Delete any existing enrollment.
+  rpc DeleteEnrollment(DeleteEnrollmentRequest)
+      returns (DeleteEnrollmentResponse);
+}

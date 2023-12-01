@@ -1,0 +1,208 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("common_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libdebugd-client",
+  ]
+}
+
+executable("urandom") {
+  sources = [ "memory_and_cpu/urandom_main.cc" ]
+  configs += [ ":common_pkg_deps" ]
+  install_path = "/usr/libexec/diagnostics"
+}
+
+executable("floating-point-accuracy") {
+  sources = [ "memory_and_cpu/floating_point_main.cc" ]
+  configs += [ ":common_pkg_deps" ]
+  cflags_cc = [
+    "-msse",
+    "-mno-mmx",
+  ]
+  install_path = "/usr/libexec/diagnostics"
+}
+
+executable("prime-search") {
+  sources = [
+    "memory_and_cpu/prime_number_search.cc",
+    "memory_and_cpu/prime_search_main.cc",
+  ]
+  configs += [ ":common_pkg_deps" ]
+  install_path = "/usr/libexec/diagnostics"
+}
+
+pkg_config("libdiag_routine_pkg_deps") {
+  pkg_deps = [
+    "iioservice_ipc",
+    "libmojo",
+    "re2",
+  ]
+}
+
+source_set("libdiag_routine") {
+  configs += [
+    ":common_pkg_deps",
+    ":libdiag_routine_pkg_deps",
+  ]
+  deps = [
+    "//diagnostics/base",
+    "//diagnostics/cros_healthd/system:libcros_healthd_system",
+    "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+  ]
+  sources = [
+    "ac_power/ac_power.cc",
+    "arc_dns_resolution/arc_dns_resolution.cc",
+    "arc_http/arc_http.cc",
+    "arc_ping/arc_ping.cc",
+    "audio/audio_driver.cc",
+    "audio/audio_set_gain.cc",
+    "audio/audio_set_volume.cc",
+    "base_routine_control.cc",
+    "battery_capacity/battery_capacity.cc",
+    "battery_charge/battery_charge.cc",
+    "battery_discharge/battery_discharge.cc",
+    "battery_health/battery_health.cc",
+    "bluetooth/bluetooth_base.cc",
+    "bluetooth/bluetooth_discovery.cc",
+    "bluetooth/bluetooth_pairing.cc",
+    "bluetooth/bluetooth_power.cc",
+    "bluetooth/bluetooth_scanning.cc",
+    "diag_process_adapter_impl.cc",
+    "diag_routine_with_status.cc",
+    "emmc_lifetime/emmc_lifetime.cc",
+    "fingerprint/fingerprint.cc",
+    "fingerprint_alive/fingerprint_alive.cc",
+    "led_lit_up/led_lit_up.cc",
+    "memory_and_cpu/cpu_cache.cc",
+    "memory_and_cpu/cpu_cache_v2.cc",
+    "memory_and_cpu/cpu_stress.cc",
+    "memory_and_cpu/cpu_stress_v2.cc",
+    "memory_and_cpu/floating_point_accuracy.cc",
+    "memory_and_cpu/memory.cc",
+    "memory_and_cpu/memory_v2.cc",
+    "memory_and_cpu/prime_search.cc",
+    "memory_and_cpu/prime_search_v2.cc",
+    "memory_and_cpu/urandom.cc",
+    "network/captive_portal.cc",
+    "network/dns_latency.cc",
+    "network/dns_resolution.cc",
+    "network/dns_resolver_present.cc",
+    "network/gateway_can_be_pinged.cc",
+    "network/has_secure_wifi_connection.cc",
+    "network/http_firewall.cc",
+    "network/https_firewall.cc",
+    "network/https_latency.cc",
+    "network/lan_connectivity.cc",
+    "network/signal_strength.cc",
+    "network/video_conferencing.cc",
+    "nvme_self_test/nvme_self_test.cc",
+    "nvme_wear_level/nvme_wear_level.cc",
+    "power_button/power_button.cc",
+    "privacy_screen/privacy_screen.cc",
+    "routine_service.cc",
+    "sensor/sensitive_sensor.cc",
+    "sensor/sensor_existence_checker.cc",
+    "simple_routine.cc",
+    "smartctl_check/smartctl_check.cc",
+    "storage/disk_read_v2.cc",
+    "storage/ufs_lifetime.cc",
+    "subproc_routine.cc",
+    "volume_button/volume_button.cc",
+  ]
+}
+
+if (use.test) {
+  pkg_config("libroutine_test_pkg_deps") {
+    pkg_deps = [
+      "iioservice_ipc",
+      "libdebugd-client",
+      "libdebugd-client-test",
+      "mojo_service_manager",
+    ]
+  }
+
+  source_set("libroutine_test_utils") {
+    configs += [ "//common-mk:test" ]
+    deps = [
+      "//diagnostics/base",
+      "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+    ]
+    sources = [
+      "routine_observer_for_testing.cc",
+      "routine_test_utils.cc",
+    ]
+  }
+
+  source_set("routine_test") {
+    sources = [
+      "ac_power/ac_power_test.cc",
+      "arc_dns_resolution/arc_dns_resolution_test.cc",
+      "arc_http/arc_http_test.cc",
+      "arc_ping/arc_ping_test.cc",
+      "audio/audio_driver_test.cc",
+      "audio/audio_set_gain_test.cc",
+      "audio/audio_set_volume_test.cc",
+      "base_routine_control_test.cc",
+      "battery_capacity/battery_capacity_test.cc",
+      "battery_charge/battery_charge_test.cc",
+      "battery_discharge/battery_discharge_test.cc",
+      "battery_health/battery_health_test.cc",
+      "bluetooth/bluetooth_base_test.cc",
+      "bluetooth/bluetooth_discovery_test.cc",
+      "bluetooth/bluetooth_pairing_test.cc",
+      "bluetooth/bluetooth_power_test.cc",
+      "bluetooth/bluetooth_scanning_test.cc",
+      "diag_routine_with_status_test.cc",
+      "emmc_lifetime/emmc_lifetime_test.cc",
+      "fingerprint/fingerprint_test.cc",
+      "fingerprint_alive/fingerprint_alive_test.cc",
+      "led_lit_up/led_lit_up_test.cc",
+      "memory_and_cpu/cpu_cache_v2_test.cc",
+      "memory_and_cpu/cpu_stress_v2_test.cc",
+      "memory_and_cpu/memory_test.cc",
+      "memory_and_cpu/memory_v2_test.cc",
+      "memory_and_cpu/prime_number_search.cc",
+      "memory_and_cpu/prime_number_search_test.cc",
+      "memory_and_cpu/prime_search_v2_test.cc",
+      "network/captive_portal_test.cc",
+      "network/dns_latency_test.cc",
+      "network/dns_resolution_test.cc",
+      "network/dns_resolver_present_test.cc",
+      "network/gateway_can_be_pinged_test.cc",
+      "network/has_secure_wifi_connection_test.cc",
+      "network/http_firewall_test.cc",
+      "network/https_firewall_test.cc",
+      "network/https_latency_test.cc",
+      "network/lan_connectivity_test.cc",
+      "network/signal_strength_test.cc",
+      "network/video_conferencing_test.cc",
+      "nvme_self_test/nvme_self_test_test.cc",
+      "nvme_wear_level/nvme_wear_level_test.cc",
+      "power_button/power_button_test.cc",
+      "privacy_screen/privacy_screen_test.cc",
+      "sensor/sensitive_sensor_test.cc",
+      "sensor/sensor_existence_checker_test.cc",
+      "simple_routine_test.cc",
+      "smartctl_check/smartctl_check_test.cc",
+      "storage/disk_read_v2_test.cc",
+      "storage/ufs_lifetime_test.cc",
+      "subproc_routine_test.cc",
+      "volume_button/volume_button_test.cc",
+    ]
+    configs += [ ":libroutine_test_pkg_deps" ]
+    deps = [
+      ":libdiag_routine",
+      ":libroutine_test_utils",
+      "//diagnostics/base",
+      "//diagnostics/base:healthd_testrunner",
+      "//diagnostics/cros_healthd/system:libcros_healthd_system_test_utils",
+      "//diagnostics/cros_healthd/utils:libcros_healthd_utils_test_utils",
+    ]
+  }
+}

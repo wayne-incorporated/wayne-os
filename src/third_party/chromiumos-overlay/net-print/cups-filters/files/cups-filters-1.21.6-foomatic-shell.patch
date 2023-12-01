@@ -1,0 +1,23 @@
+This patch replaces a shell used by cups-filters with a dedicated
+mini-shell called foomatic-shell. One of the cups-filters tools,
+foomatic-rip, uses this shell to execute scripts included in some PPD
+files. We want to use foomatic-shell instead of standard shell to limit
+set of commands that can be executed from provided PPD file. The goal is
+to prevent execution of unauthorized tools. foomatic-shell was
+implemented in CL:2271389. Chromium bug: 1073063.
+
+Author: Piotr Pawliczek
+
+diff --git a/filter/foomatic-rip/foomaticrip.c b/filter/foomatic-rip/foomaticrip.c
+index f53d0eb..3f60b49 100644
+--- a/filter/foomatic-rip/foomaticrip.c
++++ b/filter/foomatic-rip/foomaticrip.c
+@@ -175,7 +175,7 @@ char cupsfilterpath[PATH_MAX] = "/usr/local/lib/cups/filter:"
+                                 "/opt/cups/filter:"
+                                 "/usr/lib/cups/filter";
+ 
+-char modern_shell[] = SHELL;
++char modern_shell[] = "/usr/bin/foomatic_shell";
+ 
+ void config_set_option(const char *key, const char *value)
+ {

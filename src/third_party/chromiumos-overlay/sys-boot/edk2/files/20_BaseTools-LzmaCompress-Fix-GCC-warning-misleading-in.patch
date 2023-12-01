@@ -1,0 +1,38 @@
+From 50431b9cc70cd5a084ebd85436bfdd6e2e4b89a7 Mon Sep 17 00:00:00 2001
+From: Liming Gao <liming.gao@intel.com>
+Date: Tue, 9 Oct 2018 15:06:14 +0800
+Subject: [PATCH] BaseTools LzmaCompress: Fix GCC warning
+ misleading-indentation
+
+GCC 6 or above reports the warning misleading-indentation.
+This patch fixes it.
+
+Contributed-under: TianoCore Contribution Agreement 1.1
+Signed-off-by: Liming Gao <liming.gao@intel.com>
+Cc: Ard Biesheuvel <ard.biesheuvel@linaro.org>
+Acked-by: Ard Biesheuvel <ard.biesheuvel@linaro.org>
+Reviewed-by: Star Zeng <star.zeng@intel.com>
+Ref: https://bugzilla.tianocore.org/show_bug.cgi?id=1234
+[lersek@redhat.com: reference the BZ that got reported meanwhile]
+---
+ BaseTools/Source/C/LzmaCompress/Sdk/C/LzmaEnc.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/BaseTools/Source/C/LzmaCompress/Sdk/C/LzmaEnc.c b/BaseTools/Source/C/LzmaCompress/Sdk/C/LzmaEnc.c
+index bebe664d3e..e281716fee 100644
+--- a/BaseTools/Source/C/LzmaCompress/Sdk/C/LzmaEnc.c
++++ b/BaseTools/Source/C/LzmaCompress/Sdk/C/LzmaEnc.c
+@@ -1464,7 +1464,9 @@ static unsigned GetOptimum(CLzmaEnc *p, UInt32 position)
+         unsigned limit = p->numFastBytes + 1;
+         if (limit > numAvailFull)
+           limit = numAvailFull;
+-        for (len = 3; len < limit && data[len] == data2[len]; len++);
++        for (len = 3; len < limit && data[len] == data2[len]; len++)
++        {
++        }
+         
+         {
+           unsigned state2 = kLiteralNextStates[state];
+-- 
+2.34.1.307.g9b7440fafd-goog
+

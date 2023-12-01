@@ -1,0 +1,436 @@
+From 6b22608a1d30793b32f98d90f2c6a8c268630afa Mon Sep 17 00:00:00 2001
+From: Muhammad Omair Javaid <omair.javaid@linaro.org>
+Date: Mon, 15 May 2023 23:13:19 +0400
+Subject: [PATCH] Revert "Emit the correct flags for the PROC CodeView Debug
+ Symbol"
+
+This reverts commit e48826e016e2f427f3b7b1274166aa9aa0ea7f4f.
+
+https://lab.llvm.org/buildbot/#/builders/219/builds/2520
+
+ldb-shell :: SymbolFile/PDB/function-nested-block.test
+
+Differential Revision: https://reviews.llvm.org/D148761
+---
+ llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.cpp | 10 +-
+ llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.h   |  2 -
+ .../test/DebugInfo/COFF/fpo-realign-alloca.ll | 10 --
+ .../test/DebugInfo/COFF/fpo-realign-vframe.ll |  4 -
+ llvm/test/DebugInfo/COFF/frameproc-flags.ll   |  8 --
+ llvm/test/DebugInfo/COFF/function-options.ll  | 91 -------------------
+ llvm/test/DebugInfo/COFF/inlining-header.ll   |  3 +-
+ llvm/test/DebugInfo/COFF/inlining.ll          |  3 +-
+ llvm/test/DebugInfo/COFF/long-name.ll         |  3 +-
+ llvm/test/DebugInfo/COFF/multifunction.ll     | 12 +--
+ llvm/test/DebugInfo/COFF/simple.ll            |  4 +-
+ llvm/test/DebugInfo/COFF/types-array.ll       |  4 +-
+ llvm/test/DebugInfo/COFF/types-basic.ll       |  3 +-
+ llvm/test/MC/AArch64/coff-debug.ll            |  4 +-
+ 14 files changed, 15 insertions(+), 146 deletions(-)
+
+diff --git a/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.cpp b/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.cpp
+index 8161de57b58e..ce5fe6139f91 100644
+--- a/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.cpp
++++ b/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.cpp
+@@ -1160,14 +1160,7 @@ void CodeViewDebug::emitDebugInfoForFunction(const Function *GV,
+     OS.AddComment("Function section index");
+     OS.emitCOFFSectionIndex(Fn);
+     OS.AddComment("Flags");
+-    ProcSymFlags ProcFlags = ProcSymFlags::HasOptimizedDebugInfo;
+-    if (FI.HasFramePointer)
+-      ProcFlags |= ProcSymFlags::HasFP;
+-    if (GV->hasFnAttribute(Attribute::NoReturn))
+-      ProcFlags |= ProcSymFlags::IsNoReturn;
+-    if (GV->hasFnAttribute(Attribute::NoInline))
+-      ProcFlags |= ProcSymFlags::IsNoInline;
+-    OS.emitInt8(static_cast<uint8_t>(ProcFlags));
++    OS.emitInt8(0);
+     // Emit the function display name as a null-terminated string.
+     OS.AddComment("Function name");
+     // Truncate the name so we won't overflow the record length field.
+@@ -1487,7 +1480,6 @@ void CodeViewDebug::beginFunctionImpl(const MachineFunction *MF) {
+       CurFn->EncodedLocalFramePtrReg = EncodedFramePtrReg::StackPtr;
+       CurFn->EncodedParamFramePtrReg = EncodedFramePtrReg::StackPtr;
+     } else {
+-      CurFn->HasFramePointer = true;
+       // If there is an FP, parameters are always relative to it.
+       CurFn->EncodedParamFramePtrReg = EncodedFramePtrReg::FramePtr;
+       if (CurFn->HasStackRealignment) {
+diff --git a/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.h b/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.h
+index 29445b31e7e7..495822a6e653 100644
+--- a/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.h
++++ b/llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.h
+@@ -191,8 +191,6 @@ private:
+     bool HasStackRealignment = false;
+ 
+     bool HaveLineInfo = false;
+-
+-    bool HasFramePointer = false;
+   };
+   FunctionInfo *CurFn = nullptr;
+ 
+diff --git a/llvm/test/DebugInfo/COFF/fpo-realign-alloca.ll b/llvm/test/DebugInfo/COFF/fpo-realign-alloca.ll
+index 5bd19a03e745..d8b3d35f87cb 100644
+--- a/llvm/test/DebugInfo/COFF/fpo-realign-alloca.ll
++++ b/llvm/test/DebugInfo/COFF/fpo-realign-alloca.ll
+@@ -1,5 +1,4 @@
+ ; RUN: llc < %s | FileCheck %s
+-; RUN: llc -mtriple=i686-windows-msvc < %s -filetype=obj | llvm-readobj --codeview - | FileCheck %s --check-prefix=OBJ
+ 
+ ; C source:
+ ; void usethings(ptr, ptr p);
+@@ -34,15 +33,6 @@
+ ; CHECK:         retl
+ ; CHECK:         .cv_fpo_endproc
+ 
+-; OBJ-LABEL:     FunctionType: realign_and_alloca (0x1002)
+-; OBJ-NEXT:      CodeOffset: _realign_and_alloca+0x0
+-; OBJ-NEXT:      Segment: 0x0
+-; OBJ-NEXT:      Flags [ (0x81)
+-; OBJ-NEXT:        HasFP (0x1)
+-; OBJ-NEXT:        HasOptimizedDebugInfo (0x80)
+-; OBJ-NEXT:      ]
+-; OBJ-NEXT:      DisplayName: realign_and_alloca
+-; OBJ-NEXT:      LinkageName: _realign_and_alloca
+ 
+ ; ModuleID = 't.c'
+ source_filename = "t.c"
+diff --git a/llvm/test/DebugInfo/COFF/fpo-realign-vframe.ll b/llvm/test/DebugInfo/COFF/fpo-realign-vframe.ll
+index 5f1d6a5c28de..0a032a8a5bfa 100644
+--- a/llvm/test/DebugInfo/COFF/fpo-realign-vframe.ll
++++ b/llvm/test/DebugInfo/COFF/fpo-realign-vframe.ll
+@@ -95,10 +95,6 @@
+ ; OBJ:   SubSectionType: Symbols (0xF1)
+ ; OBJ:   GlobalProcIdSym {
+ ; OBJ:     Kind: S_GPROC32_ID (0x1147)
+-; OBJ:     Flags [ (0x81)
+-; OBJ:       HasFP (0x1)
+-; OBJ:       HasOptimizedDebugInfo (0x80)
+-; OBJ:     ]
+ ; OBJ:     DisplayName: realign_with_csrs
+ ; OBJ:     LinkageName: _realign_with_csrs
+ ; OBJ:   }
+diff --git a/llvm/test/DebugInfo/COFF/frameproc-flags.ll b/llvm/test/DebugInfo/COFF/frameproc-flags.ll
+index 905418969b6a..9f571b8e70e3 100644
+--- a/llvm/test/DebugInfo/COFF/frameproc-flags.ll
++++ b/llvm/test/DebugInfo/COFF/frameproc-flags.ll
+@@ -63,27 +63,22 @@
+ ; }
+ 
+ ; CHECK-LABEL: S_GPROC32_ID [size = 52] `use_alloca`
+-; CHECK:   type = `0x1002 (use_alloca)`, debug start = 0, debug end = 0, flags = has fp | opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = VFRAME, param fp reg = EBP
+ ; CHECK:   flags = has alloca | secure checks | strict secure checks | opt speed
+ ; CHECK-LABEL: S_GPROC32_ID [size = 52] `call_setjmp`
+-; CHECK:   type = `0x1003 (call_setjmp)`, debug start = 0, debug end = 0, flags = opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = NONE, param fp reg = NONE
+ ; CHECK:   flags = has setjmp | opt speed
+ ; CHECK-LABEL: S_GPROC32_ID [size = 56] `use_inlineasm`
+-; CHECK:   type = `0x1006 (use_inlineasm)`, debug start = 0, debug end = 0, flags = opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = NONE, param fp reg = NONE
+ ; CHECK:   flags = has inline asm | safe buffers | opt speed
+ ; CHECK-LABEL: S_GPROC32_ID [size = 48] `cpp_eh`
+-; CHECK:   type = `0x1007 (cpp_eh)`, debug start = 0, debug end = 0, flags = has fp | opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = EBP, param fp reg = EBP
+ ; CHECK:   flags = has eh | opt speed
+ ; CHECK-LABEL: S_GPROC32_ID [size = 52] `use_inline`
+-; CHECK:   type = `0x100C (use_inline)`, debug start = 0, debug end = 0, flags = opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = NONE, param fp reg = NONE
+ ; CHECK:   flags = safe buffers | opt speed
+@@ -92,7 +87,6 @@
+ ; CHECK:   local fp reg = NONE, param fp reg = NONE
+ ; CHECK:   flags = marked inline | safe buffers | opt speed
+ ; CHECK-LABEL: S_GPROC32_ID [size = 44] `seh`
+-; CHECK:   type = `0x100E (seh)`, debug start = 0, debug end = 0, flags = has fp | opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = EBP, param fp reg = EBP
+ ; CHECK:   flags = has seh | opt speed
+@@ -101,12 +95,10 @@
+ ; CHECK:   local fp reg = EBP, param fp reg = EBP
+ ; CHECK:   flags = safe buffers | opt speed
+ ; CHECK-LABEL: S_GPROC32_ID [size = 52] `use_naked`
+-; CHECK:   type = `0x1010 (use_naked)`, debug start = 0, debug end = 0, flags = noinline | opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = NONE, param fp reg = NONE
+ ; CHECK:   flags = has inline asm | naked | safe buffers | opt speed
+ ; CHECK-LABEL: S_GPROC32_ID [size = 52] `stack_guard`
+-; CHECK:   type = `0x1011 (stack_guard)`, debug start = 0, debug end = 0, flags = opt debuginfo
+ ; CHECK: S_FRAMEPROC [size = 32]
+ ; CHECK:   local fp reg = VFRAME, param fp reg = VFRAME
+ ; CHECK:   flags = secure checks | strict secure checks | opt speed
+diff --git a/llvm/test/DebugInfo/COFF/function-options.ll b/llvm/test/DebugInfo/COFF/function-options.ll
+index 863994be1d5e..835f3fbe3c8a 100644
+--- a/llvm/test/DebugInfo/COFF/function-options.ll
++++ b/llvm/test/DebugInfo/COFF/function-options.ll
+@@ -376,97 +376,6 @@
+ ; CHECK:   }
+ ; CHECK: ]
+ 
+-; CHECK-LABEL: FunctionType: Func_AClass (0x1008)
+-; CHECK-NEXT:  CodeOffset: ?Func_AClass@@YA?AVAClass@@AEAV1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_AClass
+-; CHECK-NEXT:  LinkageName: ?Func_AClass@@YA?AVAClass@@AEAV1@@Z
+-; CHECK-LABEL: FunctionType: Func_BClass (0x1013)
+-; CHECK-NEXT:  CodeOffset: ?Func_BClass@@YA?AVBClass@@AEAV1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_BClass
+-; CHECK-NEXT:  LinkageName: ?Func_BClass@@YA?AVBClass@@AEAV1@@Z
+-; CHECK-LABEL: FunctionType: Func_C1Class (0x101D)
+-; CHECK-NEXT:  CodeOffset: ?Func_C1Class@@YA?AVC1Class@@AEAV1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_C1Class
+-; CHECK-NEXT:  LinkageName: ?Func_C1Class@@YA?AVC1Class@@AEAV1@@Z
+-; CHECK-LABEL: FunctionType: Func_C2Class (0x1027)
+-; CHECK-NEXT:  CodeOffset: ?Func_C2Class@@YA?AVC2Class@@AEAV1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_C2Class
+-; CHECK-NEXT:  LinkageName: ?Func_C2Class@@YA?AVC2Class@@AEAV1@@Z
+-; CHECK-LABEL: FunctionType: Func_DClass (0x102F)
+-; CHECK-NEXT:  CodeOffset: ?Func_DClass@@YA?AVDClass@@AEAV1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_DClass
+-; CHECK-NEXT:  LinkageName: ?Func_DClass@@YA?AVDClass@@AEAV1@@Z
+-; CHECK-LABEL: FunctionType: Func_FClass (0x103A)
+-; CHECK-NEXT:  CodeOffset: ?Func_FClass@@YA?AVFClass@@AEAV1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_FClass
+-; CHECK-NEXT:  LinkageName: ?Func_FClass@@YA?AVFClass@@AEAV1@@Z
+-; CHECK-LABEL: FunctionType: Func_AStruct (0x1041)
+-; CHECK-NEXT:  CodeOffset: ?Func_AStruct@@YA?AUAStruct@@AEAU1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_AStruct
+-; CHECK-NEXT:  LinkageName: ?Func_AStruct@@YA?AUAStruct@@AEAU1@@Z
+-; CHECK-LABEL: FunctionType: Func_BStruct (0x104B)
+-; CHECK-NEXT:  CodeOffset: ?Func_BStruct@@YA?AUBStruct@@AEAU1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_BStruct
+-; CHECK-NEXT:  LinkageName: ?Func_BStruct@@YA?AUBStruct@@AEAU1@@Z
+-; CHECK-LABEL: FunctionType: Func_AUnion (0x1052)
+-; CHECK-NEXT:  CodeOffset: ?Func_AUnion@@YA?ATAUnion@@AEAT1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_AUnion
+-; CHECK-NEXT:  LinkageName: ?Func_AUnion@@YA?ATAUnion@@AEAT1@@Z
+-; CHECK-LABEL: FunctionType: Func_BUnion (0x105C)
+-; CHECK-NEXT:  CodeOffset: ?Func_BUnion@@YA?ATBUnion@@AEAT1@@Z+0x0
+-; CHECK-NEXT:  Segment: 0x0
+-; CHECK-NEXT:  Flags [ (0xC0)
+-; CHECK-NEXT:    HasOptimizedDebugInfo (0x80)
+-; CHECK-NEXT:    IsNoInline (0x40)
+-; CHECK-NEXT:  ]
+-; CHECK-NEXT:  DisplayName: Func_BUnion
+-; CHECK-NEXT:  LinkageName: ?Func_BUnion@@YA?ATBUnion@@AEAT1@@Z
+-
+ ; ModuleID = 't.cpp'
+ source_filename = "t.cpp"
+ target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+diff --git a/llvm/test/DebugInfo/COFF/inlining-header.ll b/llvm/test/DebugInfo/COFF/inlining-header.ll
+index 0e990cbb0fcc..bead300d6988 100644
+--- a/llvm/test/DebugInfo/COFF/inlining-header.ll
++++ b/llvm/test/DebugInfo/COFF/inlining-header.ll
+@@ -68,8 +68,7 @@
+ ; OBJ:     FunctionType: main (0x1005)
+ ; OBJ:     CodeOffset: _main+0x0
+ ; OBJ:     Segment: 0x0
+-; OBJ:     Flags [ (0x80)
+-; OBJ:       HasOptimizedDebugInfo (0x80)
++; OBJ:     Flags [ (0x0)
+ ; OBJ:     ]
+ ; OBJ:     DisplayName: main
+ ; OBJ:     LinkageName: _main
+diff --git a/llvm/test/DebugInfo/COFF/inlining.ll b/llvm/test/DebugInfo/COFF/inlining.ll
+index d0b03cc5b21e..de0d78936a0d 100644
+--- a/llvm/test/DebugInfo/COFF/inlining.ll
++++ b/llvm/test/DebugInfo/COFF/inlining.ll
+@@ -160,8 +160,7 @@
+ ; OBJ:     FunctionType: baz (0x1004)
+ ; OBJ:     CodeOffset: ?baz@@YAXXZ+0x0
+ ; OBJ:     Segment: 0x0
+-; OBJ:     Flags [ (0x80)
+-; OBJ:       HasOptimizedDebugInfo (0x80)
++; OBJ:     Flags [ (0x0)
+ ; OBJ:     ]
+ ; OBJ:     DisplayName: baz
+ ; OBJ:     LinkageName: ?baz@@YAXXZ
+diff --git a/llvm/test/DebugInfo/COFF/long-name.ll b/llvm/test/DebugInfo/COFF/long-name.ll
+index 4ea5b4328d24..073bd7909cb5 100644
+--- a/llvm/test/DebugInfo/COFF/long-name.ll
++++ b/llvm/test/DebugInfo/COFF/long-name.ll
+@@ -5,8 +5,7 @@
+ ; CHECK:   FunctionType: {{A+}} (0x1002)
+ ; CHECK:   CodeOffset: f+0x0
+ ; CHECK:   Segment: 0x0
+-; CHECK:   Flags [ (0x80)
+-; CHECK:     HasOptimizedDebugInfo (0x80)
++; CHECK:   Flags [ (0x0)
+ ; CHECK:   ]
+ ; CHECK:   DisplayName: {{A+$}}
+ ; CHECK:   LinkageName: f
+diff --git a/llvm/test/DebugInfo/COFF/multifunction.ll b/llvm/test/DebugInfo/COFF/multifunction.ll
+index 04c643602f09..98b0e4b2d8a0 100644
+--- a/llvm/test/DebugInfo/COFF/multifunction.ll
++++ b/llvm/test/DebugInfo/COFF/multifunction.ll
+@@ -78,7 +78,7 @@
+ ; X86-NEXT: .long   4098
+ ; X86-NEXT: .secrel32 _x
+ ; X86-NEXT: .secidx _x
+-; X86-NEXT: .byte   128
++; X86-NEXT: .byte   0
+ ; X86-NEXT: .asciz "x"
+ ; X86-NEXT: .p2align 2
+ ; X86-NEXT: [[PROC_SEGMENT_END]]:
+@@ -117,7 +117,7 @@
+ ; X86-NEXT: .long   4099
+ ; X86-NEXT: .secrel32 _y
+ ; X86-NEXT: .secidx _y
+-; X86-NEXT: .byte   128
++; X86-NEXT: .byte   0
+ ; X86-NEXT: .asciz "y"
+ ; X86-NEXT: .p2align 2
+ ; X86-NEXT: [[PROC_SEGMENT_END]]:
+@@ -156,7 +156,7 @@
+ ; X86-NEXT: .long   4100
+ ; X86-NEXT: .secrel32 _f
+ ; X86-NEXT: .secidx _f
+-; X86-NEXT: .byte   128
++; X86-NEXT: .byte   0
+ ; X86-NEXT: .asciz "f"
+ ; X86-NEXT: .p2align 2
+ ; X86-NEXT: [[PROC_SEGMENT_END]]:
+@@ -390,7 +390,7 @@
+ ; X64-NEXT: .long   4098
+ ; X64-NEXT: .secrel32 x
+ ; X64-NEXT: .secidx x
+-; X64-NEXT: .byte   128
++; X64-NEXT: .byte   0
+ ; X64-NEXT: .asciz "x"
+ ; X64-NEXT: .p2align 2
+ ; X64-NEXT: [[PROC_SEGMENT_END]]:
+@@ -428,7 +428,7 @@
+ ; X64-NEXT: .long   4099
+ ; X64-NEXT: .secrel32 y
+ ; X64-NEXT: .secidx y
+-; X64-NEXT: .byte   128
++; X64-NEXT: .byte   0
+ ; X64-NEXT: .asciz "y"
+ ; X64-NEXT: .p2align 2
+ ; X64-NEXT: [[PROC_SEGMENT_END]]:
+@@ -466,7 +466,7 @@
+ ; X64-NEXT: .long   4100
+ ; X64-NEXT: .secrel32 f
+ ; X64-NEXT: .secidx f
+-; X64-NEXT: .byte   128
++; X64-NEXT: .byte   0
+ ; X64-NEXT: .asciz "f"
+ ; X64-NEXT: .p2align 2
+ ; X64-NEXT: [[PROC_SEGMENT_END]]:
+diff --git a/llvm/test/DebugInfo/COFF/simple.ll b/llvm/test/DebugInfo/COFF/simple.ll
+index f81de98b5003..85819b0d990e 100644
+--- a/llvm/test/DebugInfo/COFF/simple.ll
++++ b/llvm/test/DebugInfo/COFF/simple.ll
+@@ -58,7 +58,7 @@
+ ; X86-NEXT: .long   4098
+ ; X86-NEXT: .secrel32 _f
+ ; X86-NEXT: .secidx _f
+-; X86-NEXT: .byte   128
++; X86-NEXT: .byte   0
+ ; X86-NEXT: .asciz "f"
+ ; X86-NEXT: .p2align 2
+ ; X86-NEXT: [[PROC_SEGMENT_END]]:
+@@ -188,7 +188,7 @@
+ ; X64-NEXT: .long   4098
+ ; X64-NEXT: .secrel32 f
+ ; X64-NEXT: .secidx f
+-; X64-NEXT: .byte   128
++; X64-NEXT: .byte   0
+ ; X64-NEXT: .asciz "f"
+ ; X64-NEXT: .p2align 2
+ ; X64-NEXT: [[PROC_SEGMENT_END]]:
+diff --git a/llvm/test/DebugInfo/COFF/types-array.ll b/llvm/test/DebugInfo/COFF/types-array.ll
+index 5dec93d1fdbb..07828c3406fe 100644
+--- a/llvm/test/DebugInfo/COFF/types-array.ll
++++ b/llvm/test/DebugInfo/COFF/types-array.ll
+@@ -58,9 +58,7 @@
+ ; CHECK:       FunctionType: f (0x1002)
+ ; CHECK:       CodeOffset: ?f@@YAXXZ+0x0
+ ; CHECK:       Segment: 0x0
+-; CHECK:       Flags [ (0x81)
+-; CHECK:         HasFP (0x1)
+-; CHECK:         HasOptimizedDebugInfo (0x80)
++; CHECK:       Flags [ (0x0)
+ ; CHECK:       ]
+ ; CHECK:       DisplayName: f
+ ; CHECK:       LinkageName: ?f@@YAXXZ
+diff --git a/llvm/test/DebugInfo/COFF/types-basic.ll b/llvm/test/DebugInfo/COFF/types-basic.ll
+index e87f6f686422..b33e8d338e57 100644
+--- a/llvm/test/DebugInfo/COFF/types-basic.ll
++++ b/llvm/test/DebugInfo/COFF/types-basic.ll
+@@ -221,8 +221,7 @@
+ ; CHECK:       FunctionType: f (0x1002)
+ ; CHECK:       CodeOffset: ?f@@YAXMN_J@Z+0x0
+ ; CHECK:       Segment: 0x0
+-; CHECK:       Flags [ (0x80)
+-; CHECK:         HasOptimizedDebugInfo (0x80)
++; CHECK:       Flags [ (0x0)
+ ; CHECK:       ]
+ ; CHECK:       DisplayName: f
+ ; CHECK:       LinkageName: ?f@@YAXMN_J@Z
+diff --git a/llvm/test/MC/AArch64/coff-debug.ll b/llvm/test/MC/AArch64/coff-debug.ll
+index ea1cc3286b04..cbea03592d57 100644
+--- a/llvm/test/MC/AArch64/coff-debug.ll
++++ b/llvm/test/MC/AArch64/coff-debug.ll
+@@ -95,9 +95,7 @@ attributes #0 = { noinline nounwind optnone "correctly-rounded-divide-sqrt-fp-ma
+ ; CHECK:       FunctionType: main (0x1002)
+ ; CHECK:       CodeOffset: main+0x0
+ ; CHECK:       Segment: 0x0
+-; CHECK:       Flags [ (0xC0)
+-; CHECK:         HasOptimizedDebugInfo (0x80)
+-; CHECK:         IsNoInline (0x40)
++; CHECK:       Flags [ (0x0)
+ ; CHECK:       ]
+ ; CHECK:       DisplayName: main
+ ; CHECK:       LinkageName: main
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

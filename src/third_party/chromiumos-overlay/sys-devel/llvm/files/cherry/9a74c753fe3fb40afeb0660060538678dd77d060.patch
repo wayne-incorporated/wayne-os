@@ -1,0 +1,489 @@
+commit 9a74c753fe3fb40afeb0660060538678dd77d060
+Author: Sami Tolvanen <samitolvanen@google.com>
+Date:   Fri Dec 10 11:11:28 2021 -0800
+
+    [ThinLTO][MC] Use conditional assignments for promotion aliases
+    
+    Inline assembly refererences to static functions with ThinLTO+CFI were
+    fixed in D104058 by creating aliases for promoted functions. Creating
+    the aliases unconditionally resulted in an unexpected size increase in
+    a Chrome helper binary:
+    
+    https://bugs.chromium.org/p/chromium/issues/detail?id=1261715
+    
+    This is caused by the compiler being unable to drop unused code now
+    referenced by the alias in module-level inline assembly. This change
+    adds a .set_conditional assembly extension, which emits an assignment
+    only if the target symbol is also emitted, avoiding phantom references
+    to functions that could have otherwise been dropped.
+    
+    This is an alternative to the solution proposed in D112761.
+    
+    Reviewed By: pcc, nickdesaulniers, MaskRay
+    
+    Differential Revision: https://reviews.llvm.org/D113613
+
+diff --git a/llvm/include/llvm/MC/MCObjectStreamer.h b/llvm/include/llvm/MC/MCObjectStreamer.h
+index 9d6416e4a18d..183fd79fb9fc 100644
+--- a/llvm/include/llvm/MC/MCObjectStreamer.h
++++ b/llvm/include/llvm/MC/MCObjectStreamer.h
+@@ -50,6 +50,16 @@ class MCObjectStreamer : public MCStreamer {
+   };
+   SmallVector<PendingMCFixup, 2> PendingFixups;
+ 
++  struct PendingAssignment {
++    MCSymbol *Symbol;
++    const MCExpr *Value;
++  };
++
++  /// A list of conditional assignments we may need to emit if the target
++  /// symbol is later emitted.
++  DenseMap<const MCSymbol *, SmallVector<PendingAssignment, 1>>
++      pendingAssignments;
++
+   virtual void emitInstToData(const MCInst &Inst, const MCSubtargetInfo&) = 0;
+   void emitCFIStartProcImpl(MCDwarfFrameInfo &Frame) override;
+   void emitCFIEndProcImpl(MCDwarfFrameInfo &Frame) override;
+@@ -118,6 +128,8 @@ public:
+   virtual void emitLabelAtPos(MCSymbol *Symbol, SMLoc Loc, MCFragment *F,
+                               uint64_t Offset);
+   void emitAssignment(MCSymbol *Symbol, const MCExpr *Value) override;
++  void emitConditionalAssignment(MCSymbol *Symbol,
++                                 const MCExpr *Value) override;
+   void emitValueImpl(const MCExpr *Value, unsigned Size,
+                      SMLoc Loc = SMLoc()) override;
+   void emitULEB128Value(const MCExpr *Value) override;
+@@ -208,6 +220,10 @@ public:
+                                        const MCSymbol *Lo) override;
+ 
+   bool mayHaveInstructions(MCSection &Sec) const override;
++
++  /// Emits pending conditional assignments that depend on \p Symbol
++  /// being emitted.
++  void emitPendingAssignments(MCSymbol *Symbol);
+ };
+ 
+ } // end namespace llvm
+diff --git a/llvm/include/llvm/MC/MCStreamer.h b/llvm/include/llvm/MC/MCStreamer.h
+index 428e4039e77f..7bfbdb880098 100644
+--- a/llvm/include/llvm/MC/MCStreamer.h
++++ b/llvm/include/llvm/MC/MCStreamer.h
+@@ -524,6 +524,10 @@ public:
+   /// \param Value - The value for the symbol.
+   virtual void emitAssignment(MCSymbol *Symbol, const MCExpr *Value);
+ 
++  /// Emit an assignment of \p Value to \p Symbol, but only if \p Value is also
++  /// emitted.
++  virtual void emitConditionalAssignment(MCSymbol *Symbol, const MCExpr *Value);
++
+   /// Emit an weak reference from \p Alias to \p Symbol.
+   ///
+   /// This corresponds to an assembler statement such as:
+diff --git a/llvm/lib/MC/MCAsmStreamer.cpp b/llvm/lib/MC/MCAsmStreamer.cpp
+index 6cd3bf0d1aab..5c2aaddff4d1 100644
+--- a/llvm/lib/MC/MCAsmStreamer.cpp
++++ b/llvm/lib/MC/MCAsmStreamer.cpp
+@@ -174,6 +174,8 @@ public:
+   void emitThumbFunc(MCSymbol *Func) override;
+ 
+   void emitAssignment(MCSymbol *Symbol, const MCExpr *Value) override;
++  void emitConditionalAssignment(MCSymbol *Symbol,
++                                 const MCExpr *Value) override;
+   void emitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) override;
+   bool emitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute) override;
+ 
+@@ -679,6 +681,15 @@ void MCAsmStreamer::emitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
+   MCStreamer::emitAssignment(Symbol, Value);
+ }
+ 
++void MCAsmStreamer::emitConditionalAssignment(MCSymbol *Symbol,
++                                              const MCExpr *Value) {
++  OS << ".lto_set_conditional ";
++  Symbol->print(OS, MAI);
++  OS << ", ";
++  Value->print(OS, MAI);
++  EmitEOL();
++}
++
+ void MCAsmStreamer::emitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) {
+   OS << ".weakref ";
+   Alias->print(OS, MAI);
+diff --git a/llvm/lib/MC/MCObjectStreamer.cpp b/llvm/lib/MC/MCObjectStreamer.cpp
+index 9c86fcc86bcb..6604d7988c4c 100644
+--- a/llvm/lib/MC/MCObjectStreamer.cpp
++++ b/llvm/lib/MC/MCObjectStreamer.cpp
+@@ -281,6 +281,18 @@ void MCObjectStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
+     Symbol->setOffset(0);
+     addPendingLabel(Symbol);
+   }
++
++  emitPendingAssignments(Symbol);
++}
++
++void MCObjectStreamer::emitPendingAssignments(MCSymbol *Symbol) {
++  auto Assignments = pendingAssignments.find(Symbol);
++  if (Assignments != pendingAssignments.end()) {
++    for (const PendingAssignment &A : Assignments->second)
++      emitAssignment(A.Symbol, A.Value);
++
++    pendingAssignments.erase(Assignments);
++  }
+ }
+ 
+ // Emit a label at a previously emitted fragment/offset position. This must be
+@@ -353,6 +365,19 @@ bool MCObjectStreamer::changeSectionImpl(MCSection *Section,
+ void MCObjectStreamer::emitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
+   getAssembler().registerSymbol(*Symbol);
+   MCStreamer::emitAssignment(Symbol, Value);
++  emitPendingAssignments(Symbol);
++}
++
++void MCObjectStreamer::emitConditionalAssignment(MCSymbol *Symbol,
++                                                 const MCExpr *Value) {
++  const MCSymbol *Target = &cast<MCSymbolRefExpr>(*Value).getSymbol();
++
++  // If the symbol already exists, emit the assignment. Otherwise, emit it
++  // later only if the symbol is also emitted.
++  if (Target->isRegistered())
++    emitAssignment(Symbol, Value);
++  else
++    pendingAssignments[Target].push_back({Symbol, Value});
+ }
+ 
+ bool MCObjectStreamer::mayHaveInstructions(MCSection &Sec) const {
+diff --git a/llvm/lib/MC/MCParser/AsmParser.cpp b/llvm/lib/MC/MCParser/AsmParser.cpp
+index 736adbd3cca2..705f7159d55b 100644
+--- a/llvm/lib/MC/MCParser/AsmParser.cpp
++++ b/llvm/lib/MC/MCParser/AsmParser.cpp
+@@ -356,8 +356,14 @@ private:
+   /// return the contents from the current token up to the end or comma.
+   StringRef parseStringToComma();
+ 
+-  bool parseAssignment(StringRef Name, bool allow_redef,
+-                       bool NoDeadStrip = false);
++  enum class AssignmentKind {
++    Set,
++    Equiv,
++    Equal,
++    LTOSetConditional,
++  };
++
++  bool parseAssignment(StringRef Name, AssignmentKind Kind);
+ 
+   unsigned getBinOpPrecedence(AsmToken::TokenKind K,
+                               MCBinaryExpr::Opcode &Kind);
+@@ -534,6 +540,7 @@ private:
+     DK_ADDRSIG_SYM,
+     DK_PSEUDO_PROBE,
+     DK_LTO_DISCARD,
++    DK_LTO_SET_CONDITIONAL,
+     DK_END
+   };
+ 
+@@ -564,8 +571,8 @@ private:
+                                const fltSemantics &); // ".single", ...
+   bool parseDirectiveFill(); // ".fill"
+   bool parseDirectiveZero(); // ".zero"
+-  // ".set", ".equ", ".equiv"
+-  bool parseDirectiveSet(StringRef IDVal, bool allow_redef);
++  // ".set", ".equ", ".equiv", ".lto_set_conditional"
++  bool parseDirectiveSet(StringRef IDVal, AssignmentKind Kind);
+   bool parseDirectiveOrg(); // ".org"
+   // ".align{,32}", ".p2align{,w,l}"
+   bool parseDirectiveAlign(bool IsPow2, unsigned ValueSize);
+@@ -1968,7 +1975,7 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
+     // identifier '=' ... -> assignment statement
+     Lex();
+ 
+-    return parseAssignment(IDVal, true);
++    return parseAssignment(IDVal, AssignmentKind::Equal);
+ 
+   default: // Normal instruction or directive.
+     break;
+@@ -2027,9 +2034,11 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
+       break;
+     case DK_SET:
+     case DK_EQU:
+-      return parseDirectiveSet(IDVal, true);
++      return parseDirectiveSet(IDVal, AssignmentKind::Set);
+     case DK_EQUIV:
+-      return parseDirectiveSet(IDVal, false);
++      return parseDirectiveSet(IDVal, AssignmentKind::Equiv);
++    case DK_LTO_SET_CONDITIONAL:
++      return parseDirectiveSet(IDVal, AssignmentKind::LTOSetConditional);
+     case DK_ASCII:
+       return parseDirectiveAscii(IDVal, false);
+     case DK_ASCIZ:
+@@ -2925,11 +2934,13 @@ void AsmParser::handleMacroExit() {
+   ActiveMacros.pop_back();
+ }
+ 
+-bool AsmParser::parseAssignment(StringRef Name, bool allow_redef,
+-                                bool NoDeadStrip) {
++bool AsmParser::parseAssignment(StringRef Name, AssignmentKind Kind) {
+   MCSymbol *Sym;
+   const MCExpr *Value;
+-  if (MCParserUtils::parseAssignmentExpression(Name, allow_redef, *this, Sym,
++  SMLoc ExprLoc = getTok().getLoc();
++  bool AllowRedef =
++      Kind == AssignmentKind::Set || Kind == AssignmentKind::Equal;
++  if (MCParserUtils::parseAssignmentExpression(Name, AllowRedef, *this, Sym,
+                                                Value))
+     return true;
+ 
+@@ -2944,9 +2955,22 @@ bool AsmParser::parseAssignment(StringRef Name, bool allow_redef,
+     return false;
+ 
+   // Do the assignment.
+-  Out.emitAssignment(Sym, Value);
+-  if (NoDeadStrip)
++  switch (Kind) {
++  case AssignmentKind::Equal:
++    Out.emitAssignment(Sym, Value);
++    break;
++  case AssignmentKind::Set:
++  case AssignmentKind::Equiv:
++    Out.emitAssignment(Sym, Value);
+     Out.emitSymbolAttribute(Sym, MCSA_NoDeadStrip);
++    break;
++  case AssignmentKind::LTOSetConditional:
++    if (Value->getKind() != MCExpr::SymbolRef)
++      return Error(ExprLoc, "expected identifier");
++
++    Out.emitConditionalAssignment(Sym, Value);
++    break;
++  }
+ 
+   return false;
+ }
+@@ -2998,10 +3022,11 @@ bool AsmParser::parseIdentifier(StringRef &Res) {
+ ///   ::= .equ identifier ',' expression
+ ///   ::= .equiv identifier ',' expression
+ ///   ::= .set identifier ',' expression
+-bool AsmParser::parseDirectiveSet(StringRef IDVal, bool allow_redef) {
++///   ::= .lto_set_conditional identifier ',' expression
++bool AsmParser::parseDirectiveSet(StringRef IDVal, AssignmentKind Kind) {
+   StringRef Name;
+   if (check(parseIdentifier(Name), "expected identifier") || parseComma() ||
+-      parseAssignment(Name, allow_redef, true))
++      parseAssignment(Name, Kind))
+     return true;
+   return false;
+ }
+@@ -5581,6 +5606,7 @@ void AsmParser::initializeDirectiveKindMap() {
+   DirectiveKindMap[".addrsig_sym"] = DK_ADDRSIG_SYM;
+   DirectiveKindMap[".pseudoprobe"] = DK_PSEUDO_PROBE;
+   DirectiveKindMap[".lto_discard"] = DK_LTO_DISCARD;
++  DirectiveKindMap[".lto_set_conditional"] = DK_LTO_SET_CONDITIONAL;
+ }
+ 
+ MCAsmMacro *AsmParser::parseMacroLikeBody(SMLoc DirectiveLoc) {
+diff --git a/llvm/lib/MC/MCStreamer.cpp b/llvm/lib/MC/MCStreamer.cpp
+index b056311b1b9b..9c37a7bebe2a 100644
+--- a/llvm/lib/MC/MCStreamer.cpp
++++ b/llvm/lib/MC/MCStreamer.cpp
+@@ -431,6 +431,9 @@ void MCStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
+     TS->emitLabel(Symbol);
+ }
+ 
++void MCStreamer::emitConditionalAssignment(MCSymbol *Symbol,
++                                           const MCExpr *Value) {}
++
+ void MCStreamer::emitCFISections(bool EH, bool Debug) {}
+ 
+ void MCStreamer::emitCFIStartProc(bool IsSimple, SMLoc Loc) {
+diff --git a/llvm/lib/Transforms/IPO/ThinLTOBitcodeWriter.cpp b/llvm/lib/Transforms/IPO/ThinLTOBitcodeWriter.cpp
+index 0cc1b37844f6..daaf6cbeb3fd 100644
+--- a/llvm/lib/Transforms/IPO/ThinLTOBitcodeWriter.cpp
++++ b/llvm/lib/Transforms/IPO/ThinLTOBitcodeWriter.cpp
+@@ -87,7 +87,8 @@ void promoteInternals(Module &ExportM, Module &ImportM, StringRef ModuleId,
+     if (isa<Function>(&ExportGV) && allowPromotionAlias(OldName)) {
+       // Create a local alias with the original name to avoid breaking
+       // references from inline assembly.
+-      std::string Alias = ".set " + OldName + "," + NewName + "\n";
++      std::string Alias =
++          ".lto_set_conditional " + OldName + "," + NewName + "\n";
+       ExportM.appendModuleInlineAsm(Alias);
+     }
+   }
+diff --git a/llvm/test/MC/ELF/lto-set-conditional.s b/llvm/test/MC/ELF/lto-set-conditional.s
+new file mode 100644
+index 000000000000..651708f4b5f5
+--- /dev/null
++++ b/llvm/test/MC/ELF/lto-set-conditional.s
+@@ -0,0 +1,51 @@
++# RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu < %s | llvm-readobj --symbols - | FileCheck %s
++# RUN: not llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu --defsym ERR=1 %s 2>&1 |\
++# RUN:         FileCheck %s --check-prefix=ERR
++
++.byte 0
++
++.lto_set_conditional b, a
++.lto_set_conditional d, a
++.lto_set_conditional c, b
++.lto_set_conditional e, n
++
++# CHECK:      Symbol {
++# CHECK:        Name: a
++# CHECK-NEXT:   Value: 0x1
++a:
++.byte 0
++
++# Verify that pending conditional symbols are emitted next
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: b
++# CHECK-NEXT:   Value: 0x1
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: c
++# CHECK-NEXT:   Value: 0x1
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: d
++# CHECK-NEXT:   Value: 0x1
++
++# CHECK-NOT:    Name: e
++
++# Remaining conditional symbols are emitted immediately
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: f
++# CHECK-NEXT:   Value: 0x1
++.lto_set_conditional f, a
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: g
++# CHECK-NEXT:   Value: 0x1
++.lto_set_conditional g, b
++
++# CHECK-NOT:   Name: h
++.lto_set_conditional h, m
++
++.ifdef ERR
++.text
++# ERR: {{.*}}.s:[[#@LINE+1]]:25: error: expected identifier
++.lto_set_conditional i, ERR
++.endif
+diff --git a/llvm/test/MC/MachO/lto-set-conditional.s b/llvm/test/MC/MachO/lto-set-conditional.s
+new file mode 100644
+index 000000000000..0007d4a259cb
+--- /dev/null
++++ b/llvm/test/MC/MachO/lto-set-conditional.s
+@@ -0,0 +1,75 @@
++# RUN: llvm-mc -filetype=obj -triple i386-apple-darwin9 < %s | llvm-readobj --symbols - | FileCheck %s
++# RUN: not llvm-mc -filetype=obj -triple i386-apple-darwin9 --defsym ERR=1 %s 2>&1 |\
++# RUN:         FileCheck %s --check-prefix=ERR
++
++.byte 0
++
++.lto_set_conditional b, a
++.lto_set_conditional d, a
++.lto_set_conditional c, b
++.lto_set_conditional e, n
++
++# CHECK:      Symbol {
++# CHECK:        Name: a
++# CHECK:        Flags [
++# CHECK-NEXT:     NoDeadStrip
++# CHECK:        Value: 0x1
++a:
++.byte 0
++.no_dead_strip a
++
++# Verify that pending conditional symbols are emitted next
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: b
++# CHECK:        Flags [
++# CHECK-NEXT:     NoDeadStrip
++# CHECK:        Value: 0x1
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: c
++# CHECK:        Flags [
++# CHECK-NEXT:     NoDeadStrip
++# CHECK:        Value: 0x1
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: d
++# CHECK:        Flags [
++# CHECK-NEXT:     NoDeadStrip
++# CHECK:        Value: 0x1
++
++# CHECK-NOT:    Name: e
++
++# Remaining conditional symbols are emitted immediately
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: f
++# CHECK:        Flags [
++# CHECK-NEXT:     NoDeadStrip
++# CHECK:        Value: 0x1
++.lto_set_conditional f, a
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: g
++# CHECK:        Flags [
++# CHECK-NEXT:     NoDeadStrip
++# CHECK:        Value: 0x1
++.lto_set_conditional g, b
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: m
++# CHECK:        Flags [
++# CHECK-NOT :     NoDeadStrip
++# CHECK:        Value: 0x2
++m:
++
++# CHECK:      Symbol {
++# CHECK-NEXT:   Name: h
++# CHECK:        Flags [
++# CHECK-NOT :     NoDeadStrip
++# CHECK:        Value: 0x2
++.lto_set_conditional h, m
++
++.ifdef ERR
++.text
++# ERR: {{.*}}.s:[[#@LINE+1]]:25: error: expected identifier
++.lto_set_conditional i, ERR
++.endif
+diff --git a/llvm/test/ThinLTO/X86/devirt2.ll b/llvm/test/ThinLTO/X86/devirt2.ll
+index 6501a01a39df..42c15f1c1df5 100644
+--- a/llvm/test/ThinLTO/X86/devirt2.ll
++++ b/llvm/test/ThinLTO/X86/devirt2.ll
+@@ -131,12 +131,10 @@
+ ; RUN:   -r=%t1.o,_ZN1D1mEi, \
+ ; RUN:   -r=%t1.o,test2, \
+ ; RUN:   -r=%t2.o,_ZN1A1nEi,p \
+-; RUN:   -r=%t2.o,_ZN1A1nEi, \
+ ; RUN:   -r=%t2.o,_ZN1B1fEi,p \
+ ; RUN:   -r=%t2.o,_ZN1C1fEi,p \
+ ; RUN:   -r=%t2.o,_ZN1D1mEi,p \
+ ; RUN:   -r=%t2.o,_ZN1E1mEi,p \
+-; RUN:   -r=%t2.o,_ZN1E1mEi, \
+ ; RUN:   -r=%t2.o,_ZTV1B, \
+ ; RUN:   -r=%t2.o,_ZTV1C, \
+ ; RUN:   -r=%t2.o,_ZTV1D, \
+@@ -169,12 +167,10 @@
+ ; RUN:   -r=%t1.o,_ZN1D1mEi, \
+ ; RUN:   -r=%t1.o,test2, \
+ ; RUN:   -r=%t2.o,_ZN1A1nEi,p \
+-; RUN:   -r=%t2.o,_ZN1A1nEi, \
+ ; RUN:   -r=%t2.o,_ZN1B1fEi,p \
+ ; RUN:   -r=%t2.o,_ZN1C1fEi,p \
+ ; RUN:   -r=%t2.o,_ZN1D1mEi,p \
+ ; RUN:   -r=%t2.o,_ZN1E1mEi,p \
+-; RUN:   -r=%t2.o,_ZN1E1mEi, \
+ ; RUN:   -r=%t2.o,_ZTV1B, \
+ ; RUN:   -r=%t2.o,_ZTV1C, \
+ ; RUN:   -r=%t2.o,_ZTV1D, \
+diff --git a/llvm/test/Transforms/ThinLTOBitcodeWriter/cfi-icall-static-inline-asm.ll b/llvm/test/Transforms/ThinLTOBitcodeWriter/cfi-icall-static-inline-asm.ll
+index c2de21ed4562..ff8fc5b71874 100644
+--- a/llvm/test/Transforms/ThinLTOBitcodeWriter/cfi-icall-static-inline-asm.ll
++++ b/llvm/test/Transforms/ThinLTOBitcodeWriter/cfi-icall-static-inline-asm.ll
+@@ -3,7 +3,7 @@
+ 
+ target triple = "x86_64-unknown-linux-gnu"
+ 
+-; CHECK: module asm ".set a,a.[[HASH:[0-9a-f]+]]"
++; CHECK: module asm ".lto_set_conditional a,a.[[HASH:[0-9a-f]+]]"
+ 
+ define void @b() {
+   %f = alloca void ()*, align 8

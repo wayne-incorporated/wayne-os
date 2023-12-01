@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include "login_manager/key_generator.h"
 
+#include <optional>
 #include <string>
 
 #include <gmock/gmock.h>
@@ -21,7 +22,7 @@ class MockKeyGenerator : public KeyGenerator {
   ~MockKeyGenerator() override;
   MOCK_METHOD(bool,
               Start,
-              (const std::string&, const base::Optional<base::FilePath>&),
+              (const std::string&, const std::optional<base::FilePath>&),
               (override));
 };
 }  // namespace login_manager

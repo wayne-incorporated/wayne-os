@@ -1,0 +1,25 @@
+type cros_avahi_daemon, chromeos_domain, domain;
+
+permissive cros_avahi_daemon;
+
+# TODO(fqj,vapier)
+# keep both cros_init_scripts and minijail as scontext until minijail changes are stable.
+domain_auto_trans({ cros_init_scripts minijail }, cros_avahi_daemon_exec, cros_avahi_daemon)
+allow cros_avahi_daemon { cros_init_scripts minijail }:fd use;
+
+log_writer(cros_avahi_daemon)
+cros_dbus_client(cros_avahi_daemon)
+cros_udp_listen(cros_avahi_daemon)
+cros_netlink(cros_avahi_daemon, netlink_route_socket)
+
+filetrans_pattern(cros_avahi_daemon, cros_run, cros_run_avahi_daemon, dir, "avahi-daemon")
+allow cros_avahi_daemon cros_run_avahi_daemon:dir create_dir_perms;
+allow cros_avahi_daemon cros_run_avahi_daemon:file create_file_perms;
+pid_file(cros_avahi_daemon, cros_run_avahi_daemon, "pid")
+
+allow cros_avahi_daemon self:capability { chown setuid setgid sys_chroot };
+
+filetrans_pattern(cros_avahi_daemon, cros_run_avahi_daemon, cros_avahi_socket, sock_file)
+
+allow cros_avahi_daemon cros_passwd_file:file r_file_perms;
+allow cros_avahi_daemon cros_var_lib_dbus:file { open read };

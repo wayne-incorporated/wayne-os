@@ -1,0 +1,50 @@
+This patch makes llvm not generate .cgprofile entries when we do not use integrated-as.
+
+CGProfilePass is run by default in certain new pass manager optimization pipeline.
+Assemblers other than llvm as (such as gnu as) cannot recognize the .cgprofile entries
+generated and emitted from this pass, causing build time error.
+
+Upstream patch is https://reviews.llvm.org/D62626
+
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 5620a543438..099eb769ca5 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -3995,8 +3995,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+       Args.hasArg(options::OPT_dA))
+     CmdArgs.push_back("-masm-verbose");
+ 
+-  if (!TC.useIntegratedAs())
++  if (!TC.useIntegratedAs()) {
+     CmdArgs.push_back("-no-integrated-as");
++    CmdArgs.push_back("-mllvm");
++    CmdArgs.push_back("-enable-call-graph-profile-sort=false");
++  }
+ 
+   if (Args.hasArg(options::OPT_fdebug_pass_structure)) {
+     CmdArgs.push_back("-mdebug-pass");
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index c5fd68299eb..4c6e15eeeb9 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -212,6 +212,10 @@ static cl::opt<bool>
+     EnableCHR("enable-chr-npm", cl::init(true), cl::Hidden,
+               cl::desc("Enable control height reduction optimization (CHR)"));
+ 
++static cl::opt<bool> EnableCallGraphProfileSort(
++    "enable-call-graph-profile-sort", cl::init(true), cl::Hidden,
++    cl::desc("Enable call graph profile pass for the new PM (default = on)"));
++
+ extern cl::opt<bool> EnableHotColdSplit;
+ extern cl::opt<bool> EnableOrderFileInstrumentation;
+ 
+@@ -939,7 +943,8 @@ ModulePassManager PassBuilder::buildModuleOptimizationPipeline(
+   // Add the core optimizing pipeline.
+   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(OptimizePM)));
+ 
+-  MPM.addPass(CGProfilePass());
++  if (EnableCallGraphProfileSort)
++    MPM.addPass(CGProfilePass());
+ 
+   // Now we need to do some global optimization transforms.
+   // FIXME: It would seem like these should come first in the optimization

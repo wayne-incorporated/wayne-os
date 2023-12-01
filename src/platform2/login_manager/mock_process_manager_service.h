@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "login_manager/process_manager_service_interface.h"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,10 +54,16 @@ class MockProcessManagerService : public ProcessManagerServiceInterface {
               (override));
   MOCK_METHOD(void,
               SetBrowserDataMigrationArgsForUser,
+              (const std::string&, const std::string&),
+              (override));
+  MOCK_METHOD(void,
+              SetBrowserDataBackwardMigrationArgsForUser,
               (const std::string&),
               (override));
   MOCK_METHOD(bool, IsBrowser, (pid_t), (override));
+  MOCK_METHOD(std::optional<pid_t>, GetBrowserPid, (), (const override));
   MOCK_METHOD(base::TimeTicks, GetLastBrowserRestartTime, (), (override));
+  MOCK_METHOD(void, SetMultiUserSessionStarted, (), (override));
 };
 }  // namespace login_manager
 

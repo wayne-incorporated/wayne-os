@@ -1,0 +1,73 @@
+// go/cros-ml-benchmark-suite-docs
+
+syntax = "proto3";
+
+package chrome.ml_benchmark;
+
+enum AccelerationMode {
+  NO_ACCELERATION = 0;
+  NNAPI = 1;
+}
+
+message CrOSBenchmarkConfig {
+  reserved 2, 3;
+
+  AccelerationMode acceleration_mode = 1;
+
+  // String representation of the driver proto configuration, to be decoded by
+  // the benchmark driver implementation.
+  string driver_config = 4;
+}
+
+enum BenchmarkReturnStatus {
+  OK = 0;
+  INCORRECT_CONFIGURATION = 1;
+  INITIALIZATION_FAILED = 2;
+  BENCHMARK_TIMED_OUT = 3;
+  RUNTIME_ERROR = 4;
+}
+
+message Metric {
+  enum Direction {
+    SMALLER_IS_BETTER = 0;
+    BIGGER_IS_BETTER = 1;
+  }
+
+  // https://crbug.com/1047454#c7
+  // Same units as in |tast/common/perf/perf.go|.
+  enum Units {
+    UNITLESS = 0;
+    BYTES = 1;
+    JOULES = 2;
+    WATTS = 3;
+    COUNT = 4;
+    MS = 5;
+    NPERCENT = 6;
+    SIGMA = 7;
+    TS_MS = 8;
+  }
+
+  // Adds a check that there's only a single value in |values|
+  // if |cardinality| == |SINGLE|.
+  enum Cardinality {
+    SINGLE = 0;
+    MULTIPLE = 1;
+  }
+
+  // |name| is prefixed by the scenario name and passed to the Crosbolt.
+  string name = 1;
+  Units units = 2;
+  Direction direction = 3;
+  Cardinality cardinality = 4;
+  repeated double values = 5 [packed = true];
+}
+
+message BenchmarkResults {
+  reserved 3, 4;
+
+  BenchmarkReturnStatus status = 1;
+  string results_message = 2;
+  map<int32, int64> percentile_latencies_in_us = 5;
+  repeated Metric metrics = 6;
+  double power_normalization_factor = 7;
+}

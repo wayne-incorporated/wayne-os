@@ -1,0 +1,16 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+ACTION!="change|remove", GOTO="dm_end"
+ENV{DM_UDEV_RULES_VSN}!="?*", GOTO="dm_end"
+ENV{DM_NAME}!="dmcrypt*arcvm", GOTO="dm_end"
+
+# Create a device node for VM dm-crypt device.
+ACTION=="change", \
+    RUN+="/bin/mknod -m 660 /dev/mapper/vm/$env{DM_NAME} b $env{MAJOR} $env{MINOR}", \
+    RUN+="/bin/chgrp crosvm /dev/mapper/vm/$env{DM_NAME}"
+
+ACTION=="remove", RUN+="/bin/rm /dev/mapper/vm/$env{DM_NAME}"
+
+LABEL="dm_end"

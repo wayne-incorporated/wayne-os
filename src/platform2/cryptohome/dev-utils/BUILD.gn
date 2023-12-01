@@ -1,0 +1,54 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":cryptohome-test-tool",
+    ":cryptohome-tpm-live-test",
+  ]
+}
+
+executable("cryptohome-test-tool") {
+  sources = [
+    "../cryptohome-test-tool.cc",
+    "../cryptorecovery/fake_recovery_mediator_crypto.cc",
+    "../cryptorecovery/inclusion_proof.cc",
+    "../cryptorecovery/recovery_crypto_hsm_cbor_serialization.cc",
+  ]
+  install_path = "sbin"
+  libs = [ "cbor" ]
+  deps = [
+    "//cryptohome/libs:libcrosplatform",
+    "//cryptohome/libs:libcrostpm",
+    "//cryptohome/libs:libcryptohome",
+  ]
+}
+
+executable("cryptohome-tpm-live-test") {
+  # TODO(b/238114321): Reuse fake/test libraries from the parent GN file instead
+  # of listing all their sources here.
+  sources = [
+    "../cryptohome-tpm-live-test.cc",
+    "../fake_platform.cc",
+    "../fake_platform/fake_mount_mapper.cc",
+    "../fake_platform/real_fake_mount_mapping_redirect_factory.cc",
+    "../fake_platform/test_file_path.cc",
+    "../tpm_live_test.cc",
+  ]
+  configs += [ "//common-mk:test" ]
+  install_path = "sbin"
+  deps = [
+    "//cryptohome/libs:libcrostpm",
+    "//cryptohome/libs:libcryptohome",
+  ]
+
+  pkg_deps = [
+    "libbrillo",
+    "libbrillo-test",
+    "libchrome",
+    "libmetrics",
+  ]
+}

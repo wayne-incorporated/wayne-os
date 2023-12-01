@@ -1,0 +1,202 @@
+commit c2a84771bb63947695ea50b89160c02b36fb634d
+Author: Jian Cai <jiancai@google.com>
+Date:   Tue Feb 2 18:47:03 2021 -0800
+
+    [llvm-objcopy] preserve file ownership when overwritten by root
+    
+    As of binutils 2.36, GNU strip calls chown(2) for "sudo strip foo" and
+    "sudo strip foo -o foo", but no "sudo strip foo -o bar" or "sudo strip
+    foo -o ./foo". In other words, while "sudo strip foo -o bar" creates a
+    new file bar with root access, "sudo strip foo" will keep the owner and
+    group of foo unchanged. Currently llvm-objcopy and llvm-strip behave
+    differently, always changing the owner and gropu to root. The
+    discrepancy prevents Chrome OS from migrating to llvm-objcopy and
+    llvm-strip as they change file ownership and cause intended users/groups
+    to lose access when invoked by sudo with the following sequence
+    (recommended in man page of GNU strip).
+    
+    1.<Link the executable as normal.>
+    1.<Copy "foo" to "foo.full">
+    1.<Run "strip --strip-debug foo">
+    1.<Run "objcopy --add-gnu-debuglink=foo.full foo">
+    
+    This patch makes llvm-objcopy and llvm-strip follow GNU's behavior.
+    
+    Link: crbug.com/1108880
+
+diff --git a/llvm/include/llvm/Support/FileOutputBuffer.h b/llvm/include/llvm/Support/FileOutputBuffer.h
+index 8eb36d0034ad..d65997201ef3 100644
+--- a/llvm/include/llvm/Support/FileOutputBuffer.h
++++ b/llvm/include/llvm/Support/FileOutputBuffer.h
+@@ -28,12 +28,15 @@ namespace llvm {
+ class FileOutputBuffer {
+ public:
+   enum {
+-    /// set the 'x' bit on the resulting file
++    /// Set the 'x' bit on the resulting file.
+     F_executable = 1,
+ 
+     /// Don't use mmap and instead write an in-memory buffer to a file when this
+     /// buffer is closed.
+     F_no_mmap = 2,
++
++    /// Preserve ownership if the file already exists.
++    F_keep_ownership = 4,
+   };
+ 
+   /// Factory method to create an OutputBuffer object which manages a read/write
+@@ -46,7 +49,8 @@ public:
+   /// \p Size.  It is an error to specify F_modify and Size=-1 if \p FilePath
+   /// does not exist.
+   static Expected<std::unique_ptr<FileOutputBuffer>>
+-  create(StringRef FilePath, size_t Size, unsigned Flags = 0);
++  create(StringRef FilePath, size_t Size, unsigned Flags = 0,
++         unsigned UserID = 0, unsigned GroupID = 0);
+ 
+   /// Returns a pointer to the start of the buffer.
+   virtual uint8_t *getBufferStart() const = 0;
+diff --git a/llvm/include/llvm/Support/FileSystem.h b/llvm/include/llvm/Support/FileSystem.h
+index 2483aae046f5..d82e966215dc 100644
+--- a/llvm/include/llvm/Support/FileSystem.h
++++ b/llvm/include/llvm/Support/FileSystem.h
+@@ -1159,6 +1159,16 @@ std::error_code unlockFile(int FD);
+ /// means that the filesystem may have failed to perform some buffered writes.
+ std::error_code closeFile(file_t &F);
+ 
++#ifdef LLVM_ON_UNIX
++/// @brief Change ownership of a file.
++///
++/// @param Owner The owner of the file to change to.
++/// @param Group The group of the file to change to.
++/// @returns errc::success if successfully updated file ownership, otherwise an
++///          error code is returned.
++std::error_code changeFileOwnership(int FD, uint32_t Owner, uint32_t Group);
++#endif
++
+ /// RAII class that facilitates file locking.
+ class FileLocker {
+   int FD; ///< Locked file handle.
+diff --git a/llvm/lib/Support/FileOutputBuffer.cpp b/llvm/lib/Support/FileOutputBuffer.cpp
+index 3342682270dc..7b2a512bd475 100644
+--- a/llvm/lib/Support/FileOutputBuffer.cpp
++++ b/llvm/lib/Support/FileOutputBuffer.cpp
+@@ -125,7 +125,8 @@ createInMemoryBuffer(StringRef Path, size_t Size, unsigned Mode) {
+ }
+ 
+ static Expected<std::unique_ptr<FileOutputBuffer>>
+-createOnDiskBuffer(StringRef Path, size_t Size, unsigned Mode) {
++createOnDiskBuffer(StringRef Path, size_t Size, unsigned Mode,
++                   bool KeepOwnership, unsigned UserID, unsigned GroupID) {
+   Expected<fs::TempFile> FileOrErr =
+       fs::TempFile::create(Path + ".tmp%%%%%%%", Mode);
+   if (!FileOrErr)
+@@ -133,6 +134,13 @@ createOnDiskBuffer(StringRef Path, size_t Size, unsigned Mode) {
+   fs::TempFile File = std::move(*FileOrErr);
+ 
+ #ifndef _WIN32
++  // Try to preserve file ownership if requested.
++  if (KeepOwnership) {
++    fs::file_status Stat;
++    if (!fs::status(File.FD, Stat) && Stat.getUser() == 0)
++      fs::changeFileOwnership(File.FD, UserID, GroupID);
++  }
++
+   // On Windows, CreateFileMapping (the mmap function on Windows)
+   // automatically extends the underlying file. We don't need to
+   // extend the file beforehand. _chsize (ftruncate on Windows) is
+@@ -163,7 +171,8 @@ createOnDiskBuffer(StringRef Path, size_t Size, unsigned Mode) {
+ 
+ // Create an instance of FileOutputBuffer.
+ Expected<std::unique_ptr<FileOutputBuffer>>
+-FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags) {
++FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags,
++                         unsigned UserID, unsigned GroupID) {
+   // Handle "-" as stdout just like llvm::raw_ostream does.
+   if (Path == "-")
+     return createInMemoryBuffer("-", Size, /*Mode=*/0);
+@@ -196,7 +205,8 @@ FileOutputBuffer::create(StringRef Path, size_t Size, unsigned Flags) {
+     if (Flags & F_no_mmap)
+       return createInMemoryBuffer(Path, Size, Mode);
+     else
+-      return createOnDiskBuffer(Path, Size, Mode);
++      return createOnDiskBuffer(Path, Size, Mode, Flags & F_keep_ownership,
++                                UserID, GroupID);
+   default:
+     return createInMemoryBuffer(Path, Size, Mode);
+   }
+diff --git a/llvm/lib/Support/Unix/Path.inc b/llvm/lib/Support/Unix/Path.inc
+index 77f3f54bd881..bbac8a5b3733 100644
+--- a/llvm/lib/Support/Unix/Path.inc
++++ b/llvm/lib/Support/Unix/Path.inc
+@@ -1211,6 +1211,14 @@ std::error_code real_path(const Twine &path, SmallVectorImpl<char> &dest,
+   return std::error_code();
+ }
+ 
++std::error_code changeFileOwnership(int FD, uint32_t Owner, uint32_t Group) {
++  auto FChown = [&]() { return ::fchown(FD, Owner, Group); };
++  // Retry if fchown call fails due to interruption.
++  if ((sys::RetryAfterSignal(-1, FChown)) < 0)
++    return std::error_code(errno, std::generic_category());
++  return std::error_code();
++}
++
+ } // end namespace fs
+ 
+ namespace path {
+diff --git a/llvm/tools/llvm-objcopy/Buffer.cpp b/llvm/tools/llvm-objcopy/Buffer.cpp
+index 06b2a20a762f..304979431210 100644
+--- a/llvm/tools/llvm-objcopy/Buffer.cpp
++++ b/llvm/tools/llvm-objcopy/Buffer.cpp
+@@ -36,7 +36,12 @@ Error FileBuffer::allocate(size_t Size) {
+   }
+ 
+   Expected<std::unique_ptr<FileOutputBuffer>> BufferOrErr =
+-      FileOutputBuffer::create(getName(), Size, FileOutputBuffer::F_executable);
++      FileOutputBuffer::create(getName(), Size,
++                               KeepOwnership
++                                   ? FileOutputBuffer::F_executable |
++                                         FileOutputBuffer::F_keep_ownership
++                                   : FileOutputBuffer::F_executable,
++                               UserID, GroupID);
+   // FileOutputBuffer::create() returns an Error that is just a wrapper around
+   // std::error_code. Wrap it in FileError to include the actual filename.
+   if (!BufferOrErr)
+diff --git a/llvm/tools/llvm-objcopy/Buffer.h b/llvm/tools/llvm-objcopy/Buffer.h
+index 487d5585c364..e439e984b4f9 100644
+--- a/llvm/tools/llvm-objcopy/Buffer.h
++++ b/llvm/tools/llvm-objcopy/Buffer.h
+@@ -40,6 +40,9 @@ class FileBuffer : public Buffer {
+   // Indicates that allocate(0) was called, and commit() should create or
+   // truncate a file instead of using a FileOutputBuffer.
+   bool EmptyFile = false;
++  bool KeepOwnership = false;
++  unsigned UserID = 0;
++  unsigned GroupID = 0;
+ 
+ public:
+   Error allocate(size_t Size) override;
+@@ -47,6 +50,8 @@ public:
+   Error commit() override;
+ 
+   explicit FileBuffer(StringRef FileName) : Buffer(FileName) {}
++  explicit FileBuffer(StringRef FileName, bool Keep, unsigned UID, unsigned GID)
++      : Buffer(FileName), KeepOwnership(Keep), UserID(UID), GroupID(GID) {}
+ };
+ 
+ class MemBuffer : public Buffer {
+diff --git a/llvm/tools/llvm-objcopy/llvm-objcopy.cpp b/llvm/tools/llvm-objcopy/llvm-objcopy.cpp
+index 7fd2acd11e99..42d97b2ada5a 100644
+--- a/llvm/tools/llvm-objcopy/llvm-objcopy.cpp
++++ b/llvm/tools/llvm-objcopy/llvm-objcopy.cpp
+@@ -310,7 +310,10 @@ static Error executeObjcopy(CopyConfig &Config) {
+       if (Error E = executeObjcopyOnArchive(Config, *Ar))
+         return E;
+     } else {
+-      FileBuffer FB(Config.OutputFilename);
++      FileBuffer FB(Config.OutputFilename,
++                    Config.InputFilename != "-" &&
++                        Config.InputFilename == Config.OutputFilename,
++                    Stat.getUser(), Stat.getGroup());
+       if (Error E = executeObjcopyOnBinary(Config,
+                                            *BinaryOrErr.get().getBinary(), FB))
+         return E;

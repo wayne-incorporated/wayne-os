@@ -1,0 +1,28 @@
+From 708ee4fd686a478eca5853455f0393b8a1c78e1b Mon Sep 17 00:00:00 2001
+From: Christopher Di Bella <cjdb@google.com>
+Date: Thu, 23 Jun 2022 23:44:59 +0000
+Subject: [PATCH] [gdb] adds `<iterator>` to list of includes
+
+`std::back_inserter` is defined in `<iterator>`, which is currently
+being transitively included by one of the other headers. This is causing
+gdb to fail to build on certain platforms, which is fixed by explicitly
+including it.
+---
+ gdb/value.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/gdb/value.c b/gdb/value.c
+index 022fca91a42..ba7ae1a0e18 100644
+--- a/gdb/value.c
++++ b/gdb/value.c
+@@ -40,6 +40,7 @@
+ #include "cp-abi.h"
+ #include "user-regs.h"
+ #include <algorithm>
++#include <iterator>
+ #include "completer.h"
+ #include "gdbsupport/selftest.h"
+ #include "gdbsupport/array-view.h"
+-- 
+2.37.0.rc0.104.g0611611a94-goog
+

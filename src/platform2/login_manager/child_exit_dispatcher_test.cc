@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -90,7 +91,7 @@ class ChildExitDispatcherTest : public ::testing::Test {
 TEST_F(ChildExitDispatcherTest, ChildExit) {
   signal_handler_.Init();
 
-  base::Optional<siginfo_t> siginfo;
+  std::optional<siginfo_t> siginfo;
   FakeChildExitHandler fake_handler(
       base::BindLambdaForTesting([&siginfo](const siginfo_t& s) {
         siginfo = s;
@@ -153,7 +154,7 @@ TEST_F(ChildExitDispatcherTest, DestroyInHandleExit) {
   }
 
   // Set up ChildExitDispatcher.
-  base::Optional<siginfo_t> siginfo;
+  std::optional<siginfo_t> siginfo;
   std::unique_ptr<ChildExitDispatcher> dispatcher;
   FakeChildExitHandler fake_handler(
       base::BindLambdaForTesting([&siginfo, &dispatcher](const siginfo_t& s) {

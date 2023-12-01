@@ -1,0 +1,306 @@
+#!/bin/bash
+
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# TODO(b/235407459): Fix all lints/migrate over to C++.
+. /usr/share/misc/chromeos-common.sh || exit 1
+. /usr/sbin/write_gpt.sh || exit 1
+. /usr/share/misc/shflags || exit 1
+
+# Constant variables related to dlcservice.
+readonly BLOCK_SIZE=4096
+readonly DLC_CACHE_PATH="/var/cache/dlc"
+readonly DLC_HASHTREE_FILE="hashtree"
+readonly DLC_IMG_FILE="dlc.img"
+readonly DLC_LIB_PATH="/var/lib/dlcservice/dlc"
+readonly DLC_METADATA_PATH="/opt/google/dlc"
+readonly DLC_PACKAGE="package"
+readonly DLC_PRELOAD_PATH="/var/cache/dlc-images"
+readonly DLC_SLOT_A="dlc_a"
+readonly DLC_SLOT_B="dlc_b"
+readonly DLC_TABLE_FILE="table"
+readonly IMAGELOADER_JSON_FILE="imageloader.json"
+readonly MOUNT_PATH="/run/imageloader"
+
+# Command line parsing variables.
+readonly FLAGS_HELP="Usage:
+  [Unpacking a DLC]
+  $(basename $0) --unpack --id=<id> <path>
+  <path> to which the DLC image will be unpacked to.
+
+  [Packaging a DLC]
+  $(basename $0) --id=<id> <path>
+  <path> from which to create the DLC image and manifest.
+"
+DEFINE_string "id" "" "ID name of the DLC to pack"
+DEFINE_boolean "unpack" false "To unpack the DLC passed to --id" "u"
+DEFINE_boolean "compress" true \
+    "Compress the image. Slower to pack but creates smaller images"
+
+# Parse command line.
+FLAGS "$@" || exit "$?"
+eval set -- "${FLAGS_ARGV}"
+
+# Setup working directory and cleanup.
+WORK_DIR="$(mktemp -d)"
+cleanup() {
+  rm -rf "${WORK_DIR}"
+}
+trap cleanup EXIT
+
+# Command line parse usage helper.
+usage() {
+  echo "$@"
+  echo
+  flags_help
+  exit 1
+}
+
+# Check the correctness for command line flags.
+check_flags() {
+  if [[ ! -n "${FLAGS_id}" ]]; then
+    usage "--id is missing"
+  fi
+}
+
+# Print message prior to exiting.
+die() {
+  echo "ERROR: $*"
+  exit 1
+}
+
+path_exists() {
+  local path="$1"
+  [[ -f "${path}" || -d "${path}" ]]
+}
+
+# Check if the DLC is preloadable.
+is_dlc_preloadable() {
+  [ -f "${DLC_PRELOAD_PATH}/${FLAGS_id}/${DLC_PACKAGE}/${DLC_IMG_FILE}" ]
+}
+
+# Locate the active DLC image from cache.
+locate_dlc_image() {
+  load_base_vars
+  local root_part=$(get_partition_number $(rootdev -s))
+  local dlc_cache_path="${DLC_CACHE_PATH}/${FLAGS_id}/${DLC_PACKAGE}"
+  if [[ "${root_part}" == "${PARTITION_NUM_ROOT_A}" ]]; then
+    echo "${dlc_cache_path}/${DLC_SLOT_A}/${DLC_IMG_FILE}"
+  elif [[ "${root_part}" == "${PARTITION_NUM_ROOT_B}" ]]; then
+    echo "${dlc_cache_path}/${DLC_SLOT_B}/${DLC_IMG_FILE}"
+  else
+    die "Unexpected root partition ${root_part}"
+  fi
+}
+
+# Unpack (unsquashfs) the DLC image.
+unpack_dlc() {
+  # If the path already exists, alert user.
+  if path_exists "${DIR_NAME}"; then
+    die "${DIR_NAME} is a path which already exists."
+  fi
+  # If the DLC is preloadable, install it.
+  if is_dlc_preloadable; then
+    echo "Preloading DLC to not override deployed DLC images."
+    dlcservice_util --install --id="${FLAGS_id}" || die "Failed to preload."
+  fi
+  unsquashfs -d "${DIR_NAME}" $(locate_dlc_image) || die "Failed to unpack."
+}
+
+# Checks to see if the rootfs is writable.
+check_writable_rootfs() {
+  if [ ! -w "/" ]; then
+    local doc_url="https://chromium.googlesource.com"
+    local doc_path="/chromiumos/docs/+/master/developer_mode.md#disable-verity"
+    die "Disable rootfs verification to use this script." \
+      "Reference: ${doc_url}${doc_path}"
+  fi
+}
+
+# Unmount and delete a DLC by force.
+force_delete() {
+  imageloader --unmount --mount_point="${MOUNT_PATH}/${FLAGS_id}/${DLC_PACKAGE}"
+  rm -rf "${DLC_CACHE_PATH}/${FLAGS_id}" "${DLC_LIB_PATH}/${FLAGS_id}" \
+    "${DLC_PRELOAD_PATH}/${FLAGS_id}"
+}
+
+# Check if the directory can be packed as DLC image.
+check_dlc_requirements() {
+  # /root must exist in a DLC image as that is where contents reside.
+  if ! [ -d "${DIR_NAME}/root" ]; then
+    die "root directory is missing"
+  fi
+}
+
+# Creates a squashfs image conforming to DLC requirements.
+create_squashfs_image() {
+  local args=""
+  if [ "${FLAGS_compress}" -ne "${FLAGS_TRUE}" ]; then
+    echo "Not compressing image"
+    args="-noI -noD -noF -noX -no-duplicates"
+  fi
+  mksquashfs "${DIR_NAME}" "${DLC_IMG_FILE}" -4k-align -noappend ${args}
+}
+
+# Gets the size of a file in bytes.
+get_file_size() {
+  local file="$1"
+  stat -c%s "${file}"
+}
+
+# Gets the number of blocks ceiling to nearest integer.
+get_num_blocks() {
+  local file="$1"
+  local bs="$2"
+  local size=$(get_file_size "${file}")
+  echo "(${size} + ${bs} - 1) / ${bs}" | bc
+}
+
+# Generates the verity (hashtree and table) for the DLC image.
+generate_verity() {
+  local blocks=$(get_num_blocks "${DLC_IMG_FILE}" "${BLOCK_SIZE}")
+  verity \
+    mode=create \
+    alg=sha256 \
+    payload="${DLC_IMG_FILE}" \
+    payload_blocks="${blocks}" \
+    hashtree="${DLC_HASHTREE_FILE}" \
+    salt=random \
+    > "${DLC_TABLE_FILE}"
+}
+
+# Appends the hashtree generated from verity to the DLC image.
+append_merkle_tree() {
+  cat "${DLC_HASHTREE_FILE}" >> "${DLC_IMG_FILE}"
+}
+
+# Gets the SHA256 sum of the given file.
+get_sha256sum() {
+  local file="$1"
+  sha256sum "${file}" | cut -d " " -f1
+}
+
+# Replace the regex with replacement in the given content.
+replace_txt() {
+  local content="$1"
+  local regex="$2"
+  local replacement="$3"
+  echo "${content}" | sed -e 's/'"${regex}"'/'"${replacement}"'/g'
+}
+
+# Generates the imageloader.json file read by imageloader + used by dlcservice.
+generate_imageloader_json() {
+  local metadata_path="${DLC_METADATA_PATH}/${FLAGS_id}/${DLC_PACKAGE}"
+  local json_path="${metadata_path}/${IMAGELOADER_JSON_FILE}"
+  [ -f "${json_path}" ] || die "${json_path} does not exist"
+  local json=$(cat "${json_path}")
+
+  # Replace the image-sha256-hash.
+  local image_hash=$(get_sha256sum "${DLC_IMG_FILE}")
+  local ih_regex="\"image-sha256-hash\":[[:space:]]*\"[[:alnum:]]\\+\""
+  local ih_rplc="\"image-sha256-hash\":\"${image_hash}\""
+  local json=$(replace_txt "${json}" "${ih_regex}" "${ih_rplc}")
+
+  # Replace the table-hash.
+  local table_hash=$(get_sha256sum "${DLC_TABLE_FILE}")
+  local th_regex="\"table-sha256-hash\":[[:space:]]*\"[[:alnum:]]\\+\""
+  local th_rplc="\"table-sha256-hash\":\"${table_hash}\""
+  local json=$(replace_txt "${json}" "${th_regex}" "${th_rplc}")
+
+  local num_blocks=$(get_num_blocks "${DLC_IMG_FILE}" "${BLOCK_SIZE}")
+  local new_size=$((${num_blocks} * ${BLOCK_SIZE}))
+  # Replace the size.
+  local size_regex="\"size\":[[:space:]]*\"[[:digit:]]\\+\""
+  local size_rplc="\"size\":\"${new_size}\""
+  local json=$(replace_txt "${json}" "${size_regex}" "${size_rplc}")
+
+  # Replace the pre-allocated-size, just use same as size.
+  local prealloc_regex="\"pre-allocated-size\":[[:space:]]*\"[[:digit:]]\\+\""
+  local prealloc_rplc="\"pre-allocated-size\":\"${new_size}\""
+  local json=$(replace_txt "${json}" "${prealloc_regex}" "${prealloc_rplc}")
+
+  echo "${json}" > "${IMAGELOADER_JSON_FILE}"
+  cat "${IMAGELOADER_JSON_FILE}"
+}
+
+# Writes the metadata files into the rootfs.
+write_metadata_to_rootfs() {
+  local metadata_path="${DLC_METADATA_PATH}/${FLAGS_id}/${DLC_PACKAGE}"
+  mkdir -p "${metadata_path}"
+  cp "${IMAGELOADER_JSON_FILE}" "${DLC_TABLE_FILE}" "${metadata_path}/"
+}
+
+# Writes the DLC image to dlcservice cache.
+write_dlc_image() {
+  local cache_path="${DLC_CACHE_PATH}/${FLAGS_id}/${DLC_PACKAGE}"
+  local cache_path_A="${cache_path}/dlc_a"
+  local cache_path_B="${cache_path}/dlc_b"
+  mkdir -p "${cache_path_A}" "${cache_path_B}"
+  echo "${cache_path_A}" "${cache_path_B}" | xargs -n 1 cp "${DLC_IMG_FILE}"
+}
+
+# Changes ownership for paths/files in dlcservice cache.
+update_cache() {
+  chown -R dlcservice:dlcservice "${DLC_CACHE_PATH}/${FLAGS_id}"
+}
+
+deploy_dlc() {
+  # Check if valid DLC image.
+  check_dlc_requirements
+
+  # Create the DLC image.
+  create_squashfs_image
+
+  # Generate the verity for the DLC image.
+  generate_verity
+
+  # Append the hashtree to the DLC image.
+  append_merkle_tree
+
+  # Generate the imageloader.json from DLC image.
+  generate_imageloader_json
+
+  # Copy metadata + DLC image.
+  write_metadata_to_rootfs
+  write_dlc_image
+
+  # Update cache ownership.
+  update_cache
+}
+
+# Main function.
+main() {
+  # Unpacking the DLC.
+  if [ "${FLAGS_unpack}" -eq "${FLAGS_TRUE}" ]; then
+    echo "Unpacking DLC (${FLAGS_id}) to: ${DIR_NAME}"
+    unpack_dlc
+    exit "$?"
+  fi
+
+  echo "Packing DLC (${FLAGS_id}) from: ${DIR_NAME}"
+  check_writable_rootfs
+
+  echo "Stopping dlcservice"
+  stop dlcservice
+
+  echo "Force deleting ${FLAGS_id}"
+  force_delete
+
+  echo "Creating DLC from: ${DIR_NAME}"
+  deploy_dlc
+
+  echo "Starting dlcservice"
+  start dlcservice && sleep 1
+
+  # Install the new DLC image.
+  dlcservice_util --install --id="${FLAGS_id}" || die "Failed to install"
+}
+
+check_flags
+if [ $# -eq 0 ]; then
+  usage "<path> is missing"
+fi
+# Run under a subshell inside $WORK_DIR
+(DIR_NAME=$(realpath "$1") && cd "${WORK_DIR}" &&  main)

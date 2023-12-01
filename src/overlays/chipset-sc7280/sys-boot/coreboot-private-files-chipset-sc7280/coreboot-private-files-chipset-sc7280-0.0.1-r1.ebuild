@@ -1,0 +1,1 @@
+coreboot-private-files-chipset-sc7280-0.0.1.ebuild

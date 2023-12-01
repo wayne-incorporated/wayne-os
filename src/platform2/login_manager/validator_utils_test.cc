@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 #include "login_manager/proto_bindings/policy_descriptor.pb.h"
 
-using brillo::cryptohome::home::kGuestUserName;
+using brillo::cryptohome::home::GetGuestUsername;
 
 namespace {
 
@@ -67,8 +67,8 @@ TEST(ValidatorUtilsTest, ExtensionIdTest) {
 
 TEST(ValidatorUtilsTest, AccountIdTest) {
   std::string normalized_account_id;
-  EXPECT_TRUE(ValidateAccountId(kGuestUserName, &normalized_account_id));
-  EXPECT_EQ(kGuestUserName, normalized_account_id);
+  EXPECT_TRUE(ValidateAccountId(*GetGuestUsername(), &normalized_account_id));
+  EXPECT_EQ(*GetGuestUsername(), normalized_account_id);
   EXPECT_TRUE(ValidateAccountId("JOHN@doe.com", &normalized_account_id));
   EXPECT_EQ("john@doe.com", normalized_account_id);
   EXPECT_TRUE(ValidateAccountId(kValidAccountId, &normalized_account_id));
@@ -116,14 +116,6 @@ TEST(ValidatorUtilsTest, PolicyDescriptorUserAccountInvalidAccountId) {
   EXPECT_FALSE(ValidatePolicyDescriptor(desc, PolicyDescriptorUsage::kStore));
   EXPECT_FALSE(
       ValidatePolicyDescriptor(desc, PolicyDescriptorUsage::kRetrieve));
-}
-
-TEST(ValidatorUtilsTest, PolicyDescriptorSessionlessUserAccountRetrieveOnly) {
-  PolicyDescriptor desc;
-  desc.set_account_type(ACCOUNT_TYPE_SESSIONLESS_USER);
-  desc.set_account_id(kValidAccountId);
-  EXPECT_FALSE(ValidatePolicyDescriptor(desc, PolicyDescriptorUsage::kStore));
-  EXPECT_TRUE(ValidatePolicyDescriptor(desc, PolicyDescriptorUsage::kRetrieve));
 }
 
 TEST(ValidatorUtilsTest, PolicyDescriptorDeviceLocalAccountValid) {

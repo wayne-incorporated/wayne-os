@@ -1,0 +1,19 @@
+commit 93e2b59c076e266e78627ff7cf1dc9ed7d85550d
+Author: Fangrui Song <i@maskray.me>
+Date:   Fri Feb 18 12:32:27 2022 -0800
+
+    [ELF][test] Avoid non-portable |& in notest.s
+
+diff --git a/lld/test/ELF/linkerscript/noload.s b/lld/test/ELF/linkerscript/noload.s
+index 1cc09670e8b1..fbee54b9e5b4 100644
+--- a/lld/test/ELF/linkerscript/noload.s
++++ b/lld/test/ELF/linkerscript/noload.s
+@@ -19,7 +19,7 @@
+ 
+ ## The output SHT_PROBITS is contrary to the user expectation of SHT_NOBITS.
+ ## Issue a warning. See https://github.com/ClangBuiltLinux/linux/issues/1597
+-# RUN: ld.lld --script %t/lds %t.o %t/mismatch.o -o %t/out 2>&1 |& FileCheck %s --check-prefix=WARN
++# RUN: ld.lld --script %t/lds %t.o %t/mismatch.o -o %t/out 2>&1 | FileCheck %s --check-prefix=WARN
+ # RUN: llvm-readelf -S -l %t/out | FileCheck %s --check-prefix=CHECK2
+ 
+ # WARN:   warning: section type mismatch for .data_noload_a

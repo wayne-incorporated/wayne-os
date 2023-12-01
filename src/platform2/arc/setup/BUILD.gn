@@ -1,0 +1,292 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":arc-apply-per-board-config",
+    ":arc-create-data",
+    ":arc-handle-upgrade",
+    ":arc-prepare-host-generated-dir",
+    ":arc-remove-data",
+    ":arc-remove-stale-data",
+    ":arc-setup",
+    ":generate_squashfs",
+    ":install_minijail_arc_boot_continue",
+    ":install_minijail_arc_create_data_conf",
+    ":install_minijail_arc_handle_upgrade_conf",
+    ":install_minijail_arc_remove_data_conf",
+    ":install_minijail_arc_stale_directory_remover_conf",
+    ":install_minijail_arcvm_per_board_features_conf",
+    ":libarc_setup",
+    "xml:arc-packages-xml-reader",
+    "xml:libandroidxml",
+  ]
+  if (use.test) {
+    deps += [ ":arc-setup_testrunner" ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":android_binary_xml_tokenizer_fuzzer",
+      ":android_xml_util_find_fingerprint_and_sdk_version_fuzzer",
+      ":arc_property_util_expand_property_contents_fuzzer",
+      ":arc_setup_util_find_all_properties_fuzzer",
+    ]
+  }
+}
+
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+    "libcrypto",
+    "libmetrics",
+    "libminijail",
+    "libnet-base",
+    "libpatchpanel-client",
+    "libsegmentation",
+    "libselinux",
+    "libuser_data_auth-client",
+    "libxml-2.0",
+    "re2",
+
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won"t be in the right
+    # order.
+    "system_api",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+install_config("install_minijail_arc_boot_continue") {
+  sources = [ "init/minijail/arc-boot-continue.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_minijail_arc_create_data_conf") {
+  sources = [ "init/minijail/arc-create-data.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_minijail_arc_handle_upgrade_conf") {
+  sources = [ "init/minijail/arc-handle-upgrade.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_minijail_arcvm_per_board_features_conf") {
+  sources = [ "init/minijail/arcvm-per-board-features.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_minijail_arc_remove_data_conf") {
+  sources = [ "init/minijail/arc-remove-data.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_minijail_arc_stale_directory_remover_conf") {
+  sources = [ "init/minijail/arc-stale-directory-remover.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+config("target_defaults") {
+  configs = [ ":target_defaults_pkg_deps" ]
+  defines = [
+    "OS_CHROMEOS",
+    "USE_ARCVM=${use.arcvm}",
+    "USE_HOUDINI=${use.houdini}",
+    "USE_HOUDINI64=${use.houdini64}",
+    "USE_LVM_STATEFUL_PARTITION=${use.lvm_stateful_partition}",
+    "USE_NDK_TRANSLATION=${use.ndk_translation}",
+  ]
+}
+
+libarc_setup_sources = [
+  "arc_property_util.cc",
+  "arc_setup.cc",
+  "arc_setup_metrics.cc",
+  "arc_setup_util.cc",
+  "art_container.cc",
+  "config.cc",
+]
+
+static_library("libarc_setup_static") {
+  sources = libarc_setup_sources
+  configs += [ ":target_defaults" ]
+  libs = [ "bootstat" ]
+  deps = [ "xml:libandroidxml" ]
+}
+
+shared_library("libarc_setup") {
+  sources = libarc_setup_sources
+  defines = [
+    "COMPONENT_BUILD",
+    "IS_LIBARC_SETUP_IMPL",
+    "USE_ARC_HW_OEMCRYPTO=${use.arc_hw_oemcrypto}",
+  ]
+  configs += [ ":target_defaults" ]
+  libs = [ "bootstat" ]
+  deps = [ "xml:libandroidxml" ]
+}
+
+executable("arc-setup") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libarc_setup" ]
+}
+
+executable("arc-remove-data") {
+  sources = [ "arc_remove_data_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libarc_setup" ]
+}
+
+executable("arc-remove-stale-data") {
+  sources = [ "arc_remove_stale_data_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libarc_setup" ]
+}
+
+executable("arc-apply-per-board-config") {
+  sources = [ "arc_apply_per_board_config_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libarc_setup" ]
+}
+
+executable("arc-create-data") {
+  sources = [ "arc_create_data_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libarc_setup" ]
+}
+
+executable("arc-handle-upgrade") {
+  sources = [ "arc_handle_upgrade_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libarc_setup" ]
+}
+
+executable("arc-prepare-host-generated-dir") {
+  sources = [ "arc_prepare_host_generated_dir_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libarc_setup" ]
+}
+
+action("mkdir_squashfs_source_dir") {
+  inputs = []
+  outputs = [ "${root_gen_dir}/squashfs_source_dir" ]
+  script = "//common-mk/file_generator_wrapper.py"
+  args = [
+    "mkdir",
+    "-p",
+    "${root_gen_dir}/squashfs_source_dir",
+  ]
+}
+
+action("generate_squashfs") {
+  deps = [ ":mkdir_squashfs_source_dir" ]
+  inputs = [ "${root_gen_dir}/squashfs_source_dir" ]
+  outputs = [ "${root_out_dir}/dev-rootfs.squashfs" ]
+  script = "//common-mk/file_generator_wrapper.py"
+  args = [
+    "mksquashfs",
+    "${root_gen_dir}/squashfs_source_dir",
+    "${root_out_dir}/dev-rootfs.squashfs",
+    "-no-progress",
+    "-info",
+    "-all-root",
+    "-noappend",
+    "-comp",
+    "lzo",
+    "-b",
+    "4K",
+
+    # Create rootfs and necessary dev nodes for art container.
+    # ashmem minor number is dynamic determined and will be bind
+    # mounted.
+    "-p",
+    "/dev d 700 0 0",
+    "-p",
+    "/dev/ashmem c 666 root root 1 3",
+    "-p",
+    "/dev/random c 666 root root 1 8",
+    "-p",
+    "/dev/urandom c 666 root root 1 9",
+  ]
+}
+
+if (use.test) {
+  pkg_config("arc-setup_testrunner_pkg_deps") {
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+      "libsegmentation-test",
+    ]
+  }
+  executable("arc-setup_testrunner") {
+    sources = [
+      "arc_property_util_test.cc",
+      "arc_setup_metrics_test.cc",
+      "arc_setup_test.cc",
+      "arc_setup_util_test.cc",
+      "art_container_test.cc",
+      "config_test.cc",
+      "xml/android_binary_xml_tokenizer_test.cc",
+      "xml/android_binary_xml_tokenizer_test_util.cc",
+      "xml/android_xml_util_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":arc-setup_testrunner_pkg_deps",
+      ":target_defaults",
+    ]
+
+    deps = [
+      ":libarc_setup_static",
+      "../../common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("android_binary_xml_tokenizer_fuzzer") {
+    sources = [ "android_binary_xml_tokenizer_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ "xml:libandroidxml" ]
+  }
+
+  executable("android_xml_util_find_fingerprint_and_sdk_version_fuzzer") {
+    sources = [ "android_xml_util_find_fingerprint_and_sdk_version_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ "xml:libandroidxml" ]
+  }
+
+  executable("arc_setup_util_find_all_properties_fuzzer") {
+    sources = [ "arc_setup_util_find_all_properties_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libarc_setup_static" ]
+  }
+
+  executable("arc_property_util_expand_property_contents_fuzzer") {
+    sources = [ "arc_property_util_expand_property_contents_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libarc_setup_static" ]
+  }
+}

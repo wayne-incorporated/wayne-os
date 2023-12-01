@@ -1,0 +1,93 @@
+From a3df50abeb7372fd0f1973f885fb8d634ac4e739 Mon Sep 17 00:00:00 2001
+From: James Clark <james.clark@arm.com>
+Date: Mon, 18 Oct 2021 14:48:41 +0100
+Subject: [PATCH 1/3] perf tools: Refactor out kernel symbol argument sanity
+ checking
+
+User supplied values for vmlinux and kallsyms are checked before
+continuing. Refactor this into a function so that it can be used
+elsewhere.
+
+Reviewed-by: Denis Nikitin <denik@chromium.org>
+Signed-off-by: James Clark <james.clark@arm.com>
+Cc: Alexander Shishkin <alexander.shishkin@linux.intel.com>
+Cc: Jiri Olsa <jolsa@redhat.com>
+Cc: Mark Rutland <mark.rutland@arm.com>
+Cc: Namhyung Kim <namhyung@kernel.org>
+Link: https://lore.kernel.org/r/20211018134844.2627174-2-james.clark@arm.com
+Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+---
+ tools/perf/builtin-report.c | 13 ++-----------
+ tools/perf/util/symbol.c    | 22 ++++++++++++++++++++++
+ tools/perf/util/symbol.h    |  2 ++
+ 3 files changed, 26 insertions(+), 11 deletions(-)
+
+diff --git a/tools/perf/builtin-report.c b/tools/perf/builtin-report.c
+index a0316ce910db..8167ebfe776a 100644
+--- a/tools/perf/builtin-report.c
++++ b/tools/perf/builtin-report.c
+@@ -1378,18 +1378,9 @@ int cmd_report(int argc, const char **argv)
+ 	if (quiet)
+ 		perf_quiet_option();
+ 
+-	if (symbol_conf.vmlinux_name &&
+-	    access(symbol_conf.vmlinux_name, R_OK)) {
+-		pr_err("Invalid file: %s\n", symbol_conf.vmlinux_name);
+-		ret = -EINVAL;
+-		goto exit;
+-	}
+-	if (symbol_conf.kallsyms_name &&
+-	    access(symbol_conf.kallsyms_name, R_OK)) {
+-		pr_err("Invalid file: %s\n", symbol_conf.kallsyms_name);
+-		ret = -EINVAL;
++	ret = symbol__validate_sym_arguments();
++	if (ret)
+ 		goto exit;
+-	}
+ 
+ 	if (report.inverted_callchain)
+ 		callchain_param.order = ORDER_CALLER;
+diff --git a/tools/perf/util/symbol.c b/tools/perf/util/symbol.c
+index 35116aed74eb..aa1b7c12fd61 100644
+--- a/tools/perf/util/symbol.c
++++ b/tools/perf/util/symbol.c
+@@ -2634,3 +2634,25 @@ struct mem_info *mem_info__new(void)
+ 		refcount_set(&mi->refcnt, 1);
+ 	return mi;
+ }
++
++/*
++ * Checks that user supplied symbol kernel files are accessible because
++ * the default mechanism for accessing elf files fails silently. i.e. if
++ * debug syms for a build ID aren't found perf carries on normally. When
++ * they are user supplied we should assume that the user doesn't want to
++ * silently fail.
++ */
++int symbol__validate_sym_arguments(void)
++{
++	if (symbol_conf.vmlinux_name &&
++	    access(symbol_conf.vmlinux_name, R_OK)) {
++		pr_err("Invalid file: %s\n", symbol_conf.vmlinux_name);
++		return -EINVAL;
++	}
++	if (symbol_conf.kallsyms_name &&
++	    access(symbol_conf.kallsyms_name, R_OK)) {
++		pr_err("Invalid file: %s\n", symbol_conf.kallsyms_name);
++		return -EINVAL;
++	}
++	return 0;
++}
+diff --git a/tools/perf/util/symbol.h b/tools/perf/util/symbol.h
+index 954d6a049ee2..166196686f2e 100644
+--- a/tools/perf/util/symbol.h
++++ b/tools/perf/util/symbol.h
+@@ -286,4 +286,6 @@ static inline void __mem_info__zput(struct mem_info **mi)
+ 
+ #define mem_info__zput(mi) __mem_info__zput(&mi)
+ 
++int symbol__validate_sym_arguments(void);
++
+ #endif /* __PERF_SYMBOL */
+-- 
+2.34.0.rc0.344.g81b53c2807-goog
+

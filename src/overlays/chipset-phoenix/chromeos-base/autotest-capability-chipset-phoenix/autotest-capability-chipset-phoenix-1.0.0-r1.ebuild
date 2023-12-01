@@ -1,0 +1,1 @@
+autotest-capability-chipset-phoenix-1.0.0.ebuild

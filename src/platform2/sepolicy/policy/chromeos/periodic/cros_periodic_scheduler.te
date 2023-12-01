@@ -1,0 +1,35 @@
+type cros_periodic_scheduler, chromeos_domain, domain;
+
+exec_coreutils(cros_periodic_scheduler)
+use_init_fd(cros_periodic_scheduler)
+log_writer(cros_periodic_scheduler)
+
+domain_auto_trans(cros_init, cros_periodic_scheduler_exec, cros_periodic_scheduler)
+
+# rm /var /var/spool (clean up in the script)
+allow cros_periodic_scheduler cros_var_spool:dir getattr;
+allow cros_periodic_scheduler cros_var_spool:file { r_file_perms setattr unlink };
+
+# initial directory creation
+filetrans_pattern(cros_periodic_scheduler, cros_var_spool, cros_periodic_scheduler_cache_t, dir)
+
+# stamp file
+allow cros_periodic_scheduler cros_periodic_scheduler_cache_t:file create_file_perms;
+allow cros_periodic_scheduler cros_periodic_scheduler_cache_t:dir create_dir_perms;
+# for some unknown reason crbug/1060033#c2, stamp file in unlabeled was discovered by crash collection,
+# but the stamp directory looks in good label. this workaround has pitfalls see crbug above too.
+allow cros_periodic_scheduler unlabeled:file { rw_file_perms unlink };
+
+# https://crbug.com/1166208: Allow for now to improve the SNR of SELinux violations.
+allow cros_periodic_scheduler unlabeled:dir search;
+
+domain_auto_trans({ cros_init cros_init_scripts }, cros_periodic_scheduler_exec, cros_periodic_scheduler)
+
+# signal and kill for timeout
+allow cros_periodic_scheduler cros_launched_by_periodic_scheduler_domain:process { signull signal sigkill };
+allow cros_periodic_scheduler self:capability sys_admin;
+# modprobe, and cros_browser is some process that doesn't have caller path cleared yet.
+neverallow cros_periodic_scheduler { domain - cros_launched_by_periodic_scheduler_domain -modprobe -cros_browser }:process transition;
+
+# SafeFD requires traversing from /
+allow cros_periodic_scheduler rootfs:dir { r_dir_perms };

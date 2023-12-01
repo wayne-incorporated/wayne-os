@@ -1,0 +1,30 @@
+From 79d3f9d33c101c0b027818c9b185274b08457bc9 Mon Sep 17 00:00:00 2001
+From: Nathan Muggli <nmuggli@google.com>
+Date: Thu, 10 Aug 2023 15:43:07 -0600
+Subject: [PATCH] Use old PS-based interpreter
+
+This basically reverts 75fbddf52051987287e62d13c659eb73ba16982f, though
+I could not actually do a revert since the text changed.
+
+This is a temporary work-around while we investigate some issues with
+the new C-based interpreter.
+---
+ Resource/Init/pdf_main.ps | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Resource/Init/pdf_main.ps b/Resource/Init/pdf_main.ps
+index 32af17e33..ddfa8114b 100644
+--- a/Resource/Init/pdf_main.ps
++++ b/Resource/Init/pdf_main.ps
+@@ -218,7 +218,7 @@ DingbatsEncoding pop
+ % Redefine 'run' so it recognizes PDF files.
+ systemdict begin
+ 
+-systemdict /OLDPDF known not {/OLDPDF //false def} if
++systemdict /OLDPDF known not {/OLDPDF //true def} if
+ 
+ % PostScript interface to the ghostpdf C-based interpreter
+ %
+-- 
+2.41.0.694.ge786442a9b-goog
+

@@ -1,0 +1,85 @@
+From b5d922941577eb9a12abf1b89aca648ee4a00b4e Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Thu, 15 Jun 2023 13:49:16 +0300
+Subject: [PATCH] BACKPORT: add pidfd_open syscall definitions
+
+This is a backport of the following upstream commit
+which added the definitions for the new syscall
+present in kernels >= v5.3.
+
+commit 7615d9e178 ("arch: wire-up pidfd_open()")
+
+glibc started using this syscall in versions >= 2.36
+and these header additions are also required by
+minijail to properly know which calls to filter.
+---
+ arch/arm/tools/syscall.tbl             | 1 +
+ arch/arm64/include/asm/unistd32.h      | 2 ++
+ arch/x86/entry/syscalls/syscall_32.tbl | 1 +
+ arch/x86/entry/syscalls/syscall_64.tbl | 1 +
+ include/uapi/asm-generic/unistd.h      | 2 ++
+ 5 files changed, 7 insertions(+)
+
+diff --git a/arch/arm/tools/syscall.tbl b/arch/arm/tools/syscall.tbl
+index 860e2de..091f659 100644
+--- a/arch/arm/tools/syscall.tbl
++++ b/arch/arm/tools/syscall.tbl
+@@ -438,5 +438,6 @@
+ 423	common	sched_rr_get_interval_time64	sys_sched_rr_get_interval
+ 425	common	io_uring_setup		sys_io_uring_setup
+ 426	common	io_uring_enter		sys_io_uring_enter
++434	common	pidfd_open		sys_pidfd_open
+ 436	common	close_range		sys_close_range
+ 439	common	faccessat2			sys_faccessat2
+diff --git a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+index c7f3eb4..e66b667 100644
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -865,6 +865,8 @@ __SYSCALL(__NR_sched_rr_get_interval_time64, sys_sched_rr_get_interval)
+ __SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
+ #define __NR_io_uring_enter 426
+ __SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
++#define __NR_pidfd_open 434
++__SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+ #define __NR_close_range 436
+ __SYSCALL(__NR_close_range, sys_close_range)
+ #define __NR_faccessat2 439
+diff --git a/arch/x86/entry/syscalls/syscall_32.tbl b/arch/x86/entry/syscalls/syscall_32.tbl
+index 2538ae9..93642d8 100644
+--- a/arch/x86/entry/syscalls/syscall_32.tbl
++++ b/arch/x86/entry/syscalls/syscall_32.tbl
+@@ -415,5 +415,6 @@
+ 423	i386	sched_rr_get_interval_time64	sys_sched_rr_get_interval	__ia32_sys_sched_rr_get_interval
+ 425	i386	io_uring_setup		sys_io_uring_setup		__ia32_sys_io_uring_setup
+ 426	i386	io_uring_enter		sys_io_uring_enter		__ia32_sys_io_uring_enter
++434	i386	pidfd_open		sys_pidfd_open			__ia32_sys_pidfd_open
+ 436	i386	close_range		sys_close_range
+ 439	i386	faccessat2		sys_faccessat2
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index d00d9c0..7798699 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -342,6 +342,7 @@
+ 334	common	rseq			sys_rseq
+ 425	common	io_uring_setup		__x64_sys_io_uring_setup
+ 426	common	io_uring_enter		__x64_sys_io_uring_enter
++434	common	pidfd_open		__x64_sys_pidfd_open
+ 436	common	close_range		sys_close_range
+ 439	common	faccessat2		sys_faccessat2
+ 
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index 34e7a04..e6850c1 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -784,6 +784,8 @@ __SYSCALL(__NR_sched_rr_get_interval_time64, sys_sched_rr_get_interval)
+ __SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
+ #define __NR_io_uring_enter 426
+ __SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
++#define __NR_pidfd_open 434
++__SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+ #define __NR_close_range 436
+ __SYSCALL(__NR_close_range, sys_close_range)
+ #define __NR_faccessat2 439
+-- 
+2.41.0
+

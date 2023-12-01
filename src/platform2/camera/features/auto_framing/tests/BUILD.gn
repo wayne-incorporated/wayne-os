@@ -1,0 +1,40 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+group("all") {
+  deps = [ ":auto_framing_test" ]
+}
+
+pkg_config("target_defaults") {
+  configs = [
+    "//camera/build:cros_camera_common",
+    "//common-mk:test",
+  ]
+  pkg_deps = [
+    "libchrome-test",
+    "libcros_camera_android_deps",
+    "libdrm",
+  ]
+}
+
+source_set("base") {
+  sources = [
+    "//camera/features/auto_framing/tests/auto_framing_test_fixture.cc",
+    "//camera/features/auto_framing/tests/test_image.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//camera/common:stream_manipulator",
+    "//camera/common/test_support",
+    "//camera/features/auto_framing",
+    "//camera/gpu:gpu_test_support",
+  ]
+}
+
+executable("auto_framing_test") {
+  sources = [ "//camera/features/auto_framing/tests/auto_framing_test.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":base" ]
+}

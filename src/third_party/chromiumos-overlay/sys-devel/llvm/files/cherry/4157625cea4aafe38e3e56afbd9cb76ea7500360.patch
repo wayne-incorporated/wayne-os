@@ -1,0 +1,276 @@
+commit 4157625cea4aafe38e3e56afbd9cb76ea7500360
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Sun May 7 16:09:37 2023 -0700
+
+    Revert "[AArch64] Emit FNMADD instead of FNEG(FMADD)"
+    
+    This reverts commit ea228bd0bd0173ffd4aac497a312a852e8f7ffad.
+    
+    Cuases a crash on AArch64. Testcase provided at D149260.
+
+diff --git a/llvm/include/llvm/CodeGen/MachineCombinerPattern.h b/llvm/include/llvm/CodeGen/MachineCombinerPattern.h
+index 6d7c515b1008..5be436b69a5b 100644
+--- a/llvm/include/llvm/CodeGen/MachineCombinerPattern.h
++++ b/llvm/include/llvm/CodeGen/MachineCombinerPattern.h
+@@ -178,9 +178,6 @@ enum class MachineCombinerPattern {
+ 
+   // X86 VNNI
+   DPWSSD,
+-
+-  FNMADDS,
+-  FNMADDD,
+ };
+ 
+ } // end namespace llvm
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index e1d26ea3f7ee..2bd0c1d782c2 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -5409,41 +5409,6 @@ static bool getFMULPatterns(MachineInstr &Root,
+   return Found;
+ }
+ 
+-static bool getFNEGPatterns(MachineInstr &Root,
+-                            SmallVectorImpl<MachineCombinerPattern> &Patterns) {
+-  unsigned Opc = Root.getOpcode();
+-  MachineBasicBlock &MBB = *Root.getParent();
+-  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
+-  bool Found = false;
+-
+-  auto Match = [&](unsigned Opcode, MachineCombinerPattern Pattern) -> bool {
+-    MachineOperand &MO = Root.getOperand(1);
+-    MachineInstr *MI = MRI.getUniqueVRegDef(MO.getReg());
+-    if ((MI->getOpcode() == Opcode) &&
+-        Root.getFlag(MachineInstr::MIFlag::FmContract) &&
+-        Root.getFlag(MachineInstr::MIFlag::FmNsz) &&
+-        MI->getFlag(MachineInstr::MIFlag::FmContract) &&
+-        MI->getFlag(MachineInstr::MIFlag::FmNsz)) {
+-      Patterns.push_back(Pattern);
+-      return true;
+-    }
+-    return false;
+-  };
+-
+-  switch (Opc) {
+-  default:
+-    return false;
+-  case AArch64::FNEGDr:
+-    Found |= Match(AArch64::FMADDDrrr, MachineCombinerPattern::FNMADDD);
+-    break;
+-  case AArch64::FNEGSr:
+-    Found |= Match(AArch64::FMADDSrrr, MachineCombinerPattern::FNMADDS);
+-    break;
+-  }
+-
+-  return Found;
+-}
+-
+ /// Return true when a code sequence can improve throughput. It
+ /// should be called only for instructions in loops.
+ /// \param Pattern - combiner pattern
+@@ -5613,8 +5578,6 @@ bool AArch64InstrInfo::getMachineCombinerPatterns(
+     return true;
+   if (getFMAPatterns(Root, Patterns))
+     return true;
+-  if (getFNEGPatterns(Root, Patterns))
+-    return true;
+ 
+   // Other patterns
+   if (getMiscPatterns(Root, Patterns))
+@@ -5705,39 +5668,6 @@ genFusedMultiply(MachineFunction &MF, MachineRegisterInfo &MRI,
+   return MUL;
+ }
+ 
+-static MachineInstr *
+-genFNegatedMAD(MachineFunction &MF, MachineRegisterInfo &MRI,
+-               const TargetInstrInfo *TII, MachineInstr &Root,
+-               SmallVectorImpl<MachineInstr *> &InsInstrs, unsigned Opc,
+-               const TargetRegisterClass *RC) {
+-  MachineInstr *MAD = MRI.getUniqueVRegDef(Root.getOperand(1).getReg());
+-  Register ResultReg = Root.getOperand(0).getReg();
+-  Register SrcReg0 = MAD->getOperand(1).getReg();
+-  Register SrcReg1 = MAD->getOperand(2).getReg();
+-  Register SrcReg2 = MAD->getOperand(3).getReg();
+-  bool Src0IsKill = MAD->getOperand(1).isKill();
+-  bool Src1IsKill = MAD->getOperand(2).isKill();
+-  bool Src2IsKill = MAD->getOperand(3).isKill();
+-
+-  if (ResultReg.isVirtual())
+-    MRI.constrainRegClass(ResultReg, RC);
+-  if (SrcReg0.isVirtual())
+-    MRI.constrainRegClass(SrcReg0, RC);
+-  if (SrcReg1.isVirtual())
+-    MRI.constrainRegClass(SrcReg1, RC);
+-  if (SrcReg2.isVirtual())
+-    MRI.constrainRegClass(SrcReg2, RC);
+-
+-  MachineInstrBuilder MIB =
+-      BuildMI(MF, MIMetadata(Root), TII->get(Opc), ResultReg)
+-          .addReg(SrcReg0, getKillRegState(Src0IsKill))
+-          .addReg(SrcReg1, getKillRegState(Src1IsKill))
+-          .addReg(SrcReg2, getKillRegState(Src2IsKill));
+-  InsInstrs.push_back(MIB);
+-
+-  return MAD;
+-}
+-
+ /// Fold (FMUL x (DUP y lane)) into (FMUL_indexed x y lane)
+ static MachineInstr *
+ genIndexedMultiply(MachineInstr &Root,
+@@ -6870,20 +6800,6 @@ void AArch64InstrInfo::genAlternativeCodeSequence(
+                        &AArch64::FPR128_loRegClass, MRI);
+     break;
+   }
+-
+-  case MachineCombinerPattern::FNMADDS: {
+-    Opc = AArch64::FNMADDSrrr;
+-    RC = &AArch64::FPR32RegClass;
+-    MUL = genFNegatedMAD(MF, MRI, TII, Root, InsInstrs, Opc, RC);
+-    break;
+-  }
+-  case MachineCombinerPattern::FNMADDD: {
+-    Opc = AArch64::FNMADDDrrr;
+-    RC = &AArch64::FPR64RegClass;
+-    MUL = genFNegatedMAD(MF, MRI, TII, Root, InsInstrs, Opc, RC);
+-    break;
+-  }
+-
+   } // end switch (Pattern)
+   // Record MUL and ADD/SUB for deletion
+   if (MUL)
+diff --git a/llvm/test/CodeGen/AArch64/aarch64_fnmadd.ll b/llvm/test/CodeGen/AArch64/aarch64_fnmadd.ll
+deleted file mode 100644
+index 9c7ac1a3edf9..000000000000
+--- a/llvm/test/CodeGen/AArch64/aarch64_fnmadd.ll
++++ /dev/null
+@@ -1,130 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 2
+-; RUN: llc < %s -mtriple=aarch64-linux-gnu -O3 -verify-machineinstrs | FileCheck %s
+-
+-define void @fnmaddd(ptr %a, ptr %b, ptr %c) {
+-; CHECK-LABEL: fnmaddd:
+-; CHECK:       // %bb.0: // %entry
+-; CHECK-NEXT:    ldr d0, [x1]
+-; CHECK-NEXT:    ldr d1, [x0]
+-; CHECK-NEXT:    ldr d2, [x2]
+-; CHECK-NEXT:    fnmadd d0, d0, d1, d2
+-; CHECK-NEXT:    str d0, [x0]
+-; CHECK-NEXT:    ret
+-entry:
+-  %0 = load double, ptr %a, align 8
+-  %1 = load double, ptr %b, align 8
+-  %mul = fmul fast double %1, %0
+-  %2 = load double, ptr %c, align 8
+-  %add = fadd fast double %mul, %2
+-  %fneg = fneg fast double %add
+-  store double %fneg, ptr %a, align 8
+-  ret void
+-}
+-
+-; Don't combine: No flags
+-define void @fnmaddd_no_fast(ptr %a, ptr %b, ptr %c) {
+-; CHECK-LABEL: fnmaddd_no_fast:
+-; CHECK:       // %bb.0: // %entry
+-; CHECK-NEXT:    ldr d0, [x0]
+-; CHECK-NEXT:    ldr d1, [x1]
+-; CHECK-NEXT:    fmul d0, d1, d0
+-; CHECK-NEXT:    ldr d1, [x2]
+-; CHECK-NEXT:    fadd d0, d0, d1
+-; CHECK-NEXT:    fneg d0, d0
+-; CHECK-NEXT:    str d0, [x0]
+-; CHECK-NEXT:    ret
+-entry:
+-  %0 = load double, ptr %a, align 8
+-  %1 = load double, ptr %b, align 8
+-  %mul = fmul double %1, %0
+-  %2 = load double, ptr %c, align 8
+-  %add = fadd double %mul, %2
+-  %fneg = fneg double %add
+-  store double %fneg, ptr %a, align 8
+-  ret void
+-}
+-
+-define void @fnmadds(ptr %a, ptr %b, ptr %c) {
+-; CHECK-LABEL: fnmadds:
+-; CHECK:       // %bb.0: // %entry
+-; CHECK-NEXT:    ldr s0, [x1]
+-; CHECK-NEXT:    ldr s1, [x0]
+-; CHECK-NEXT:    ldr s2, [x2]
+-; CHECK-NEXT:    fnmadd s0, s0, s1, s2
+-; CHECK-NEXT:    str s0, [x0]
+-; CHECK-NEXT:    ret
+-entry:
+-  %0 = load float, ptr %a, align 4
+-  %1 = load float, ptr %b, align 4
+-  %mul = fmul fast float %1, %0
+-  %2 = load float, ptr %c, align 4
+-  %add = fadd fast float %mul, %2
+-  %fneg = fneg fast float %add
+-  store float %fneg, ptr %a, align 4
+-  ret void
+-}
+-
+-define void @fnmadds_nsz_contract(ptr %a, ptr %b, ptr %c) {
+-; CHECK-LABEL: fnmadds_nsz_contract:
+-; CHECK:       // %bb.0: // %entry
+-; CHECK-NEXT:    ldr s0, [x1]
+-; CHECK-NEXT:    ldr s1, [x0]
+-; CHECK-NEXT:    ldr s2, [x2]
+-; CHECK-NEXT:    fnmadd s0, s0, s1, s2
+-; CHECK-NEXT:    str s0, [x0]
+-; CHECK-NEXT:    ret
+-entry:
+-  %0 = load float, ptr %a, align 4
+-  %1 = load float, ptr %b, align 4
+-  %mul = fmul contract nsz float %1, %0
+-  %2 = load float, ptr %c, align 4
+-  %add = fadd contract nsz float %mul, %2
+-  %fneg = fneg contract nsz float %add
+-  store float %fneg, ptr %a, align 4
+-  ret void
+-}
+-
+-; Don't combine: Missing nsz
+-define void @fnmadds_contract(ptr %a, ptr %b, ptr %c) {
+-; CHECK-LABEL: fnmadds_contract:
+-; CHECK:       // %bb.0: // %entry
+-; CHECK-NEXT:    ldr s0, [x1]
+-; CHECK-NEXT:    ldr s1, [x0]
+-; CHECK-NEXT:    ldr s2, [x2]
+-; CHECK-NEXT:    fmadd s0, s0, s1, s2
+-; CHECK-NEXT:    fneg s0, s0
+-; CHECK-NEXT:    str s0, [x0]
+-; CHECK-NEXT:    ret
+-entry:
+-  %0 = load float, ptr %a, align 4
+-  %1 = load float, ptr %b, align 4
+-  %mul = fmul contract float %1, %0
+-  %2 = load float, ptr %c, align 4
+-  %add = fadd contract float %mul, %2
+-  %fneg = fneg contract float %add
+-  store float %fneg, ptr %a, align 4
+-  ret void
+-}
+-
+-; Don't combine: Missing contract
+-define void @fnmadds_nsz(ptr %a, ptr %b, ptr %c) {
+-; CHECK-LABEL: fnmadds_nsz:
+-; CHECK:       // %bb.0: // %entry
+-; CHECK-NEXT:    ldr s0, [x0]
+-; CHECK-NEXT:    ldr s1, [x1]
+-; CHECK-NEXT:    fmul s0, s1, s0
+-; CHECK-NEXT:    ldr s1, [x2]
+-; CHECK-NEXT:    fadd s0, s0, s1
+-; CHECK-NEXT:    fneg s0, s0
+-; CHECK-NEXT:    str s0, [x0]
+-; CHECK-NEXT:    ret
+-entry:
+-  %0 = load float, ptr %a, align 4
+-  %1 = load float, ptr %b, align 4
+-  %mul = fmul nsz float %1, %0
+-  %2 = load float, ptr %c, align 4
+-  %add = fadd nsz float %mul, %2
+-  %fneg = fneg nsz float %add
+-  store float %fneg, ptr %a, align 4
+-  ret void
+-}

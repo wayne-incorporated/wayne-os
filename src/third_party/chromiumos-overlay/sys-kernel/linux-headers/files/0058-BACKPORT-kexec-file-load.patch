@@ -1,0 +1,46 @@
+From 4dcffeefda7c752aebdbb8d3b57b4002d3d4062c Mon Sep 17 00:00:00 2001
+From: Ricardo Ribalda <ribalda@chromium.org>
+Date: Tue, 29 Nov 2022 11:08:26 +0000
+Subject: [PATCH] BACKPORT: kexec-file-load: Add syscall definitions
+
+Add the syscall definition to all the platforms in use by ChromeOS.
+
+Signed-off-by: Ricardo Ribalda <ribalda@chromium.org>
+---
+ arch/arm/tools/syscall.tbl        | 4 +++-
+ include/uapi/asm-generic/unistd.h | 4 +++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/tools/syscall.tbl b/arch/arm/tools/syscall.tbl
+index f101191..860e2de 100644
+--- a/arch/arm/tools/syscall.tbl
++++ b/arch/arm/tools/syscall.tbl
+@@ -413,7 +413,9 @@
+ 396	common	pkey_free		sys_pkey_free
+ 397	common	statx			sys_statx
+ 398	common	rseq			sys_rseq
+-# 399-402 unused
++# 399-400 unused
++401	common	kexec_file_load		sys_kexec_file_load
++# 402 unused
+ 403	common	clock_gettime64			sys_clock_gettime
+ 404	common	clock_settime64			sys_clock_settime
+ 405	common	clock_adjtime64			sys_clock_adjtime
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index 600c61c..34e7a04 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -734,7 +734,9 @@ __SYSCALL(__NR_pkey_free,     sys_pkey_free)
+ __SYSCALL(__NR_statx,     sys_statx)
+ #define __NR_rseq 293
+ __SYSCALL(__NR_rseq, sys_rseq)
+-/* 294 through 402 are unassigned to sync up with generic numbers, don't use */
++#define __NR_kexec_file_load 294
++__SYSCALL(__NR_kexec_file_load,     sys_kexec_file_load)
++/* 295 through 402 are unassigned to sync up with generic numbers, don't use */
+ #if __BITS_PER_LONG == 32
+ #define __NR_clock_gettime64 403
+ __SYSCALL(__NR_clock_gettime64, sys_clock_gettime)
+-- 
+2.38.1.584.g0f3c55d4c2-goog
+

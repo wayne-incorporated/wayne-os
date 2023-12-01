@@ -1,0 +1,323 @@
+From dc6b8308a0e882317a43397df377cbaf117bfdb9 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 4 Aug 2022 09:41:29 -0300
+Subject: [PATCH 108/163] x86: Add inhibit_stack_protector on ifunc handlers
+
+---
+ sysdeps/i386/i686/multiarch/ifunc-memset.h       | 1 +
+ sysdeps/i386/i686/multiarch/ifunc-sse2-bsf.h     | 1 +
+ sysdeps/i386/i686/multiarch/ifunc-sse2-ssse3.h   | 1 +
+ sysdeps/i386/i686/multiarch/ifunc-sse2.h         | 1 +
+ sysdeps/i386/i686/multiarch/ifunc-sse4_2.h       | 1 +
+ sysdeps/i386/i686/multiarch/ifunc-ssse3-sse4_2.h | 1 +
+ sysdeps/x86_64/fpu/multiarch/ifunc-avx-fma4.h    | 1 +
+ sysdeps/x86_64/fpu/multiarch/ifunc-fma.h         | 1 +
+ sysdeps/x86_64/fpu/multiarch/ifunc-fma4.h        | 1 +
+ sysdeps/x86_64/fpu/multiarch/ifunc-sse4_1.h      | 1 +
+ sysdeps/x86_64/multiarch/ifunc-avx2.h            | 1 +
+ sysdeps/x86_64/multiarch/ifunc-evex.h            | 1 +
+ sysdeps/x86_64/multiarch/ifunc-memcmp.h          | 1 +
+ sysdeps/x86_64/multiarch/ifunc-memmove.h         | 1 +
+ sysdeps/x86_64/multiarch/ifunc-memset.h          | 1 +
+ sysdeps/x86_64/multiarch/ifunc-sse4_2.h          | 1 +
+ sysdeps/x86_64/multiarch/ifunc-strcasecmp.h      | 1 +
+ sysdeps/x86_64/multiarch/ifunc-strcpy.h          | 1 +
+ sysdeps/x86_64/multiarch/ifunc-wcslen.h          | 1 +
+ sysdeps/x86_64/multiarch/ifunc-wmemset.h         | 1 +
+ sysdeps/x86_64/multiarch/strchr.c                | 1 +
+ sysdeps/x86_64/multiarch/strcmp.c                | 1 +
+ sysdeps/x86_64/multiarch/strncmp.c               | 1 +
+ sysdeps/x86_64/multiarch/wcscpy.c                | 1 +
+ 24 files changed, 24 insertions(+)
+
+diff --git a/sysdeps/i386/i686/multiarch/ifunc-memset.h b/sysdeps/i386/i686/multiarch/ifunc-memset.h
+index 9dca987cab..a9756b37b2 100644
+--- a/sysdeps/i386/i686/multiarch/ifunc-memset.h
++++ b/sysdeps/i386/i686/multiarch/ifunc-memset.h
+@@ -24,6 +24,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2_rep) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/i386/i686/multiarch/ifunc-sse2-bsf.h b/sysdeps/i386/i686/multiarch/ifunc-sse2-bsf.h
+index 912f90fddd..6340c77ea1 100644
+--- a/sysdeps/i386/i686/multiarch/ifunc-sse2-bsf.h
++++ b/sysdeps/i386/i686/multiarch/ifunc-sse2-bsf.h
+@@ -24,6 +24,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2_bsf) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/i386/i686/multiarch/ifunc-sse2-ssse3.h b/sysdeps/i386/i686/multiarch/ifunc-sse2-ssse3.h
+index ea1ad57a33..e7b58a1836 100644
+--- a/sysdeps/i386/i686/multiarch/ifunc-sse2-ssse3.h
++++ b/sysdeps/i386/i686/multiarch/ifunc-sse2-ssse3.h
+@@ -25,6 +25,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (ssse3) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/i386/i686/multiarch/ifunc-sse2.h b/sysdeps/i386/i686/multiarch/ifunc-sse2.h
+index b6f70e920a..e2316a8655 100644
+--- a/sysdeps/i386/i686/multiarch/ifunc-sse2.h
++++ b/sysdeps/i386/i686/multiarch/ifunc-sse2.h
+@@ -23,6 +23,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (ia32) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/i386/i686/multiarch/ifunc-sse4_2.h b/sysdeps/i386/i686/multiarch/ifunc-sse4_2.h
+index 41eadf7953..23822a1078 100644
+--- a/sysdeps/i386/i686/multiarch/ifunc-sse4_2.h
++++ b/sysdeps/i386/i686/multiarch/ifunc-sse4_2.h
+@@ -23,6 +23,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (ia32) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse42) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/i386/i686/multiarch/ifunc-ssse3-sse4_2.h b/sysdeps/i386/i686/multiarch/ifunc-ssse3-sse4_2.h
+index 6b95cd7947..d38d004d1d 100644
+--- a/sysdeps/i386/i686/multiarch/ifunc-ssse3-sse4_2.h
++++ b/sysdeps/i386/i686/multiarch/ifunc-ssse3-sse4_2.h
+@@ -25,6 +25,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (ssse3) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse4_2) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/fpu/multiarch/ifunc-avx-fma4.h b/sysdeps/x86_64/fpu/multiarch/ifunc-avx-fma4.h
+index 9eb1e56afa..6d13f7b466 100644
+--- a/sysdeps/x86_64/fpu/multiarch/ifunc-avx-fma4.h
++++ b/sysdeps/x86_64/fpu/multiarch/ifunc-avx-fma4.h
+@@ -25,6 +25,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (fma) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (fma4) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/fpu/multiarch/ifunc-fma.h b/sysdeps/x86_64/fpu/multiarch/ifunc-fma.h
+index 24254c520b..2bc26e38f7 100644
+--- a/sysdeps/x86_64/fpu/multiarch/ifunc-fma.h
++++ b/sysdeps/x86_64/fpu/multiarch/ifunc-fma.h
+@@ -22,6 +22,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (fma) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/fpu/multiarch/ifunc-fma4.h b/sysdeps/x86_64/fpu/multiarch/ifunc-fma4.h
+index 93be985429..e5bf987962 100644
+--- a/sysdeps/x86_64/fpu/multiarch/ifunc-fma4.h
++++ b/sysdeps/x86_64/fpu/multiarch/ifunc-fma4.h
+@@ -24,6 +24,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (fma) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (fma4) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/fpu/multiarch/ifunc-sse4_1.h b/sysdeps/x86_64/fpu/multiarch/ifunc-sse4_1.h
+index aafda9d219..1c309f850f 100644
+--- a/sysdeps/x86_64/fpu/multiarch/ifunc-sse4_1.h
++++ b/sysdeps/x86_64/fpu/multiarch/ifunc-sse4_1.h
+@@ -22,6 +22,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (c) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse41) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-avx2.h b/sysdeps/x86_64/multiarch/ifunc-avx2.h
+index 4289df29ec..bd6dc37d02 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-avx2.h
++++ b/sysdeps/x86_64/multiarch/ifunc-avx2.h
+@@ -25,6 +25,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-evex.h b/sysdeps/x86_64/multiarch/ifunc-evex.h
+index b8f7a12ea2..11677a675d 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-evex.h
++++ b/sysdeps/x86_64/multiarch/ifunc-evex.h
+@@ -27,6 +27,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex_rtm) attribute_hidden;
+ 
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-memcmp.h b/sysdeps/x86_64/multiarch/ifunc-memcmp.h
+index 4518b0f98c..8472f4ffc2 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-memcmp.h
++++ b/sysdeps/x86_64/multiarch/ifunc-memcmp.h
+@@ -26,6 +26,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_movbe_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex_movbe) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-memmove.h b/sysdeps/x86_64/multiarch/ifunc-memmove.h
+index f8f958064c..dce3ee9550 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-memmove.h
++++ b/sysdeps/x86_64/multiarch/ifunc-memmove.h
+@@ -45,6 +45,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx512_no_vzeroupper)
+   attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-memset.h b/sysdeps/x86_64/multiarch/ifunc-memset.h
+index 64d179913c..7c36f71863 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-memset.h
++++ b/sysdeps/x86_64/multiarch/ifunc-memset.h
+@@ -43,6 +43,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx512_no_vzeroupper)
+   attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-sse4_2.h b/sysdeps/x86_64/multiarch/ifunc-sse4_2.h
+index b555ff2fac..e4ca0320bb 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-sse4_2.h
++++ b/sysdeps/x86_64/multiarch/ifunc-sse4_2.h
+@@ -23,6 +23,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse42) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-strcasecmp.h b/sysdeps/x86_64/multiarch/ifunc-strcasecmp.h
+index 766539c241..baa4b91d68 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-strcasecmp.h
++++ b/sysdeps/x86_64/multiarch/ifunc-strcasecmp.h
+@@ -27,6 +27,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-strcpy.h b/sysdeps/x86_64/multiarch/ifunc-strcpy.h
+index 5bece38f78..265c04c4e0 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-strcpy.h
++++ b/sysdeps/x86_64/multiarch/ifunc-strcpy.h
+@@ -29,6 +29,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-wcslen.h b/sysdeps/x86_64/multiarch/ifunc-wcslen.h
+index 2b29e7608a..1358f906d9 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-wcslen.h
++++ b/sysdeps/x86_64/multiarch/ifunc-wcslen.h
+@@ -26,6 +26,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/ifunc-wmemset.h b/sysdeps/x86_64/multiarch/ifunc-wmemset.h
+index 87c48e2387..a3521d3aa6 100644
+--- a/sysdeps/x86_64/multiarch/ifunc-wmemset.h
++++ b/sysdeps/x86_64/multiarch/ifunc-wmemset.h
+@@ -26,6 +26,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex_unaligned) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx512_unaligned) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/strchr.c b/sysdeps/x86_64/multiarch/strchr.c
+index de737580eb..b5645b70e7 100644
+--- a/sysdeps/x86_64/multiarch/strchr.c
++++ b/sysdeps/x86_64/multiarch/strchr.c
+@@ -33,6 +33,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/strcmp.c b/sysdeps/x86_64/multiarch/strcmp.c
+index 68cb73baad..d1fa888721 100644
+--- a/sysdeps/x86_64/multiarch/strcmp.c
++++ b/sysdeps/x86_64/multiarch/strcmp.c
+@@ -34,6 +34,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/strncmp.c b/sysdeps/x86_64/multiarch/strncmp.c
+index fca74199d8..840d5733af 100644
+--- a/sysdeps/x86_64/multiarch/strncmp.c
++++ b/sysdeps/x86_64/multiarch/strncmp.c
+@@ -34,6 +34,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (avx2_rtm) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (evex) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+diff --git a/sysdeps/x86_64/multiarch/wcscpy.c b/sysdeps/x86_64/multiarch/wcscpy.c
+index 6a2d1421d9..5898205188 100644
+--- a/sysdeps/x86_64/multiarch/wcscpy.c
++++ b/sysdeps/x86_64/multiarch/wcscpy.c
+@@ -30,6 +30,7 @@ extern __typeof (REDIRECT_NAME) OPTIMIZE (sse2) attribute_hidden;
+ extern __typeof (REDIRECT_NAME) OPTIMIZE (ssse3) attribute_hidden;
+ 
+ static inline void *
++inhibit_stack_protector
+ IFUNC_SELECTOR (void)
+ {
+   const struct cpu_features* cpu_features = __get_cpu_features ();
+-- 
+2.37.2
+

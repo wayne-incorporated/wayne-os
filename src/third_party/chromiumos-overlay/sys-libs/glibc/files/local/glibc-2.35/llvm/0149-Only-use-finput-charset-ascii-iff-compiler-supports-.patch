@@ -1,0 +1,148 @@
+From cb3de0bdb7cc758fe6ccd6178d97f36debdad54d Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 13:58:03 -0300
+Subject: [PATCH 149/163] Only use -finput-charset=ascii iff compiler supports
+ it
+
+---
+ Makefile                           |  2 ++
+ Rules                              |  2 ++
+ configure                          | 22 ++++++++++++++++++++++
+ configure.ac                       | 10 ++++++++++
+ scripts/check-installed-headers.sh | 12 +++++++++---
+ 5 files changed, 45 insertions(+), 3 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 73c3ef1e76..e7a9a8af95 100644
+--- a/Makefile
++++ b/Makefile
+@@ -544,6 +544,7 @@ $(objpfx)check-installed-headers-c.out: \
+     scripts/check-installed-headers.sh $(headers)
+ 	$(SHELL) $(..)scripts/check-installed-headers.sh c \
+ 	  "$(CC) $(filter-out -std=%,$(CFLAGS)) -D_ISOMAC $(+includes)" \
++	  $(config-cflags-charset-ascii) \
+ 	  $(headers) > $@; \
+ 	$(evaluate-test)
+ 
+@@ -554,6 +555,7 @@ $(objpfx)check-installed-headers-cxx.out: \
+     scripts/check-installed-headers.sh $(headers)
+ 	$(SHELL) $(..)scripts/check-installed-headers.sh c++ \
+ 	  "$(CXX) $(filter-out -std=%,$(CXXFLAGS)) -D_ISOMAC $(+includes)" \
++	  $(config-cflags-charset-ascii) \
+ 	  $(headers) > $@; \
+ 	$(evaluate-test)
+ endif # $(CXX)
+diff --git a/Rules b/Rules
+index ac9455d6a7..91cf297aa5 100644
+--- a/Rules
++++ b/Rules
+@@ -90,6 +90,7 @@ $(objpfx)check-installed-headers-c.out: \
+     $(..)scripts/check-installed-headers.sh $(headers)
+ 	$(SHELL) $(..)scripts/check-installed-headers.sh c \
+ 	  "$(CC) $(filter-out -std=%,$(CFLAGS)) -D_ISOMAC $(+includes)" \
++	  $(config-cflags-charset-ascii) \
+ 	  $(headers) > $@; \
+ 	$(evaluate-test)
+ 
+@@ -102,6 +103,7 @@ $(objpfx)check-installed-headers-cxx.out: \
+     $(..)scripts/check-installed-headers.sh $(headers)
+ 	$(SHELL) $(..)scripts/check-installed-headers.sh c++ \
+ 	  "$(CXX) $(filter-out -std=%,$(CXXFLAGS)) -D_ISOMAC $(+includes)" \
++	  $(config-cflags-charset-ascii) \
+ 	  $(headers) > $@; \
+ 	$(evaluate-test)
+ endif # $(CXX)
+diff --git a/configure b/configure
+index 8b1c2c01d6..31b2b65fe7 100755
+--- a/configure
++++ b/configure
+@@ -6648,6 +6648,28 @@ $as_echo "$libc_cv_cc_trampoline" >&6; }
+ config_vars="$config_vars
+ have-cc-trampoline = $libc_cv_cc_trampoline"
+ 
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking if $CC supports -finput-charset=ascii" >&5
++$as_echo_n "checking if $CC supports -finput-charset=ascii... " >&6; }
++if ${libc_cv_cc_charset_ascii+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  if { ac_try='${CC-cc} -Werror -finput-charset=ascii -xc /dev/null -S -o /dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }; then :
++  libc_cv_cc_charset_ascii=yes
++else
++  libc_cv_cc_charset_ascii=no
++fi
++
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_cc_charset_ascii" >&5
++$as_echo "$libc_cv_cc_charset_ascii" >&6; }
++config_vars="$config_vars
++config-cflags-charset-ascii = $libc_cv_cc_charset_ascii"
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libgd" >&5
+ $as_echo_n "checking for libgd... " >&6; }
+ if test "$with_gd" != "no"; then
+diff --git a/configure.ac b/configure.ac
+index 839d3d5815..c2f378d837 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1672,6 +1672,16 @@ rm -f conftest*])
+ LIBC_CONFIG_VAR([have-cc-trampoline],
+ 		[$libc_cv_cc_trampoline])
+ 
++dnl Check if -finput-charset accepts ascii
++AC_CACHE_CHECK([if $CC supports -finput-charset=ascii],
++	       libc_cv_cc_charset_ascii, [dnl
++LIBC_TRY_CC_OPTION([-Werror -finput-charset=ascii],
++		   [libc_cv_cc_charset_ascii=yes],
++		   [libc_cv_cc_charset_ascii=no])
++])
++LIBC_CONFIG_VAR([config-cflags-charset-ascii],
++		[$libc_cv_cc_charset_ascii])
++
+ dnl Check whether we have the gd library available.
+ AC_MSG_CHECKING(for libgd)
+ if test "$with_gd" != "no"; then
+diff --git a/scripts/check-installed-headers.sh b/scripts/check-installed-headers.sh
+index 0876d2643a..457902d3b4 100644
+--- a/scripts/check-installed-headers.sh
++++ b/scripts/check-installed-headers.sh
+@@ -29,8 +29,8 @@ cxx_modes="-std=c++98 -std=gnu++98 -std=c++11 -std=gnu++11"
+ # These are probably the most commonly used three.
+ lib_modes="-D_DEFAULT_SOURCE=1 -D_GNU_SOURCE=1 -D_XOPEN_SOURCE=700"
+ 
+-if [ $# -lt 3 ]; then
+-    echo "usage: $0 c|c++ \"compile command\" header header header..." >&2
++if [ $# -lt 4 ]; then
++    echo "usage: $0 c|c++ \"compile command\" \"yes|no\" header header header..." >&2
+     exit 2
+ fi
+ case "$1" in
+@@ -49,6 +49,12 @@ esac
+ shift
+ cc_cmd="$1"
+ shift
++if [ "$1" = "yes" ]; then
++     finputcharset="-finput-charset=ascii"
++else
++     finputcharset=""
++fi
++shift
+ trap "rm -f '$cih_test_c'" 0
+ 
+ failed=0
+@@ -118,7 +124,7 @@ $expanded_lib_mode
+ #include <$header>
+ int avoid_empty_translation_unit;
+ EOF
+-            if $cc_cmd -finput-charset=ascii -fsyntax-only $lang_mode \
++            if $cc_cmd $finputcharset -fsyntax-only $lang_mode \
+ 		       "$cih_test_c" 2>&1
+             then :
+             else failed=1
+-- 
+2.37.2
+

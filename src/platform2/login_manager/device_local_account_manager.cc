@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include <base/memory/ptr_util.h>
 #include <base/strings/string_util.h>
 #include <brillo/cryptohome.h>
+#include <brillo/files/file_util.h>
 
 #include "bindings/chrome_device_policy.pb.h"
 #include "login_manager/policy_service.h"
@@ -63,7 +64,7 @@ void DeviceLocalAccountManager::UpdateDeviceSettings(
     if (IsValidAccountKey(subdir.BaseName().value()) &&
         policy_map_.find(subdir.BaseName().value()) == policy_map_.end()) {
       LOG(INFO) << "Purging " << subdir.value();
-      if (!base::DeletePathRecursively(subdir))
+      if (!brillo::DeletePathRecursively(subdir))
         LOG(ERROR) << "Failed to delete " << subdir.value();
     }
   }
@@ -112,16 +113,10 @@ PolicyService* DeviceLocalAccountManager::GetPolicyService(
   return entry->second.get();
 }
 
-void DeviceLocalAccountManager::PersistAllPolicy() {
-  for (const auto& kv : policy_map_) {
-    if (kv.second)
-      kv.second->PersistAllPolicy();
-  }
-}
-
 std::string DeviceLocalAccountManager::GetAccountKey(
     const std::string& account_id) {
-  return brillo::cryptohome::home::SanitizeUserName(account_id);
+  return *brillo::cryptohome::home::SanitizeUserName(
+      brillo::cryptohome::home::Username(account_id));
 }
 
 bool DeviceLocalAccountManager::IsValidAccountKey(const std::string& str) {

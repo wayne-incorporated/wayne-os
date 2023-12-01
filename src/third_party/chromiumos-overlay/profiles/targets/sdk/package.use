@@ -1,0 +1,177 @@
+# Copyright 2014 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Since we execute bzip2 outside of the chroot, we need to statically
+# link this to avoid library mismatch errors.  http://crosbug.com/32519
+app-arch/bzip2 static-libs
+app-arch/lbzip2 static
+# Same for pigz.
+app-arch/pigz static
+sys-libs/zlib static-libs
+
+# Drop this once we audit code to make sure we aren't using `echo -n` or `echo -e`.
+app-shells/dash	vanilla
+
+net-misc/openssh kerberos hpn
+sys-apps/flashrom dediprog ft2232_spi serprog
+dev-lang/python gdbm
+sys-apps/smartmontools	-daemon
+sys-fs/lvm2 -udev thin lvm
+
+# Start rolling out Python 3.8.
+virtual/target-chromium-os-sdk python_targets_python3_8
+
+# Set Python 3.8 as /usr/bin/python{,3}
+dev-lang/python-exec-conf -python_targets_python3_6
+
+# Enable Python 3.8 for select packages.
+chromeos-base/chromeos-config-host -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+chromeos-base/zephyr-build-tools -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+chromeos-base/chromeos-zephyr -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+dev-embedded/binman -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+dev-embedded/patman -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+dev-util/meson -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+dev-vcs/dtoc -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+>=cross-aarch64-cros-linux-gnu/gdb-13.1-r2 -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+>=cross-arm-none-eabi/gdb-13.1-r2 -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+>=cross-armv7a-cros-linux-gnueabihf/gdb-13.1-r2 -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+>=cross-armv7m-cros-eabi/gdb-13.1-r2 -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+>=cross-i686-cros-linux-gnu/gdb-13.1-r2 -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+>=cross-x86_64-cros-linux-gnu/gdb-13.1-r2 -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+>=cross-x86_64-cros-linux-gnux32/gdb-13.1-r2 -python_targets_python3_6 -python_single_target_python3_6 python_single_target_python3_8
+
+# Use pcre2 rather than pcre as everything else has moved.
+sys-libs/libselinux pcre2
+
+# mksquashfs used in build_image requires lzo/lz4/zstd support.
+# Also include lzma compressor for flexibility.
+sys-fs/squashfs-tools lzo lz4 lzma zstd
+
+# some prebuilt binaries created on Ubuntu like to link against libtinfo.
+sys-libs/ncurses tinfo
+
+# We don't need this, so don't bother enabling.
+dev-libs/libxslt -python
+# We don't need Java cups support.
+dev-java/icedtea-bin -cups -gtk headless-awt -multilib -webstart
+dev-java/openjdk-bin -cups
+# We don't want cups-filters to pull in ghostscript.
+net-print/cups-filters -postscript
+# We don't use python features in cups.
+net-print/cups -python
+# We don't need lsusb.py as we have the compiled lsusb program.
+sys-apps/usbutils	-python
+# We don't use any of the python files this package installs.
+dev-util/boost-build	-python
+# We don't use libfdti's Python bindings.
+dev-embedded/libftdi -python
+# USE=doc is needed for basic `perf --help` output.
+# USE=coresight enables Arm's CoreSight trace decoding.
+dev-util/perf	audit coresight doc -python tui -unwind
+
+# Disable Segger J-Link for building openocd-0.10.0. We currently
+# don't use J-Link. It requires upgrading libjaylink, which is not yet
+# supported by official Gentoo portage repository.
+dev-embedded/openocd	-jlink
+
+# Provide 32-lib libc++ libraries.
+# https://crbug.com/756528
+sys-libs/libcxxabi abi_x86_32
+sys-libs/libcxx abi_x86_32
+sys-libs/llvm-libunwind abi_x86_32
+
+# We're not removing libgcc_s.so from GCC yet.
+sys-devel/gcc -llvm_libgcc
+
+# vaapi is not used through ffmpeg on ChromiumOS, avoid dependency for sdk
+media-video/ffmpeg -vaapi
+
+# Enable XML in GDB
+sys-devel/gdb	xml
+cross-aarch64-cros-linux-gnu/gdb	xml
+cross-arm-none-eabi/gdb	xml
+cross-armv6j-cros-linux-gnueabi/gdb	xml
+cross-armv7a-cros-linux-gnueabi/gdb	xml
+cross-armv7a-cros-linux-gnueabihf/gdb	xml
+cross-i686-cros-linux-gnu/gdb	xml
+cross-mipsel-cros-linux-gnu/gdb	xml
+cross-x86_64-cros-linux-gnu/gdb	xml
+
+# Build qemu's userland helpers statically so we can copy them into sysroots
+# and run unittests standalone.  Build qemu's softmmu helpers statically so
+# we can run vms outside of the chroot.
+app-emulation/qemu	-doc -pin-upstream-blobs -seccomp static-user usb virtfs
+dev-libs/glib		static-libs
+dev-libs/libpcre2	static-libs
+sys-apps/attr		static-libs
+sys-libs/zlib		static-libs
+
+# Enable building shellcheck statically so we can make it available to tricium
+# and developer workstations.
+dev-libs/gmp		static-libs
+dev-libs/libffi		static-libs
+
+# MariaDB connector must run in MySQL compatible mode in the SDK for autotest
+dev-db/mariadb-connector-c  mysqlcompat
+
+dev-lang/ruby -rdoc
+
+# Required packages for Android ITS. See 2.2.1. Software installation from
+# http://androidxref.com/9.0.0_r3/raw/cts/apps/CameraITS/CameraITS.pdf for
+# details.
+dev-python/pillow jpeg
+media-libs/opencv -openmp png jpeg
+
+# LibYAML offers significant speedup for cros_config_host.
+dev-python/pyyaml libyaml
+
+# We don't need Python in these packages, so save some space.
+dev-libs/boost -python
+
+# Disable cairo for pygobject to avoid pulling in more python 2 packages as
+# dependencies.
+dev-python/pygobject -cairo
+
+# Disable crypt for vim so sodium is not used.
+app-editors/vim -crypt
+
+# cbindgen expects to be able to unwind panics rather than immediately abort.
+# This behavior is not compatible with the -Cpanic=abort flag normally
+# added by cros-rust eclass. Disable this flag for cbindgen.
+dev-rust/cbindgen -panic-abort
+
+# We don't need translated man pages.  b/248739853
+sys-apps/man-db -nls
+# Or any other translated messages.
+app-arch/xz-utils -nls
+app-crypt/mit-krb5 -nls
+app-crypt/rhash -nls
+app-editors/vim -nls
+app-editors/vim-core -nls
+dev-vcs/git -nls
+sys-apps/help2man -nls
+sys-apps/net-tools -nls
+sys-libs/binutils-libs -nls
+sys-power/cpupower -nls
+
+# We don't need any of these binaries provided by wireshark. We're only looking
+# for tshark.
+net-analyzer/wireshark -capinfos -captype -dftest -dumpcap -editcap -mergecap
+net-analyzer/wireshark -randpkt -randpktdump -reordercap -sharkd -text2pcap
+
+# Disable unneeded features in SDK.
+net-misc/curl -adns -imap -pop3 -smtp -tftp
+
+# We don't need or want su in the SDK. Use sudo instead.
+sys-apps/util-linux -su
+
+# Set minimal for perl and major packages.
+dev-lang/perl minimal
+dev-perl/libintl-perl minimal
+dev-perl/Try-Tiny minimal
+dev-perl/Net-HTTP minimal
+dev-perl/File-ShareDir minimal
+
+# Enable rustc-demangle on the sdk side for dump_syms.
+chromeos-base/google-breakpad rustc-demangle

@@ -1,0 +1,31 @@
+commit a58017e5cae5be948fd1913b68d46553e87aa622
+Author: Elizabeth Andrews <elizabeth.andrews@intel.com>
+Date:   Wed Feb 12 11:30:02 2020 -0800
+
+    Fix type-dependency of bitfields in templates
+    
+    This patch is a follow up to 878a24ee244a24. Name of bitfields
+    with value-dependent width should be set as type-dependent. This
+    patch adds the required value-dependency check and sets the
+    type-dependency accordingly.
+    
+    Patch fixes PR44886
+    
+    Differential revision: https://reviews.llvm.org/D72242
+
+diff --git a/clang/lib/AST/Expr.cpp b/clang/lib/AST/Expr.cpp
+index d9291616c66..7e8808f84ea 100644
+--- a/clang/lib/AST/Expr.cpp
++++ b/clang/lib/AST/Expr.cpp
+@@ -1680,6 +1680,11 @@ MemberExpr *MemberExpr::Create(
+     CXXRecordDecl *RD = dyn_cast_or_null<CXXRecordDecl>(DC);
+     if (RD && RD->isDependentContext() && RD->isCurrentInstantiation(DC))
+       E->setTypeDependent(T->isDependentType());
++
++    // Bitfield with value-dependent width is type-dependent.
++    FieldDecl *FD = dyn_cast<FieldDecl>(MemberDecl);
++    if (FD && FD->isBitField() && FD->getBitWidth()->isValueDependent())
++      E->setTypeDependent(true);
+   }
+ 
+   if (HasQualOrFound) {

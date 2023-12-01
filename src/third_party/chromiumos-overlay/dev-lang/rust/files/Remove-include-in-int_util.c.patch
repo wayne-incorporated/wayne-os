@@ -1,0 +1,34 @@
+From b468cd6f44138a28f705ef5b2ef2ada228030d89 Mon Sep 17 00:00:00 2001
+From: Michael Benfield <mbenfield@google.com>
+Date: Fri, 18 Nov 2022 19:29:18 +0000
+Subject: [PATCH] Remove include in int_util.c.
+
+This is necessary due to the Rust build's use of -ffreestanding.
+
+This was previously solved with a `sed` command in `cros-rustc.eclass`.
+
+See crbug/730845.
+
+Once this commit
+https://github.com/rust-lang/compiler-builtins/commit/c10cfb3fcf4c6a29bd2cba25fc5dab19eac8df50
+is in use by our Rust version, we will no longer need this patch.
+---
+ compiler-rt/lib/builtins/int_util.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/compiler-rt/lib/builtins/int_util.c b/compiler-rt/lib/builtins/int_util.c
+index bbb735ccf279..5198a060efb8 100644
+--- a/compiler-rt/lib/builtins/int_util.c
++++ b/compiler-rt/lib/builtins/int_util.c
+@@ -42,7 +42,7 @@ void __compilerrt_abort_impl(const char *file, int line, const char *function) {
+ #else
+ 
+ #ifdef _WIN32
+-#include <stdlib.h>
++void abort();
+ #endif
+ 
+ #ifndef _WIN32
+-- 
+2.38.1.584.g0f3c55d4c2-goog
+

@@ -1,4 +1,4 @@
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -57,9 +57,5 @@ mod_image_for_test () {
       "${SCRIPTS_DIR}/bin/cros_make_image_bootable" "${BUILD_DIR}" \
          ${image_name} --force_developer_mode
     fi
-  fi
-
-  if type board_test_setup &>/dev/null; then
-    board_test_setup "${BUILD_DIR}/${image_name}"
   fi
 }

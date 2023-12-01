@@ -1,0 +1,69 @@
+From 5e1cfa7aacc9a3d16f2a64d27a139f7353e07b0d Mon Sep 17 00:00:00 2001
+From: Sean Kau <skau@chromium.org>
+Date: Tue, 25 Apr 2023 16:40:29 -0700
+Subject: [PATCH 1/2] fonts-config.patch
+
+Chromium OS has different needs for fontconfig than is typical. Our list of
+fonts is the same for every user (there is only one linux user anyway).
+Also, the list can never change.
+
+We explicitly list the font directories to be searched for fonts, which come
+from the read-only partition.  This prevents potentially malicious fonts from
+being installed in writable directories such as ~/.fonts that are not subject
+to verification.  Explicitly listing every font directory allows us to specify
+exactly which fonts we want in the font cache.  This is necessary so that we
+can generate the font cache during build_packages and produce a prebuilt binary
+with all the cache files.  This speeds up build_image for ARM boards by up to
+9 minutes (crbug.com/205424).  The font directories are listed in the local.conf
+file to make it easier to add or remove fonts in the future. Finally, by
+excluding FC_FONTPATH we also make sure that nonexistent directories added in
+ebuilds (/usr/local/share/fonts) are not searched.
+
+In addition, we remove the rescan directive because the font list won't
+change.
+
+
+---
+ fonts.conf.in | 20 --------------------
+ 1 file changed, 20 deletions(-)
+
+diff --git a/fonts.conf.in b/fonts.conf.in
+index 44a4484..8817864 100644
+--- a/fonts.conf.in
++++ b/fonts.conf.in
+@@ -22,14 +22,6 @@
+ 	Keith Packard
+ -->
+ 
+-<!-- Font directory list -->
+-
+-@FC_DEFAULT_FONTS@
+-	@FC_FONTPATH@
+-	<dir prefix="xdg">fonts</dir>
+-	<!-- the following element will be removed in the future -->
+-	<dir>~/.fonts</dir>
+-
+ <!--
+   Accept deprecated 'mono' alias, replacing it with 'monospace'
+ -->
+@@ -85,17 +77,5 @@
+ <!-- Font cache directory list -->
+ 
+ 	<cachedir>@FC_CACHEDIR@</cachedir>
+-	<cachedir prefix="xdg">fontconfig</cachedir>
+-	<!-- the following element will be removed in the future -->
+-	<cachedir>~/.fontconfig</cachedir>
+-
+-	<config>
+-<!--
+-  Rescan configuration every 30 seconds when FcFontSetList is called
+- -->
+-		<rescan>
+-			<int>30</int>
+-		</rescan>
+-	</config>
+ 
+ </fontconfig>
+-- 
+2.40.0.634.g4ca3ef3211-goog
+

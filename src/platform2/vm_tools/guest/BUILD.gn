@@ -1,0 +1,359 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("../sommelier/wayland_protocol.gni")
+
+group("guest") {
+  deps = [
+    ":garcon",
+    ":guest_service_failure_notifier",
+    ":maitred",
+    ":upgrade_container",
+    ":virtwl_guest_proxy",
+    ":vm_syslog",
+    "//vm_tools:vshd",
+  ]
+  if (!use.fuzzer) {
+    # Exclude notificationd and the demos from fuzzer builds since they
+    # pull in wayland, which causes build problems.
+    deps += [
+      ":notificationd",
+      ":wayland_demo",
+      ":x11_demo",
+    ]
+  }
+  if (use.test) {
+    deps += [
+      ":garcon_desktop_file_test",
+      ":garcon_icon_finder_test",
+      ":garcon_icon_index_file_test",
+      ":garcon_mime_types_parser_test",
+      ":maitred_init_test",
+      ":maitred_service_test",
+      ":maitred_syslog_test",
+      ":notificationd_test",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":garcon_desktop_file_fuzzer",
+      ":garcon_icon_index_file_fuzzer",
+      ":garcon_ini_parse_util_fuzzer",
+      ":garcon_mime_types_parser_fuzzer",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [ "libchrome" ]
+}
+
+static_library("libmaitred") {
+  sources = [
+    "../maitred/init.cc",
+    "../maitred/service_impl.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  defines = [
+    "USE_VM_BOREALIS=${use.vm_borealis}",
+    "USE_VM_SLUDGE=${use.vm_sludge}",
+  ]
+  pkg_deps = [
+    "grpc++",
+    "libbrillo",
+    "protobuf",
+    "vm_protos",
+  ]
+}
+
+static_library("libgarcon") {
+  sources = [
+    "../garcon/ansible_playbook_application.cc",
+    "../garcon/arc_sideload.cc",
+    "../garcon/desktop_file.cc",
+    "../garcon/file_chooser_dbus_service.cc",
+    "../garcon/host_notifier.cc",
+    "../garcon/icon_finder.cc",
+    "../garcon/icon_index_file.cc",
+    "../garcon/ini_parse_util.cc",
+    "../garcon/mime_types_parser.cc",
+    "../garcon/package_kit_proxy.cc",
+    "../garcon/screensaver_dbus_service.cc",
+    "../garcon/service_impl.cc",
+    "../garcon/xdg_util.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  pkg_deps = [
+    "grpc++",
+    "protobuf",
+    "vm_protos",
+  ]
+}
+
+static_library("libsyslog") {
+  sources = [
+    "../syslog/collector.cc",
+    "../syslog/guest_collector.cc",
+    "../syslog/parser.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  all_dependent_pkg_deps = [ "libminijail" ]
+  pkg_deps = [
+    "grpc++",
+    "protobuf",
+    "vm_protos",
+  ]
+}
+
+executable("maitred") {
+  sources = [ "../maitred/main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":libmaitred",
+    "//vm_tools:libvm_tools_common",
+  ]
+}
+
+executable("garcon") {
+  sources = [ "../garcon/main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":libgarcon",
+    "//vm_tools:libvm_tools_common",
+  ]
+}
+
+executable("guest_service_failure_notifier") {
+  sources = [ "../guest_service_failure_notifier/main.cc" ]
+  configs += [ ":target_defaults" ]
+  pkg_deps = [
+    "grpc++",
+    "protobuf",
+    "vm_protos",
+  ]
+}
+
+executable("vm_syslog") {
+  sources = [ "../syslog/main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libsyslog" ]
+}
+
+executable("virtwl_guest_proxy") {
+  sources = [ "../virtwl_guest_proxy/main.c" ]
+  configs += [ ":target_defaults" ]
+  ldflags = [ "-pthread" ]
+}
+
+if (!use.fuzzer) {
+  wayland_protocol_library("notification-protocol") {
+    sources = [ "../notificationd/protocol/notification-shell-unstable-v1.xml" ]
+    configs = [ ":target_defaults" ]
+    out_dir = "include"
+  }
+
+  static_library("libnotificationd") {
+    sources = [
+      "../notificationd/dbus_service.cc",
+      "../notificationd/notification_daemon.cc",
+      "../notificationd/notification_shell_client.cc",
+    ]
+    include_dirs = [ ".." ]
+    defines = [ "WL_HIDE_DEPRECATED" ]
+    public_pkg_deps = [
+      "wayland-client",
+      "wayland-server",
+    ]
+    pkg_deps = [
+      "dbus-1",
+      "libbrillo",
+    ]
+    deps = [ ":notification-protocol" ]
+  }
+
+  executable("notificationd") {
+    sources = [ "../notificationd/notificationd.cc" ]
+    include_dirs = [ ".." ]
+    public_pkg_deps = [
+      "wayland-client",
+      "wayland-server",
+    ]
+    pkg_deps = [
+      "dbus-1",
+      "libbrillo",
+    ]
+    deps = [
+      ":libnotificationd",
+      ":notification-protocol",
+    ]
+  }
+
+  executable("wayland_demo") {
+    sources = [ "../demos/wayland_demo.cc" ]
+    libs = [ "wayland-client" ]
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+      "wayland-client",
+    ]
+  }
+
+  executable("x11_demo") {
+    sources = [ "../demos/x11_demo.cc" ]
+    libs = [ "X11" ]
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+    ]
+  }
+}
+
+copy("upgrade_container") {
+  sources = [ "../upgrade_container/upgrade_container" ]
+  outputs = [ "$root_out_dir/upgrade_container" ]
+}
+
+if (use.test) {
+  executable("maitred_init_test") {
+    sources = [ "../maitred/init_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libmaitred",
+      "../../common-mk/testrunner:testrunner",
+      "//vm_tools:libvm_tools_common",
+    ]
+  }
+
+  executable("maitred_service_test") {
+    sources = [ "../maitred/service_impl_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libmaitred",
+      "../../common-mk/testrunner:testrunner",
+      "//vm_tools:libvm_tools_common",
+    ]
+  }
+
+  executable("maitred_syslog_test") {
+    sources = [
+      "../syslog/collector_test.cc",
+      "../syslog/parser_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libsyslog",
+      "../../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("garcon_desktop_file_test") {
+    sources = [ "../garcon/desktop_file_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libgarcon",
+      "../../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("garcon_icon_index_file_test") {
+    sources = [ "../garcon/icon_index_file_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libgarcon",
+      "../../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("garcon_icon_finder_test") {
+    sources = [ "../garcon/icon_finder_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libgarcon",
+      "../../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("garcon_mime_types_parser_test") {
+    sources = [ "../garcon/mime_types_parser_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libgarcon",
+      "../../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("notificationd_test") {
+    sources = [ "../notificationd/dbus_service_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    public_pkg_deps = [
+      "wayland-client",
+      "wayland-server",
+    ]
+    pkg_deps = [
+      "dbus-1",
+      "libbrillo",
+      "libchrome-test",
+    ]
+    deps = [
+      ":libnotificationd",
+      ":notification-protocol",
+      "../../common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("garcon_desktop_file_fuzzer") {
+    sources = [ "../garcon/desktop_file_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome-test" ]
+    deps = [ "//vm_tools/guest:libgarcon" ]
+  }
+
+  executable("garcon_icon_index_file_fuzzer") {
+    sources = [ "../garcon/icon_index_file_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome-test" ]
+    deps = [ "//vm_tools/guest:libgarcon" ]
+  }
+
+  executable("garcon_ini_parse_util_fuzzer") {
+    sources = [ "../garcon/ini_parse_util_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome-test" ]
+    deps = [ "//vm_tools/guest:libgarcon" ]
+  }
+
+  executable("garcon_mime_types_parser_fuzzer") {
+    sources = [ "../garcon/mime_types_parser_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome-test" ]
+    deps = [ "//vm_tools/guest:libgarcon" ]
+  }
+}

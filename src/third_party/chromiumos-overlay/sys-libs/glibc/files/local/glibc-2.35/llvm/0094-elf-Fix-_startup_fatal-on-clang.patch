@@ -1,0 +1,396 @@
+From 460480fcb7c99b6419163e5b9c224168d2b3c80b Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 10 May 2022 15:34:42 -0300
+Subject: [PATCH 094/163] elf: Fix _startup_fatal on clang
+
+clang can not see that the input string as constant one, so
+__builtin_constant_p fails and a strlen might be issue.  Instead
+change TLS_INIT_TP to return the string size.
+---
+ csu/libc-tls.c                    |  8 ++++----
+ elf/rtld.c                        | 11 ++++-------
+ sysdeps/aarch64/nptl/tls.h        |  2 +-
+ sysdeps/alpha/nptl/tls.h          |  2 +-
+ sysdeps/arc/nptl/tls.h            |  3 +--
+ sysdeps/csky/nptl/tls.h           |  3 +--
+ sysdeps/hppa/nptl/tls.h           |  2 +-
+ sysdeps/i386/nptl/tls.h           |  4 ++--
+ sysdeps/ia64/nptl/tls.h           |  2 +-
+ sysdeps/m68k/nptl/tls.h           |  2 +-
+ sysdeps/mach/hurd/i386/tls.h      | 10 +++++-----
+ sysdeps/microblaze/nptl/tls.h     |  2 +-
+ sysdeps/mips/nptl/tls.h           |  3 +--
+ sysdeps/nios2/nptl/tls.h          |  2 +-
+ sysdeps/or1k/nptl/tls.h           |  2 +-
+ sysdeps/powerpc/nptl/tls.h        |  2 +-
+ sysdeps/riscv/nptl/tls.h          |  2 +-
+ sysdeps/s390/nptl/tls.h           |  2 +-
+ sysdeps/sh/nptl/tls.h             |  2 +-
+ sysdeps/sparc/nptl/tls.h          |  2 +-
+ sysdeps/unix/sysv/linux/arm/tls.h |  3 +--
+ sysdeps/x86_64/nptl/tls.h         |  4 +++-
+ 22 files changed, 35 insertions(+), 40 deletions(-)
+
+diff --git a/csu/libc-tls.c b/csu/libc-tls.c
+index 0a216c5502..0948b10ccb 100644
+--- a/csu/libc-tls.c
++++ b/csu/libc-tls.c
+@@ -191,15 +191,15 @@ __libc_setup_tls (void)
+ #if TLS_TCB_AT_TP
+   INSTALL_DTV ((char *) tlsblock + tcb_offset, _dl_static_dtv);
+ 
+-  const char *lossage = TLS_INIT_TP ((char *) tlsblock + tcb_offset);
++  bool tlsinit = TLS_INIT_TP ((char *) tlsblock + tcb_offset);
+ #elif TLS_DTV_AT_TP
+   INSTALL_DTV (tlsblock, _dl_static_dtv);
+-  const char *lossage = TLS_INIT_TP (tlsblock);
++  bool tlsinit = TLS_INIT_TP (tlsblock);
+ #else
+ # error "Either TLS_TCB_AT_TP or TLS_DTV_AT_TP must be defined"
+ #endif
+-  if (__builtin_expect (lossage != NULL, 0))
+-    _startup_fatal (lossage);
++  if (__glibc_unlikely (!tlsinit))
++    _startup_fatal ("cannot set base address for thread-local storage");
+   __tls_init_tp ();
+ 
+   /* Update the executable's link map with enough information to make
+diff --git a/elf/rtld.c b/elf/rtld.c
+index 747c6f2c03..62512b639a 100644
+--- a/elf/rtld.c
++++ b/elf/rtld.c
+@@ -810,9 +810,8 @@ cannot allocate TLS data structures for initial thread\n");
+   GL(dl_initial_dtv) = GET_DTV (tcbp);
+ 
+   /* And finally install it for the main thread.  */
+-  const char *lossage = TLS_INIT_TP (tcbp);
+-  if (__glibc_unlikely (lossage != NULL))
+-    _dl_fatal_printf ("cannot set up thread-local storage: %s\n", lossage);
++  if (__glibc_unlikely (!TLS_INIT_TP (tcbp)))
++    _dl_fatal_printf ("cannot set up thread-local storage\n");
+   __tls_init_tp ();
+   tls_init_tp_called = true;
+ 
+@@ -2507,10 +2506,8 @@ dl_main (const ElfW(Phdr) *phdr,
+   /* And finally install it for the main thread.  */
+   if (! tls_init_tp_called)
+     {
+-      const char *lossage = TLS_INIT_TP (tcbp);
+-      if (__glibc_unlikely (lossage != NULL))
+-	_dl_fatal_printf ("cannot set up thread-local storage: %s\n",
+-			  lossage);
++      if (__glibc_unlikely (!TLS_INIT_TP (tcbp)))
++	_dl_fatal_printf ("cannot set up thread-local storage\n");
+       __tls_init_tp ();
+     }
+ 
+diff --git a/sysdeps/aarch64/nptl/tls.h b/sysdeps/aarch64/nptl/tls.h
+index 8d62b31e23..3e91f5df90 100644
+--- a/sysdeps/aarch64/nptl/tls.h
++++ b/sysdeps/aarch64/nptl/tls.h
+@@ -72,7 +72,7 @@ typedef struct
+    special attention since 'errno' is not yet available and if the
+    operation can cause a failure 'errno' must not be touched.  */
+ # define TLS_INIT_TP(tcbp) \
+-  ({ __asm __volatile ("msr tpidr_el0, %0" : : "r" (tcbp)); NULL; })
++  ({ __asm __volatile ("msr tpidr_el0, %0" : : "r" (tcbp)); true; })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd) + 1
+diff --git a/sysdeps/alpha/nptl/tls.h b/sysdeps/alpha/nptl/tls.h
+index ddf7de0705..b3d5699d5a 100644
+--- a/sysdeps/alpha/nptl/tls.h
++++ b/sysdeps/alpha/nptl/tls.h
+@@ -69,7 +69,7 @@ typedef struct
+    special attention since 'errno' is not yet available and if the
+    operation can cause a failure 'errno' must not be touched.  */
+ # define TLS_INIT_TP(tcbp) \
+-  (__builtin_set_thread_pointer ((void *)(tcbp)), NULL)
++  ({ __builtin_set_thread_pointer ((void *)(tcbp)), true; })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd) + 1
+diff --git a/sysdeps/arc/nptl/tls.h b/sysdeps/arc/nptl/tls.h
+index 15adfc9491..31c83494ea 100644
+--- a/sysdeps/arc/nptl/tls.h
++++ b/sysdeps/arc/nptl/tls.h
+@@ -75,8 +75,7 @@ typedef struct
+ 	long result_var;					\
+ 	__builtin_set_thread_pointer (tcbp);     		\
+ 	result_var = INTERNAL_SYSCALL_CALL (arc_settls, (tcbp));\
+-	INTERNAL_SYSCALL_ERROR_P (result_var)			\
+-	  ? "settls syscall error" : NULL;			\
++	INTERNAL_SYSCALL_ERROR_P (result_var);			\
+    })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+diff --git a/sysdeps/csky/nptl/tls.h b/sysdeps/csky/nptl/tls.h
+index cd135d5464..4e1f50a657 100644
+--- a/sysdeps/csky/nptl/tls.h
++++ b/sysdeps/csky/nptl/tls.h
+@@ -92,8 +92,7 @@ typedef struct
+   ({ long int result_var;						\
+      result_var = INTERNAL_SYSCALL_CALL (set_thread_area, 		\
+                     (char *) (tcbp) + TLS_TCB_OFFSET);			\
+-     INTERNAL_SYSCALL_ERROR_P (result_var)				\
+-       ? "unknown error" : NULL; })
++     INTERNAL_SYSCALL_ERROR_P (result_var); })
+ 
+ /* Return the address of the dtv for the current thread.  */
+ # define THREAD_DTV() \
+diff --git a/sysdeps/hppa/nptl/tls.h b/sysdeps/hppa/nptl/tls.h
+index 204960d524..2a27014632 100644
+--- a/sysdeps/hppa/nptl/tls.h
++++ b/sysdeps/hppa/nptl/tls.h
+@@ -74,7 +74,7 @@ typedef struct
+    special attention since 'errno' is not yet available and if the
+    operation can cause a failure 'errno' must not be touched.  */
+ # define TLS_INIT_TP(tcbp) \
+-  ({ __set_cr27(tcbp); NULL; })
++  ({ __set_cr27(tcbp); true; })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd) + 1
+diff --git a/sysdeps/i386/nptl/tls.h b/sysdeps/i386/nptl/tls.h
+index 91090bf287..c1c6f08126 100644
+--- a/sysdeps/i386/nptl/tls.h
++++ b/sysdeps/i386/nptl/tls.h
+@@ -203,8 +203,8 @@ tls_fill_user_desc (union user_desc_init *desc,
+ 	  which is necessary since we have changed it.   */		      \
+        TLS_SET_GS (_segdescr.desc.entry_number * 8 + 3);		      \
+ 									      \
+-     _result == 0 ? NULL						      \
+-     : "set_thread_area failed when setting up thread-local storage\n"; })
++      _result == 0 ? true : false;					      \
++   })
+ 
+ # define TLS_DEFINE_INIT_TP(tp, pd)					      \
+   union user_desc_init _segdescr;					      \
+diff --git a/sysdeps/ia64/nptl/tls.h b/sysdeps/ia64/nptl/tls.h
+index 8ccedb73e6..5a8aea15f0 100644
+--- a/sysdeps/ia64/nptl/tls.h
++++ b/sysdeps/ia64/nptl/tls.h
+@@ -105,7 +105,7 @@ register struct pthread *__thread_self __asm__("r13");
+    special attention since 'errno' is not yet available and if the
+    operation can cause a failure 'errno' must not be touched.  */
+ # define TLS_INIT_TP(thrdescr) \
+-  (__thread_self = (thrdescr), INIT_SYSINFO, NULL)
++  ({ __thread_self = (thrdescr), INIT_SYSINFO, true; })
+ 
+ /* Value passed to 'clone2' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) \
+diff --git a/sysdeps/m68k/nptl/tls.h b/sysdeps/m68k/nptl/tls.h
+index 30d58e36e9..675cb3971f 100644
+--- a/sysdeps/m68k/nptl/tls.h
++++ b/sysdeps/m68k/nptl/tls.h
+@@ -90,7 +90,7 @@ typedef struct
+ 									\
+     _sys_result = INTERNAL_SYSCALL_CALL (set_thread_area, 		\
+ 				    ((void *) (tcbp)) + TLS_TCB_OFFSET); \
+-    INTERNAL_SYSCALL_ERROR_P (_sys_result) ? "unknown error" : NULL; })
++    INTERNAL_SYSCALL_ERROR_P (_sys_result); })
+ 
+ # define TLS_DEFINE_INIT_TP(tp, pd) \
+   void *tp = (void *) (pd) + TLS_TCB_OFFSET + TLS_PRE_TCB_SIZE
+diff --git a/sysdeps/mach/hurd/i386/tls.h b/sysdeps/mach/hurd/i386/tls.h
+index 264ed9a9c5..547ab849fd 100644
+--- a/sysdeps/mach/hurd/i386/tls.h
++++ b/sysdeps/mach/hurd/i386/tls.h
+@@ -107,12 +107,12 @@ typedef struct
+ 
+ # define HURD_SEL_LDT(sel) (__builtin_expect ((sel) & 4, 0))
+ 
+-static inline const char * __attribute__ ((unused))
++static inline bool __attribute__ ((unused))
+ _hurd_tls_init (tcbhead_t *tcb)
+ {
+   HURD_TLS_DESC_DECL (desc, tcb);
+   thread_t self = __mach_thread_self ();
+-  const char *msg = NULL;
++  bool ret = true;
+ 
+   /* This field is used by TLS accesses to get our "thread pointer"
+      from the TLS point of view.  */
+@@ -131,14 +131,14 @@ _hurd_tls_init (tcbhead_t *tcb)
+       assert_perror (err);
+       if (err)
+       {
+-	msg = "i386_set_ldt failed";
++	ret = false;
+ 	goto out;
+       }
+     }
+   else if (err)
+     {
+       assert_perror (err); /* Separate from above with different line #. */
+-      msg = "i386_set_gdt failed";
++      ret = false;
+       goto out;
+     }
+ 
+@@ -147,7 +147,7 @@ _hurd_tls_init (tcbhead_t *tcb)
+ 
+ out:
+   __mach_port_deallocate (__mach_task_self (), self);
+-  return msg;
++  return ret;
+ }
+ 
+ /* Code to initially initialize the thread pointer.  This might need
+diff --git a/sysdeps/microblaze/nptl/tls.h b/sysdeps/microblaze/nptl/tls.h
+index 40a6acd71e..a46d5835e1 100644
+--- a/sysdeps/microblaze/nptl/tls.h
++++ b/sysdeps/microblaze/nptl/tls.h
+@@ -75,7 +75,7 @@ typedef struct
+ /* Code to initially initialize the thread pointer.
+    r21 is reserved for thread pointer.  */
+ # define TLS_INIT_TP(tcbp) \
+-  ({ __asm __volatile ("or r21,r0,%0" : : "r" ((void *)tcbp)); NULL; })
++  ({ __asm __volatile ("or r21,r0,%0" : : "r" ((void *)tcbp)); true; })
+ 
+ # define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd) + 1
+ 
+diff --git a/sysdeps/mips/nptl/tls.h b/sysdeps/mips/nptl/tls.h
+index 03a5b24abd..ddd6ab895e 100644
+--- a/sysdeps/mips/nptl/tls.h
++++ b/sysdeps/mips/nptl/tls.h
+@@ -116,8 +116,7 @@ typedef struct
+   ({ long int result_var;						\
+      result_var = INTERNAL_SYSCALL_CALL (set_thread_area, 		\
+ 				    (char *) (tcbp) + TLS_TCB_OFFSET);	\
+-     INTERNAL_SYSCALL_ERROR_P (result_var)				\
+-       ? "unknown error" : NULL; })
++     INTERNAL_SYSCALL_ERROR_P (result_var); })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) \
+diff --git a/sysdeps/nios2/nptl/tls.h b/sysdeps/nios2/nptl/tls.h
+index 18080275ef..128d9451d2 100644
+--- a/sysdeps/nios2/nptl/tls.h
++++ b/sysdeps/nios2/nptl/tls.h
+@@ -88,7 +88,7 @@ register struct pthread *__thread_self __asm__("r23");
+ 
+ /* Code to initially initialize the thread pointer.  */
+ # define TLS_INIT_TP(tcbp) \
+-  (__thread_self = (struct pthread *) ((char *) tcbp + TLS_TCB_OFFSET), NULL)
++  ({ __thread_self = (struct pthread *) ((char *) tcbp + TLS_TCB_OFFSET), true; })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) \
+diff --git a/sysdeps/or1k/nptl/tls.h b/sysdeps/or1k/nptl/tls.h
+index c6ffe62c3f..0e2cce7fa0 100644
+--- a/sysdeps/or1k/nptl/tls.h
++++ b/sysdeps/or1k/nptl/tls.h
+@@ -112,7 +112,7 @@ register tcbhead_t *__thread_self __asm__("r10");
+    It's hard to fail this, so return NULL always.  */
+ 
+ # define TLS_INIT_TP(tcbp) \
+-  ({__thread_self = ((tcbhead_t *)tcbp + 1); NULL;})
++  ({__thread_self = ((tcbhead_t *)tcbp + 1); true; })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) \
+diff --git a/sysdeps/powerpc/nptl/tls.h b/sysdeps/powerpc/nptl/tls.h
+index b80d39ad41..dc65fe59db 100644
+--- a/sysdeps/powerpc/nptl/tls.h
++++ b/sysdeps/powerpc/nptl/tls.h
+@@ -139,7 +139,7 @@ typedef struct
+     __thread_register = (void *) (tcbp) + TLS_TCB_OFFSET;		      \
+     THREAD_SET_HWCAP (__tcb_hwcap);					      \
+     THREAD_SET_AT_PLATFORM (__tcb_platform);				      \
+-    NULL;								      \
++    true;								      \
+   })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+diff --git a/sysdeps/riscv/nptl/tls.h b/sysdeps/riscv/nptl/tls.h
+index 4e586f348a..ab0df3681c 100644
+--- a/sysdeps/riscv/nptl/tls.h
++++ b/sysdeps/riscv/nptl/tls.h
+@@ -79,7 +79,7 @@ typedef struct
+ 
+ /* Code to initially initialize the thread pointer.  */
+ # define TLS_INIT_TP(tcbp) \
+-  ({ __thread_self = (char*)tcbp + TLS_TCB_OFFSET; NULL; })
++  ({ __thread_self = (char*)tcbp + TLS_TCB_OFFSET; true; })
+ 
+ /* Return the address of the dtv for the current thread.  */
+ # define THREAD_DTV() \
+diff --git a/sysdeps/s390/nptl/tls.h b/sysdeps/s390/nptl/tls.h
+index ff210ffeb2..5d300789c5 100644
+--- a/sysdeps/s390/nptl/tls.h
++++ b/sysdeps/s390/nptl/tls.h
+@@ -112,7 +112,7 @@ typedef struct
+      INIT_SYSINFO;							      \
+ 									      \
+     __builtin_set_thread_pointer (_thrdescr);				      \
+-    NULL;								      \
++    true;								      \
+   })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+diff --git a/sysdeps/sh/nptl/tls.h b/sysdeps/sh/nptl/tls.h
+index 76591ab6ef..7fe5663713 100644
+--- a/sysdeps/sh/nptl/tls.h
++++ b/sysdeps/sh/nptl/tls.h
+@@ -83,7 +83,7 @@ typedef struct
+    special attention since 'errno' is not yet available and if the
+    operation can cause a failure 'errno' must not be touched.  */
+ # define TLS_INIT_TP(tcbp) \
+-  ({ __asm __volatile ("ldc %0,gbr" : : "r" (tcbp)); NULL; })
++  ({ __asm __volatile ("ldc %0,gbr" : : "r" (tcbp)); true; })
+ 
+ # define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd) + 1
+ 
+diff --git a/sysdeps/sparc/nptl/tls.h b/sysdeps/sparc/nptl/tls.h
+index d1e2bb4ad1..73302637be 100644
+--- a/sysdeps/sparc/nptl/tls.h
++++ b/sysdeps/sparc/nptl/tls.h
+@@ -89,7 +89,7 @@ register struct pthread *__thread_self __asm__("%g7");
+ 
+ /* Code to initially initialize the thread pointer.  */
+ # define TLS_INIT_TP(descr) \
+-  (__thread_self = (__typeof (__thread_self)) (descr), NULL)
++  ({ __thread_self = (__typeof (__thread_self)) (descr), true; })
+ 
+ /* Value passed to 'clone' for initialization of the thread register.  */
+ # define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd)
+diff --git a/sysdeps/unix/sysv/linux/arm/tls.h b/sysdeps/unix/sysv/linux/arm/tls.h
+index 9d1601af44..045fad2275 100644
+--- a/sysdeps/unix/sysv/linux/arm/tls.h
++++ b/sysdeps/unix/sysv/linux/arm/tls.h
+@@ -33,8 +33,7 @@
+ # define TLS_INIT_TP(tcbp) \
+   ({ long int result_var;						\
+      result_var = INTERNAL_SYSCALL_CALL (set_tls, (tcbp));		\
+-     INTERNAL_SYSCALL_ERROR_P (result_var)				\
+-       ? "unknown error" : NULL; })
++     !INTERNAL_SYSCALL_ERROR_P (result_var); })
+ 
+ #endif /* __ASSEMBLER__ */
+ 
+diff --git a/sysdeps/x86_64/nptl/tls.h b/sysdeps/x86_64/nptl/tls.h
+index 75f8020975..7a36c9b60c 100644
+--- a/sysdeps/x86_64/nptl/tls.h
++++ b/sysdeps/x86_64/nptl/tls.h
+@@ -132,6 +132,8 @@ _Static_assert (offsetof (tcbhead_t, __glibc_unused2) == 0x80,
+ # define GET_DTV(descr) \
+   (((tcbhead_t *) (descr))->dtv)
+ 
++# define TLS_INIT_TP_ERR_MSG \
++  "cannot set %fs base address for thread-local storage"
+ 
+ /* Code to initially initialize the thread pointer.  This might need
+    special attention since 'errno' is not yet available and if the
+@@ -156,7 +158,7 @@ _Static_assert (offsetof (tcbhead_t, __glibc_unused2) == 0x80,
+ 		     "S" (_thrdescr)					      \
+ 		   : "memory", "cc", "r11", "cx");			      \
+ 									      \
+-    _result ? "cannot set %fs base address for thread-local storage" : 0;     \
++     _result ? false : true;						      \
+   })
+ 
+ # define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd)
+-- 
+2.37.2
+

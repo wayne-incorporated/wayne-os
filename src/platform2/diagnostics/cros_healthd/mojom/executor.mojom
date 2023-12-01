@@ -1,0 +1,452 @@
+// Copyright 2020 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// API exposed by cros_healthd's root-level executor. This is used by the
+// sandboxed cros_healthd daemon when it needs to perform a high-privilege
+// operation.
+
+module ash.cros_healthd.mojom;
+
+import "diagnostics/mojom/external/time.mojom";
+import "diagnostics/mojom/public/cros_healthd_diagnostics.mojom";
+import "diagnostics/mojom/public/cros_healthd_events.mojom";
+import "diagnostics/mojom/public/cros_healthd_probe.mojom";
+import "diagnostics/mojom/public/cros_healthd_routines.mojom";
+import "diagnostics/mojom/public/nullable_primitives.mojom";
+
+// Provides the result of running a process.
+struct ExecutedProcessResult {
+  // Return code received from the process (0=success). If this is non-zero then
+  // stdout and/or stderr may be empty.
+  int32 return_code;
+  // Contents of stdout from running the process.
+  string out;
+  // Contents of stderr from running the process. If this is non-empty it may
+  // indicate there is a problem, even if |return_code| is 0.
+  string err;
+};
+
+// Fingerprint info result.
+struct FingerprintInfoResult {
+  // Whether the firmware copy is RW or not.
+  bool rw_fw;
+};
+
+// Fingerprint frame result.
+struct FingerprintFrameResult {
+  // Frame data. The length is |width| * |height|.
+  array<uint8> frame;
+  // Frame width.
+  int32 width;
+  // Frame height.
+  int32 height;
+};
+
+// An enumeration of fingerprint capture type.
+//
+// NextMinVersion: 1, NextIndex: 3
+enum FingerprintCaptureType {
+  // Checkerboard test.
+  kCheckerboardTest = 0,
+  // Inverted checkerboard test.
+  kInvertedCheckerboardTest = 1,
+  // Pixel reset value test.
+  kResetTest = 2,
+};
+
+// An enumeration of stressapptest test type.
+//
+// NextMinVersion: 1, NextIndex: 2
+enum StressAppTestType {
+  // Cpu Stress test.
+  kCpuStress = 0,
+  // Cpu Cache test.
+  kCpuCache = 1,
+};
+
+// Control the lifecycle of a child process of executor.
+interface ProcessControl {
+  // Get a file descriptor to the stdout output of the process.
+  GetStdout() => (handle stdout);
+  // Get a file descriptor to the stderr output of the process.
+  GetStderr() => (handle stderr);
+  // Get the return code of the process. This method will return after the
+  // process has finished.
+  GetReturnCode() => (int32 return_code);
+  // Kill the process.
+  Kill();
+};
+
+// Implemented by clients who desire audio jack notifications.
+interface AudioJackObserver {
+  OnAdd(AudioJackEventInfo.DeviceType device_type);
+  OnRemove(AudioJackEventInfo.DeviceType device_type);
+};
+
+// Implemented by clients who desire touchpad notifications.
+interface TouchpadObserver {
+  OnButton(TouchpadButtonEvent button_event);
+  OnTouch(TouchpadTouchEvent touch_event);
+  OnConnected(TouchpadConnectedEvent connected_event);
+};
+
+// Implemented by clients who desire touchscreen notifications.
+interface TouchscreenObserver {
+  OnTouch(TouchscreenTouchEvent touch_event);
+  OnConnected(TouchscreenConnectedEvent connected_event);
+};
+
+// Implemented by clients who desire stylus garage notifications.
+interface StylusGarageObserver {
+  OnInsert();
+  OnRemove();
+};
+
+// Implemented by clients who desire stylus notifications.
+interface StylusObserver {
+  OnTouch(StylusTouchEvent touch_event);
+  OnConnected(StylusConnectedEvent connected_event);
+};
+
+// File stat as returned by `Executor::GetFileInfo`. This is not a full list of
+// file stat; new fields are added as needed.
+struct FileInfo {
+  // File creation time. Corresponding to struct statx::stx_btime.
+  //
+  // This is not supported on all filesystems. See inode manpage:
+  // https://man7.org/linux/man-pages/man7/inode.7.html
+  //
+  // This is known to work on ext4:
+  // https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=99652ea56a4186bc5bf8a3721c5353f41b35ebcb
+  ash.cros_healthd.external.mojo_base.mojom.Time creation_time;
+};
+
+// Argument for fio prepare job.
+struct PrepareJobArgument {
+  // Test file size in megabytes.
+  uint32 file_size_mb;
+};
+
+// Argument for fio read job.
+struct ReadJobArgument {
+  // Dedicated duration for reading test files, which will be rounded towards
+  // zero to the nearest second.
+  ash.cros_healthd.external.mojo_base.mojom.TimeDelta exec_duration;
+  // Type of disk read.
+  DiskReadTypeEnum disk_read_type;
+};
+
+union FioJobArgument {
+  // Create a test file with md5 checksum and validate the md5 checksum of read
+  // back.
+  PrepareJobArgument prepare@0;
+  // Read the test file either randomly or linearly, repeatedly for the
+  // dedicated duration.
+  ReadJobArgument read@1;
+};
+
+// Implemented by clients who desire power button notifications.
+interface PowerButtonObserver {
+  enum ButtonState {
+    // The button is up.
+    kUp,
+    // The button is down.
+    kDown,
+    // The button is hold down.
+    kRepeat,
+  };
+  OnEvent(ButtonState button_state);
+};
+
+// Implemented by clients who desire volume button notifications.
+interface VolumeButtonObserver {
+  enum Button {
+    // The volume up button.
+    kVolumeUp,
+    // The volume down button.
+    kVolumeDown,
+  };
+  enum ButtonState {
+    // The button is up.
+    kUp,
+    // The button is down.
+    kDown,
+    // The button is hold down.
+    kRepeat,
+  };
+  OnEvent(Button button, ButtonState button_state);
+};
+
+// Root-level executor interface exposed to the cros_healthd daemon. In
+// production, this is implemented by the Executor daemon.
+interface Executor {
+  enum File {
+    kCrashLog,
+    kUEFISecureBootVariable,
+    kUEFIPlatformSize,
+    kWirelessPowerScheme,
+  };
+  // Reads file. Returns the content or null if failed.
+  ReadFile(File file_enum) => (string? content);
+  // Reads part of a file for |size| bytes starting from location |begin|.
+  // Returns the content or null if failed. If reaches EOF before reading |size|
+  // bytes, or does not provide |size|, then returns the part between |begin|
+  // and EOF.
+  ReadFilePart(File file_enum, uint64 begin, uint64? size) => (string? content);
+  // Gets file info. Returns the file info or null if failed.
+  GetFileInfo(File file_enum) => (FileInfo? info);
+
+  // Obtains fan speed by running ectool and returns the result.
+  //
+  // The response:
+  // * |result| - contains information received from running the tool.
+  GetFanSpeed() => (ExecutedProcessResult result);
+
+  // Runs the `iw` command and returns the result.
+  enum IwCommand {
+    kDev, // interface_name is not used for this subcommand.
+    kLink,
+    kInfo,
+    kScanDump,
+  };
+  RunIw(IwCommand cmd, string interface_name) => (ExecutedProcessResult result);
+
+  // Runs memtester and returns the result. The executor can only run one
+  // instance of the memtester process at a time, which is reasonable since
+  // memtester mlocks the vast majority of the device's memory, and a second
+  // memtester process would have no memory to test.
+  //
+  // The request:
+  // * |test_mem_kib| - The amount of memory used for memory test, should be
+  //                    greater than zero.
+  // The response:
+  // * |result| - contains information received from running memtester.
+  RunMemtester(uint32 test_mem_kib) => (ExecutedProcessResult result);
+
+  // Runs memtester and returns the result. The executor uses ProcessControl to
+  // take control of the process lifetime, making sure the process is terminated
+  // when mojo disconnects.
+  //
+  // The request:
+  // * |test_mem_kib| - The amount of memory used for memory test, should be
+  //                    greater than zero.
+  // * |receiver| - The receiver which will be ound to a Process Control class
+  //                that will manage the memtester binary's lifetime.
+  RunMemtesterV2(uint32 test_mem_kib, pending_receiver<ProcessControl> receiver);
+
+  // Kills an existing memtester process, which must have been started by the
+  // executor.
+  KillMemtester();
+
+  // Reads the I/O file of each process in the array and returns a map of the
+  // raw, trimmed contents with no parsing.
+  //
+  // The response:
+  // * |contents| - a map that contains contents of each I/O file with pids as
+  //                keys.
+  GetProcessIOContents(array<uint32> pids) => (map<uint32, string> contents);
+
+  // Reads MSR register from /dev/cpu/|cpu_index|/msr file.
+  //
+  // The response:
+  // * |contents| - contains the value of 64-bit MSR register value.
+  ReadMsr(uint32 msr_reg, uint32 cpu_index) => (NullableUint64? value);
+
+  // Obtains lid angle from EC. Returns null if error is happened.
+  GetLidAngle() => (uint16? lid_angle);
+
+  // Get fingerprint frame data with specific capture type. We only support
+  // testing related capture type.
+  //
+  // The request:
+  // * |type| - The capture type.
+  //
+  // The response:
+  // * |result| - Fingerprint frame result.
+  // * |err| - Error message if existed.
+  GetFingerprintFrame(FingerprintCaptureType type)
+      => (FingerprintFrameResult result, string? err);
+
+  // Get fingerprint information.
+  //
+  // The response:
+  // * |result| - Fingerprint information.
+  // * |err| - Error message if existed.
+  GetFingerprintInfo() => (FingerprintInfoResult result, string? err);
+
+  // Set the target LED to the specified color.
+  //
+  // The request:
+  // * |name| - The target LED.
+  // * |color| - The specified LED color.
+  //
+  // The response:
+  // * |err| - Error message if existed.
+  SetLedColor(LedName name, LedColor color) => (string? err);
+
+  // Switch the LED back to be automatically controlled by EC.
+  //
+  // The request:
+  // * |name| - The target LED.
+  //
+  // The response:
+  // * |err| - Error message if existed.
+  ResetLedColor(LedName name) => (string? err);
+
+  // Obtains HCI device configuration of hci0 by running hciconfig and returns
+  // the result.
+  //
+  // The response:
+  // * |result| - contains information of hci0 received from running the tool.
+  GetHciDeviceConfig() => (ExecutedProcessResult result);
+
+  // Monitor audio jack events.
+  //
+  // The request:
+  // * |observer| - The observer to notify client.
+  // * |process_control| - Used to stop the monitor process.
+  MonitorAudioJack(pending_remote<AudioJackObserver> observer,
+                   pending_receiver<ProcessControl> process_control);
+
+  // Monitor touchpad events.
+  //
+  // The request:
+  // * |observer| - The observer to notify client.
+  // * |process_control| - Used to stop the monitor process.
+  MonitorTouchpad(pending_remote<TouchpadObserver> observer,
+                  pending_receiver<ProcessControl> process_control);
+
+  // Runs stressapptest and returns the result. The executor uses ProcessControl
+  // to take control of the process lifetime, making sure the process is terminated
+  // at the correct time.
+  //
+  // The request:
+  // * |test_mem_mib| - The amount of memory used for stressapptest test, should be
+  //                    greater than zero.
+  // * |test_seconds| - The number of seconds to run the stressapptest, should
+  //                    be greater than zero.
+  // * |test_type| - What type of test the stressapptest should run.
+  // * |receiver| - The receiver which will be bound to a ProcessControl class
+  //                that will manage the stressapptest binary's lifetime.
+  RunStressAppTest(uint32 test_mem_mib, uint32 test_seconds,
+            StressAppTestType test_type,
+            pending_receiver<ProcessControl> receiver);
+
+  // Fetch boot performance info.
+  FetchBootPerformance() => (BootPerformanceResult result);
+
+  // Monitor touchscreen events.
+  //
+  // The request:
+  // * |observer| - The observer to notify client.
+  // * |process_control| - Used to stop the monitor process.
+  MonitorTouchscreen(pending_remote<TouchscreenObserver> observer,
+                     pending_receiver<ProcessControl> process_control);
+
+  // Monitor stylus garage events.
+  //
+  // The request:
+  // * |observer| - The observer to notify client.
+  // * |process_control| - Used to stop the monitor process.
+  MonitorStylusGarage(pending_remote<StylusGarageObserver> observer,
+                      pending_receiver<ProcessControl> process_control);
+
+  // Monitor stylus events.
+  //
+  // The request:
+  // * |observer| - The observer to notify client.
+  // * |process_control| - Used to stop the monitor process.
+  MonitorStylus(pending_remote<StylusObserver> observer,
+                pending_receiver<ProcessControl> process_control);
+
+  // Get Platform Service Record (PSR) information.
+  //
+  // The response:
+  // * |result| - PSR information result.
+  // * |err| - Error message if existed.
+  GetPsr() => (PsrInfo result, string? err);
+
+  // Run fio and return the result.
+  //
+  // The request:
+  // * |argument| - Argument for fio prepare job and read job.
+  // * |receiver| - The receiver which will be ound to a Process Control class
+  //                that will manage the memtester binary's lifetime.
+  RunFio(FioJobArgument argument,
+         pending_receiver<ProcessControl> receiver);
+
+  // Remove the test file created by fio and return the result.
+  //
+  // The response:
+  // * |result| - contains information of removing test file by running rm.
+  RemoveFioTestFile() => (ExecutedProcessResult result);
+
+  // Get the free disk space of fio test directory in bytes.
+  //
+  // The response:
+  // * |free_space_byte| - Free disk space of fio test directory in bytes.
+  GetFioTestDirectoryFreeSpace() => (uint64? free_space_byte);
+
+  // Returns a map of connector_ids to display info that records the
+  // active HDMI connectors.
+  //
+  // The response:
+  // * |connectors| - Maps the connector_id to its corresponding display info.
+  // * |err| - Error message if existed.
+  GetConnectedHdmiConnectors()
+      => (map<uint32, ExternalDisplayInfo> connectors, string? err);
+
+  // Returns whether a privacy screen is supported and whether is enabled on the
+  // embedded display.
+  //
+  // The response:
+  // * |privacy_screen_supported| - Whether privacy screen is supported on the
+  //                                device.
+  // * |privacy_screen_enabled| - Whether privacy screen is on.
+  GetPrivacyScreenInfo() => (bool privacy_screen_supported,
+                             bool privacy_screen_enabled,
+                             string? err);
+
+  // Fetch display info.
+  //
+  // The response:
+  // * |result| - Struct containing display info.
+  FetchDisplayInfo() => (DisplayResult result);
+
+  // Fetch crash information by calling crash_sender.
+  //
+  // The response:
+  // * |result| - contains information received from running crash_sender.
+  FetchCrashFromCrashSender() => (ExecutedProcessResult result);
+
+  // Monitor power button events.
+  //
+  // The request:
+  // * |observer| - The observer to notify client.
+  // * |process_control| - Used to stop the monitor process.
+  MonitorPowerButton(pending_remote<PowerButtonObserver> observer,
+                     pending_receiver<ProcessControl> process_control);
+
+  // Run a prime search routine.
+  //
+  // The request:
+  // * |duration_sec| - The number of seconds this routine can run.
+  // * |max_num| - The maximum number under which all prime number should be
+  //               found.
+  // * |process_control| - Used to run and collect status about the running
+  //                       process.
+  //
+  // The response:
+  // * |result| - Whether the routine has passed successfully.
+  RunPrimeSearch(uint32 duration_sec, uint64 max_num,
+                  pending_receiver<ProcessControl> process_control) => (bool passed);
+
+  // Monitor volume button events.
+  //
+  // The request:
+  // * |observer| - The observer to notify client.
+  // * |process_control| - Used to stop the monitor process.
+  MonitorVolumeButton(pending_remote<VolumeButtonObserver> observer,
+                      pending_receiver<ProcessControl> process_control);
+};

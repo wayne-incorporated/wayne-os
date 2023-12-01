@@ -1,0 +1,113 @@
+commit fc4494dffa5422b2be5442c235554e76bed79c8a
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Thu Apr 13 09:30:19 2023 -0700
+
+    [StackProtector] don't check stack protector before calling nounwind functions
+    
+    https://reviews.llvm.org/rGd656ae28095726830f9beb8dbd4d69f5144ef821
+    introduced a additional checks before calling noreturn functions in
+    response to this security paper related to Catch Handler Oriented
+    Programming (CHOP):
+    https://download.vusec.net/papers/chop_ndss23.pdf
+    See also:
+    https://bugs.chromium.org/p/llvm/issues/detail?id=30
+    
+    This causes stack canaries to be inserted in C code which was
+    unexpected; we noticed certain Linux kernel trees stopped booting after
+    this (in functions trying to initialize the stack canary itself).
+    https://github.com/ClangBuiltLinux/linux/issues/1815
+    
+    There is no point checking the stack canary like this when exceptions
+    are disabled (-fno-exceptions or function is marked noexcept) or for C
+    code.  The GCC patch for this issue does something similar:
+    https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=a25982ada523689c8745d7fb4b1b93c8f5dab2e7
+    
+    Android measured a 2% regression in RSS as a result of d656ae280957 and
+    undid it globally:
+    https://android-review.googlesource.com/c/platform/build/soong/+/2524336
+    
+    Reviewed By: xiangzhangllvm
+    
+    Differential Revision: https://reviews.llvm.org/D147975
+
+diff --git a/llvm/lib/CodeGen/StackProtector.cpp b/llvm/lib/CodeGen/StackProtector.cpp
+index 05ac176461a5..387b653f8815 100644
+--- a/llvm/lib/CodeGen/StackProtector.cpp
++++ b/llvm/lib/CodeGen/StackProtector.cpp
+@@ -482,18 +482,15 @@ bool StackProtector::InsertStackProtectors() {
+     if (&BB == FailBB)
+       continue;
+     Instruction *CheckLoc = dyn_cast<ReturnInst>(BB.getTerminator());
+-    if (!CheckLoc && !DisableCheckNoReturn) {
+-      for (auto &Inst : BB) {
+-        auto *CB = dyn_cast<CallBase>(&Inst);
+-        if (!CB)
+-          continue;
+-        if (!CB->doesNotReturn())
+-          continue;
+-        // Do stack check before non-return calls (e.g: __cxa_throw)
+-        CheckLoc = CB;
+-        break;
+-      }
+-    }
++    if (!CheckLoc && !DisableCheckNoReturn)
++      for (auto &Inst : BB)
++        if (auto *CB = dyn_cast<CallBase>(&Inst))
++          // Do stack check before noreturn calls that aren't nounwind (e.g:
++          // __cxa_throw).
++          if (CB->doesNotReturn() && !CB->doesNotThrow()) {
++            CheckLoc = CB;
++            break;
++          }
+ 
+     if (!CheckLoc)
+       continue;
+diff --git a/llvm/test/CodeGen/X86/stack-protector-2.ll b/llvm/test/CodeGen/X86/stack-protector-2.ll
+index 14909520f914..bd6998171475 100644
+--- a/llvm/test/CodeGen/X86/stack-protector-2.ll
++++ b/llvm/test/CodeGen/X86/stack-protector-2.ll
+@@ -1,4 +1,5 @@
+-; RUN: llc -mtriple=x86_64-pc-linux-gnu -start-before=stack-protector -stop-after=stack-protector -o - < %s | FileCheck %s
++; RUN: llc -mtriple=x86_64-pc-linux-gnu -start-before=stack-protector \
++; RUN:   -stop-after=stack-protector -o - < %s | FileCheck %s
+ ; Bugs 42238/43308: Test some additional situations not caught previously.
+ 
+ define void @store_captures() #0 {
+@@ -219,5 +220,14 @@ return:                                           ; preds = %if.end, %if.then
+   ret i32 0
+ }
+ 
++declare void @callee() noreturn nounwind
++define void @caller() sspstrong {
++; Test that a stack protector is NOT inserted when we call nounwind functions.
++; CHECK-LABEL: @caller
++; CHECK-NEXT: call void @callee
++  call void @callee() noreturn nounwind
++  ret void
++}
++
+ attributes #0 = { sspstrong }
+ attributes #1 = { noreturn sspreq}
+diff --git a/llvm/test/CodeGen/X86/stack-protector-recursively.ll b/llvm/test/CodeGen/X86/stack-protector-recursively.ll
+index 383af168de77..ad7af3f302a6 100644
+--- a/llvm/test/CodeGen/X86/stack-protector-recursively.ll
++++ b/llvm/test/CodeGen/X86/stack-protector-recursively.ll
+@@ -12,15 +12,14 @@ define dso_local void @__stack_chk_fail() local_unnamed_addr #0 {
+ ; CHECK-NEXT:    cmpq (%rsp), %rax
+ ; CHECK-NEXT:    jne .LBB0_2
+ ; CHECK-NEXT:  # %bb.1: # %SP_return
+-; CHECK-NEXT:    ud2
++; CHECK-NEXT:    callq foo@PLT
+ ; CHECK-NEXT:  .LBB0_2: # %CallStackCheckFailBlk
+ ; CHECK-NEXT:    callq __stack_chk_fail
+ entry:
+-  tail call void @llvm.trap()
++  tail call void @foo() noreturn
+   unreachable
+ }
+ 
+-declare void @llvm.trap() #1
++declare void @foo() noreturn
+ 
+ attributes #0 = { noreturn nounwind sspreq }
+-attributes #1 = { noreturn nounwind }

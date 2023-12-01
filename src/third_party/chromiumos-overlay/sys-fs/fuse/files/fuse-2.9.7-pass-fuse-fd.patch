@@ -1,0 +1,141 @@
+From 047f5fe621a8f80c3ca3b0b0692d017858e21576 Mon Sep 17 00:00:00 2001
+From: Mattias Nissler <mnissler@chromium.org>
+Date: Mon, 27 Aug 2018 15:17:57 +0200
+Subject: [PATCH] Allow passing `/dev/fuse` file descriptor from parent process
+
+This adds support for a mode of operation in which a privileged parent
+process opens `/dev/fuse` and takes care of mounting. The FUSE file
+system daemon can then run as an unprivileged child that merely
+processes requests on the FUSE file descriptor, which get passed using
+the special `/dev/fd/%u` syntax for the mountpoint parameter.
+
+The main benefit is that no privileged operations need to be performed
+by the FUSE file system daemon itself directly or indirectly, so the
+FUSE process can run with fully unprivileged and mechanisms like
+securebits and no_new_privs can be used to prevent subprocesses from
+re-acquiring privilege via setuid, fscaps, etc. This reduces risk in
+case the FUSE file system gets exploited by malicious file system
+data.
+
+Below is an example that illustrates this. Note that I'm using shell
+for presentation purposes, the expectation is that the parent process
+will implement the equivalent of the `mount -i` and `capsh` commands.
+
+```
+\# example/hello can mount successfully with privilege
+$ sudo sh -c "LD_LIBRARY_PATH=build/lib ./example/hello /mnt/tmp"
+$ sudo cat /mnt/tmp/hello
+Hello World!
+$ sudo umount /mnt/tmp
+
+\# example/hello fails to mount without privilege
+$ sudo capsh --drop=all --secbits=0x2f -- -c 'LD_LIBRARY_PATH=build/lib ./example/hello -f /mnt/tmp'
+fusermount3: mount failed: Operation not permitted
+
+\# Passing FUSE file descriptor via /dev/fd/%u allows example/hello to work without privilege
+$ sudo sh -c '
+      exec 17<>/dev/fuse
+      mount -i -o nodev,nosuid,noexec,fd=17,rootmode=40000,user_id=0,group_id=0 -t fuse hello /mnt/tmp
+      capsh --drop=all --secbits=0x2f -- -c "LD_LIBRARY_PATH=build/lib example/hello /dev/fd/17"
+    '
+$ sudo cat /mnt/tmp/hello
+Hello World!
+$ sudo umount /mnt/tmp
+```
+---
+ lib/helper.c     |  5 +++++
+ lib/mount.c      | 24 ++++++++++++++++++++++++
+ lib/mount_util.c | 13 +++++++++++++
+ lib/mount_util.h |  1 +
+ 4 files changed, 43 insertions(+)
+
+--- a/lib/helper.c
++++ b/lib/helper.c
+@@ -12,6 +12,7 @@
+ #include "fuse_opt.h"
+ #include "fuse_lowlevel.h"
+ #include "fuse_common_compat.h"
++#include "mount_util.h"
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -105,6 +106,10 @@ static int fuse_helper_opt_proc(void *data, const char *arg, int key,
+ 
+ 	case FUSE_OPT_KEY_NONOPT:
+ 		if (!hopts->mountpoint) {
++			if (fuse_mnt_parse_fuse_fd(arg) != -1) {
++				return fuse_opt_add_opt(&hopts->mountpoint, arg);
++			}
++
+ 			char mountpoint[PATH_MAX];
+ 			if (realpath(arg, mountpoint) == NULL) {
+ 				fprintf(stderr,
+--- a/lib/mount.c
++++ b/lib/mount.c
+@@ -318,6 +318,13 @@ void fuse_kern_unmount(const char *mountpoint, int fd)
+ 			return;
+ 	}
+ 
++	/* We're not responsible (and most likely unable!) to unmount fuse file
++	 * descriptors passed by the parent.
++	 */
++	if (fuse_mnt_parse_fuse_fd(mountpoint) != -1) {
++		return;
++	}
++
+ 	if (geteuid() == 0) {
+ 		fuse_mnt_umount("fuse", mountpoint, mountpoint,  1);
+ 		return;
+@@ -588,6 +595,23 @@ int fuse_kern_mount(const char *mountpoint, struct fuse_args *args)
+ 	    fuse_opt_parse(args, &mo, fuse_mount_opts, fuse_mount_opt_proc) == -1)
+ 		return -1;
+ 
++	/*
++	 * To allow FUSE daemons to run without privileges, the caller may open
++	 * /dev/fuse before launching the file system and pass on the file
++	 * descriptor by specifying /dev/fd/N as the mount point. Note that the
++	 * parent process takes care of performing the mount in this case.
++	 */
++	res = fuse_mnt_parse_fuse_fd(mountpoint);
++	if (res != -1) {
++		if (fcntl(res, F_GETFD) == -1) {
++			fprintf(stderr,
++				"fuse: Invalid file descriptor /dev/fd/%u\n",
++				res);
++			res = -1;
++		}
++		goto out;
++	}
++
+ 	if (mo.allow_other && mo.allow_root) {
+ 		fprintf(stderr, "fuse: 'allow_other' and 'allow_root' options are mutually exclusive\n");
+ 		goto out;
+--- a/lib/mount_util.c
++++ b/lib/mount_util.c
+@@ -361,3 +361,16 @@ int fuse_mnt_check_fuseblk(void)
+ 	fclose(f);
+ 	return 0;
+ }
++
++int fuse_mnt_parse_fuse_fd(const char *mountpoint)
++{
++	int fd = -1;
++	int len = 0;
++
++	if (mountpoint && sscanf(mountpoint, "/dev/fd/%u%n", &fd, &len) == 1 &&
++	    len == strlen(mountpoint)) {
++		return fd;
++	}
++
++	return -1;
++}
+--- a/lib/mount_util.h
++++ b/lib/mount_util.h
+@@ -17,3 +17,4 @@ char *fuse_mnt_resolve_path(const char *progname, const char *orig);
+ int fuse_mnt_check_empty(const char *progname, const char *mnt,
+ 			 mode_t rootmode, off_t rootsize);
+ int fuse_mnt_check_fuseblk(void);
++int fuse_mnt_parse_fuse_fd(const char *mountpoint);
+-- 
+2.20.1
+

@@ -1,0 +1,318 @@
+commit 2831a317b689c7f005a29f008a8e4c24485c0711
+Author: Erich Keane <erich.keane@intel.com>
+Date:   Tue Jun 23 12:14:09 2020 -0700
+
+    Implement AVX ABI Warning/error
+    
+    The x86-64 "avx" feature changes how >128 bit vector types are passed,
+    instead of being passed in separate 128 bit registers, they can be
+    passed in 256 bit registers.
+    
+    "avx512f" does the same thing, except it switches from 256 bit registers
+    to 512 bit registers.
+    
+    The result of both of these is an ABI incompatibility between functions
+    compiled with and without these features.
+    
+    This patch implements a warning/error pair upon an attempt to call a
+    function that would run afoul of this. First, if a function is called
+    that would have its ABI changed, we issue a warning.
+    
+    Second, if said call is made in a situation where the caller and callee
+    are known to have different calling conventions (such as the case of
+    'target'), we instead issue an error.
+    
+    Differential Revision: https://reviews.llvm.org/D82562
+
+diff --git a/clang/include/clang/Basic/DiagnosticFrontendKinds.td b/clang/include/clang/Basic/DiagnosticFrontendKinds.td
+index 687c60c9c53..83c13e0dbbe 100644
+--- a/clang/include/clang/Basic/DiagnosticFrontendKinds.td
++++ b/clang/include/clang/Basic/DiagnosticFrontendKinds.td
+@@ -240,6 +240,12 @@ def err_function_needs_feature : Error<
+   "always_inline function %1 requires target feature '%2', but would "
+   "be inlined into function %0 that is compiled without support for '%2'">;
+ 
++def warn_avx_calling_convention
++    : Warning<"AVX vector %select{return|argument}0 of type %1 without '%2' "
++              "enabled changes the ABI">,
++      InGroup<DiagGroup<"psabi">>;
++def err_avx_calling_convention : Error<warn_avx_calling_convention.Text>;
++
+ def err_alias_to_undefined : Error<
+   "%select{alias|ifunc}0 must point to a defined "
+   "%select{variable or |}1function">;
+diff --git a/clang/lib/CodeGen/CGCall.cpp b/clang/lib/CodeGen/CGCall.cpp
+index 87242442a57..7af986981e5 100644
+--- a/clang/lib/CodeGen/CGCall.cpp
++++ b/clang/lib/CodeGen/CGCall.cpp
+@@ -4245,7 +4245,7 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
+   llvm::FunctionType *IRFuncTy = getTypes().GetFunctionType(CallInfo);
+ 
+   const Decl *TargetDecl = Callee.getAbstractInfo().getCalleeDecl().getDecl();
+-  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl))
++  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl)) {
+     // We can only guarantee that a function is called from the correct
+     // context/function based on the appropriate target attributes,
+     // so only check in the case where we have both always_inline and target
+@@ -4256,6 +4256,12 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
+         TargetDecl->hasAttr<TargetAttr>())
+       checkTargetFeatures(Loc, FD);
+ 
++    // Some architectures (such as x86-64) have the ABI changed based on
++    // attribute-target/features. Give them a chance to diagnose.
++    CGM.getTargetCodeGenInfo().checkFunctionCallABI(
++        CGM, Loc, dyn_cast_or_null<FunctionDecl>(CurCodeDecl), FD, CallArgs);
++  }
++
+ #ifndef NDEBUG
+   if (!(CallInfo.isVariadic() && CallInfo.getArgStruct())) {
+     // For an inalloca varargs function, we don't expect CallInfo to match the
+diff --git a/clang/lib/CodeGen/TargetInfo.cpp b/clang/lib/CodeGen/TargetInfo.cpp
+index 24237c46068..7947aff6cc2 100644
+--- a/clang/lib/CodeGen/TargetInfo.cpp
++++ b/clang/lib/CodeGen/TargetInfo.cpp
+@@ -20,6 +20,7 @@
+ #include "clang/AST/Attr.h"
+ #include "clang/AST/RecordLayout.h"
+ #include "clang/Basic/CodeGenOptions.h"
++#include "clang/Basic/DiagnosticFrontend.h"
+ #include "clang/CodeGen/CGFunctionInfo.h"
+ #include "clang/CodeGen/SwiftCallingConv.h"
+ #include "llvm/ADT/SmallBitVector.h"
+@@ -2466,8 +2467,110 @@ public:
+       }
+     }
+   }
++
++  void checkFunctionCallABI(CodeGenModule &CGM, SourceLocation CallLoc,
++                            const FunctionDecl *Caller,
++                            const FunctionDecl *Callee,
++                            const CallArgList &Args) const override;
+ };
+ 
++static void initFeatureMaps(const ASTContext &Ctx,
++                            llvm::StringMap<bool> &CallerMap,
++                            const FunctionDecl *Caller,
++                            llvm::StringMap<bool> &CalleeMap,
++                            const FunctionDecl *Callee) {
++  if (CalleeMap.empty() && CallerMap.empty()) {
++    // The caller is potentially nullptr in the case where the call isn't in a
++    // function.  In this case, the getFunctionFeatureMap ensures we just get
++    // the TU level setting (since it cannot be modified by 'target'..
++    Ctx.getFunctionFeatureMap(CallerMap, Caller);
++    Ctx.getFunctionFeatureMap(CalleeMap, Callee);
++  }
++}
++
++static bool checkAVXParamFeature(DiagnosticsEngine &Diag,
++                                 SourceLocation CallLoc,
++                                 const llvm::StringMap<bool> &CallerMap,
++                                 const llvm::StringMap<bool> &CalleeMap,
++                                 QualType Ty, StringRef Feature,
++                                 bool IsArgument) {
++  bool CallerHasFeat = CallerMap.lookup(Feature);
++  bool CalleeHasFeat = CalleeMap.lookup(Feature);
++  if (!CallerHasFeat && !CalleeHasFeat)
++    return Diag.Report(CallLoc, diag::warn_avx_calling_convention)
++           << IsArgument << Ty << Feature;
++
++  // Mixing calling conventions here is very clearly an error.
++  if (!CallerHasFeat || !CalleeHasFeat)
++    return Diag.Report(CallLoc, diag::err_avx_calling_convention)
++           << IsArgument << Ty << Feature;
++
++  // Else, both caller and callee have the required feature, so there is no need
++  // to diagnose.
++  return false;
++}
++
++static bool checkAVXParam(DiagnosticsEngine &Diag, ASTContext &Ctx,
++                          SourceLocation CallLoc,
++                          const llvm::StringMap<bool> &CallerMap,
++                          const llvm::StringMap<bool> &CalleeMap, QualType Ty,
++                          bool IsArgument) {
++  uint64_t Size = Ctx.getTypeSize(Ty);
++  if (Size > 256)
++    return checkAVXParamFeature(Diag, CallLoc, CallerMap, CalleeMap, Ty,
++                                "avx512f", IsArgument);
++
++  if (Size > 128)
++    return checkAVXParamFeature(Diag, CallLoc, CallerMap, CalleeMap, Ty, "avx",
++                                IsArgument);
++
++  return false;
++}
++
++void X86_64TargetCodeGenInfo::checkFunctionCallABI(
++    CodeGenModule &CGM, SourceLocation CallLoc, const FunctionDecl *Caller,
++    const FunctionDecl *Callee, const CallArgList &Args) const {
++  llvm::StringMap<bool> CallerMap;
++  llvm::StringMap<bool> CalleeMap;
++  unsigned ArgIndex = 0;
++
++  // We need to loop through the actual call arguments rather than the the
++  // function's parameters, in case this variadic.
++  for (const CallArg &Arg : Args) {
++    // The "avx" feature changes how vectors >128 in size are passed. "avx512f"
++    // additionally changes how vectors >256 in size are passed. Like GCC, we
++    // warn when a function is called with an argument where this will change.
++    // Unlike GCC, we also error when it is an obvious ABI mismatch, that is,
++    // the caller and callee features are mismatched.
++    // Unfortunately, we cannot do this diagnostic in SEMA, since the callee can
++    // change its ABI with attribute-target after this call.
++    if (Arg.getType()->isVectorType() &&
++        CGM.getContext().getTypeSize(Arg.getType()) > 128) {
++      initFeatureMaps(CGM.getContext(), CallerMap, Caller, CalleeMap, Callee);
++      QualType Ty = Arg.getType();
++      // The CallArg seems to have desugared the type already, so for clearer
++      // diagnostics, replace it with the type in the FunctionDecl if possible.
++      if (ArgIndex < Callee->getNumParams())
++        Ty = Callee->getParamDecl(ArgIndex)->getType();
++
++      if (checkAVXParam(CGM.getDiags(), CGM.getContext(), CallLoc, CallerMap,
++                        CalleeMap, Ty, /*IsArgument*/ true))
++        return;
++    }
++    ++ArgIndex;
++  }
++
++  // Check return always, as we don't have a good way of knowing in codegen
++  // whether this value is used, tail-called, etc.
++  if (Callee->getReturnType()->isVectorType() &&
++      CGM.getContext().getTypeSize(Callee->getReturnType()) > 128) {
++    initFeatureMaps(CGM.getContext(), CallerMap, Caller, CalleeMap, Callee);
++    checkAVXParam(CGM.getDiags(), CGM.getContext(), CallLoc, CallerMap,
++                  CalleeMap, Callee->getReturnType(),
++                  /*IsArgument*/ false);
++  }
++}
++
+ static std::string qualifyWindowsLibrary(llvm::StringRef Lib) {
+   // If the argument does not end in .lib, automatically add the suffix.
+   // If the argument contains a space, enclose it in quotes.
+diff --git a/clang/lib/CodeGen/TargetInfo.h b/clang/lib/CodeGen/TargetInfo.h
+index 250e6b81c7c..1152cabce4a 100644
+--- a/clang/lib/CodeGen/TargetInfo.h
++++ b/clang/lib/CodeGen/TargetInfo.h
+@@ -63,6 +63,13 @@ public:
+       CodeGen::CodeGenModule &CGM,
+       const llvm::MapVector<GlobalDecl, StringRef> &MangledDeclNames) const {}
+ 
++  /// Any further codegen related checks that need to be done on a function call
++  /// in a target specific manner.
++  virtual void checkFunctionCallABI(CodeGenModule &CGM, SourceLocation CallLoc,
++                                    const FunctionDecl *Caller,
++                                    const FunctionDecl *Callee,
++                                    const CallArgList &Args) const {}
++
+   /// Determines the size of struct _Unwind_Exception on this platform,
+   /// in 8-bit units.  The Itanium ABI defines this as:
+   ///   struct _Unwind_Exception {
+diff --git a/clang/test/CodeGen/target-avx-abi-diag.c b/clang/test/CodeGen/target-avx-abi-diag.c
+new file mode 100644
+index 00000000000..5b8074f3131
+--- /dev/null
++++ b/clang/test/CodeGen/target-avx-abi-diag.c
+@@ -0,0 +1,50 @@
++// RUN: %clang_cc1 %s -triple=x86_64-linux-gnu -verify=no256,no512 -o - -S
++// RUN: %clang_cc1 %s -triple=x86_64-linux-gnu -target-feature +avx -verify=no512 -o - -S
++// RUN: %clang_cc1 %s -triple=x86_64-linux-gnu -target-feature +avx512f -verify=both -o - -S
++
++// both-no-diagnostics
++
++typedef short avx512fType __attribute__((vector_size(64)));
++typedef short avx256Type __attribute__((vector_size(32)));
++
++__attribute__((target("avx"))) void takesAvx256(avx256Type t);
++__attribute__((target("avx512f"))) void takesAvx512(avx512fType t);
++void takesAvx256_no_target(avx256Type t);
++void takesAvx512_no_target(avx512fType t);
++
++void variadic(int i, ...);
++__attribute__((target("avx512f"))) void variadic_err(int i, ...);
++
++// If neither side has an attribute, warn.
++void call_warn(void) {
++  avx256Type t1;
++  takesAvx256_no_target(t1); // no256-warning {{AVX vector argument of type 'avx256Type' (vector of 16 'short' values) without 'avx' enabled changes the ABI}}
++
++  avx512fType t2;
++  takesAvx512_no_target(t2); // no512-warning {{AVX vector argument of type 'avx512fType' (vector of 32 'short' values) without 'avx512f' enabled changes the ABI}}
++
++  variadic(1, t1); // no256-warning {{AVX vector argument of type 'avx256Type' (vector of 16 'short' values) without 'avx' enabled changes the ABI}}
++  variadic(3, t2); // no512-warning {{AVX vector argument of type 'avx512fType' (vector of 32 'short' values) without 'avx512f' enabled changes the ABI}}
++}
++
++// If only 1 side has an attribute, error.
++void call_errors(void) {
++  avx256Type t1;
++  takesAvx256(t1); // no256-error {{AVX vector argument of type 'avx256Type' (vector of 16 'short' values) without 'avx' enabled changes the ABI}}
++  avx512fType t2;
++  takesAvx512(t2); // no512-error {{AVX vector argument of type 'avx512fType' (vector of 32 'short' values) without 'avx512f' enabled changes the ABI}}
++
++  variadic_err(1, t1); // no256-error {{AVX vector argument of type 'avx256Type' (vector of 16 'short' values) without 'avx' enabled changes the ABI}}
++  variadic_err(3, t2); // no512-error {{AVX vector argument of type 'avx512fType' (vector of 32 'short' values) without 'avx512f' enabled changes the ABI}}
++}
++
++// These two don't diagnose anything, since these are valid calls.
++__attribute__((target("avx"))) void call_avx256_ok(void) {
++  avx256Type t;
++  takesAvx256(t);
++}
++
++__attribute__((target("avx512f"))) void call_avx512_ok(void) {
++  avx512fType t;
++  takesAvx512(t);
++}
+diff --git a/clang/test/CodeGen/target-builtin-error-3.c b/clang/test/CodeGen/target-builtin-error-3.c
+index 5beb474befe..3de76e253d9 100644
+--- a/clang/test/CodeGen/target-builtin-error-3.c
++++ b/clang/test/CodeGen/target-builtin-error-3.c
+@@ -18,11 +18,12 @@ static inline half8 __attribute__((__overloadable__)) convert_half( float8 a ) {
+   return __extension__ ({ __m256 __a = (a); (__m128i)__builtin_ia32_vcvtps2ph256((__v8sf)__a, (0x00)); }); // expected-error {{'__builtin_ia32_vcvtps2ph256' needs target feature f16c}}
+ }
+ static inline half16 __attribute__((__overloadable__)) convert_half( float16 a ) {
+-  half16 r; 
+-  r.lo = convert_half( a.lo); 
++  half16 r;
++  r.lo = convert_half(a.lo);
+   return r;
+ }
+ void avx_test( uint16_t *destData, float16 argbF)
+ {
+-   ((half16U*)destData)[0] = convert_half(argbF);
++  // expected-warning@+1{{AVX vector argument of type 'float16' (vector of 16 'float' values) without 'avx512f' enabled changes the ABI}}
++  ((half16U *)destData)[0] = convert_half(argbF);
+ }
+diff --git a/clang/test/CodeGen/target-builtin-noerror.c b/clang/test/CodeGen/target-builtin-noerror.c
+index b2d18fa0b2c..339e5b15c88 100644
+--- a/clang/test/CodeGen/target-builtin-noerror.c
++++ b/clang/test/CodeGen/target-builtin-noerror.c
+@@ -6,15 +6,15 @@
+ 
+ // No warnings.
+ extern __m256i a;
+-int __attribute__((target("avx"))) bar(__m256i a) {
++int __attribute__((target("avx"))) bar() {
+   return _mm256_extract_epi32(a, 3);
+ }
+ 
+ int baz() {
+-  return bar(a);
++  return bar();
+ }
+ 
+-int __attribute__((target("avx"))) qq_avx(__m256i a) {
++int __attribute__((target("avx"))) qq_avx() {
+   return _mm256_extract_epi32(a, 3);
+ }
+ 
+@@ -25,7 +25,7 @@ int qq_noavx() {
+ extern __m256i a;
+ int qq() {
+   if (__builtin_cpu_supports("avx"))
+-    return qq_avx(a);
++    return qq_avx();
+   else
+     return qq_noavx();
+ }

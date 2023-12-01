@@ -1,0 +1,714 @@
+commit 6dcbc323fd8778ba6db1c4e76c809f93fc82efc5
+Author: David Green <david.green@arm.com>
+Date:   Tue Oct 20 08:55:21 2020 +0100
+
+    Revert "[ARM][LowOverheadLoops] Adjust Start insertion."
+    
+    This reverts commit 38f625d0d1360b035271422bab922d22ed04d79a.
+    
+    This commit contains some holes in its logic and has been causing
+    issues since it was commited. The idea sounds OK but some cases were not
+    handled correctly. Instead of trying to fix that up later it is probably
+    simpler to revert it and work to reimplement it in a more reliable way.
+
+diff --git a/llvm/lib/Target/ARM/ARMLowOverheadLoops.cpp b/llvm/lib/Target/ARM/ARMLowOverheadLoops.cpp
+index 2456e9c79bc..47f11df7c59 100644
+--- a/llvm/lib/Target/ARM/ARMLowOverheadLoops.cpp
++++ b/llvm/lib/Target/ARM/ARMLowOverheadLoops.cpp
+@@ -646,10 +646,47 @@ bool LowOverheadLoop::ValidateTailPredicate() {
+     return false;
+   }
+ 
++  // The element count register maybe defined after InsertPt, in which case we
++  // need to try to move either InsertPt or the def so that the [w|d]lstp can
++  // use the value.
++
++  if (StartInsertPt != StartInsertBB->end() &&
++      !RDA.isReachingDefLiveOut(&*StartInsertPt, NumElements)) {
++    if (auto *ElemDef = RDA.getLocalLiveOutMIDef(StartInsertBB, NumElements)) {
++      if (RDA.isSafeToMoveForwards(ElemDef, &*StartInsertPt)) {
++        ElemDef->removeFromParent();
++        StartInsertBB->insert(StartInsertPt, ElemDef);
++        LLVM_DEBUG(dbgs() << "ARM Loops: Moved element count def: "
++                   << *ElemDef);
++      } else if (RDA.isSafeToMoveBackwards(&*StartInsertPt, ElemDef)) {
++        StartInsertPt->removeFromParent();
++        StartInsertBB->insertAfter(MachineBasicBlock::iterator(ElemDef),
++                                   &*StartInsertPt);
++        LLVM_DEBUG(dbgs() << "ARM Loops: Moved start past: " << *ElemDef);
++      } else {
++        // If we fail to move an instruction and the element count is provided
++        // by a mov, use the mov operand if it will have the same value at the
++        // insertion point
++        MachineOperand Operand = ElemDef->getOperand(1);
++        if (isMovRegOpcode(ElemDef->getOpcode()) &&
++            RDA.getUniqueReachingMIDef(ElemDef, Operand.getReg()) ==
++               RDA.getUniqueReachingMIDef(&*StartInsertPt, Operand.getReg())) {
++          TPNumElements = Operand;
++          NumElements = TPNumElements.getReg();
++        } else {
++          LLVM_DEBUG(dbgs()
++                     << "ARM Loops: Unable to move element count to loop "
++                     << "start instruction.\n");
++          return false;
++        }
++      }
++    }
++  }
++
+   // Could inserting the [W|D]LSTP cause some unintended affects? In a perfect
+   // world the [w|d]lstp instruction would be last instruction in the preheader
+   // and so it would only affect instructions within the loop body. But due to
+-  // scheduling, and/or the logic in this pass, the insertion point can
++  // scheduling, and/or the logic in this pass (above), the insertion point can
+   // be moved earlier. So if the Loop Start isn't the last instruction in the
+   // preheader, and if the initial element count is smaller than the vector
+   // width, the Loop Start instruction will immediately generate one or more
+@@ -1068,35 +1105,12 @@ void LowOverheadLoop::Validate(ARMBasicBlockUtils *BBUtils) {
+     return true;
+   };
+ 
+-  // We know that we can define safely LR at InsertPt, but maybe we could
+-  // push the insertion point to later on in the basic block.
+-  auto TryAdjustInsertionPoint = [](MachineBasicBlock::iterator &InsertPt,
+-                                    MachineInstr *Start,
+-                                    ReachingDefAnalysis &RDA) {
+-
+-    MachineBasicBlock *MBB = InsertPt->getParent();
+-    MachineBasicBlock::iterator FirstNonTerminator =
+-      MBB->getFirstTerminator();
+-    unsigned CountReg = Start->getOperand(0).getReg();
+-
+-    // Get the latest possible insertion point and check whether the semantics
+-    // will be maintained if Start was inserted there.
+-    if (FirstNonTerminator == MBB->end()) {
+-      if (RDA.isReachingDefLiveOut(Start, CountReg) &&
+-          RDA.isReachingDefLiveOut(Start, ARM::LR))
+-        InsertPt = FirstNonTerminator;
+-    } else if (RDA.hasSameReachingDef(Start, &*FirstNonTerminator, CountReg) &&
+-               RDA.hasSameReachingDef(Start, &*FirstNonTerminator, ARM::LR))
+-      InsertPt = FirstNonTerminator;
+-  };
+-
+   if (!FindStartInsertionPoint(Start, Dec, StartInsertPt, StartInsertBB, RDA,
+                                ToRemove)) {
+     LLVM_DEBUG(dbgs() << "ARM Loops: Unable to find safe insertion point.\n");
+     Revert = true;
+     return;
+   }
+-  TryAdjustInsertionPoint(StartInsertPt, Start, RDA);
+   LLVM_DEBUG(if (StartInsertPt == StartInsertBB->end())
+                dbgs() << "ARM Loops: Will insert LoopStart at end of block\n";
+              else
+diff --git a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/lstp-insertion-position.mir b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/lstp-insertion-position.mir
+index cdf53b8666e..c4a372d790e 100644
+--- a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/lstp-insertion-position.mir
++++ b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/lstp-insertion-position.mir
+@@ -153,17 +153,25 @@ body:             |
+   ; CHECK:   frame-setup CFI_INSTRUCTION offset $r7, -8
+   ; CHECK:   dead $r7 = frame-setup tMOVr $sp, 14 /* CC::al */, $noreg
+   ; CHECK:   frame-setup CFI_INSTRUCTION def_cfa_register $r7
++  ; CHECK:   renamable $r3, dead $cpsr = tADDi3 renamable $r2, 3, 14 /* CC::al */, $noreg
++  ; CHECK:   renamable $r3 = t2BICri killed renamable $r3, 3, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = t2SUBri killed renamable $r3, 4, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r3, dead $cpsr = tMOVi8 1, 14 /* CC::al */, $noreg
++  ; CHECK:   renamable $lr = nuw nsw t2ADDrs killed renamable $r3, killed renamable $r12, 19, 14 /* CC::al */, $noreg, $noreg
+   ; CHECK:   renamable $r3 = tLDRpci %const.0, 14 /* CC::al */, $noreg :: (load 4 from constant-pool)
++  ; CHECK:   $lr = t2DLS killed renamable $lr
+   ; CHECK:   renamable $q1 = MVE_VDUP32 killed renamable $r3, 0, $noreg, undef renamable $q1
+   ; CHECK:   $s4 = VMOVS killed $s0, 14 /* CC::al */, $noreg, implicit killed $q1, implicit-def $q1
+-  ; CHECK:   $lr = MVE_DLSTP_32 killed renamable $r2
+   ; CHECK: bb.2.vector.body:
+   ; CHECK:   successors: %bb.2(0x7c000000), %bb.3(0x04000000)
+-  ; CHECK:   liveins: $lr, $q1, $r0, $r1
+-  ; CHECK:   renamable $r0, renamable $q0 = MVE_VLDRWU32_post killed renamable $r0, 16, 0, $noreg :: (load 16 from %ir.lsr.iv12, align 4)
+-  ; CHECK:   renamable $r1, renamable $q2 = MVE_VLDRWU32_post killed renamable $r1, 16, 0, $noreg :: (load 16 from %ir.lsr.iv1315, align 4)
+-  ; CHECK:   renamable $q1 = MVE_VFMAf32 killed renamable $q1, killed renamable $q2, killed renamable $q0, 0, killed $noreg
+-  ; CHECK:   $lr = MVE_LETP killed renamable $lr, %bb.2
++  ; CHECK:   liveins: $lr, $q1, $r0, $r1, $r2
++  ; CHECK:   renamable $vpr = MVE_VCTP32 renamable $r2, 0, $noreg
++  ; CHECK:   renamable $r2, dead $cpsr = tSUBi8 killed renamable $r2, 4, 14 /* CC::al */, $noreg
++  ; CHECK:   MVE_VPST 2, implicit $vpr
++  ; CHECK:   renamable $r0, renamable $q0 = MVE_VLDRWU32_post killed renamable $r0, 16, 1, renamable $vpr :: (load 16 from %ir.lsr.iv12, align 4)
++  ; CHECK:   renamable $r1, renamable $q2 = MVE_VLDRWU32_post killed renamable $r1, 16, 1, renamable $vpr :: (load 16 from %ir.lsr.iv1315, align 4)
++  ; CHECK:   renamable $q1 = MVE_VFMAf32 killed renamable $q1, killed renamable $q2, killed renamable $q0, 1, killed renamable $vpr
++  ; CHECK:   $lr = t2LEUpdate killed renamable $lr, %bb.2
+   ; CHECK: bb.3.middle.block:
+   ; CHECK:   liveins: $q1
+   ; CHECK:   renamable $s0 = nnan ninf nsz arcp contract afn reassoc VADDS renamable $s6, renamable $s7, 14 /* CC::al */, $noreg
+@@ -277,18 +285,27 @@ body:             |
+   ; CHECK:   frame-setup CFI_INSTRUCTION offset $r7, -8
+   ; CHECK:   dead $r7 = frame-setup tMOVr $sp, 14 /* CC::al */, $noreg
+   ; CHECK:   frame-setup CFI_INSTRUCTION def_cfa_register $r7
++  ; CHECK:   renamable $r3, dead $cpsr = tMOVi8 3, 14 /* CC::al */, $noreg
++  ; CHECK:   renamable $r3 = nuw nsw t2ADDrs killed renamable $r3, renamable $r2, 19, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r3 = t2BICri killed renamable $r3, 3, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = t2SUBri killed renamable $r3, 4, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r3, dead $cpsr = tMOVi8 1, 14 /* CC::al */, $noreg
++  ; CHECK:   renamable $lr = t2ADDrs killed renamable $r3, killed renamable $r12, 19, 14 /* CC::al */, $noreg, $noreg
+   ; CHECK:   renamable $r3 = tLDRpci %const.0, 14 /* CC::al */, $noreg :: (load 4 from constant-pool)
++  ; CHECK:   $lr = t2DLS killed renamable $lr
+   ; CHECK:   renamable $q1 = MVE_VDUP32 killed renamable $r3, 0, $noreg, undef renamable $q1
+   ; CHECK:   renamable $r2, dead $cpsr = tLSRri killed renamable $r2, 2, 14 /* CC::al */, $noreg
+   ; CHECK:   $s4 = VMOVS killed $s0, 14 /* CC::al */, $noreg, implicit killed $q1, implicit-def $q1
+-  ; CHECK:   $lr = MVE_DLSTP_32 killed renamable $r2
+   ; CHECK: bb.2.vector.body:
+   ; CHECK:   successors: %bb.2(0x7c000000), %bb.3(0x04000000)
+-  ; CHECK:   liveins: $lr, $q1, $r0, $r1
+-  ; CHECK:   renamable $r0, renamable $q0 = MVE_VLDRWU32_post killed renamable $r0, 16, 0, $noreg :: (load 16 from %ir.lsr.iv13, align 4)
+-  ; CHECK:   renamable $r1, renamable $q2 = MVE_VLDRWU32_post killed renamable $r1, 16, 0, $noreg :: (load 16 from %ir.lsr.iv1416, align 4)
+-  ; CHECK:   renamable $q1 = MVE_VFMAf32 killed renamable $q1, killed renamable $q2, killed renamable $q0, 0, killed $noreg
+-  ; CHECK:   $lr = MVE_LETP killed renamable $lr, %bb.2
++  ; CHECK:   liveins: $lr, $q1, $r0, $r1, $r2
++  ; CHECK:   renamable $vpr = MVE_VCTP32 renamable $r2, 0, $noreg
++  ; CHECK:   renamable $r2, dead $cpsr = tSUBi8 killed renamable $r2, 4, 14 /* CC::al */, $noreg
++  ; CHECK:   MVE_VPST 2, implicit $vpr
++  ; CHECK:   renamable $r0, renamable $q0 = MVE_VLDRWU32_post killed renamable $r0, 16, 1, renamable $vpr :: (load 16 from %ir.lsr.iv13, align 4)
++  ; CHECK:   renamable $r1, renamable $q2 = MVE_VLDRWU32_post killed renamable $r1, 16, 1, renamable $vpr :: (load 16 from %ir.lsr.iv1416, align 4)
++  ; CHECK:   renamable $q1 = MVE_VFMAf32 killed renamable $q1, killed renamable $q2, killed renamable $q0, 1, killed renamable $vpr
++  ; CHECK:   $lr = t2LEUpdate killed renamable $lr, %bb.2
+   ; CHECK: bb.3.middle.block:
+   ; CHECK:   liveins: $q1
+   ; CHECK:   renamable $s0 = nnan ninf nsz arcp contract afn reassoc VADDS renamable $s6, renamable $s7, 14 /* CC::al */, $noreg
+diff --git a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-after-dlstp.mir b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-after-dlstp.mir
+index 5bafc295a3e..94e3e26c819 100644
+--- a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-after-dlstp.mir
++++ b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-after-dlstp.mir
+@@ -163,14 +163,17 @@ body:             |
+   ; CHECK:   renamable $lr = nuw nsw t2ADDrs killed renamable $r12, killed renamable $r3, 19, 14 /* CC::al */, $noreg, $noreg
+   ; CHECK:   $r3 = tMOVr $r1, 14 /* CC::al */, $noreg
+   ; CHECK:   $r12 = tMOVr $r0, 14 /* CC::al */, $noreg
+-  ; CHECK:   $r4 = tMOVr killed $lr, 14 /* CC::al */, $noreg
+-  ; CHECK:   $lr = MVE_DLSTP_32 killed renamable $r3
++  ; CHECK:   $lr = t2DLS killed renamable $lr
++  ; CHECK:   $r4 = tMOVr $lr, 14 /* CC::al */, $noreg
+   ; CHECK: bb.1.do.body.i:
+   ; CHECK:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+-  ; CHECK:   liveins: $lr, $q0, $r0, $r1, $r2, $r4, $r12
+-  ; CHECK:   renamable $r12, renamable $q1 = MVE_VLDRWU32_post killed renamable $r12, 16, 0, $noreg :: (load 16 from %ir.pSrc.addr.0.i2, align 4)
+-  ; CHECK:   renamable $q0 = nnan ninf nsz arcp contract afn reassoc MVE_VADDf32 killed renamable $q0, killed renamable $q1, 0, killed $noreg, killed renamable $q0
+-  ; CHECK:   $lr = MVE_LETP killed renamable $lr, %bb.1
++  ; CHECK:   liveins: $lr, $q0, $r0, $r1, $r2, $r3, $r4, $r12
++  ; CHECK:   renamable $vpr = MVE_VCTP32 renamable $r3, 0, $noreg
++  ; CHECK:   renamable $r3, dead $cpsr = tSUBi8 killed renamable $r3, 4, 14 /* CC::al */, $noreg
++  ; CHECK:   MVE_VPST 4, implicit $vpr
++  ; CHECK:   renamable $r12, renamable $q1 = MVE_VLDRWU32_post killed renamable $r12, 16, 1, renamable $vpr :: (load 16 from %ir.pSrc.addr.0.i2, align 4)
++  ; CHECK:   renamable $q0 = nnan ninf nsz arcp contract afn reassoc MVE_VADDf32 killed renamable $q0, killed renamable $q1, 1, killed renamable $vpr, killed renamable $q0
++  ; CHECK:   $lr = t2LEUpdate killed renamable $lr, %bb.1
+   ; CHECK: bb.2.arm_mean_f32_mve.exit:
+   ; CHECK:   successors: %bb.3(0x80000000)
+   ; CHECK:   liveins: $q0, $r0, $r1, $r2, $r4
+diff --git a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-operand.ll b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-operand.ll
+index 12c6858c961..1404075dce9 100644
+--- a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-operand.ll
++++ b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/mov-operand.ll
+@@ -17,13 +17,16 @@ define arm_aapcs_vfpcc void @arm_var_f32_mve(float* %pSrc, i32 %blockSize, float
+ ; CHECK-NEXT:    add.w lr, r12, r3, lsr #2
+ ; CHECK-NEXT:    mov r3, r1
+ ; CHECK-NEXT:    mov r12, r0
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    mov r4, lr
+-; CHECK-NEXT:    dlstp.32 lr, r3
+ ; CHECK-NEXT:  .LBB0_1: @ %do.body.i
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+-; CHECK-NEXT:    vldrw.u32 q1, [r12], #16
+-; CHECK-NEXT:    vadd.f32 q0, q0, q1
+-; CHECK-NEXT:    letp lr, .LBB0_1
++; CHECK-NEXT:    vctp.32 r3
++; CHECK-NEXT:    subs r3, #4
++; CHECK-NEXT:    vpstt
++; CHECK-NEXT:    vldrwt.u32 q1, [r12], #16
++; CHECK-NEXT:    vaddt.f32 q0, q0, q1
++; CHECK-NEXT:    le lr, .LBB0_1
+ ; CHECK-NEXT:  @ %bb.2: @ %arm_mean_f32_mve.exit
+ ; CHECK-NEXT:    vmov s4, r1
+ ; CHECK-NEXT:    vadd.f32 s0, s3, s3
+diff --git a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-def-before-start.mir b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-def-before-start.mir
+index 005524b8788..ea3589f48fd 100644
+--- a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-def-before-start.mir
++++ b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-def-before-start.mir
+@@ -117,21 +117,32 @@ body:             |
+   ; CHECK: bb.1.vector.ph:
+   ; CHECK:   successors: %bb.2(0x80000000)
+   ; CHECK:   liveins: $r0, $r1, $r2, $r3
++  ; CHECK:   renamable $r12 = t2MOVi 3, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $lr = t2MOVi 1, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = nuw t2ADDrs killed renamable $r12, renamable $r3, 11, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = t2BICri killed renamable $r12, 3, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = t2SUBri killed renamable $r12, 4, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $lr = nuw nsw t2ADDrs killed renamable $lr, killed renamable $r12, 19, 14 /* CC::al */, $noreg, $noreg
+   ; CHECK:   $r12 = t2MOVr killed $r3, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   $lr = t2DLS killed renamable $lr
+   ; CHECK:   renamable $r3, dead $cpsr = tMOVi8 0, 14 /* CC::al */, $noreg
+   ; CHECK:   renamable $r12 = t2LSRri killed renamable $r12, 1, 14 /* CC::al */, $noreg, $noreg
+-  ; CHECK:   $lr = MVE_DLSTP_32 killed renamable $r12
+   ; CHECK: bb.2.vector.body:
+   ; CHECK:   successors: %bb.2(0x7c000000), %bb.3(0x04000000)
+-  ; CHECK:   liveins: $lr, $r0, $r1, $r2, $r3
++  ; CHECK:   liveins: $lr, $r0, $r1, $r2, $r3, $r12
+   ; CHECK:   renamable $r4, dead $cpsr = tADDrr renamable $r1, renamable $r3, 14 /* CC::al */, $noreg
+-  ; CHECK:   renamable $q0 = MVE_VLDRBU32 killed renamable $r4, 0, 0, $noreg :: (load 4 from %ir.scevgep45, align 1)
++  ; CHECK:   renamable $vpr = MVE_VCTP32 renamable $r12, 0, $noreg
++  ; CHECK:   MVE_VPST 8, implicit $vpr
++  ; CHECK:   renamable $q0 = MVE_VLDRBU32 killed renamable $r4, 0, 1, renamable $vpr :: (load 4 from %ir.scevgep45, align 1)
+   ; CHECK:   renamable $r4, dead $cpsr = tADDrr renamable $r2, renamable $r3, 14 /* CC::al */, $noreg
+   ; CHECK:   renamable $r3, dead $cpsr = tADDi8 killed renamable $r3, 4, 14 /* CC::al */, $noreg
+-  ; CHECK:   renamable $q1 = MVE_VLDRBU32 killed renamable $r4, 0, 0, $noreg :: (load 4 from %ir.scevgep23, align 1)
++  ; CHECK:   renamable $r12 = t2SUBri killed renamable $r12, 4, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   MVE_VPST 8, implicit $vpr
++  ; CHECK:   renamable $q1 = MVE_VLDRBU32 killed renamable $r4, 0, 1, renamable $vpr :: (load 4 from %ir.scevgep23, align 1)
+   ; CHECK:   renamable $q0 = nuw nsw MVE_VMULi32 killed renamable $q1, killed renamable $q0, 0, $noreg, undef renamable $q0
+-  ; CHECK:   renamable $r0 = MVE_VSTRWU32_post killed renamable $q0, killed renamable $r0, 16, 0, killed $noreg :: (store 16 into %ir.lsr.iv1, align 4)
+-  ; CHECK:   $lr = MVE_LETP killed renamable $lr, %bb.2
++  ; CHECK:   MVE_VPST 8, implicit $vpr
++  ; CHECK:   renamable $r0 = MVE_VSTRWU32_post killed renamable $q0, killed renamable $r0, 16, 1, killed renamable $vpr :: (store 16 into %ir.lsr.iv1, align 4)
++  ; CHECK:   $lr = t2LEUpdate killed renamable $lr, %bb.2
+   ; CHECK: bb.3.for.cond.cleanup:
+   ; CHECK:   tPOP_RET 14 /* CC::al */, $noreg, def $r4, def $pc
+   bb.0.entry:
+diff --git a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-start-after-def.mir b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-start-after-def.mir
+index f7e0e699c75..0295acb6796 100644
+--- a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-start-after-def.mir
++++ b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/move-start-after-def.mir
+@@ -117,21 +117,32 @@ body:             |
+   ; CHECK: bb.1.vector.ph:
+   ; CHECK:   successors: %bb.2(0x80000000)
+   ; CHECK:   liveins: $r0, $r1, $r2, $r3
++  ; CHECK:   renamable $r12 = t2MOVi 3, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $lr = t2MOVi 1, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = nuw t2ADDrs killed renamable $r12, renamable $r3, 11, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = t2BICri killed renamable $r12, 3, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $r12 = t2SUBri killed renamable $r12, 4, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   renamable $lr = nuw nsw t2ADDrs killed renamable $lr, killed renamable $r12, 19, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   $lr = t2DLS killed renamable $lr
+   ; CHECK:   $r12 = t2MOVr killed $r3, 14 /* CC::al */, $noreg, $noreg
+   ; CHECK:   renamable $r3, dead $cpsr = tMOVi8 0, 14 /* CC::al */, $noreg
+   ; CHECK:   renamable $r12 = t2LSRri killed renamable $r12, 1, 14 /* CC::al */, $noreg, $noreg
+-  ; CHECK:   $lr = MVE_DLSTP_32 killed renamable $r12
+   ; CHECK: bb.2.vector.body:
+   ; CHECK:   successors: %bb.2(0x7c000000), %bb.3(0x04000000)
+-  ; CHECK:   liveins: $lr, $r0, $r1, $r2, $r3
++  ; CHECK:   liveins: $lr, $r0, $r1, $r2, $r3, $r12
+   ; CHECK:   renamable $r4, dead $cpsr = tADDrr renamable $r1, renamable $r3, 14 /* CC::al */, $noreg
+-  ; CHECK:   renamable $q0 = MVE_VLDRBU32 killed renamable $r4, 0, 0, $noreg :: (load 4 from %ir.scevgep45, align 1)
++  ; CHECK:   renamable $vpr = MVE_VCTP32 renamable $r12, 0, $noreg
++  ; CHECK:   MVE_VPST 8, implicit $vpr
++  ; CHECK:   renamable $q0 = MVE_VLDRBU32 killed renamable $r4, 0, 1, renamable $vpr :: (load 4 from %ir.scevgep45, align 1)
+   ; CHECK:   renamable $r4, dead $cpsr = tADDrr renamable $r2, renamable $r3, 14 /* CC::al */, $noreg
+   ; CHECK:   renamable $r3, dead $cpsr = tADDi8 killed renamable $r3, 4, 14 /* CC::al */, $noreg
+-  ; CHECK:   renamable $q1 = MVE_VLDRBU32 killed renamable $r4, 0, 0, $noreg :: (load 4 from %ir.scevgep23, align 1)
++  ; CHECK:   renamable $r12 = t2SUBri killed renamable $r12, 4, 14 /* CC::al */, $noreg, $noreg
++  ; CHECK:   MVE_VPST 8, implicit $vpr
++  ; CHECK:   renamable $q1 = MVE_VLDRBU32 killed renamable $r4, 0, 1, renamable $vpr :: (load 4 from %ir.scevgep23, align 1)
+   ; CHECK:   renamable $q0 = nuw nsw MVE_VMULi32 killed renamable $q1, killed renamable $q0, 0, $noreg, undef renamable $q0
+-  ; CHECK:   renamable $r0 = MVE_VSTRWU32_post killed renamable $q0, killed renamable $r0, 16, 0, killed $noreg :: (store 16 into %ir.lsr.iv1, align 4)
+-  ; CHECK:   $lr = MVE_LETP killed renamable $lr, %bb.2
++  ; CHECK:   MVE_VPST 8, implicit $vpr
++  ; CHECK:   renamable $r0 = MVE_VSTRWU32_post killed renamable $q0, killed renamable $r0, 16, 1, killed renamable $vpr :: (store 16 into %ir.lsr.iv1, align 4)
++  ; CHECK:   $lr = t2LEUpdate killed renamable $lr, %bb.2
+   ; CHECK: bb.3.for.cond.cleanup:
+   ; CHECK:   tPOP_RET 14 /* CC::al */, $noreg, def $r4, def $pc
+   bb.0.entry:
+diff --git a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/reductions.ll b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/reductions.ll
+index f9116634a4d..5f4014fc30f 100644
+--- a/llvm/test/CodeGen/Thumb2/LowOverheadLoops/reductions.ll
++++ b/llvm/test/CodeGen/Thumb2/LowOverheadLoops/reductions.ll
+@@ -451,9 +451,9 @@ define dso_local arm_aapcs_vfpcc i32 @two_loops_mul_add_v4i32(i8* nocapture read
+ ; CHECK-NEXT:    movs r3, #1
+ ; CHECK-NEXT:    add.w lr, r3, r6, lsr #2
+ ; CHECK-NEXT:    movs r3, #0
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    vdup.32 q0, r3
+ ; CHECK-NEXT:    vmov.32 q0[0], r12
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB6_5: @ %vector.body46
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vctp.32 r2
+@@ -686,8 +686,8 @@ define i32 @wrongop(%struct.date* nocapture readonly %pd) {
+ ; CHECK-NEXT:    mla r2, r4, r3, r2
+ ; CHECK-NEXT:    movs r3, #0
+ ; CHECK-NEXT:    vdup.32 q0, r3
+-; CHECK-NEXT:    vmov.32 q0[0], r0
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    vmov.32 q0[0], r0
+ ; CHECK-NEXT:  .LBB8_6: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vctp.32 r1
+diff --git a/llvm/test/CodeGen/Thumb2/mve-float16regloops.ll b/llvm/test/CodeGen/Thumb2/mve-float16regloops.ll
+index f3db06e571c..d364eb97fff 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-float16regloops.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-float16regloops.ll
+@@ -1156,8 +1156,8 @@ define void @fir(%struct.arm_fir_instance_f32* nocapture readonly %S, half* noca
+ ; CHECK-NEXT:  @ %bb.5: @ %for.body.preheader
+ ; CHECK-NEXT:    @ in Loop: Header=BB16_4 Depth=1
+ ; CHECK-NEXT:    ldr.w lr, [sp] @ 4-byte Reload
+-; CHECK-NEXT:    ldr r6, [sp, #4] @ 4-byte Reload
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    ldr r6, [sp, #4] @ 4-byte Reload
+ ; CHECK-NEXT:  .LBB16_6: @ %for.body
+ ; CHECK-NEXT:    @ Parent Loop BB16_4 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+diff --git a/llvm/test/CodeGen/Thumb2/mve-float32regloops.ll b/llvm/test/CodeGen/Thumb2/mve-float32regloops.ll
+index 6f9b001ea99..a43f564951e 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-float32regloops.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-float32regloops.ll
+@@ -1116,8 +1116,8 @@ define void @fir(%struct.arm_fir_instance_f32* nocapture readonly %S, float* noc
+ ; CHECK-NEXT:  @ %bb.5: @ %for.body.preheader
+ ; CHECK-NEXT:    @ in Loop: Header=BB16_4 Depth=1
+ ; CHECK-NEXT:    ldr.w lr, [sp, #4] @ 4-byte Reload
+-; CHECK-NEXT:    ldr r7, [sp, #8] @ 4-byte Reload
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    ldr r7, [sp, #8] @ 4-byte Reload
+ ; CHECK-NEXT:  .LBB16_6: @ %for.body
+ ; CHECK-NEXT:    @ Parent Loop BB16_4 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+@@ -1436,9 +1436,9 @@ define arm_aapcs_vfpcc void @arm_biquad_cascade_stereo_df2T_f32(%struct.arm_biqu
+ ; CHECK-NEXT:    mov r6, r2
+ ; CHECK-NEXT:    vmov.f32 s6, s12
+ ; CHECK-NEXT:    vmov.f32 s10, s14
++; CHECK-NEXT:    dls lr, r3
+ ; CHECK-NEXT:    vmov.f32 s7, s12
+ ; CHECK-NEXT:    vmov.f32 s11, s14
+-; CHECK-NEXT:    dls lr, r3
+ ; CHECK-NEXT:  .LBB17_3: @ Parent Loop BB17_2 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+ ; CHECK-NEXT:    vldrw.u32 q4, [r1, q0, uxtw #2]
+@@ -1589,8 +1589,8 @@ define arm_aapcs_vfpcc void @fms(float* nocapture readonly %pSrc1, float* nocapt
+ ; CHECK-NEXT:    @ =>This Loop Header: Depth=1
+ ; CHECK-NEXT:    @ Child Loop BB18_3 Depth 2
+ ; CHECK-NEXT:    ldr r4, [r2]
+-; CHECK-NEXT:    vdup.32 q0, r4
+ ; CHECK-NEXT:    dls lr, r5
++; CHECK-NEXT:    vdup.32 q0, r4
+ ; CHECK-NEXT:  .LBB18_3: @ %while.body
+ ; CHECK-NEXT:    @ Parent Loop BB18_2 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+diff --git a/llvm/test/CodeGen/Thumb2/mve-fma-loops.ll b/llvm/test/CodeGen/Thumb2/mve-fma-loops.ll
+index 68ebeaa830c..86cbec661f1 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-fma-loops.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-fma-loops.ll
+@@ -265,9 +265,9 @@ define arm_aapcs_vfpcc void @fmss1(float* nocapture readonly %x, float* nocaptur
+ ; CHECK-NEXT:    poplt {r4, pc}
+ ; CHECK-NEXT:  .LBB4_1: @ %vector.ph
+ ; CHECK-NEXT:    vmov r4, s0
++; CHECK-NEXT:    dlstp.32 lr, r3
+ ; CHECK-NEXT:    eor r12, r4, #-2147483648
+ ; CHECK-NEXT:    movs r4, #0
+-; CHECK-NEXT:    dlstp.32 lr, r3
+ ; CHECK-NEXT:  .LBB4_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    adds r4, #4
+@@ -529,9 +529,9 @@ define arm_aapcs_vfpcc void @fms1(float* nocapture readonly %x, float* nocapture
+ ; CHECK-NEXT:    poplt {r4, pc}
+ ; CHECK-NEXT:  .LBB8_1: @ %vector.ph
+ ; CHECK-NEXT:    vmov r4, s0
++; CHECK-NEXT:    dlstp.32 lr, r3
+ ; CHECK-NEXT:    eor r12, r4, #-2147483648
+ ; CHECK-NEXT:    movs r4, #0
+-; CHECK-NEXT:    dlstp.32 lr, r3
+ ; CHECK-NEXT:  .LBB8_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    adds r4, #4
+diff --git a/llvm/test/CodeGen/Thumb2/mve-gather-scatter-optimisation.ll b/llvm/test/CodeGen/Thumb2/mve-gather-scatter-optimisation.ll
+index e06ec427599..8bafe44b45c 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-gather-scatter-optimisation.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-gather-scatter-optimisation.ll
+@@ -709,12 +709,12 @@ define dso_local void @arm_mat_mult_q15(i16* noalias nocapture readonly %A, i16*
+ ; CHECK-NEXT:    @ in Loop: Header=BB10_8 Depth=2
+ ; CHECK-NEXT:    ldr r0, [sp, #112]
+ ; CHECK-NEXT:    sub.w lr, r11, r5
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    mla r3, r0, r5, r1
+ ; CHECK-NEXT:    add r5, r9
+ ; CHECK-NEXT:    ldr r0, [sp, #16] @ 4-byte Reload
+ ; CHECK-NEXT:    add.w r5, r0, r5, lsl #1
+ ; CHECK-NEXT:    add.w r3, r6, r3, lsl #1
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB10_14: @ %for.body8.us.us
+ ; CHECK-NEXT:    @ Parent Loop BB10_5 Depth=1
+ ; CHECK-NEXT:    @ Parent Loop BB10_8 Depth=2
+diff --git a/llvm/test/CodeGen/Thumb2/mve-gather-scatter-ptr-address.ll b/llvm/test/CodeGen/Thumb2/mve-gather-scatter-ptr-address.ll
+index 030fb3b91cf..bfc64b8c8e2 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-gather-scatter-ptr-address.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-gather-scatter-ptr-address.ll
+@@ -556,8 +556,8 @@ define void @ptr_iv_v8f16_mult(half* noalias nocapture readonly %A, half* noalia
+ ; CHECK-NEXT:    vmov.f16 r1, s0
+ ; CHECK-NEXT:    vldrw.u32 q0, [r2]
+ ; CHECK-NEXT:    adr r2, .LCPI9_1
+-; CHECK-NEXT:    vldrw.u32 q1, [r2]
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    vldrw.u32 q1, [r2]
+ ; CHECK-NEXT:  .LBB9_1: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrh.u16 q2, [r0, q0, uxtw #1]
+diff --git a/llvm/test/CodeGen/Thumb2/mve-gather-scatter-tailpred.ll b/llvm/test/CodeGen/Thumb2/mve-gather-scatter-tailpred.ll
+index 5c32f37455e..c1814036a97 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-gather-scatter-tailpred.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-gather-scatter-tailpred.ll
+@@ -11,9 +11,9 @@ define dso_local void @mve_gather_qi_wb(i32* noalias nocapture readonly %A, i32*
+ ; CHECK-NEXT:    vldrw.u32 q0, [r0]
+ ; CHECK-NEXT:    movw lr, #1250
+ ; CHECK-NEXT:    vmov.i32 q1, #0x0
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    vadd.i32 q0, q0, r1
+ ; CHECK-NEXT:    adds r1, r3, #4
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB0_1: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vctp.32 r3
+@@ -231,11 +231,17 @@ define void @justoffsets(i8* noalias nocapture readonly %r, i8* noalias nocaptur
+ ; CHECK-NEXT:    cmp r2, #0
+ ; CHECK-NEXT:    beq.w .LBB3_3
+ ; CHECK-NEXT:  @ %bb.1: @ %vector.ph
++; CHECK-NEXT:    adds r3, r2, #3
+ ; CHECK-NEXT:    adr r7, .LCPI3_5
++; CHECK-NEXT:    bic r3, r3, #3
+ ; CHECK-NEXT:    vmov.i32 q0, #0x8000
++; CHECK-NEXT:    sub.w r12, r3, #4
++; CHECK-NEXT:    movs r3, #1
+ ; CHECK-NEXT:    adr r6, .LCPI3_4
+ ; CHECK-NEXT:    adr r5, .LCPI3_3
++; CHECK-NEXT:    add.w lr, r3, r12, lsr #2
+ ; CHECK-NEXT:    adr r4, .LCPI3_2
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    vstrw.32 q0, [sp, #160] @ 16-byte Spill
+ ; CHECK-NEXT:    vldrw.u32 q0, [r7]
+ ; CHECK-NEXT:    adr.w r8, .LCPI3_1
+@@ -268,18 +274,22 @@ define void @justoffsets(i8* noalias nocapture readonly %r, i8* noalias nocaptur
+ ; CHECK-NEXT:    vstrw.32 q0, [sp, #16] @ 16-byte Spill
+ ; CHECK-NEXT:    vldrw.u32 q0, [r3]
+ ; CHECK-NEXT:    vstrw.32 q0, [sp] @ 16-byte Spill
+-; CHECK-NEXT:    dlstp.32 lr, r2
+ ; CHECK-NEXT:  .LBB3_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #192] @ 16-byte Reload
+-; CHECK-NEXT:    vldrb.u32 q4, [r0, q0]
++; CHECK-NEXT:    vctp.32 r2
++; CHECK-NEXT:    vpst
++; CHECK-NEXT:    vldrbt.u32 q4, [r0, q0]
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #176] @ 16-byte Reload
+-; CHECK-NEXT:    vldrb.u32 q7, [r0, q0]
++; CHECK-NEXT:    vpst
++; CHECK-NEXT:    vldrbt.u32 q7, [r0, q0]
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #144] @ 16-byte Reload
+ ; CHECK-NEXT:    vldrw.u32 q5, [sp, #112] @ 16-byte Reload
++; CHECK-NEXT:    subs r2, #4
+ ; CHECK-NEXT:    vmul.i32 q6, q7, q0
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #128] @ 16-byte Reload
+-; CHECK-NEXT:    vldrb.u32 q1, [r0, q5]
++; CHECK-NEXT:    vpst
++; CHECK-NEXT:    vldrbt.u32 q1, [r0, q5]
+ ; CHECK-NEXT:    vldrw.u32 q2, [sp, #80] @ 16-byte Reload
+ ; CHECK-NEXT:    vmul.i32 q3, q4, q0
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #96] @ 16-byte Reload
+@@ -310,12 +320,14 @@ define void @justoffsets(i8* noalias nocapture readonly %r, i8* noalias nocaptur
+ ; CHECK-NEXT:    vadd.i32 q1, q1, q0
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #192] @ 16-byte Reload
+ ; CHECK-NEXT:    vshr.u32 q1, q1, #16
+-; CHECK-NEXT:    vstrb.32 q1, [r1, q0]
++; CHECK-NEXT:    vpst
++; CHECK-NEXT:    vstrbt.32 q1, [r1, q0]
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #176] @ 16-byte Reload
+-; CHECK-NEXT:    vstrb.32 q2, [r1, q0]
+-; CHECK-NEXT:    vstrb.32 q6, [r1, q5]
++; CHECK-NEXT:    vpstt
++; CHECK-NEXT:    vstrbt.32 q2, [r1, q0]
++; CHECK-NEXT:    vstrbt.32 q6, [r1, q5]
+ ; CHECK-NEXT:    adds r1, #12
+-; CHECK-NEXT:    letp lr, .LBB3_2
++; CHECK-NEXT:    le lr, .LBB3_2
+ ; CHECK-NEXT:  .LBB3_3: @ %for.cond.cleanup
+ ; CHECK-NEXT:    add sp, #216
+ ; CHECK-NEXT:    vpop {d8, d9, d10, d11, d12, d13, d14, d15}
+diff --git a/llvm/test/CodeGen/Thumb2/mve-postinc-lsr.ll b/llvm/test/CodeGen/Thumb2/mve-postinc-lsr.ll
+index b710912e808..f87beba4a2d 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-postinc-lsr.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-postinc-lsr.ll
+@@ -257,13 +257,13 @@ define i8* @test(i8* nocapture readonly %input_row, i8* nocapture readonly %inpu
+ ; CHECK-NEXT:    ldr r3, [sp, #64]
+ ; CHECK-NEXT:    mov r6, r12
+ ; CHECK-NEXT:    ldr r1, [sp, #12] @ 4-byte Reload
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    ldr r5, [sp, #8] @ 4-byte Reload
+ ; CHECK-NEXT:    mov r10, r12
+ ; CHECK-NEXT:    mla r7, r11, r3, r1
+ ; CHECK-NEXT:    ldr r1, [sp, #16] @ 4-byte Reload
+ ; CHECK-NEXT:    ldrd r4, r3, [sp] @ 8-byte Folded Reload
+ ; CHECK-NEXT:    mov r8, r12
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB2_7: @ %for.body24
+ ; CHECK-NEXT:    @ Parent Loop BB2_5 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+@@ -425,13 +425,13 @@ define i8* @test_optsize(i8* nocapture readonly %input_row, i8* nocapture readon
+ ; CHECK-NEXT:    ldr r3, [sp, #64]
+ ; CHECK-NEXT:    mov r6, r12
+ ; CHECK-NEXT:    ldr r1, [sp, #12] @ 4-byte Reload
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    ldr r5, [sp, #8] @ 4-byte Reload
+ ; CHECK-NEXT:    mov r10, r12
+ ; CHECK-NEXT:    mla r7, r11, r3, r1
+ ; CHECK-NEXT:    ldr r1, [sp, #16] @ 4-byte Reload
+ ; CHECK-NEXT:    ldrd r4, r3, [sp] @ 8-byte Folded Reload
+ ; CHECK-NEXT:    mov r8, r12
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB3_5: @ %for.body24
+ ; CHECK-NEXT:    @ Parent Loop BB3_3 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+@@ -735,13 +735,13 @@ define i8* @signext(i8* %input_row, i8* %input_col, i16 zeroext %output_ch, i16
+ ; CHECK-NEXT:    ldr.w r11, [sp, #88]
+ ; CHECK-NEXT:    mov r6, r12
+ ; CHECK-NEXT:    ldr r0, [sp, #12] @ 4-byte Reload
++; CHECK-NEXT:    dlstp.16 lr, r11
+ ; CHECK-NEXT:    ldr r1, [sp, #16] @ 4-byte Reload
+ ; CHECK-NEXT:    mov r10, r12
+ ; CHECK-NEXT:    mla r3, r9, r11, r0
+ ; CHECK-NEXT:    ldr r5, [sp, #8] @ 4-byte Reload
+ ; CHECK-NEXT:    ldrd r7, r0, [sp] @ 8-byte Folded Reload
+ ; CHECK-NEXT:    mov r8, r12
+-; CHECK-NEXT:    dlstp.16 lr, r11
+ ; CHECK-NEXT:  .LBB5_7: @ %for.body24
+ ; CHECK-NEXT:    @ Parent Loop BB5_5 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+@@ -907,13 +907,13 @@ define i8* @signext_optsize(i8* %input_row, i8* %input_col, i16 zeroext %output_
+ ; CHECK-NEXT:    ldr.w r11, [sp, #88]
+ ; CHECK-NEXT:    mov r6, r12
+ ; CHECK-NEXT:    ldr r0, [sp, #12] @ 4-byte Reload
++; CHECK-NEXT:    dlstp.16 lr, r11
+ ; CHECK-NEXT:    ldr r1, [sp, #16] @ 4-byte Reload
+ ; CHECK-NEXT:    mov r10, r12
+ ; CHECK-NEXT:    mla r3, r9, r11, r0
+ ; CHECK-NEXT:    ldr r5, [sp, #8] @ 4-byte Reload
+ ; CHECK-NEXT:    ldrd r7, r0, [sp] @ 8-byte Folded Reload
+ ; CHECK-NEXT:    mov r8, r12
+-; CHECK-NEXT:    dlstp.16 lr, r11
+ ; CHECK-NEXT:  .LBB6_5: @ %for.body24
+ ; CHECK-NEXT:    @ Parent Loop BB6_3 Depth=1
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=2
+@@ -1120,6 +1120,7 @@ define arm_aapcs_vfpcc void @_Z37_arm_radix4_butterfly_inverse_f32_mvePK21arm_cf
+ ; CHECK-NEXT:    ldr.w r1, [r1, r10, lsl #2]
+ ; CHECK-NEXT:    ldrd r6, r7, [r0, #32]
+ ; CHECK-NEXT:    ldr.w r3, [r3, r10, lsl #2]
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    add.w r6, r6, r2, lsl #2
+ ; CHECK-NEXT:    add.w r12, r12, r1, lsl #2
+ ; CHECK-NEXT:    ldr r1, [sp, #20] @ 4-byte Reload
+@@ -1128,7 +1129,6 @@ define arm_aapcs_vfpcc void @_Z37_arm_radix4_butterfly_inverse_f32_mvePK21arm_cf
+ ; CHECK-NEXT:    add.w r1, r2, r11, lsl #2
+ ; CHECK-NEXT:    add.w r8, r1, r11, lsl #2
+ ; CHECK-NEXT:    add.w r9, r8, r11, lsl #2
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB7_7: @ Parent Loop BB7_3 Depth=1
+ ; CHECK-NEXT:    @ Parent Loop BB7_6 Depth=2
+ ; CHECK-NEXT:    @ => This Inner Loop Header: Depth=3
+diff --git a/llvm/test/CodeGen/Thumb2/mve-pred-threshold.ll b/llvm/test/CodeGen/Thumb2/mve-pred-threshold.ll
+index 35e02faa14e..12561d56030 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-pred-threshold.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-pred-threshold.ll
+@@ -187,8 +187,8 @@ define arm_aapcs_vfpcc void @thresh_f32(float* %data, i16 zeroext %N, float %T)
+ ; CHECK-NEXT:    add.w lr, r2, r1, lsr #2
+ ; CHECK-NEXT:    vmov r1, s0
+ ; CHECK-NEXT:    vmov.i32 q0, #0x0
+-; CHECK-NEXT:    eor r2, r1, #-2147483648
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    eor r2, r1, #-2147483648
+ ; CHECK-NEXT:  .LBB3_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q1, [r0]
+@@ -480,8 +480,8 @@ define arm_aapcs_vfpcc void @thresh_rev_f32(float* %data, i16 zeroext %N, float
+ ; CHECK-NEXT:    add.w lr, r2, r1, lsr #2
+ ; CHECK-NEXT:    vmov r1, s0
+ ; CHECK-NEXT:    vmov.i32 q0, #0x0
+-; CHECK-NEXT:    eor r2, r1, #-2147483648
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    eor r2, r1, #-2147483648
+ ; CHECK-NEXT:  .LBB8_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q1, [r0]
+diff --git a/llvm/test/CodeGen/Thumb2/mve-satmul-loops.ll b/llvm/test/CodeGen/Thumb2/mve-satmul-loops.ll
+index fdaea92c432..f586857f289 100644
+--- a/llvm/test/CodeGen/Thumb2/mve-satmul-loops.ll
++++ b/llvm/test/CodeGen/Thumb2/mve-satmul-loops.ll
+@@ -36,8 +36,8 @@ define arm_aapcs_vfpcc void @ssatmul_s_q31(i32* nocapture readonly %pSrcA, i32*
+ ; CHECK-NEXT:    vldrw.u32 q0, [r4]
+ ; CHECK-NEXT:    vmvn.i32 q1, #0x80000000
+ ; CHECK-NEXT:    mov.w r10, #-1
+-; CHECK-NEXT:    str r3, [sp] @ 4-byte Spill
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    str r3, [sp] @ 4-byte Spill
+ ; CHECK-NEXT:  .LBB0_4: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    ldrd r4, r5, [r0]
+@@ -256,10 +256,10 @@ define arm_aapcs_vfpcc void @ssatmul_4_q31(i32* nocapture readonly %pSrcA, i32*
+ ; CHECK-NEXT:    adr r7, .LCPI1_1
+ ; CHECK-NEXT:    add.w r12, r0, r3, lsl #2
+ ; CHECK-NEXT:    vldrw.u32 q1, [r7]
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    str r3, [sp] @ 4-byte Spill
+ ; CHECK-NEXT:    mov.w r3, #-1
+ ; CHECK-NEXT:    mvn r9, #-2147483648
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB1_4: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q2, [r0], #16
+@@ -544,8 +544,8 @@ define arm_aapcs_vfpcc void @ssatmul_4t_q31(i32* nocapture readonly %pSrcA, i32*
+ ; CHECK-NEXT:    vdup.32 q1, r7
+ ; CHECK-NEXT:    mov.w r12, #-1
+ ; CHECK-NEXT:    mvn r8, #-2147483648
+-; CHECK-NEXT:    vstrw.32 q0, [sp] @ 16-byte Spill
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    vstrw.32 q0, [sp] @ 16-byte Spill
+ ; CHECK-NEXT:  .LBB2_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp] @ 16-byte Reload
+@@ -773,8 +773,8 @@ define arm_aapcs_vfpcc void @usatmul_2_q31(i32* nocapture readonly %pSrcA, i32*
+ ; CHECK-NEXT:    add.w r11, r1, r5, lsl #2
+ ; CHECK-NEXT:    add.w lr, r6, r7, lsr #1
+ ; CHECK-NEXT:    add.w r12, r0, r5, lsl #2
+-; CHECK-NEXT:    str r5, [sp] @ 4-byte Spill
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    str r5, [sp] @ 4-byte Spill
+ ; CHECK-NEXT:  .LBB3_4: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    ldrd r4, r9, [r0]
+@@ -1617,8 +1617,8 @@ define arm_aapcs_vfpcc void @ssatmul_8t_q15(i16* nocapture readonly %pSrcA, i16*
+ ; CHECK-NEXT:    movs r3, #0
+ ; CHECK-NEXT:    vdup.32 q1, r12
+ ; CHECK-NEXT:    vmov.i8 q3, #0xff
+-; CHECK-NEXT:    vstrw.32 q0, [sp] @ 16-byte Spill
+ ; CHECK-NEXT:    dls lr, lr
++; CHECK-NEXT:    vstrw.32 q0, [sp] @ 16-byte Spill
+ ; CHECK-NEXT:  .LBB9_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q5, [sp] @ 16-byte Reload
+@@ -2842,6 +2842,7 @@ define arm_aapcs_vfpcc void @ssatmul_16t_q7(i8* nocapture readonly %pSrcA, i8* n
+ ; CHECK-NEXT:    vmov.i8 q2, #0x0
+ ; CHECK-NEXT:    add.w lr, lr, r12, lsr #4
+ ; CHECK-NEXT:    sub.w r12, r3, #1
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    vstrw.32 q0, [sp, #32] @ 16-byte Spill
+ ; CHECK-NEXT:    vldrw.u32 q0, [r4]
+ ; CHECK-NEXT:    adr r4, .LCPI18_2
+@@ -2853,7 +2854,6 @@ define arm_aapcs_vfpcc void @ssatmul_16t_q7(i8* nocapture readonly %pSrcA, i8* n
+ ; CHECK-NEXT:    vmov.i8 q3, #0xff
+ ; CHECK-NEXT:    vldrw.u32 q6, [r4]
+ ; CHECK-NEXT:    vstrw.32 q0, [sp] @ 16-byte Spill
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB18_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q0, [sp, #32] @ 16-byte Reload
+@@ -3142,6 +3142,7 @@ define arm_aapcs_vfpcc void @ssatmul_16ti_q7(i8* nocapture readonly %pSrcA, i8*
+ ; CHECK-NEXT:    vmov.i8 q2, #0x0
+ ; CHECK-NEXT:    add.w lr, lr, r12, lsr #4
+ ; CHECK-NEXT:    sub.w r12, r3, #1
++; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:    vstrw.32 q0, [sp, #32] @ 16-byte Spill
+ ; CHECK-NEXT:    vldrw.u32 q0, [r4]
+ ; CHECK-NEXT:    adr r4, .LCPI19_2
+@@ -3153,7 +3154,6 @@ define arm_aapcs_vfpcc void @ssatmul_16ti_q7(i8* nocapture readonly %pSrcA, i8*
+ ; CHECK-NEXT:    vmov.i8 q3, #0xff
+ ; CHECK-NEXT:    vldrw.u32 q6, [r4]
+ ; CHECK-NEXT:    vstrw.32 q0, [sp] @ 16-byte Spill
+-; CHECK-NEXT:    dls lr, lr
+ ; CHECK-NEXT:  .LBB19_2: @ %vector.body
+ ; CHECK-NEXT:    @ =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    vldrw.u32 q4, [sp, #32] @ 16-byte Reload

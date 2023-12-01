@@ -1,0 +1,21 @@
+# Copyright 2012 The ChromiumOS Authors
+# Distributed under the terms of the GNU General Public License v2
+
+EAPI=7
+
+CROS_WORKON_COMMIT="b2e50298c1c56bec9e452719798b4dfb9e85c609"
+CROS_WORKON_TREE="33ac73f3dcdf1d3c96a5d3d0e0543aeee57caed4"
+CROS_WORKON_PROJECT="chromiumos/platform/inputcontrol"
+CROS_WORKON_LOCALNAME="platform/inputcontrol"
+
+inherit cros-workon
+
+DESCRIPTION="A collection of utilities for configuring input devices"
+HOMEPAGE="https://chromium.googlesource.com/chromiumos/platform/inputcontrol/"
+
+LICENSE="BSD-Google"
+KEYWORDS="*"
+IUSE=""
+
+RDEPEND="app-arch/gzip"
+DEPEND=""

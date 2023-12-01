@@ -1,0 +1,70 @@
+diff --git a/tensorflow/lite/delegates/gpu/cl/testing/performance_profiling.cc b/tensorflow/lite/delegates/gpu/cl/testing/performance_profiling.cc
+index 9bac8a70..caf36a26 100644
+--- a/tensorflow/lite/delegates/gpu/cl/testing/performance_profiling.cc
++++ b/tensorflow/lite/delegates/gpu/cl/testing/performance_profiling.cc
+@@ -34,6 +34,8 @@ absl::Status RunPredefinedLayoutSample(const std::string& model_name) {
+   auto flatbuffer = tflite::FlatBufferModel::BuildFromFile(model_name.c_str());
+   GraphFloat32 graph_cl;
+   ops::builtin::BuiltinOpResolver op_resolver;
++  TfLiteRegistration reg = { nullptr, nullptr, nullptr, nullptr };
++  op_resolver.AddCustom("Convolution2DTransposeBias", &reg);
+   RETURN_IF_ERROR(BuildFromFlatBuffer(*flatbuffer, op_resolver, &graph_cl,
+                                       /*allow_quant_ops=*/true));
+ 
+@@ -78,6 +80,8 @@ absl::Status RunExternalImmutableSample(const std::string& model_name) {
+   auto flatbuffer = tflite::FlatBufferModel::BuildFromFile(model_name.c_str());
+   GraphFloat32 graph_cl;
+   ops::builtin::BuiltinOpResolver op_resolver;
++  TfLiteRegistration reg = { nullptr, nullptr, nullptr, nullptr };
++  op_resolver.AddCustom("Convolution2DTransposeBias", &reg);
+   RETURN_IF_ERROR(BuildFromFlatBuffer(*flatbuffer, op_resolver, &graph_cl,
+                                       /*allow_quant_ops*/ true));
+ 
+@@ -132,6 +136,8 @@ absl::Status RunSerializedTest(const std::string& model_name) {
+   auto flatbuffer = tflite::FlatBufferModel::BuildFromFile(model_name.c_str());
+   GraphFloat32 graph_cl;
+   ops::builtin::BuiltinOpResolver op_resolver;
++  TfLiteRegistration reg = { nullptr, nullptr, nullptr, nullptr };
++  op_resolver.AddCustom("Convolution2DTransposeBias", &reg);
+   RETURN_IF_ERROR(BuildFromFlatBuffer(*flatbuffer, op_resolver, &graph_cl,
+                                       /*allow_quant_ops*/ true));
+ 
+@@ -230,6 +236,8 @@ absl::Status RunModelSample(const std::string& model_name) {
+   auto flatbuffer = tflite::FlatBufferModel::BuildFromFile(model_name.c_str());
+   GraphFloat32 graph_cl;
+   ops::builtin::BuiltinOpResolver op_resolver;
++  TfLiteRegistration reg = { nullptr, nullptr, nullptr, nullptr };
++  op_resolver.AddCustom("Convolution2DTransposeBias", &reg);
+   RETURN_IF_ERROR(BuildFromFlatBuffer(*flatbuffer, op_resolver, &graph_cl,
+                                       /*allow_quant_ops*/ true));
+ 
+diff --git a/tensorflow/lite/tools/benchmark/benchmark_tflite_model.cc b/tensorflow/lite/tools/benchmark/benchmark_tflite_model.cc
+index cc1729e8..5380a248 100644
+--- a/tensorflow/lite/tools/benchmark/benchmark_tflite_model.cc
++++ b/tensorflow/lite/tools/benchmark/benchmark_tflite_model.cc
+@@ -50,7 +50,11 @@ void RegisterSelectedOps(::tflite::MutableOpResolver* resolver);
+ // library with another definition of this function (presumably to actually
+ // register custom ops), that version will be used instead.
+ void ABSL_ATTRIBUTE_WEAK
+-RegisterSelectedOps(::tflite::MutableOpResolver* resolver) {}
++RegisterSelectedOps(::tflite::MutableOpResolver* resolver) {
++  static TfLiteRegistration reg = { nullptr, nullptr, nullptr, nullptr };
++  resolver->AddCustom("Convolution2DTransposeBias",
++                      &reg);
++}
+ 
+ namespace tflite {
+ namespace benchmark {
+diff --git a/tensorflow/lite/tools/evaluation/stages/tflite_inference_stage.cc b/tensorflow/lite/tools/evaluation/stages/tflite_inference_stage.cc
+index 0863e0db..dd19daf5 100644
+--- a/tensorflow/lite/tools/evaluation/stages/tflite_inference_stage.cc
++++ b/tensorflow/lite/tools/evaluation/stages/tflite_inference_stage.cc
+@@ -126,6 +126,8 @@ TfLiteStatus TfliteInferenceStage::Init(
+       apply_default_delegates
+           ? new ops::builtin::BuiltinOpResolver()
+           : new ops::builtin::BuiltinOpResolverWithoutDefaultDelegates());
++  TfLiteRegistration reg = { nullptr, nullptr, nullptr, nullptr };
++  resolver_->AddCustom("Convolution2DTransposeBias", &reg);
+   InterpreterBuilder(*model_, *resolver_)(&interpreter_);
+   if (!interpreter_) {
+     LOG(ERROR) << "Could not build interpreter";

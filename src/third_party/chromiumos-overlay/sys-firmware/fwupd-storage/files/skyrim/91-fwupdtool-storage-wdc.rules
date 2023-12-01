@@ -1,0 +1,11 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# udev rules to start firmware update for NVME SSD: WDC
+SUBSYSTEM=="nvme", \
+ATTRS{vendor}=="0x15b7", \
+ATTR{firmware_rev}!="73914104", \
+ATTR{model}=="PC SN740 NVMe*", \
+ACTION=="add", \
+RUN+="/sbin/initctl emit fwupdtool-update PLUGIN=nvme GUID=f8d46dc9-4450-5bf1-8f3d-46999571c4e6"

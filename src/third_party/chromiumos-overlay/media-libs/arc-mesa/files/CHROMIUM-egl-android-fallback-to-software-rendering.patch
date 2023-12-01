@@ -1,0 +1,30 @@
+From 32761e78282d5fb915c8493d6cd7db2b550a4b1f Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Wed, 13 Mar 2019 10:59:59 -0700
+Subject: [PATCH 5/6] egl/android: fallback to software rendering
+
+Change-Id: I8f19f494638547044bb7baf1f61f12ceb1a8c740
+---
+ src/egl/drivers/dri2/platform_android.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index e7a997dbcff6..2ef68c4d1b29 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -1584,9 +1584,10 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *disp)
+    disp->DriverData = (void *) dri2_dpy;
+ 
+ #ifdef HAVE_DRM_GRALLOC
+-   if (!droid_open_device_drm_gralloc(disp, false)) {
++   if (!droid_open_device_drm_gralloc(disp, false) &&
++       !droid_open_device_drm_gralloc(disp, true)) {
+ #else
+-   if (!droid_open_device(disp, false)) {
++   if (!droid_open_device(disp, false) && !droid_open_device(disp, true)) {
+ #endif
+       err = "DRI2: failed to open device";
+       goto cleanup;
+-- 
+2.20.1
+

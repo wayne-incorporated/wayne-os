@@ -1,0 +1,1 @@
+parade-ps8805a2-firmware-8.ebuild

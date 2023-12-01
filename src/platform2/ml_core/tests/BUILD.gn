@@ -1,0 +1,56 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":ml_core_effects_pipeline_test" ]
+  if (use.test) {
+    deps += [ ":ml_core_pngio_test" ]
+  }
+  if (use.fuzzer) {
+    deps += []
+  }
+}
+
+pkg_config("target_defaults") {
+  configs = [ "//common-mk:test" ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libpng",
+    "protobuf",
+    "system_api",
+  ]
+}
+
+executable("ml_core_effects_pipeline_test") {
+  sources = [
+    "effects_pipeline_test.cc",
+    "png_io.cc",
+    "test_utilities.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  defines = [ "EGL_NO_X11" ]
+  deps = [
+    "//ml_core:libcros_ml_core",
+    "//ml_core/dlc:dlc_client",
+  ]
+}
+
+if (use.test) {
+  executable("ml_core_pngio_test") {
+    sources = [
+      "png_io.cc",
+      "png_io_test.cc",
+      "test_utilities.cc",
+    ]
+    configs += [ ":target_defaults" ]
+    deps = [ "//ml_core:libcros_ml_core" ]
+  }
+}
+
+# TODO(b/235425140): Add fuzzers
+if (use.fuzzer) {
+}

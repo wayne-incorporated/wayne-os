@@ -1,0 +1,95 @@
+From 5799da66e95faab0a363f48bdebf449376ea53cf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?St=C3=A9phane=20Graber?= <stgraber@ubuntu.com>
+Date: Thu, 6 Dec 2012 23:34:43 +0000
+Subject: [PATCH 1/3] Before iterating through an array, check that it's
+ non-null.
+
+---
+ nih-dbus-tool/marshal.c | 41 +++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 37 insertions(+), 4 deletions(-)
+
+diff --git a/nih-dbus-tool/marshal.c b/nih-dbus-tool/marshal.c
+index f0a5abc..ba63fe3 100644
+--- a/nih-dbus-tool/marshal.c
++++ b/nih-dbus-tool/marshal.c
+@@ -364,6 +364,7 @@ marshal_array (const void *       parent,
+ 	nih_local TypeVar *element_len_var = NULL;
+ 	nih_local char *   block = NULL;
+ 	nih_local char *   vars_block = NULL;
++	nih_local char *   loop_block = NULL;
+ 
+ 	nih_assert (iter != NULL);
+ 	nih_assert (iter_name != NULL);
+@@ -448,7 +449,7 @@ marshal_array (const void *       parent,
+ 	nih_list_add (locals, &array_iter_var->entry);
+ 
+ 	if (dbus_type_is_fixed (element_type)) {
+-		if (! nih_strcat_sprintf (&code, parent,
++		if (! nih_strcat_sprintf (&loop_block, parent,
+ 					  "for (size_t %s = 0; %s < %s; %s++) {\n",
+ 					  loop_name, loop_name, len_name, loop_name)) {
+ 			nih_free (code);
+@@ -456,6 +457,12 @@ marshal_array (const void *       parent,
+ 		}
+ 	} else {
+ 		if (! nih_strcat_sprintf (&code, parent,
++					  "if (%s) {\n",
++					  name)) {
++			nih_free (code);
++			return NULL;
++		}
++		if (! nih_strcat_sprintf (&loop_block, parent,
+ 					  "for (size_t %s = 0; %s[%s]; %s++) {\n",
+ 					  loop_name, name, loop_name, loop_name)) {
+ 			nih_free (code);
+@@ -576,7 +583,7 @@ marshal_array (const void *       parent,
+ 	}
+ 
+ 
+-	if (! nih_strcat_sprintf (&code, parent,
++	if (! nih_strcat_sprintf (&loop_block, parent,
+ 			   "%s"
+ 			   "\n"
+ 			   "%s"
+@@ -589,10 +596,36 @@ marshal_array (const void *       parent,
+ 		return NULL;
+ 	}
+ 
++	/* Close the container again */
++	if (! nih_strcat_sprintf (&loop_block, parent,
++				  "}\n")) {
++		nih_free (code);
++		return NULL;
++	}
++
++	if (dbus_type_is_fixed (element_type)) {
++		if (! nih_strcat_sprintf (&code, parent,
++				 "%s\n", loop_block)) {
++			nih_free (code);
++			return NULL;
++		}
++	}
++	else {
++		if (! indent (&loop_block, NULL, 1)) {
++			nih_free (code);
++			return NULL;
++		}
++
++		if (! nih_strcat_sprintf (&code, parent,
++				 "%s"
++				 "}\n\n", loop_block)) {
++			nih_free (code);
++			return NULL;
++		}
++	}
++
+ 	/* Close the container again */
+ 	if (! nih_strcat_sprintf (&code, parent,
+-				  "}\n"
+-				  "\n"
+ 				  "if (! dbus_message_iter_close_container (&%s, &%s)) {\n"
+ 				  "%s"
+ 				  "}\n",
+-- 
+2.36.1.476.g0c4daa206d-goog
+

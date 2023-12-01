@@ -1,0 +1,145 @@
+commit 3a6f12f9156bcebf38965d96007bd942024c75be
+Author: Arthur Eubanks <aeubanks@google.com>
+Date:   Sat May 29 22:40:07 2021 -0700
+
+    Revert "[NFC] Use ArgListEntry indirect types more in ISel lowering"
+    
+    This reverts commit bc7d15c61da78864b35e3c114294d6e4db645611.
+    
+    Dependent change is to be reverted.
+
+diff --git a/llvm/include/llvm/CodeGen/TargetLowering.h b/llvm/include/llvm/CodeGen/TargetLowering.h
+index a837265446ad..fe9f72e840de 100644
+--- a/llvm/include/llvm/CodeGen/TargetLowering.h
++++ b/llvm/include/llvm/CodeGen/TargetLowering.h
+@@ -290,8 +290,8 @@ public:
+     bool IsSwiftError : 1;
+     bool IsCFGuardTarget : 1;
+     MaybeAlign Alignment = None;
+-    // Type for byval, inalloca, or preallocated.
+-    Type *IndirectType = nullptr;
++    Type *ByValType = nullptr;
++    Type *PreallocatedType = nullptr;
+ 
+     ArgListEntry()
+         : IsSExt(false), IsZExt(false), IsInReg(false), IsSRet(false),
+diff --git a/llvm/include/llvm/IR/InstrTypes.h b/llvm/include/llvm/IR/InstrTypes.h
+index 8ef59f15b252..5b106c200544 100644
+--- a/llvm/include/llvm/IR/InstrTypes.h
++++ b/llvm/include/llvm/IR/InstrTypes.h
+@@ -1729,17 +1729,14 @@ public:
+ 
+   /// Extract the byval type for a call or parameter.
+   Type *getParamByValType(unsigned ArgNo) const {
+-    return Attrs.getParamByValType(ArgNo);
+-  }
+-
+-  /// Extract the inalloca type for a call or parameter.
+-  Type *getParamInAllocaType(unsigned ArgNo) const {
+-    return Attrs.getParamInAllocaType(ArgNo);
++    Type *Ty = Attrs.getParamByValType(ArgNo);
++    return Ty ? Ty : getArgOperand(ArgNo)->getType()->getPointerElementType();
+   }
+ 
+   /// Extract the preallocated type for a call or parameter.
+   Type *getParamPreallocatedType(unsigned ArgNo) const {
+-    return Attrs.getParamPreallocatedType(ArgNo);
++    Type *Ty = Attrs.getParamPreallocatedType(ArgNo);
++    return Ty ? Ty : getArgOperand(ArgNo)->getType()->getPointerElementType();
+   }
+ 
+   /// Extract the number of dereferenceable bytes for a call or
+diff --git a/llvm/lib/CodeGen/SelectionDAG/FastISel.cpp b/llvm/lib/CodeGen/SelectionDAG/FastISel.cpp
+index 7009fe0cd652..439b9041bbfd 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/FastISel.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/FastISel.cpp
+@@ -1033,7 +1033,7 @@ bool FastISel::lowerCallTo(CallLoweringInfo &CLI) {
+   for (auto &Arg : CLI.getArgs()) {
+     Type *FinalType = Arg.Ty;
+     if (Arg.IsByVal)
+-      FinalType = Arg.IndirectType;
++      FinalType = cast<PointerType>(Arg.Ty)->getElementType();
+     bool NeedsRegBlock = TLI.functionArgumentNeedsConsecutiveRegisters(
+         FinalType, CLI.CallConv, CLI.IsVarArg);
+ 
+@@ -1076,10 +1076,10 @@ bool FastISel::lowerCallTo(CallLoweringInfo &CLI) {
+     }
+     MaybeAlign MemAlign = Arg.Alignment;
+     if (Arg.IsByVal || Arg.IsInAlloca || Arg.IsPreallocated) {
+-      Type *ElementTy = Arg.IndirectType;
+-      assert(ElementTy && "Indirect type not set in ArgListEntry");
+-
+-      unsigned FrameSize = DL.getTypeAllocSize(ElementTy);
++      PointerType *Ty = cast<PointerType>(Arg.Ty);
++      Type *ElementTy = Ty->getElementType();
++      unsigned FrameSize =
++          DL.getTypeAllocSize(Arg.ByValType ? Arg.ByValType : ElementTy);
+ 
+       // For ByVal, alignment should come from FE. BE will guess if this info
+       // is not there, but there are cases it cannot get right.
+diff --git a/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp b/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
+index 3594756f433c..01b06279c0f4 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
+@@ -9499,7 +9499,7 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
+     // FIXME: Split arguments if CLI.IsPostTypeLegalization
+     Type *FinalType = Args[i].Ty;
+     if (Args[i].IsByVal)
+-      FinalType = Args[i].IndirectType;
++      FinalType = cast<PointerType>(Args[i].Ty)->getElementType();
+     bool NeedsRegBlock = functionArgumentNeedsConsecutiveRegisters(
+         FinalType, CLI.CallConv, CLI.IsVarArg);
+     for (unsigned Value = 0, NumValues = ValueVTs.size(); Value != NumValues;
+@@ -9572,10 +9572,11 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
+       }
+       Align MemAlign;
+       if (Args[i].IsByVal || Args[i].IsInAlloca || Args[i].IsPreallocated) {
+-        Type *ElementTy = Args[i].IndirectType;
+-        assert(ElementTy && "Indirect type not set in ArgListEntry");
++        PointerType *Ty = cast<PointerType>(Args[i].Ty);
++        Type *ElementTy = Ty->getElementType();
+ 
+-        unsigned FrameSize = DL.getTypeAllocSize(ElementTy);
++        unsigned FrameSize = DL.getTypeAllocSize(
++            Args[i].ByValType ? Args[i].ByValType : ElementTy);
+         Flags.setByValSize(FrameSize);
+ 
+         // info is not there but there are cases it cannot get right.
+diff --git a/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp b/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
+index 8950bd9a301c..30393298ab72 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
+@@ -120,26 +120,17 @@ void TargetLoweringBase::ArgListEntry::setAttributes(const CallBase *Call,
+   Alignment = Attrs.getParamStackAlignment(ArgIdx);
+ 
+   IsByVal = Attrs.hasParamAttribute(ArgIdx, Attribute::ByVal);
+-  IsInAlloca = Attrs.hasParamAttribute(ArgIdx, Attribute::InAlloca);
+-  IsPreallocated = Attrs.hasParamAttribute(ArgIdx, Attribute::Preallocated);
+-
+-  assert(IsByVal + IsInAlloca + IsPreallocated <= 1 &&
+-         "can't have multiple indirect attributes");
+-  IndirectType = nullptr;
++  ByValType = nullptr;
+   if (IsByVal) {
+-    IndirectType = Call->getParamByValType(ArgIdx);
+-    assert(IndirectType && "no byval type?");
++    ByValType = Call->getParamByValType(ArgIdx);
+     if (!Alignment)
+       Alignment = Call->getParamAlign(ArgIdx);
+   }
+-  if (IsInAlloca) {
+-    IndirectType = Call->getParamInAllocaType(ArgIdx);
+-    assert(IndirectType && "no inalloca type?");
+-  }
+-  if (IsPreallocated) {
+-    IndirectType = Call->getParamPreallocatedType(ArgIdx);
+-    assert(IndirectType && "no preallocated type?");
+-  }
++  IsInAlloca = Attrs.hasParamAttribute(ArgIdx, Attribute::InAlloca);
++  IsPreallocated = Attrs.hasParamAttribute(ArgIdx, Attribute::Preallocated);
++  PreallocatedType = nullptr;
++  if (IsPreallocated)
++    PreallocatedType = Call->getParamPreallocatedType(ArgIdx);
+ }
+ 
+ /// Generate a libcall taking the given operands as arguments and returning a

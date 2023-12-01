@@ -1,0 +1,50 @@
+From 202401752d31b73c30ffbd3bd42aacfbb61f73f9 Mon Sep 17 00:00:00 2001
+From: Haixia Shi <hshi@chromium.org>
+Date: Thu, 20 Oct 2016 14:21:34 -0700
+Subject: [PATCH] Transition to the official DMA-BUF import modifier tokens.
+
+---
+ src/waffle/null/wnull_buffer.c |  4 ++--
+ src/waffle/null/wnull_buffer.h | 10 ----------
+ 2 files changed, 2 insertions(+), 12 deletions(-)
+
+diff --git a/src/waffle/null/wnull_buffer.c b/src/waffle/null/wnull_buffer.c
+index a3b9ba1..7afb3fc 100644
+--- a/src/waffle/null/wnull_buffer.c
++++ b/src/waffle/null/wnull_buffer.c
+@@ -178,9 +178,9 @@ slbuf_get_image(struct slbuf *self)
+             struct gbm_bo *bo = slbuf_get_bo(self);
+             if (bo) {
+                 uint64_t modifier = self->f->gbm_bo_get_modifier(bo);
+-                attr[12] = EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT;
++                attr[12] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+                 attr[13] = (uint32_t)(modifier & 0xffffffff);
+-                attr[14] = EGL_LINUX_DRM_PLANE0_MODIFIER1_EXT;
++                attr[14] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+                 attr[15] = (uint32_t)(modifier >> 32);
+                 attr[16] = EGL_NONE;
+             }
+diff --git a/src/waffle/null/wnull_buffer.h b/src/waffle/null/wnull_buffer.h
+index 244a1a5..68cdb1f 100644
+--- a/src/waffle/null/wnull_buffer.h
++++ b/src/waffle/null/wnull_buffer.h
+@@ -17,16 +17,6 @@ f(EGLImageKHR, eglCreateImageKHR , (EGLDisplay dpy, EGLContext ctx, EGLenum targ
+ f(EGLBoolean , eglDestroyImageKHR, (EGLDisplay dpy, EGLImageKHR image)) \
+ f(EGLBoolean , eglImageFlushExternalEXT, (EGLDisplay dpy, EGLImageKHR image, const EGLint *attrib_list)) \
+ 
+-#if !defined (EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT)
+-#define EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT 0x3286
+-#define EGL_LINUX_DRM_PLANE0_MODIFIER1_EXT 0x3287
+-#define EGL_LINUX_DRM_PLANE1_MODIFIER0_EXT 0x3288
+-#define EGL_LINUX_DRM_PLANE1_MODIFIER1_EXT 0x3289
+-#define EGL_LINUX_DRM_PLANE2_MODIFIER0_EXT 0x328a
+-#define EGL_LINUX_DRM_PLANE2_MODIFIER1_EXT 0x328b
+-#endif
+-
+-
+ struct slbuf_func {
+ #define DECLARE(type, name, args) type (*name) args;
+     GBM_FUNCTIONS(DECLARE)
+-- 
+2.8.0.rc3.226.g39d4020
+

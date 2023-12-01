@@ -1,0 +1,25 @@
+Respect wayland configure flags
+
+Don't attempt to use the WAYLAND_SCANNER macro even if it is enabled
+unless the user explicitly asks to enable wayland support.
+
+--- configure.ac.old	2018-04-17 16:39:23.835077504 -0700
++++ configure.ac	2018-04-17 16:41:01.474678546 -0700
+@@ -168,13 +168,13 @@
+     PKG_CHECK_MODULES([LIBVA_WAYLAND_DEPS], [libva-wayland],
+         [AC_DEFINE([HAVE_VA_WAYLAND], [1], [Defined to 1 if VA/Wayland API is enabled])],
+         [USE_WAYLAND="no"])
++
++    m4_ifdef([WAYLAND_SCANNER_RULES],
++        [WAYLAND_SCANNER_RULES(['$(top_builddir)/src/wayland'])],
++        [wayland_scanner_rules=""; AC_SUBST(wayland_scanner_rules)])
+ fi
+ AM_CONDITIONAL(USE_WAYLAND, test "$USE_WAYLAND" = "yes")
+ 
+-m4_ifdef([WAYLAND_SCANNER_RULES],
+-    [WAYLAND_SCANNER_RULES(['$(top_builddir)/src/wayland'])],
+-    [wayland_scanner_rules=""; AC_SUBST(wayland_scanner_rules)])
+-
+ AC_OUTPUT([
+     Makefile
+     debian.upstream/Makefile 

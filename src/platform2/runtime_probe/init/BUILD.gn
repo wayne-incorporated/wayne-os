@@ -1,0 +1,24 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/install_config.gni")
+import("//common-mk/install_seccomp_policy.gni")
+
+group("init") {
+  deps = [
+    ":install_init_config",
+    ":install_seccomp",
+  ]
+}
+
+install_seccomp_policy("install_seccomp") {
+  _arch = getenv("ARCH")
+  sources = [ "seccomp/${_arch}/runtime_probe-seccomp.policy" ]
+  install_path = "/usr/share/policy"
+}
+
+install_config("install_init_config") {
+  sources = [ "runtime_probe.conf" ]
+  install_path = "/etc/init"
+}

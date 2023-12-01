@@ -1,0 +1,103 @@
+From 60f57b36587c99175cb380406e2502a592a0c400 Mon Sep 17 00:00:00 2001
+From: David Green <david.green@arm.com>
+Date: Tue, 29 Mar 2022 10:12:44 +0100
+Subject: [PATCH] [AArch64] Ensure fixed point fptoi_sat has correct saturation
+ width
+
+D113200 introduced an error where it was converting FP_TO_SI_SAT with
+multiply to a fixed point floating point convert. The saturation
+bitwidth needs to be equal to the floating point width, or else the
+routine would truncate the result as opposed to saturating it.
+
+Fixes #54601
+---
+ .../Target/AArch64/AArch64ISelLowering.cpp    |  2 +-
+ llvm/test/CodeGen/AArch64/fcvt_combine.ll     | 31 ++++++++++++++++---
+ 2 files changed, 28 insertions(+), 5 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+index 30b9b6096620..38079a191f72 100644
+--- a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+@@ -13973,7 +13973,7 @@ static SDValue performFpToIntCombine(SDNode *N, SelectionDAG &DAG,
+   if (N->getOpcode() == ISD::FP_TO_SINT_SAT ||
+       N->getOpcode() == ISD::FP_TO_UINT_SAT) {
+     EVT SatVT = cast<VTSDNode>(N->getOperand(1))->getVT();
+-    if (SatVT.getScalarSizeInBits() != IntBits)
++    if (SatVT.getScalarSizeInBits() != IntBits || IntBits != FloatBits)
+       return SDValue();
+   }
+ 
+diff --git a/llvm/test/CodeGen/AArch64/fcvt_combine.ll b/llvm/test/CodeGen/AArch64/fcvt_combine.ll
+index 24713c444024..67af07e05ab0 100644
+--- a/llvm/test/CodeGen/AArch64/fcvt_combine.ll
++++ b/llvm/test/CodeGen/AArch64/fcvt_combine.ll
+@@ -285,6 +285,7 @@ declare <2 x i32> @llvm.fptosi.sat.v2i32.v2f64(<2 x double>)
+ declare <2 x i64> @llvm.fptosi.sat.v2i64.v2f64(<2 x double>)
+ declare <4 x i32> @llvm.fptosi.sat.v4i32.v4f32(<4 x float>)
+ declare <2 x i16> @llvm.fptosi.sat.v2i16.v2f32(<2 x float>)
++declare <4 x i16> @llvm.fptosi.sat.v4i16.v4f32(<4 x float>)
+ declare <2 x i64> @llvm.fptosi.sat.v2i64.v2f32(<2 x float>)
+ declare <3 x i32> @llvm.fptosi.sat.v3i32.v3f32(<3 x float>)
+ declare <8 x i16> @llvm.fptosi.sat.v8i16.v8f16(<8 x half>)
+@@ -326,8 +327,14 @@ define <2 x i64> @test3_sat(<2 x double> %d) {
+ define <2 x i32> @test4_sat(<2 x double> %d) {
+ ; CHECK-LABEL: test4_sat:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    fcvtzs v0.2d, v0.2d, #4
+-; CHECK-NEXT:    xtn v0.2s, v0.2d
++; CHECK-NEXT:    fmov v1.2d, #16.00000000
++; CHECK-NEXT:    fmul v0.2d, v0.2d, v1.2d
++; CHECK-NEXT:    mov d1, v0.d[1]
++; CHECK-NEXT:    fcvtzs w8, d0
++; CHECK-NEXT:    fmov s0, w8
++; CHECK-NEXT:    fcvtzs w8, d1
++; CHECK-NEXT:    mov v0.s[1], w8
++; CHECK-NEXT:    // kill: def $d0 killed $d0 killed $q0
+ ; CHECK-NEXT:    ret
+   %mul.i = fmul <2 x double> %d, <double 16.000000e+00, double 16.000000e+00>
+   %vcvt.i = call <2 x i32> @llvm.fptosi.sat.v2i32.v2f64(<2 x double> %mul.i)
+@@ -338,13 +345,29 @@ define <2 x i32> @test4_sat(<2 x double> %d) {
+ define <2 x i16> @test5_sat(<2 x float> %f) {
+ ; CHECK-LABEL: test5_sat:
+ ; CHECK:       // %bb.0:
++; CHECK-NEXT:    movi v1.2s, #127, msl #8
+ ; CHECK-NEXT:    fcvtzs v0.2s, v0.2s, #4
++; CHECK-NEXT:    smin v0.2s, v0.2s, v1.2s
++; CHECK-NEXT:    mvni v1.2s, #127, msl #8
++; CHECK-NEXT:    smax v0.2s, v0.2s, v1.2s
+ ; CHECK-NEXT:    ret
+   %mul.i = fmul <2 x float> %f, <float 16.000000e+00, float 16.000000e+00>
+   %vcvt.i = call <2 x i16> @llvm.fptosi.sat.v2i16.v2f32(<2 x float> %mul.i)
+   ret <2 x i16> %vcvt.i
+ }
+ 
++; Truncate float to i16
++define <4 x i16> @test5l_sat(<4 x float> %f) {
++; CHECK-LABEL: test5l_sat:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    fcvtzs v0.4s, v0.4s, #4
++; CHECK-NEXT:    sqxtn v0.4h, v0.4s
++; CHECK-NEXT:    ret
++  %mul.i = fmul <4 x float> %f, <float 16.000000e+00, float 16.000000e+00, float 16.000000e+00, float 16.000000e+00>
++  %vcvt.i = call <4 x i16> @llvm.fptosi.sat.v4i16.v4f32(<4 x float> %mul.i)
++  ret <4 x i16> %vcvt.i
++}
++
+ ; Don't convert float to i64
+ define <2 x i64> @test6_sat(<2 x float> %f) {
+ ; CHECK-LABEL: test6_sat:
+@@ -389,8 +412,8 @@ define <2 x i32> @test8_sat(<2 x float> %f) {
+ define <2 x i32> @test9_sat(<2 x float> %f) {
+ ; CHECK-LABEL: test9_sat:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    adrp x8, .LCPI26_0
+-; CHECK-NEXT:    ldr d1, [x8, :lo12:.LCPI26_0]
++; CHECK-NEXT:    adrp x8, .LCPI27_0
++; CHECK-NEXT:    ldr d1, [x8, :lo12:.LCPI27_0]
+ ; CHECK-NEXT:    fmul v0.2s, v0.2s, v1.2s
+ ; CHECK-NEXT:    fcvtzu v0.2s, v0.2s
+ ; CHECK-NEXT:    ret
+-- 
+2.35.1.1021.g381101b075-goog
+

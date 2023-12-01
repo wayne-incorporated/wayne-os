@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+// Copyright 2010 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,10 @@
 #include <vector>
 
 #include <base/logging.h>
+#include <base/time/time.h>
 #include <dbus/message.h>
 #include <dbus/object_proxy.h>
+#include <dbus/scoped_dbus_error.h>
 
 namespace login_manager {
 
@@ -17,6 +19,7 @@ namespace {
 
 constexpr char kInterface[] = "com.ubuntu.Upstart0_6";
 constexpr char kMethodName[] = "EmitEvent";
+constexpr base::TimeDelta kDefaultTimeout = base::TimeDelta::Min();
 
 }  // namespace
 
@@ -32,6 +35,18 @@ std::unique_ptr<dbus::Response> UpstartSignalEmitter::TriggerImpulse(
     const std::string& name,
     const std::vector<std::string>& args_keyvals,
     TriggerMode mode) {
+  dbus::ScopedDBusError error;
+  return this->TriggerImpulseWithTimeoutAndError(name, args_keyvals, mode,
+                                                 kDefaultTimeout, &error);
+}
+
+std::unique_ptr<dbus::Response>
+UpstartSignalEmitter::TriggerImpulseWithTimeoutAndError(
+    const std::string& name,
+    const std::vector<std::string>& args_keyvals,
+    TriggerMode mode,
+    base::TimeDelta timeout,
+    dbus::ScopedDBusError* error) {
   DLOG(INFO) << "Emitting " << name << " Upstart signal";
 
   dbus::MethodCall method_call(kInterface, kMethodName);
@@ -41,8 +56,10 @@ std::unique_ptr<dbus::Response> UpstartSignalEmitter::TriggerImpulse(
   // When this boolean is true, Upstart waits until all side-effects of the
   // event have completed instead of just returning after it's queued.
   writer.AppendBool(mode == TriggerMode::SYNC);
-  return upstart_dbus_proxy_->CallMethodAndBlock(
-      &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT);
+  int timeout_ms = timeout.is_min() ? dbus::ObjectProxy::TIMEOUT_USE_DEFAULT
+                                    : timeout.InMilliseconds();
+  return upstart_dbus_proxy_->CallMethodAndBlockWithErrorDetails(
+      &method_call, timeout_ms, error);
 }
 
 }  // namespace login_manager

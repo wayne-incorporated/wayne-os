@@ -1,0 +1,48 @@
+From cabcbb4db0fcc6bc204169b1ba0deca4561e67ee Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <zwisler@chromium.org>
+Date: Wed, 18 Dec 2019 19:56:24 -0700
+Subject: [PATCH] intel: limit shader geometry on BDW GT1
+
+Similar to the SKL GT1 fix introduced here:
+
+https://gitlab.freedesktop.org/asimiklit/mesa/commit/b1ba7ffdbd54fdb5da18d086c7b7a830e06a1cff
+
+we need to limit the .urb.max_entries[MESA_SHADER_GEOMETRY] on BDW GT1
+to address failures in these two tests:
+
+dEQP-GLES31.functional.geometry_shading.layered.render_with_default_layer_3d
+dEQP-GLES31.functional.geometry_shading.layered.render_with_default_layer_2d_array
+
+The value 690 was found via bisection.  691 is the actual max on the
+hardware I'm using, but 690 seemed like a nice round number.
+
+Signed-off-by: Ross Zwisler <zwisler@google.com>
+Signed-off-by: Lionel Landwerlin <lionel.g.landwerlin@intel.com>
+Acked-by: Lionel Landwerlin <lionel.g.landwerlin@intel.com>
+Tested-by: Marge Bot <https://gitlab.freedesktop.org/mesa/mesa/merge_requests/3173>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/merge_requests/3173>
+
+BUG=b:140204925
+TEST=./cts-tradefed run cts --module CtsDeqpTestCases -s dut:22
+(cherry picked from commit cabcbb4db0fcc6bc204169b1ba0deca4561e67ee)
+---
+ src/intel/dev/gen_device_info.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/intel/dev/gen_device_info.c b/src/intel/dev/gen_device_info.c
+index 23306475b3e..520b87073a7 100644
+--- a/src/intel/dev/gen_device_info.c
++++ b/src/intel/dev/gen_device_info.c
+@@ -446,7 +446,8 @@ static const struct gen_device_info gen_device_info_bdw_gt1 = {
+          [MESA_SHADER_VERTEX]    = 2560,
+          [MESA_SHADER_TESS_CTRL] = 504,
+          [MESA_SHADER_TESS_EVAL] = 1536,
+-         [MESA_SHADER_GEOMETRY]  = 960,
++         /* Reduced from 960, seems to be similar to the bug on Gen9 GT1. */
++         [MESA_SHADER_GEOMETRY]  = 690,
+       },
+    },
+    .simulator_id = 11,
+-- 
+2.24.1.735.g03f4e72817-goog
+

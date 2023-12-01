@@ -1,0 +1,23 @@
+libnet_join.c: Don't set ACB_PWNOEXP for machine account
+
+Does not set the "PasswordNeverExpires" on machine accounts since authpolicy is
+going to periodically renew them.
+
+crbug.com/777979.
+
+
+diff --git a/source3/libnet/libnet_join.c b/source3/libnet/libnet_join.c
+index 0595cfe..a356e40 100644
+--- a/source3/libnet/libnet_join.c
++++ b/source3/libnet/libnet_join.c
+@@ -1461,10 +1461,6 @@ static NTSTATUS libnet_join_joindomain_rpc(TALLOC_CTX *mem_ctx,
+ 		goto done;
+ 	}
+ 
+-	/* Fill in the additional account flags now */
+-
+-	acct_flags |= ACB_PWNOEXP;
+-
+ 	/* Set account flags on machine account */
+ 	ZERO_STRUCT(user_info.info16);
+ 	user_info.info16.acct_flags = acct_flags;

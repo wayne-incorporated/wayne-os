@@ -1,0 +1,13 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Bypass reset_resume on the internal GL852G USB hub
+# The hub takes ~492ms to perform reset_resume, which significantly slows
+# down resume performance.
+SUBSYSTEM=="usb", KERNEL=="?-?", ATTR{removable}=="fixed", ATTRS{idVendor}=="05e3", ATTR{idProduct}=="0610", ACTION=="add", RUN+="/bin/sh -c 'echo 1 > /sys$devpath/avoid_reset_quirk'"
+
+# Bypass reset_resume on the internal GL850G-OHY50 USB hub
+# The hub takes ~492ms to perform reset_resume, which significantly slows
+# down resume performance.
+SUBSYSTEM=="usb", KERNEL=="?-?", ATTR{removable}=="fixed", ATTRS{idVendor}=="05e3", ATTR{idProduct}=="0608", ACTION=="add", RUN+="/bin/sh -c 'echo 1 > /sys$devpath/avoid_reset_quirk'"

@@ -1,0 +1,62 @@
+commit 836991d3676fda06d0f07c816ba855c8a0c3e0aa
+Author: Wei Mi <wmi@google.com>
+Date:   Thu Jul 30 17:47:27 2020 -0700
+
+    Fix a crash when the sample profile uses md5 and -sample-profile-merge-inlinee
+    is enabled.
+    
+    When -sample-profile-merge-inlinee is enabled, new FunctionSamples may be
+    created during profile merge without GUIDToFuncNameMap being initialized.
+    That will occasionally cause compiler crash. The patch fixes it.
+    
+    Differential Revision: https://reviews.llvm.org/D84994
+
+diff --git a/llvm/include/llvm/ProfileData/SampleProf.h b/llvm/include/llvm/ProfileData/SampleProf.h
+index 562468333ef..fa5326038ad 100644
+--- a/llvm/include/llvm/ProfileData/SampleProf.h
++++ b/llvm/include/llvm/ProfileData/SampleProf.h
+@@ -515,6 +515,8 @@ public:
+   sampleprof_error merge(const FunctionSamples &Other, uint64_t Weight = 1) {
+     sampleprof_error Result = sampleprof_error::success;
+     Name = Other.getName();
++    if (!GUIDToFuncNameMap)
++      GUIDToFuncNameMap = Other.GUIDToFuncNameMap;
+     MergeResult(Result, addTotalSamples(Other.getTotalSamples(), Weight));
+     MergeResult(Result, addHeadSamples(Other.getHeadSamples(), Weight));
+     for (const auto &I : Other.getBodySamples()) {
+diff --git a/llvm/lib/Transforms/IPO/SampleProfile.cpp b/llvm/lib/Transforms/IPO/SampleProfile.cpp
+index b6871e26053..ca60d35b8aa 100644
+--- a/llvm/lib/Transforms/IPO/SampleProfile.cpp
++++ b/llvm/lib/Transforms/IPO/SampleProfile.cpp
+@@ -995,6 +995,8 @@ bool SampleProfileLoader::inlineHotFunctions(
+         const FunctionSamples *FS = nullptr;
+         if (auto *CB = dyn_cast<CallBase>(&I)) {
+           if (!isa<IntrinsicInst>(I) && (FS = findCalleeFunctionSamples(*CB))) {
++            assert((!FunctionSamples::UseMD5 || FS->GUIDToFuncNameMap) &&
++                   "GUIDToFuncNameMap has to be populated");
+             AllCandidates.push_back(CB);
+             if (FS->getEntrySamples() > 0)
+               localNotInlinedCallSites.try_emplace(CB, FS);
+diff --git a/llvm/test/Transforms/SampleProfile/Inputs/inline-mergeprof.md5.prof b/llvm/test/Transforms/SampleProfile/Inputs/inline-mergeprof.md5.prof
+new file mode 100644
+index 00000000000..f8fa801beea
+Binary files /dev/null and b/llvm/test/Transforms/SampleProfile/Inputs/inline-mergeprof.md5.prof differ
+diff --git a/llvm/test/Transforms/SampleProfile/inline-mergeprof.ll b/llvm/test/Transforms/SampleProfile/inline-mergeprof.ll
+index d83fd23c33d..dfd1f1f2020 100644
+--- a/llvm/test/Transforms/SampleProfile/inline-mergeprof.ll
++++ b/llvm/test/Transforms/SampleProfile/inline-mergeprof.ll
+@@ -3,9 +3,13 @@
+ ; RUN: opt < %s -sample-profile -sample-profile-file=%S/Inputs/inline-mergeprof.prof -sample-profile-merge-inlinee=true -S | FileCheck -check-prefix=SCALE %s
+ ; RUN: opt < %s -passes=sample-profile -sample-profile-file=%S/Inputs/inline-mergeprof.prof -sample-profile-merge-inlinee=false -S | FileCheck -check-prefix=SCALE %s
+ 
+-; Test we properly merge not inlined profile properly with '-sample-profile-merge-inlinee'
++; Test we properly merge not inlined profile with '-sample-profile-merge-inlinee'
+ ; RUN: opt < %s -passes=sample-profile -sample-profile-file=%S/Inputs/inline-mergeprof.prof -sample-profile-merge-inlinee=true -S | FileCheck -check-prefix=MERGE  %s
+ 
++; Test we properly merge not inlined profile with '-sample-profile-merge-inlinee'
++; when the profile uses md5.
++; RUN: opt < %s -passes=sample-profile -sample-profile-file=%S/Inputs/inline-mergeprof.md5.prof -sample-profile-merge-inlinee=true -S | FileCheck -check-prefix=MERGE  %s
++
+ @.str = private unnamed_addr constant [11 x i8] c"sum is %d\0A\00", align 1
+ 
+ define i32 @main() #0 !dbg !6 {

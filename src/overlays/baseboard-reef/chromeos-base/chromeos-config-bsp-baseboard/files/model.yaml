@@ -1,0 +1,165 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+identity-common: &identity_common
+  platform-name: Reef
+  frid: "Google_{{$firmware-target}}"
+
+base-config: &base_config
+  brand-code: "{{$brand-code}}"
+  camera:
+    legacy-usb: True
+  firmware:
+    build-targets:
+      coreboot: "{{$firmware-target}}"
+      depthcharge: "{{$firmware-target}}"
+      libpayload: "{{$firmware-target}}"
+      # Only "reef" EC board is left on ToT.
+      ec: reef
+    image-name: "{{$device-name}}"
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    psu-type: battery
+  identity:
+    <<: *identity_common
+    customization-id: "{{$loem}}-{{$chassis}}"
+  name: "{{$device-name}}"
+  test-label: "{{$device-name}}"
+
+zerg-base-config: &zerg_base_config
+  <<: *base_config
+  $firmware-target: "{{$zerg-group}}"
+
+nonzerg-base-config: &nonzerg_base_config
+  <<: *base_config
+  $firmware-target: "{{$device-name}}"
+
+reef-config: &reef_config
+  <<: *zerg_base_config
+  $zerg-group: reef
+  nnpalm:
+    touch-compatible: True
+    model: "alpha"
+    radius-polynomial: "0.17889799, 4.22584412"
+  power:
+    charging-ports: |-
+      CROS_USB_PD_CHARGER0 LEFT
+      CROS_USB_PD_CHARGER1 RIGHT
+    low-battery-shutdown-percent: '4.0'
+    $set-wifi-transmit-power-for-tablet-mode: '1'
+    set-wifi-transmit-power-for-tablet-mode: "{{$set-wifi-transmit-power-for-tablet-mode}}"
+
+snappy-config: &snappy_config
+  <<: *zerg_base_config
+  $zerg-group: snappy
+  cros-healthd:
+    cached-vpd:
+      has-sku-number: True
+  power:
+    charging-ports: |-
+      CROS_USB_PD_CHARGER0 RIGHT
+      CROS_USB_PD_CHARGER1 LEFT
+    has-keyboard-backlight: '1'
+    internal-backlight-no-als-battery-brightness: |-
+      70.0 171
+      65.5 185
+      60.4 223
+      60.4 235
+      69.3 170
+      68.5 181
+      62.7 215
+      62.7 217
+      60.7 229
+      66.0 188
+      69.3 176
+      62.7 208
+      66.0 184
+      63.0
+    keyboard-backlight-no-als-brightness: '10.0'
+    low-battery-shutdown-percent: '6.0'
+  ui:
+    side-volume-button:
+      region: keyboard
+      side: left
+
+pyro-config: &pyro_config
+  <<: *nonzerg_base_config
+  power:
+    low-battery-shutdown-percent: '4.0'
+
+sand-config: &sand_config
+  <<: *nonzerg_base_config
+  power:
+    has-keyboard-backlight: '1'
+    power-supply-full-factor: '0.94'
+    suspend-to-idle: '1'
+
+chromeos-board-reef: &reef_board_config
+  devices:
+    - $device-name: electro
+      products:
+        - $brand-code: ACBB
+          $chassis: ELECTRO
+          $loem: PARMA
+      skus:
+        - config:
+            <<: *reef_config
+            $set-wifi-transmit-power-for-tablet-mode: '0'
+    - $device-name: basking
+      products:
+        - $brand-code: ASUN
+          $chassis: BASKING
+          $loem: OEM2
+      skus:
+        - config: *reef_config
+
+chromeos-board-pyro: &pyro_board_config
+  devices:
+    - $device-name: pyro
+      $brand-code: LEAN
+      $chassis: PYRO
+      products:
+        - $loem: NEWTON2
+        - $loem: LENOVO
+      skus:
+        - config: *pyro_config
+
+chromeos-board-sand: &sand_board_config
+  devices:
+    - $device-name: sand
+      products:
+        - $brand-code: ACBD
+          $chassis: SAND
+          $loem: ACER
+      skus:
+        - config: *sand_config
+
+chromeos-board-snappy: &snappy_board_config
+  devices:
+    - $device-name: alan
+      products:
+        - $brand-code: CLSF
+          $chassis: ALAN
+          $loem: DOLPHIN
+      skus:
+        - config: *snappy_config
+    - $device-name: bigdaddy
+      products:
+        - $brand-code: FQZI
+          $chassis: BIGDADDY
+          $loem: BENTLEY
+      skus:
+        - config: *snappy_config
+    - $device-name: snappy
+      products:
+        - $brand-code: HPZO
+          $chassis: SNAPPY
+          $loem: MORGAN
+      skus:
+        - config: *snappy_config
+        # Devices pre-DVT2 were not provisioned with a
+        # customization_id.  Tolerate these devices.
+        - config:
+            <<: *snappy_config
+            identity: *identity_common

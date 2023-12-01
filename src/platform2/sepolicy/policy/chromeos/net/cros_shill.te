@@ -1,0 +1,52 @@
+# SELinux policy for Shill component of Chrome OS.
+
+type cros_shill, chromeos_domain, domain;
+
+permissive cros_shill;
+
+domain_auto_trans({ cros_init_shill minijail }, cros_shill_exec, cros_shill)
+allow cros_shill { cros_init_shill minijail }:fd use;
+allow cros_shill { cros_init_shill minijail }:fifo_file rw_file_perms;
+
+r_dir_file(cros_shill, cros_passwd_file)
+r_dir_file(cros_shill, cros_var_lib_devicesettings)
+
+allow cros_shill { cros_run_shill cros_var_lib_shill cros_var_cache_shill }:file create_file_perms;
+allow cros_shill { cros_run_shill cros_var_lib_shill cros_var_cache_shill }:dir create_dir_perms;
+
+r_dir_file(cros_shill, sysfs)
+allow cros_shill sysfs_net:dir search;
+allow cros_shill sysfs_net:lnk_file read;
+
+# read proc
+allow cros_shill chromeos_domain:dir search;
+allow cros_shill chromeos_domain:file { open getattr read };
+allow cros_shill chromeos_domain:lnk_file read;
+
+allow cros_shill self:capability { net_admin net_raw setgid setpcap setuid kill };
+allow cros_shill self:netlink_generic_socket { bind create read setopt write };
+allow cros_shill self:netlink_route_socket { bind create nlmsg_read nlmsg_write read setopt write };
+allow cros_shill self:packet_socket { bind create };
+
+allow cros_shill proc_net:file rw_file_perms;
+allow cros_shill proc_uptime:file r_file_perms;
+
+cros_tcp_connect(cros_shill)
+cros_udp_listen(cros_shill)
+
+allow cros_shill kernel:system module_request;
+
+allow cros_shill device:blk_file getattr;
+
+# dhcpcd-specific
+allow cros_shill cros_dhcpcd_exec:file rx_file_perms;
+allow cros_shill self:capability net_bind_service;
+allow cros_shill self:packet_socket { setopt write read };
+allow cros_shill self:netlink_route_socket getattr;
+allowxperm cros_shill self:udp_socket ioctl { SIOCETHTOOL SIOCGIWESSID };
+
+tmp_file(cros_shill, file)
+
+log_writer(cros_shill)
+uma_writer(cros_shill)
+cros_dbus_client(cros_shill)

@@ -1,0 +1,17 @@
+Removes hardcoded asan flags
+
+https://crbug.com/1155327
+
+diff -ru a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -83,8 +83,8 @@
+     sources + ['fuzzer/@0@.cc'.format(fuzzer)],
+     dependencies: shared_deps,
+     build_by_default: false,
+-    cpp_args: ['-fsanitize=address', '-fsanitize=fuzzer-no-link'],
+-    link_args: ['-fsanitize=address', '-fsanitize=fuzzer']
++    cpp_args: ['-fsanitize=fuzzer-no-link'],
++    link_args: ['-fsanitize=fuzzer']
+   )
+ endforeach

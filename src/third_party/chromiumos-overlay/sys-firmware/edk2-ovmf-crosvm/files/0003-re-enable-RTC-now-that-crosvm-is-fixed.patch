@@ -1,0 +1,42 @@
+From 1b0a22dc686ef0b7c2fd2a55273975836b84c417 Mon Sep 17 00:00:00 2001
+From: Mike Gerow <gerow@google.com>
+Date: Thu, 09 Mar 2023 18:17:52 -0800
+Subject: [PATCH] re-enable RTC now that crosvm is fixed
+
+crosvm now reports the correct status register to allow OVMF to use the
+RTC properly.
+
+Shouldn't be submitted until after
+https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4326940 makes
+it to stable.
+
+b/235855065
+b/272640638
+
+Change-Id: Ib91500fba9049331ec76ed57cb4a0656934158a9
+---
+
+diff --git a/OvmfPkg/Crosvm/CrosvmX64.dsc b/OvmfPkg/Crosvm/CrosvmX64.dsc
+index 652b330..03c1675 100644
+--- a/OvmfPkg/Crosvm/CrosvmX64.dsc
++++ b/OvmfPkg/Crosvm/CrosvmX64.dsc
+@@ -830,6 +830,7 @@
+   }
+   MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystemRuntimeDxe.inf
+   MdeModulePkg/Universal/Metronome/Metronome.inf
++  PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcatRealTimeClockRuntimeDxe.inf
+   MdeModulePkg/Universal/DriverHealthManagerDxe/DriverHealthManagerDxe.inf
+   MdeModulePkg/Universal/BdsDxe/BdsDxe.inf {
+     <LibraryClasses>
+diff --git a/OvmfPkg/Crosvm/CrosvmX64.fdf b/OvmfPkg/Crosvm/CrosvmX64.fdf
+index 8781f87..b7cd5ff 100644
+--- a/OvmfPkg/Crosvm/CrosvmX64.fdf
++++ b/OvmfPkg/Crosvm/CrosvmX64.fdf
+@@ -260,6 +260,7 @@
+ INF  MdeModulePkg/Bus/Pci/PciBusDxe/PciBusDxe.inf
+ INF  MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystemRuntimeDxe.inf
+ INF  MdeModulePkg/Universal/Metronome/Metronome.inf
++INF  PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcatRealTimeClockRuntimeDxe.inf
+ 
+ INF  OvmfPkg/VirtioPciDeviceDxe/VirtioPciDeviceDxe.inf
+ INF  OvmfPkg/Virtio10Dxe/Virtio10.inf

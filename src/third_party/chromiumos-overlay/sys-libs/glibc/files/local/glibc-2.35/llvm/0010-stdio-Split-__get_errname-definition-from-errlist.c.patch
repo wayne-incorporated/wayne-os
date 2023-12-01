@@ -1,0 +1,191 @@
+From 529954d73384d4a9f3ae19f47321ca576b494967 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 6 Apr 2022 11:46:46 -0300
+Subject: [PATCH 010/163] stdio: Split __get_errname definition from errlist.c
+
+The loader does not need to pull all __get_errlist definitions
+and its size is decreased:
+
+Before:
+$ size elf/ld.so
+   text    data     bss     dec     hex filename
+ 197774   11024     456  209254   33166 elf/ld.so
+
+After:
+$ size elf/ld.so
+   text    data     bss     dec     hex filename
+ 191510    9936     456  201902   314ae elf/ld.so
+
+Checked on x86_64-linux-gnu.
+
+(cherry picked from commit 592b6d00aaaf435efd687e99b5985852dffb4c80)
+---
+ stdio-common/Makefile       |  2 +-
+ stdio-common/errlist.c      | 38 ++---------------------
+ stdio-common/errname.c      | 61 +++++++++++++++++++++++++++++++++++++
+ sysdeps/mach/hurd/errname.c | 21 +++++++++++++
+ 4 files changed, 85 insertions(+), 37 deletions(-)
+ create mode 100644 stdio-common/errname.c
+ create mode 100644 sysdeps/mach/hurd/errname.c
+
+diff --git a/stdio-common/Makefile b/stdio-common/Makefile
+index d8498bbd62..7f67665ef1 100644
+--- a/stdio-common/Makefile
++++ b/stdio-common/Makefile
+@@ -43,7 +43,7 @@ routines	:=							      \
+ 	vfscanf-internal vfwscanf-internal iovfscanf			      \
+ 	vfprintf-internal vfwprintf-internal
+ 
+-aux	:= errlist siglist printf-parsemb printf-parsewc fxprintf
++aux	:= errlist errname siglist printf-parsemb printf-parsewc fxprintf
+ 
+ tests := tstscanf test_rdwr test-popen tstgetln test-fseek \
+ 	 temptest tst-fileno test-fwrite tst-ungetc tst-ferror \
+diff --git a/stdio-common/errlist.c b/stdio-common/errlist.c
+index 310b858e31..1c09a31a7a 100644
+--- a/stdio-common/errlist.c
++++ b/stdio-common/errlist.c
+@@ -1,4 +1,5 @@
+-/* Copyright (C) 1991-2022 Free Software Foundation, Inc.
++/* Internal errno names mapping definition.
++   Copyright (C) 1991-2022 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -40,39 +41,4 @@ __get_errlist (int errnum)
+   return NULL;
+ }
+ 
+-static const union sys_errname_t
+-{
+-  struct
+-  {
+-#define MSGSTRFIELD1(line) str##line
+-#define MSGSTRFIELD(line)  MSGSTRFIELD1(line)
+-#define _S(n, str)         char MSGSTRFIELD(__LINE__)[sizeof(#n)];
+-#include <errlist.h>
+-#undef _S
+-  };
+-  char str[0];
+-} _sys_errname = { {
+-#define _S(n, s) #n,
+-#include <errlist.h>
+-#undef _S
+-} };
+-
+-static const unsigned short _sys_errnameidx[] =
+-{
+-#define _S(n, s) \
+-  [ERR_MAP(n)] = offsetof(union sys_errname_t, MSGSTRFIELD(__LINE__)),
+-#include <errlist.h>
+-#undef _S
+-};
+-
+-const char *
+-__get_errname (int errnum)
+-{
+-  int mapped = ERR_MAP (errnum);
+-  if (mapped < 0 || mapped >= array_length (_sys_errnameidx)
+-      || (mapped > 0 && _sys_errnameidx[mapped] == 0))
+-    return NULL;
+-  return _sys_errname.str + _sys_errnameidx[mapped];
+-}
+-
+ #include <errlist-compat.c>
+diff --git a/stdio-common/errname.c b/stdio-common/errname.c
+new file mode 100644
+index 0000000000..08e4cecbd1
+--- /dev/null
++++ b/stdio-common/errname.c
+@@ -0,0 +1,61 @@
++/* Internal errno names mapping definition.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <stdio.h>
++#include <errno.h>
++#include <libintl.h>
++#include <array_length.h>
++
++#ifndef ERR_MAP
++# define ERR_MAP(n) n
++#endif
++
++static const union sys_errname_t
++{
++  struct
++  {
++#define MSGSTRFIELD1(line) str##line
++#define MSGSTRFIELD(line)  MSGSTRFIELD1(line)
++#define _S(n, str)         char MSGSTRFIELD(__LINE__)[sizeof(#n)];
++#include <errlist.h>
++#undef _S
++  };
++  char str[0];
++} _sys_errname = { {
++#define _S(n, s) #n,
++#include <errlist.h>
++#undef _S
++} };
++
++static const unsigned short _sys_errnameidx[] =
++{
++#define _S(n, s) \
++  [ERR_MAP(n)] = offsetof(union sys_errname_t, MSGSTRFIELD(__LINE__)),
++#include <errlist.h>
++#undef _S
++};
++
++const char *
++__get_errname (int errnum)
++{
++  int mapped = ERR_MAP (errnum);
++  if (mapped < 0 || mapped >= array_length (_sys_errnameidx)
++      || (mapped > 0 && _sys_errnameidx[mapped] == 0))
++    return NULL;
++  return _sys_errname.str + _sys_errnameidx[mapped];
++}
+diff --git a/sysdeps/mach/hurd/errname.c b/sysdeps/mach/hurd/errname.c
+new file mode 100644
+index 0000000000..09ddb49478
+--- /dev/null
++++ b/sysdeps/mach/hurd/errname.c
+@@ -0,0 +1,21 @@
++/* Copyright (C) 1998-2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <mach/error.h>
++
++#define ERR_MAP(value) err_get_code (value)
++#include <stdio-common/errname.c>
+-- 
+2.37.2
+

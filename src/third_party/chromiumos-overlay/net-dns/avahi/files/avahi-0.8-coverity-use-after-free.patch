@@ -1,0 +1,28 @@
+From bf92dbc2c0cb39b4c970dcf700254ab5293b3756 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Mon, 5 Dec 2022 20:17:42 +0000
+Subject: [PATCH] avahi-core: rearrange deallocations in
+ avahi_time_event_queue_new a bit
+
+Reported by Coverity Scan.
+---
+ avahi-core/timeeventq.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/avahi-core/timeeventq.c b/avahi-core/timeeventq.c
+index 2799bf242..beceaffaf 100644
+--- a/avahi-core/timeeventq.c
++++ b/avahi-core/timeeventq.c
+@@ -135,10 +135,10 @@ AvahiTimeEventQueue* avahi_time_event_queue_new(const AvahiPoll *poll_api) {
+ oom:
+ 
+     if (q) {
+-        avahi_free(q);
+-
+         if (q->prioq)
+             avahi_prio_queue_free(q->prioq);
++
++        avahi_free(q);
+     }
+ 
+     return NULL;

@@ -1,0 +1,109 @@
+From d62bf06264f8efc97f40ce4d68e9bd3b47109fc6 Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Thu, 24 Jan 2019 17:26:31 -0800
+Subject: [PATCH 12/13] BACKPORT: i965: Add handling for fp16 configs
+
+Expose configs when allow_fp16_configs has been enabled and
+DRI_LOADER_CAP_FP16 is set in the loader.
+
+Also, define a new dri configuration option so users can disable exposure of
+fp16 formats. Make fp16 opt-in for i965.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Adam Jackson <ajax@redhat.com>
+Reviewed-by: Emil Velikov <emil.l.velikov@gmail.com>
+(cherry picked from commit f4703f1c10246b4e4813635569ff00475c00f418)
+
+ Conflicts:Trivial conflicts.
+	src/mesa/drivers/dri/i965/intel_screen.c
+	src/util/xmlpool/t_options.h
+
+Change-Id: Iea0bcd15b81be27f3c5d44a471886a9e25e6c8cb
+---
+ src/mesa/drivers/dri/i965/intel_screen.c | 25 +++++++++++++++++++++++-
+ src/util/xmlpool/t_options.h             |  5 +++++
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/src/mesa/drivers/dri/i965/intel_screen.c b/src/mesa/drivers/dri/i965/intel_screen.c
+index 97a62aa1591..8fa46681aff 100644
+--- a/src/mesa/drivers/dri/i965/intel_screen.c
++++ b/src/mesa/drivers/dri/i965/intel_screen.c
+@@ -96,6 +96,7 @@ DRI_CONF_BEGIN
+    DRI_CONF_SECTION_MISCELLANEOUS
+       DRI_CONF_GLSL_ZERO_INIT("false")
+       DRI_CONF_ALLOW_RGB10_CONFIGS("false")
++      DRI_CONF_ALLOW_FP16_CONFIGS("false")
+    DRI_CONF_SECTION_END
+ DRI_CONF_END
+ };
+@@ -183,6 +184,12 @@ static const struct __DRI2flushExtensionRec intelFlushExtension = {
+ };
+ 
+ static const struct intel_image_format intel_image_formats[] = {
++   { __DRI_IMAGE_FOURCC_ABGR16161616F, __DRI_IMAGE_COMPONENTS_RGBA, 1,
++     { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR16161616F, 8 } } },
++
++   { __DRI_IMAGE_FOURCC_XBGR16161616F, __DRI_IMAGE_COMPONENTS_RGB, 1,
++     { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR16161616F, 8 } } },
++
+    { __DRI_IMAGE_FOURCC_ARGB2101010, __DRI_IMAGE_COMPONENTS_RGBA, 1,
+      { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB2101010, 4 } } },
+ 
+@@ -1712,7 +1719,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
+       fb->Visual.samples = num_samples;
+    }
+ 
+-   if (mesaVis->redBits == 10 && mesaVis->alphaBits > 0) {
++   if (mesaVis->redBits == 16 && mesaVis->alphaBits > 0 && mesaVis->floatMode) {
++      rgbFormat = MESA_FORMAT_RGBA_FLOAT16;
++   } else if (mesaVis->redBits == 16 && mesaVis->floatMode) {
++      rgbFormat = MESA_FORMAT_RGBX_FLOAT16;
++   } else if (mesaVis->redBits == 10 && mesaVis->alphaBits > 0) {
+       rgbFormat = mesaVis->redMask == 0x3ff00000 ? MESA_FORMAT_B10G10R10A2_UNORM
+                                                  : MESA_FORMAT_R10G10B10A2_UNORM;
+    } else if (mesaVis->redBits == 10) {
+@@ -2133,6 +2144,15 @@ intel_allowed_format(__DRIscreen *dri_screen, mesa_format format)
+         format == MESA_FORMAT_B10G10R10X2_UNORM))
+       return false;
+ 
++   /* Shall we expose fp16 formats? */
++   bool allow_fp16_configs = driQueryOptionb(&screen->optionCache,
++                                             "allow_fp16_configs");
++   allow_fp16_configs &= intel_loader_get_cap(dri_screen, DRI_LOADER_CAP_FP16);
++   if (!allow_fp16_configs &&
++       (format == MESA_FORMAT_RGBA_FLOAT16 ||
++        format == MESA_FORMAT_RGBX_FLOAT16))
++      return false;
++
+    return true;
+ }
+ 
+@@ -2150,6 +2170,9 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
+       MESA_FORMAT_B10G10R10A2_UNORM,
+       MESA_FORMAT_B10G10R10X2_UNORM,
+ 
++      MESA_FORMAT_RGBA_FLOAT16,
++      MESA_FORMAT_RGBX_FLOAT16,
++
+       /* The 32-bit RGBA format must not precede the 32-bit BGRA format.
+        * Likewise for RGBX and BGRX.  Otherwise, the GLX client and the GLX
+        * server may disagree on which format the GLXFBConfig represents,
+diff --git a/src/util/xmlpool/t_options.h b/src/util/xmlpool/t_options.h
+index 80ddf0e203e..9d502ffdf09 100644
+--- a/src/util/xmlpool/t_options.h
++++ b/src/util/xmlpool/t_options.h
+@@ -264,6 +264,11 @@ DRI_CONF_OPT_BEGIN_B(allow_rgb10_configs, def) \
+ DRI_CONF_DESC(en,gettext("Allow exposure of visuals and fbconfigs with rgb10a2 formats")) \
+ DRI_CONF_OPT_END
+ 
++#define DRI_CONF_ALLOW_FP16_CONFIGS(def) \
++DRI_CONF_OPT_BEGIN_B(allow_fp16_configs, def) \
++DRI_CONF_DESC(en,gettext("Allow exposure of visuals and fbconfigs with fp16 formats")) \
++DRI_CONF_OPT_END
++
+ /**
+  * \brief Initialization configuration options
+  */
+-- 
+2.21.0
+

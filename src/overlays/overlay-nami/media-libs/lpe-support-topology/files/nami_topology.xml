@@ -1,0 +1,459 @@
+<?xml version="1.0"?>
+<System>
+
+  <SubsystemType name="AudioDSP" version="2.0">
+
+    <ModuleType name="copier" uuid="9BA00C83-CA12-4A83-943C-1FA2E82F9DDA" library_name="base_fw"
+                input_pin_type="homogeneous" output_pin_type="homogeneous"
+                input_pins="1" output_pins="2" mem_pages="0" />
+
+    <ModuleType name="mixout" uuid="3C56505A-24D7-418F-BDDC-C1F5A3AC2AE0" library_name="base_fw"
+                input_pin_type="homogeneous" output_pin_type="homogeneous"
+                input_pins="8" output_pins="1" mem_pages="0" />
+
+    <ModuleType name="mixin" uuid="39656EB2-3B71-4049-8D3F-F92CD5C43C09" library_name="base_fw"
+                input_pin_type="homogeneous" output_pin_type="homogeneous"
+                input_pins="1" output_pins="1" mem_pages="0" />
+
+    <ModuleType name="kpb" uuid="A8A0CB32-4A77-4DB1-85C7-53D7EE07BCE6" library_name="base_fw"
+                input_pin_type="homogeneous" output_pin_type="homogeneous"
+                input_pins="1" output_pins="2" mem_pages="0">
+      <!--InitParams name="init" param_id="0" size="24" default_value="1,0x100,0x6d0,2,0xa0003,0xb0003" set_params="postbind" /-->
+      <Params>
+        <Param name="kpb_init" param_id="0" size="16" default_value="1,0x100,0x98c,0x2bc" set_params="postinit"/>
+        <Param name="kpb_bind" param_id="1" size="12" default_value="2,0xa0003,0xb0003" set_params="postbind"/>
+      </Params>
+    </ModuleType>
+
+    <ModuleType name="hwd" uuid="578A29B8-0890-446F-A80A-2FE202AE0DBA" library_name="dsp_lib_ghw_spt_release.bin"
+                input_pin_type="homogeneous" output_pin_type="homogeneous"
+                input_pins="1" output_pins="0" mem_pages="14">
+      <Params>
+        <Param name="mdl" param_id="0xff" size="31776" default_value="" set_params="postinit"/>
+      </Params>
+    </ModuleType>
+
+    <ModuleType name="mic_select" uuid="32FE92C1-1E17-4FC2-9758-C7F3542E980A" library_name="base_fw"
+                input_pin_type="heterogeneous" output_pin_type="homogeneous"
+                input_pins="1" output_pins="1" mem_pages="0">
+    </ModuleType>
+
+  </SubsystemType>
+
+  <Subsystem name="IntelSST" type="AudioDSP">
+
+    <!-- Devices must match FE DAI stream names -->
+    <!-- Ports must match BE AIF widget names in machine driver -->
+    <Path name="media0_in" id="1" priority="0" direction="playback" conn_type="HOST_DMA" mem_pages="2" device="System Playback">
+      <PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="16"/>
+      <PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="24"/>
+      <PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="0"/>
+        <To module="mixin" instance="0"/>
+      </Link>
+    </Path>
+
+    <Path name="codec0_out" id="2" priority="0" direction="playback" conn_type="LINK_DMA" mem_pages="4" port="codec0_out">
+      <PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="24"/>
+      <PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="24"/>
+
+      <Link type="direct">
+        <From module="mixout" instance="0"/>
+        <To module="copier" instance="1"/>
+      </Link>
+    </Path>
+
+    <Path name="codec1_out" id="13" priority="0" direction="playback" conn_type="LINK_DMA" mem_pages="2" port="codec1_out">
+      <PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="24"/>
+      <PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="24"/>
+
+      <Link type="direct">
+        <From module="mixout" instance="1"/>
+        <To module="copier" instance="3"/>
+      </Link>
+    </Path>
+
+    <Path name="hs_cap_out" id="3" priority="0" direction="capture" conn_type="HOST_DMA" mem_pages="2" port ="codec0_in" device="System Capture">
+	<PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="16"/>
+	<PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="24"/>
+	<PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="4"/>
+        <To module="copier" instance="5"/>
+      </Link>
+    </Path>
+
+	<Path name="dmic_hifi_in" id="5" priority="0" direction="capture" conn_type="NONE" mem_pages="2" port="dmic01_hifi" device="DMIC Capture">
+           <PcmFormat dir="out" sample_rate="48000" channel_count="4" bps="24"/>
+           <PcmFormat dir="out" sample_rate="48000" channel_count="4" bps="16"/>
+           <PcmFormat dir="in" sample_rate="48000" channel_count="4" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="8"/>
+        <To module="copier" instance="9"/>
+      </Link>
+    </Path>
+
+	<Path name="media2_out" id="6" priority="0" direction="capture" conn_type="HOST_DMA" mem_pages="2" device="Reference Capture">
+      <PcmFormat dir="out" sample_rate="16000" channel_count="1" bps="24"/>
+      <PcmFormat dir="in" sample_rate="16000" channel_count="1" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="10"/>
+        <To module="copier" instance="11"/>
+      </Link>
+    </Path>
+
+    <Path name="hdmi1_pt_out" id="7" priority="0" direction="playback" conn_type="HOST_DMA" mem_pages="2" device="HDMI1 Playback" port="iDisp1_out">
+      <PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="24"/>
+      <PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="12"/>
+        <To module="copier" instance="13"/>
+      </Link>
+    </Path>
+
+    <Path name="hdmi2_pt_out" id="8" priority="0" direction="playback" conn_type="HOST_DMA" mem_pages="2" device="HDMI2 Playback" port="iDisp2_out">
+      <PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="24"/>
+      <PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="14"/>
+        <To module="copier" instance="15"/>
+      </Link>
+    </Path>
+
+	<Path name="hdmi3_pt_out" id="9" priority="0" direction="playback" conn_type="HOST_DMA" mem_pages="2" device="HDMI3 Playback" port="iDisp3_out">
+      <PcmFormat dir="out" sample_rate="48000" channel_count="2" bps="24"/>
+      <PcmFormat dir="in" sample_rate="48000" channel_count="2" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="16"/>
+        <To module="copier" instance="17"/>
+      </Link>
+    </Path>
+
+	<Path name="dmic_ref_in" id="10" priority="0" direction="capture" conn_type="LINK_DMA" mem_pages="5" port="dmic01_hifi">
+      <PcmFormat dir="out" sample_rate="16000" channel_count="1" bps="24"/>
+      <PcmFormat dir="in" sample_rate="16000" channel_count="4" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="18"/>
+        <To module="mic_select" instance="0"/>
+      </Link>
+      <Link type="direct">
+        <From module="mic_select" instance="0"/>
+        <To module="kpb" instance="0"/>
+      </Link>
+    </Path>
+
+    <Path name="hwd_in" id="11" priority="0" direction="capture" conn_type="NONE" mem_pages="5" dapm_src_sink="hwd_in sink">
+      <PcmFormat dir="out" sample_rate="16000" channel_count="1" bps="24"/>
+      <PcmFormat dir="in" sample_rate="16000" channel_count="1" bps="24"/>
+
+      <Link type="direct">
+        <From module="copier" instance="19"/>
+        <To module="hwd" instance="0"/>
+      </Link>
+    </Path>
+
+    <Module type="copier" description="media0_in" instance_id="0" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1">
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="mixin" description="media0_in" instance_id="0" affinity="0" dma_type="NONE" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA_LEAF" subseq="FE_SRC_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="codec0_out" instance_id="1" affinity="0" dma_type="I2S" port="SSP0" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" tdm_slot="0" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="16" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="BE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="mixout" description="codec0_out" instance_id="0" affinity="0" dma_type="NONE" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1">
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_MIXER" subseq="BE_SINK_MIX"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+   <Module type="mixout" description="codec1_out" instance_id="1" affinity="0" dma_type="NONE" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1">
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_MIXER" subseq="BE_SINK_MIX"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="codec1_out" instance_id="3" affinity="0" dma_type="I2S" port="SSP1" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1">
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="BE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="hs_cap_out" instance_id="4" affinity="0" dma_type="I2S" port="SSP1" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1">
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="hs_cap_out" instance_id="5" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+	<Module type="copier" description="dmic_hifi_in" instance_id="8" affinity="0" dma_type="DMIC" port="PDM" domain="LL" converter_mask="0x1" fixup_mask="0x4" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="200000"/>
+    </Module>
+    <Module type="copier" description="dmic_hifi_in" instance_id="9" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x1" fixup_mask="0x4" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+	<Module type="copier" description="media2_out" instance_id="10" affinity="0" dma_type="NONE" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_MIXER" subseq="FE_SINK_MIX"/>
+      <ModuleResources mcps="2000"/>
+    </Module>
+    <Module type="copier" description="media2_out" instance_id="11" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="2999"/>
+    </Module>
+
+    <Module type="copier" description="hdmi1_pt_out" instance_id="12" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x0" fixup_mask="0x7" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="hdmi1_pt_out" instance_id="13" affinity="0" dma_type="HDA_LINK" domain="LL" converter_mask="0x0" fixup_mask="0x7" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="hdmi2_pt_out" instance_id="14" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x0" fixup_mask="0x7" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="hdmi2_pt_out" instance_id="15" affinity="0" dma_type="HDA_LINK" domain="LL" converter_mask="0x0" fixup_mask="0x7" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+	<Module type="copier" description="hdmi3_pt_out" instance_id="16" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="32" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="hdmi3_pt_out" instance_id="17" affinity="0" dma_type="HDA_LINK" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="2" sample_size="24" channel_map="0xFFFFFF10" channel_config="CHANNEL_CONFIG_STEREO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <Module type="copier" description="dmic_ref_in" instance_id="18" affinity="0" dma_type="DMIC" port="PDM" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" tdm_slot="1">
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="4" sample_size="16" channel_map="0xFFFF4320" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="4" sample_size="16" channel_map="0xFFFF4320" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <!-- KPD module should get created after media2_in, hence the non-standard subseq -->
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="BE_SRC_MIX"/>
+      <ModuleResources mcps="2999"/>
+    </Module>
+
+    <Module type="mic_select" description="dmic_ref_in" instance_id="0" affinity="0" dma_type="NONE" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="4" sample_size="16" channel_map="0xFFFF4320" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="BE_SRC_PGA"/>
+      <ModuleResources mcps="965"/>
+    </Module>
+
+    <Module type="kpb" description="dmic_ref_in" instance_id="0" affinity="0" dma_type="NONE" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="1">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA_LEAF" subseq="BE_SRC_PGA"/>
+      <ModuleResources mcps="409"/>
+    </Module>
+
+    <Module type="copier" description="hwd_in" instance_id="19" affinity="0" dma_type="NONE" domain="LL" converter_mask="0x0" fixup_mask="0x0" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_MIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="2000"/>
+    </Module>
+
+    <Module type="hwd" description="hwd_in" instance_id="0" affinity="0" dma_type="NONE" domain="DP" converter_mask="0x0" fixup_mask="0x0" frame_size="10" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="16000" sample_container="16" channel_count="1" sample_size="16" channel_map="0xFFFFFFF0" channel_config="CHANNEL_CONFIG_MONO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="65000"/>
+    </Module>
+
+    <Module type="copier" description="dmic_hifi_in" instance_id="8" affinity="0" dma_type="DMIC" port="PDM" domain="LL" converter_mask="0x1" fixup_mask="0x4" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="mixer" event_type="HDA_SST_SET_VMIXER" subseq="FE_SRC_MIX"/>
+      <ModuleResources mcps="200000"/>
+    </Module>
+
+    <Module type="copier" description="dmic_hifi_in" instance_id="9" affinity="0" dma_type="HOST_DMA" domain="LL" converter_mask="0x1" fixup_mask="0x4" frame_size="1" >
+      <Interface dir="in" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <Interface dir="out" pin_id="0">
+        <AudioFormat sample_rate="48000" sample_container="32" channel_count="4" sample_size="24" channel_map="0xFFFF3210" channel_config="CHANNEL_CONFIG_QUATRO" interleaving="0x0" sample_type="0x0"/>
+      </Interface>
+      <DapmInfo event_id="PGA" event_type="HDA_SST_SET_PGA" subseq="FE_SINK_PGA"/>
+      <ModuleResources mcps="100000"/>
+    </Module>
+
+    <PathConnector type="mixer">
+      <Input path_name="media0_in" module_type="mixin" instance_id="0" />
+      <Output path_name="codec0_out" module_type="mixout" instance_id="0" />
+      <Output path_name="codec1_out" module_type="mixout" instance_id="1" />
+    </PathConnector>
+    <PathConnector type="direct">
+      <Input path_name="dmic_ref_in" module_type="kpb" instance_id="0" interface="out1" />
+      <Output path_name="media2_out" module_type="copier" instance_id="10" interface="any" />
+    </PathConnector>
+
+    <PathConnector type="direct">
+      <Input path_name="dmic_ref_in" module_type="kpb" instance_id="0" interface="out0" />
+      <Output path_name="hwd_in" module_type="copier" instance_id="19" interface="any" />
+    </PathConnector>
+
+    <PathConnector type="direct">
+      <Input path_name="hwd_in sink" module_type=" " instance_id="0" interface="any" />
+      <Output path_name="media2_out" module_type="copier" instance_id="11" interface="any" />
+  </PathConnector>
+
+  </Subsystem>
+</System>

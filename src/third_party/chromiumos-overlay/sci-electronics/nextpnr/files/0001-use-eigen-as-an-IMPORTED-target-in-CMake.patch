@@ -1,0 +1,33 @@
+From 94cdc69d4fd7fcd50610501a0365c5ff86cd0572 Mon Sep 17 00:00:00 2001
+From: Dan Callaghan <dcallagh@google.com>
+Date: Tue, 24 Jan 2023 13:11:50 +1100
+Subject: [PATCH] use eigen as an IMPORTED target in CMake
+
+Eigen considers the EIGEN3_INCLUDE_DIRS and EIGEN3_DEFINITIONS variables
+to be deprecated and they will no longer be exported in the next release
+after 3.4.0:
+https://gitlab.com/libeigen/eigen/-/commit/f2984cd0778dd0a1d7e74216d826eaff2bc6bfab
+
+Use the IMPORTED target instead, which seems to be the preferred way of
+consuming third-party CMake libraries.
+---
+ CMakeLists.txt | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 269e90eb..4d15f724 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -225,8 +225,7 @@ include_directories(common/kernel/ common/place/ common/route/ json/ frontend/ 3
+ 
+ if(BUILD_HEAP)
+     find_package (Eigen3 REQUIRED NO_MODULE)
+-    include_directories(${EIGEN3_INCLUDE_DIRS})
+-    add_definitions(${EIGEN3_DEFINITIONS})
++    link_libraries(Eigen3::Eigen)
+     add_definitions(-DWITH_HEAP)
+ endif()
+ 
+-- 
+2.39.0.246.g2a6d74b583-goog
+

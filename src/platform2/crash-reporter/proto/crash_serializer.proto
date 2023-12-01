@@ -1,0 +1,90 @@
+// Copyright 2020 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// Protos used by crash_serializer.
+// This should exactly match the messages in config's
+// proto/chromiumos/config/api/test/tls/common.proto
+syntax = "proto3";
+
+package crash;
+
+// When this response is streamed, the first proto with a given crash ID will
+// always contain the CrashInfo.
+// Files and core dumps (if present) may be streamed. If they are,
+// subsequent protos with the same crash ID will follow, each containing a chunk
+// of file/coredump. To reassemble these, concatenate the bytes received from
+// each subsequent proto with a matching crash_id (concatenate blobs that have
+// matching crash_ids and keys).
+// Additional crashes may be reported in the same stream with a new crash ID.
+message FetchCrashesResponse {
+  // Crash id. unique only within responses to a single FetchCrashes request.
+  // Used to assemble multiple streamed |FetchCrashesResponse| protos into a
+  // single crash report.
+  int64 crash_id = 1;
+  oneof data {
+    // Full details of crash report.
+    CrashInfo crash = 2;
+    // Misc file (e.g. minidump, large binary log, etc)
+    CrashBlob blob = 3;
+    // Coredump. Present iff fetch_core was true in FetchCrashesRequest and
+    // the crash has a coredump. (kernel warnings, for example, do not have
+    // one).
+    bytes core = 4;
+  }
+}
+
+// The data in this proto matches the metadata from crash-reporter's meta files.
+// Sender::CreateCrashFormData puts this data into crash upload POST requests.
+// (See src/platform2/crash-reporter/crash_sender_util.cc.)
+// The names in this proto MUST match the names that crash-reporter uses so
+// that, when crashes are uploaded to the crash server, they are interpreted
+// as they are when crash-reporter uploads them.
+// Similarly, when this proto is converted into a POST request to send to the
+// crash server, the names must not be altered.
+message CrashInfo {
+  // Name of executable that crashed (e.g. "chrome")
+  string exec_name = 1;
+  // Product name (e.g. "Chrome_ChromeOS" or "ChromeOS")
+  string prod = 2;
+  // Product version (e.g. "12345.0.0")
+  string ver = 3;
+  // Crash signature (may not be populated for all crashes)
+  string sig = 4;
+  // The name of the integration test that was running when this crash
+  // happened, if any.
+  string in_progress_integration_test = 5;
+  // The name of the collector (e.g. chrome_collector, arc_collector)
+  string collector = 6;
+  // Additional key-value pairs of metadata (e.g. "crash_loop_mode = true").
+  // These should be included in any POSTs to the crash server in a standard
+  // POST form, as seen in CreateCrashFormData.
+  // (despite the fact that this message is a subfield, it should be a flat
+  // structure in any POSTs).
+  repeated CrashMetadata fields = 7;
+}
+
+// Arbitrary text-only key-value pair corresponding to the key-value pairs in
+// crash report metadata files.
+message CrashMetadata {
+  // This value is a UTF8, human-readable, description of the data.
+  string key = 1;
+  // The value will be a human-readable string (e.g. "12345.0.0"), which must
+  // be valid UTF-8.
+  string text = 2;
+};
+
+// Arbitrary non-UTF8 key-value pair from crash report metadata files.
+message CrashBlob {
+  // This value is a UTF8, human-readable, description of the data.
+  // This should be passed as the 'name' to the crash server.
+  // For instance, upload_file_fake_payload
+  string key = 1;
+  // The value is a blob (e.g. a file from sysfs or a minidump), which need
+  // not be valid UTF-8, and may be large.
+  bytes blob = 2;
+  // The basename of the file. Must be specified as the filename in data
+  // uploaded to the crash server.
+  // e.g. foo_binary.20201027.102345.0.dmp
+  string filename = 3;
+};

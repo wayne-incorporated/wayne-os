@@ -1,0 +1,383 @@
+From c0702ac07b8e206f424930ff0331151954fb821c Mon Sep 17 00:00:00 2001
+From: Emre Kultursay <emrekultursay@google.com>
+Date: Fri, 1 Jul 2022 13:44:01 +0800
+Subject: [PATCH] [PATCH] [lldb-server] Skip shared regions for memory
+ allocation
+
+Differential Revision: https://reviews.llvm.org/D128832
+---
+ lldb/include/lldb/Target/MemoryRegionInfo.h   | 14 +++-
+ .../Process/Linux/NativeProcessLinux.cpp      |  3 +-
+ .../Plugins/Process/Utility/LinuxProcMaps.cpp | 10 ++-
+ .../Process/Utility/LinuxProcMapsTest.cpp     | 84 +++++++++++++------
+ .../MemoryTagManagerAArch64MTETest.cpp        |  4 +-
+ .../Process/minidump/MinidumpParserTest.cpp   | 32 +++----
+ 6 files changed, 99 insertions(+), 48 deletions(-)
+
+diff --git a/lldb/include/lldb/Target/MemoryRegionInfo.h b/lldb/include/lldb/Target/MemoryRegionInfo.h
+index 4e978d33b05..3ef66b403e1 100644
+--- a/lldb/include/lldb/Target/MemoryRegionInfo.h
++++ b/lldb/include/lldb/Target/MemoryRegionInfo.h
+@@ -26,12 +26,14 @@ public:
+ 
+   MemoryRegionInfo() = default;
+   MemoryRegionInfo(RangeType range, OptionalBool read, OptionalBool write,
+-                   OptionalBool execute, OptionalBool mapped, ConstString name,
++                   OptionalBool execute, OptionalBool shared,
++                   OptionalBool mapped, ConstString name,
+                    OptionalBool flash, lldb::offset_t blocksize,
+                    OptionalBool memory_tagged, OptionalBool stack_memory)
+       : m_range(range), m_read(read), m_write(write), m_execute(execute),
+-        m_mapped(mapped), m_name(name), m_flash(flash), m_blocksize(blocksize),
+-        m_memory_tagged(memory_tagged), m_is_stack_memory(stack_memory) {}
++        m_shared(shared), m_mapped(mapped), m_name(name), m_flash(flash),
++        m_blocksize(blocksize), m_memory_tagged(memory_tagged),
++        m_is_stack_memory(stack_memory) {}
+ 
+   RangeType &GetRange() { return m_range; }
+ 
+@@ -45,6 +47,8 @@ public:
+ 
+   OptionalBool GetExecutable() const { return m_execute; }
+ 
++  OptionalBool GetShared() const { return m_shared; }
++
+   OptionalBool GetMapped() const { return m_mapped; }
+ 
+   ConstString GetName() const { return m_name; }
+@@ -57,6 +61,8 @@ public:
+ 
+   void SetExecutable(OptionalBool val) { m_execute = val; }
+ 
++  void SetShared(OptionalBool val) { m_shared = val; }
++
+   void SetMapped(OptionalBool val) { m_mapped = val; }
+ 
+   void SetName(const char *name) { m_name = ConstString(name); }
+@@ -95,6 +101,7 @@ public:
+   bool operator==(const MemoryRegionInfo &rhs) const {
+     return m_range == rhs.m_range && m_read == rhs.m_read &&
+            m_write == rhs.m_write && m_execute == rhs.m_execute &&
++           m_shared == rhs.m_shared &&
+            m_mapped == rhs.m_mapped && m_name == rhs.m_name &&
+            m_flash == rhs.m_flash && m_blocksize == rhs.m_blocksize &&
+            m_memory_tagged == rhs.m_memory_tagged &&
+@@ -134,6 +141,7 @@ protected:
+   OptionalBool m_read = eDontKnow;
+   OptionalBool m_write = eDontKnow;
+   OptionalBool m_execute = eDontKnow;
++  OptionalBool m_shared = eDontKnow;
+   OptionalBool m_mapped = eDontKnow;
+   ConstString m_name;
+   OptionalBool m_flash = eDontKnow;
+diff --git a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+index 0fb4c691118..90118f9386d 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+@@ -1227,7 +1227,8 @@ llvm::Expected<uint64_t>
+ NativeProcessLinux::Syscall(llvm::ArrayRef<uint64_t> args) {
+   PopulateMemoryRegionCache();
+   auto region_it = llvm::find_if(m_mem_region_cache, [](const auto &pair) {
+-    return pair.first.GetExecutable() == MemoryRegionInfo::eYes;
++    return pair.first.GetExecutable() == MemoryRegionInfo::eYes &&
++        pair.first.GetShared() != MemoryRegionInfo::eYes;
+   });
+   if (region_it == m_mem_region_cache.end())
+     return llvm::createStringError(llvm::inconvertibleErrorCode(),
+diff --git a/lldb/source/Plugins/Process/Utility/LinuxProcMaps.cpp b/lldb/source/Plugins/Process/Utility/LinuxProcMaps.cpp
+index 947b970edf6..2a15f981374 100644
+--- a/lldb/source/Plugins/Process/Utility/LinuxProcMaps.cpp
++++ b/lldb/source/Plugins/Process/Utility/LinuxProcMaps.cpp
+@@ -94,7 +94,15 @@ ParseMemoryRegionInfoFromProcMapsLine(llvm::StringRef maps_line,
+     return ProcMapError("unexpected /proc/{pid}/%s exec permission char",
+                         maps_kind);
+ 
+-  line_extractor.GetChar();              // Read the private bit
++  // Handle sharing status (private/shared).
++  const char sharing_char = line_extractor.GetChar();
++  if (sharing_char == 's')
++    region.SetShared(MemoryRegionInfo::OptionalBool::eYes);
++  else if (sharing_char == 'p')
++    region.SetShared(MemoryRegionInfo::OptionalBool::eNo);
++  else
++    region.SetShared(MemoryRegionInfo::OptionalBool::eDontKnow);
++
+   line_extractor.SkipSpaces();           // Skip the separator
+   line_extractor.GetHexMaxU64(false, 0); // Read the offset
+   line_extractor.GetHexMaxU64(false, 0); // Read the major device number
+diff --git a/lldb/unittests/Process/Utility/LinuxProcMapsTest.cpp b/lldb/unittests/Process/Utility/LinuxProcMapsTest.cpp
+index bc714e26fbf..ac1c6132630 100644
+--- a/lldb/unittests/Process/Utility/LinuxProcMapsTest.cpp
++++ b/lldb/unittests/Process/Utility/LinuxProcMapsTest.cpp
+@@ -87,8 +87,8 @@ INSTANTIATE_TEST_SUITE_P(
+             "0-0 rwzp 00000000 00:00 0\n"
+             "2-3 r-xp 00000000 00:00 0 [def]\n",
+             MemoryRegionInfos{
+-                MemoryRegionInfo(make_range(0, 1), MemoryRegionInfo::eYes,
+-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                MemoryRegionInfo(make_range(0, 1), MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                                 MemoryRegionInfo::eNo,
+                                  MemoryRegionInfo::eYes, ConstString("[abc]"),
+                                  MemoryRegionInfo::eDontKnow, 0,
+                                  MemoryRegionInfo::eDontKnow,
+@@ -101,8 +101,9 @@ INSTANTIATE_TEST_SUITE_P(
+             MemoryRegionInfos{
+                 MemoryRegionInfo(
+                     make_range(0x55a4512f7000, 0x55a451b68000),
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eYes,
+                     ConstString("[heap]"), MemoryRegionInfo::eDontKnow, 0,
+                     MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
+             },
+@@ -110,19 +111,29 @@ INSTANTIATE_TEST_SUITE_P(
+         // Multiple entries
+         std::make_tuple(
+             "7fc090021000-7fc094000000 ---p 00000000 00:00 0\n"
++            "7fc094000000-7fc094a00000 ---s 00000000 00:00 0\n"
+             "ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0 "
+             "[vsyscall]",
+             MemoryRegionInfos{
+                 MemoryRegionInfo(
+                     make_range(0x7fc090021000, 0x7fc094000000),
+-                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
+-                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
++                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eYes,
++                    ConstString(nullptr), MemoryRegionInfo::eDontKnow, 0,
++                    MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
++                MemoryRegionInfo(
++                    make_range(0x7fc094000000, 0x7fc094a00000),
++                    MemoryRegionInfo::eNo, MemoryRegionInfo::eNo, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eYes,
++                    MemoryRegionInfo::eYes,
+                     ConstString(nullptr), MemoryRegionInfo::eDontKnow, 0,
+                     MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
+                 MemoryRegionInfo(
+                     make_range(0xffffffffff600000, 0xffffffffff601000),
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
++                    MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eYes,
+                     ConstString("[vsyscall]"), MemoryRegionInfo::eDontKnow, 0,
+                     MemoryRegionInfo::eDontKnow, MemoryRegionInfo::eDontKnow),
+             },
+@@ -146,8 +157,9 @@ INSTANTIATE_TEST_SUITE_P(
+             "0/0 rw-p 00000000 00:00 0",
+             MemoryRegionInfos{
+                 MemoryRegionInfo(
+-                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    make_range(0x1111, 0x2222),
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eNo,
+                     MemoryRegionInfo::eYes, ConstString("[foo]"),
+                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                     MemoryRegionInfo::eDontKnow),
+@@ -166,8 +178,22 @@ INSTANTIATE_TEST_SUITE_P(
+             "1111-2222 rw-p 00000000 00:00 0    [foo]",
+             MemoryRegionInfos{
+                 MemoryRegionInfo(
+-                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    make_range(0x1111, 0x2222),
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eYes, ConstString("[foo]"),
++                    MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
++                    MemoryRegionInfo::eDontKnow),
++            },
++            ""),
++        // Single shared region parses, has no flags
++        std::make_tuple(
++            "1111-2222 rw-s 00000000 00:00 0    [foo]",
++            MemoryRegionInfos{
++                MemoryRegionInfo(
++                    make_range(0x1111, 0x2222),
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eYes,
+                     MemoryRegionInfo::eYes, ConstString("[foo]"),
+                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                     MemoryRegionInfo::eDontKnow),
+@@ -181,8 +207,9 @@ INSTANTIATE_TEST_SUITE_P(
+             "VmFlags: mt",
+             MemoryRegionInfos{
+                 MemoryRegionInfo(
+-                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    make_range(0x1111, 0x2222),
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eNo,
+                     MemoryRegionInfo::eYes, ConstString("[foo]"),
+                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eYes,
+                     MemoryRegionInfo::eDontKnow),
+@@ -193,8 +220,9 @@ INSTANTIATE_TEST_SUITE_P(
+             "0-0 rw-p 00000000 00:00 0\n"
+             "VmFlags:      mt      ",
+             MemoryRegionInfos{
+-                MemoryRegionInfo(make_range(0, 0), MemoryRegionInfo::eYes,
+-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                MemoryRegionInfo(make_range(0, 0),
++                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                                 MemoryRegionInfo::eNo,
+                                  MemoryRegionInfo::eYes, ConstString(nullptr),
+                                  MemoryRegionInfo::eDontKnow, 0,
+                                  MemoryRegionInfo::eYes,
+@@ -206,8 +234,9 @@ INSTANTIATE_TEST_SUITE_P(
+             "0-0 rw-p 00000000 00:00 0\n"
+             "VmFlags:         ",
+             MemoryRegionInfos{
+-                MemoryRegionInfo(make_range(0, 0), MemoryRegionInfo::eYes,
+-                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                MemoryRegionInfo(make_range(0, 0),
++                                 MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                                 MemoryRegionInfo::eNo,
+                                  MemoryRegionInfo::eYes, ConstString(nullptr),
+                                  MemoryRegionInfo::eDontKnow, 0,
+                                  MemoryRegionInfo::eNo,
+@@ -223,14 +252,15 @@ INSTANTIATE_TEST_SUITE_P(
+             "VmFlags: mt",
+             MemoryRegionInfos{
+                 MemoryRegionInfo(
+-                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    make_range(0x1111, 0x2222),
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eNo,
+                     MemoryRegionInfo::eYes, ConstString("[foo]"),
+                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                     MemoryRegionInfo::eDontKnow),
+                 MemoryRegionInfo(
+-                    make_range(0x3333, 0x4444), MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
++                    make_range(0x3333, 0x4444), MemoryRegionInfo::eYes, MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
++                    MemoryRegionInfo::eNo,
+                     MemoryRegionInfo::eYes, ConstString("[bar]"),
+                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eYes,
+                     MemoryRegionInfo::eDontKnow),
+@@ -246,14 +276,16 @@ INSTANTIATE_TEST_SUITE_P(
+             "MMUPageSize:           4 kB\n",
+             MemoryRegionInfos{
+                 MemoryRegionInfo(
+-                    make_range(0x1111, 0x2222), MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    make_range(0x1111, 0x2222),
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eNo,
++                    MemoryRegionInfo::eNo,
+                     MemoryRegionInfo::eYes, ConstString(nullptr),
+                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                     MemoryRegionInfo::eDontKnow),
+                 MemoryRegionInfo(
+-                    make_range(0x3333, 0x4444), MemoryRegionInfo::eYes,
+-                    MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
++                    make_range(0x3333, 0x4444),
++                    MemoryRegionInfo::eYes, MemoryRegionInfo::eNo, MemoryRegionInfo::eYes,
++                    MemoryRegionInfo::eNo,
+                     MemoryRegionInfo::eYes, ConstString(nullptr),
+                     MemoryRegionInfo::eDontKnow, 0, MemoryRegionInfo::eDontKnow,
+                     MemoryRegionInfo::eDontKnow),
+diff --git a/lldb/unittests/Process/Utility/MemoryTagManagerAArch64MTETest.cpp b/lldb/unittests/Process/Utility/MemoryTagManagerAArch64MTETest.cpp
+index 78688aef3fd..9c209ec2363 100644
+--- a/lldb/unittests/Process/Utility/MemoryTagManagerAArch64MTETest.cpp
++++ b/lldb/unittests/Process/Utility/MemoryTagManagerAArch64MTETest.cpp
+@@ -134,8 +134,10 @@ TEST(MemoryTagManagerAArch64MTETest, ExpandToGranule) {
+ static MemoryRegionInfo MakeRegionInfo(lldb::addr_t base, lldb::addr_t size,
+                                        bool tagged) {
+   return MemoryRegionInfo(
+-      MemoryRegionInfo::RangeType(base, size), MemoryRegionInfo::eYes,
++      MemoryRegionInfo::RangeType(base, size),
+       MemoryRegionInfo::eYes, MemoryRegionInfo::eYes, MemoryRegionInfo::eYes,
++      MemoryRegionInfo::eNo,
++      MemoryRegionInfo::eYes,
+       ConstString(), MemoryRegionInfo::eNo, 0,
+       /*memory_tagged=*/
+       tagged ? MemoryRegionInfo::eYes : MemoryRegionInfo::eNo,
+diff --git a/lldb/unittests/Process/minidump/MinidumpParserTest.cpp b/lldb/unittests/Process/minidump/MinidumpParserTest.cpp
+index 95e2cf30b3d..b8143d53eb0 100644
+--- a/lldb/unittests/Process/minidump/MinidumpParserTest.cpp
++++ b/lldb/unittests/Process/minidump/MinidumpParserTest.cpp
+@@ -378,15 +378,15 @@ Streams:
+       parser->BuildMemoryRegions(),
+       testing::Pair(
+           testing::ElementsAre(
+-              MemoryRegionInfo({0x0, 0x10000}, no, no, no, no, ConstString(),
++              MemoryRegionInfo({0x0, 0x10000}, no, no, no, unknown, no, ConstString(),
+                                unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x10000, 0x21000}, yes, yes, no, yes,
++              MemoryRegionInfo({0x10000, 0x21000}, yes, yes, no, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x40000, 0x1000}, yes, no, no, yes,
++              MemoryRegionInfo({0x40000, 0x1000}, yes, no, no, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x7ffe0000, 0x1000}, yes, no, no, yes,
++              MemoryRegionInfo({0x7ffe0000, 0x1000}, yes, no, no, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x7ffe1000, 0xf000}, no, no, no, yes,
++              MemoryRegionInfo({0x7ffe1000, 0xf000}, no, no, no, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown)),
+           true));
+ }
+@@ -412,9 +412,9 @@ Streams:
+       parser->BuildMemoryRegions(),
+       testing::Pair(
+           testing::ElementsAre(
+-              MemoryRegionInfo({0x1000, 0x10}, yes, unknown, unknown, yes,
++              MemoryRegionInfo({0x1000, 0x10}, yes, unknown, unknown, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x2000, 0x20}, yes, unknown, unknown, yes,
++              MemoryRegionInfo({0x2000, 0x20}, yes, unknown, unknown, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown)),
+           false));
+ }
+@@ -428,9 +428,9 @@ TEST_F(MinidumpParserTest, GetMemoryRegionInfoFromMemory64List) {
+       parser->BuildMemoryRegions(),
+       testing::Pair(
+           testing::ElementsAre(
+-              MemoryRegionInfo({0x1000, 0x10}, yes, unknown, unknown, yes,
++              MemoryRegionInfo({0x1000, 0x10}, yes, unknown, unknown, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x2000, 0x20}, yes, unknown, unknown, yes,
++              MemoryRegionInfo({0x2000, 0x20}, yes, unknown, unknown, unknown, yes,
+                                ConstString(), unknown, 0, unknown, unknown)),
+           false));
+ }
+@@ -460,17 +460,17 @@ Streams:
+       parser->BuildMemoryRegions(),
+       testing::Pair(
+           testing::ElementsAre(
+-              MemoryRegionInfo({0x400d9000, 0x2000}, yes, no, yes, yes,
++              MemoryRegionInfo({0x400d9000, 0x2000}, yes, no, yes, no, yes,
+                                app_process, unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x400db000, 0x1000}, yes, no, no, yes,
++              MemoryRegionInfo({0x400db000, 0x1000}, yes, no, no, no, yes,
+                                app_process, unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x400dc000, 0x1000}, yes, yes, no, yes,
++              MemoryRegionInfo({0x400dc000, 0x1000}, yes, yes, no, no, yes,
+                                ConstString(), unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x400ec000, 0x1000}, yes, no, no, yes,
++              MemoryRegionInfo({0x400ec000, 0x1000}, yes, no, no, no, yes,
+                                ConstString(), unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x400ee000, 0x1000}, yes, yes, no, yes, linker,
++              MemoryRegionInfo({0x400ee000, 0x1000}, yes, yes, no, no, yes, linker,
+                                unknown, 0, unknown, unknown),
+-              MemoryRegionInfo({0x400fc000, 0x1000}, yes, yes, yes, yes, liblog,
++              MemoryRegionInfo({0x400fc000, 0x1000}, yes, yes, yes, no, yes, liblog,
+                                unknown, 0, unknown, unknown)),
+           true));
+ }
+@@ -491,7 +491,7 @@ Streams:
+   EXPECT_THAT(
+       parser->BuildMemoryRegions(),
+       testing::Pair(testing::ElementsAre(MemoryRegionInfo(
+-                        {0x400fc000, 0x1000}, yes, yes, yes, yes,
++                        {0x400fc000, 0x1000}, yes, yes, yes, no, yes,
+                         ConstString(nullptr), unknown, 0, unknown, unknown)),
+                     true));
+ }
+-- 
+2.37.0.rc0.161.g10f37bed90-goog
+

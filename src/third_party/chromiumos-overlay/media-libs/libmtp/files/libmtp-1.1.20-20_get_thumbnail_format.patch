@@ -1,0 +1,57 @@
+diff --git a/src/libmtp.c b/src/libmtp.c
+index d3d4f89..91a42b9 100644
+--- a/src/libmtp.c
++++ b/src/libmtp.c
+@@ -9354,6 +9354,27 @@ int LIBMTP_TruncateObject(LIBMTP_mtpdevice_t *device, uint32_t const id,
+ }
+ 
+ 
++/**
++ * Get thumbnail format of a file.
++ * @param device a pointer to the device to get thumbnail format of.
++ * @param id the object ID of the file to get thumbnail format of.
++ * @return 0 on success, any other value means failure.
++ */
++int LIBMTP_Get_Thumbnail_Format(LIBMTP_mtpdevice_t *device, uint32_t const id,
++                                uint16_t *format)
++{
++  PTPParams *params = (PTPParams *) device->params;
++  uint16_t ret;
++
++  PTPObjectInfo object_info;
++  ret = ptp_getobjectinfo(params, id, &object_info);
++  if (ret != PTP_RC_OK)
++    return -1;
++
++  *format = object_info.ThumbFormat;
++  return 0;
++}
++
+ /**
+  * This routine updates an album based on the metadata
+  * supplied. If the <code>tracks</code> field of the metadata
+diff --git a/src/libmtp.h.in b/src/libmtp.h.in
+index 69cdc23..3bef6b0 100644
+--- a/src/libmtp.h.in
++++ b/src/libmtp.h.in
+@@ -970,6 +970,8 @@ int LIBMTP_Get_Representative_Sample(LIBMTP_mtpdevice_t *, uint32_t const,
+                           LIBMTP_filesampledata_t *);
+ int LIBMTP_Get_Thumbnail(LIBMTP_mtpdevice_t *, uint32_t const,
+                          unsigned char **data, unsigned int *size);
++int LIBMTP_Get_Thumbnail_Format(LIBMTP_mtpdevice_t *device, uint32_t const id,
++                                uint16_t *format);
+ 
+ /**
+  * @}
+diff --git a/src/libmtp.sym b/src/libmtp.sym
+index cc5329a..e00f194 100644
+--- a/src/libmtp.sym
++++ b/src/libmtp.sym
+@@ -106,6 +106,7 @@ LIBMTP_Set_Playlist_Name
+ LIBMTP_Set_Album_Name
+ LIBMTP_Set_Object_Filename
+ LIBMTP_Get_Thumbnail
++LIBMTP_Get_Thumbnail_Format
+ LIBMTP_Read_Event
+ LIBMTP_Read_Event_Async
+ LIBMTP_Handle_Events_Timeout_Completed

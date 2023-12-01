@@ -1,0 +1,19 @@
+We had a test failure:
+
+nnapi-0.0.2-r3: Expected: (endUptimeMs - startUptimeMs) < (SLEEP_MS + SLACK_MS), actual: 555 vs 550
+
+Increasing the slack time to account for when the test might be run under heavy load.
+
+diff --git a/platform2/aosp/system/core/libutils/SystemClock_test.cpp b/platform2/aosp/system/core/libutils/SystemClock_test.cpp
+index 7449dad..821c295 100644
+--- a/platform2/aosp/system/core/libutils/SystemClock_test.cpp
++++ b/platform2/aosp/system/core/libutils/SystemClock_test.cpp
+@@ -24,7 +24,7 @@ static const auto MS_IN_NS = 1000000;
+ static const int64_t SLEEP_MS = 500;
+ static const int64_t SLEEP_NS = SLEEP_MS * MS_IN_NS;
+ // Conservatively assume that we might be descheduled for up to 50 ms
+-static const int64_t SLACK_MS = 50;
++static const int64_t SLACK_MS = 100;
+ static const int64_t SLACK_NS = SLACK_MS * MS_IN_NS;
+ 
+ TEST(SystemClock, SystemClock) {

@@ -1,0 +1,65 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+CHROMEOS_DTBS="sc7180-trogdor-*.dtb"
+
+# Initial value just for style purposes.
+LINUX_FIRMWARE=""
+USE=""
+
+USE="${USE} cros_ec eclog powerd_manual_eventlog_add -opengl"
+USE="${USE} opengles touchview watchdog"
+
+# Enable TPM2 for H1
+USE="${USE} -tpm tpm2"
+
+# Include prebuilt (&signed) CR50 FW
+USE="${USE} cr50_onboard"
+
+# Enable KVM
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+FW_BLOBS="ps8751/ps8751_a3.bin ps8805/ps8805_a2.bin ps8805/ps8805_a3.bin ps8755/ps8755_a2.bin"
+
+# Google USBPD peripheral firmwares
+LINUX_FIRMWARE="${LINUX_FIRMWARE} cros-pd"
+
+# Firmware for WCN3991 Bluetooth
+LINUX_FIRMWARE="${LINUX_FIRMWARE} qca-wcn3991-bt"
+
+# Adreno 630 firmware
+LINUX_FIRMWARE="${LINUX_FIRMWARE} adreno-630"
+
+# Venus 5.4 firmware
+LINUX_FIRMWARE="${LINUX_FIRMWARE} venus-54"
+
+# For minigbm, mesa driver selected by virtuals
+VIDEO_CARDS="msm"
+
+# Declare set of enabled consoles
+TTY_CONSOLE="ttyMSM0"
+
+# Enable Downloadable Content (DLC) Test
+USE="${USE} dlc_test"
+
+#Enable diag odl tool
+USE="${USE} diag"
+
+# Enable eMMC tools
+USE="${USE} mmc"
+
+# Enable Type-C daemon
+USE="${USE} typecd"
+
+# Set mosys_platform
+USE="${USE} -mosys_platform_generic mosys_platform_trogdor"
+
+# Enable cross-domain context
+USE="${USE} cross_domain_context"
+
+# Enable virtgpu native context (go/virtgpu-native-context)
+USE="${USE} virtgpu_native_context"
+
+# Enable hermes for eSIM support.
+USE="${USE} esim"

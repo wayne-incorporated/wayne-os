@@ -1,0 +1,38 @@
+commit fd553312031c7d8085fa6ee0755a957796eadf05
+Author: Stefan Pintilie <stefanp@ca.ibm.com>
+Date:   Fri May 28 11:34:02 2021 -0500
+
+    Revert "[NFC] Formatting fix"
+    
+    This reverts commit 59d938e649e62db0cef4903d495e838fbc6a6eb8.
+
+diff --git a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+index cd2a3fc48e3b..14eb07ab17e6 100644
+--- a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
++++ b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+@@ -283,17 +283,16 @@ static bool canProveExitOnFirstIteration(Loop *L, DominatorTree &DT,
+     // Can we prove constant true or false for this condition?
+     const SCEV *LHSS = getSCEVOnFirstIteration(LHS, L, SE, FirstIterSCEV);
+     const SCEV *RHSS = getSCEVOnFirstIteration(RHS, L, SE, FirstIterSCEV);
+-    // Only query for liveness of in-loop edge if another successor is also
+-    // in-loop.
+-    // TODO: isKnownPredicateAt is more powerful, but it's too compile time
+-    // consuming. So we avoid using it here.
+-    if (L->contains(Term->getSuccessor(1)) &&
+-        SE.isKnownPredicate(Pred, LHSS, RHSS))
+-      MarkLiveEdge(BB, Term->getSuccessor(0));
++        // Only query for liveness of in-loop edge if another successor is also
++        // in-loop.
++        // TODO: isKnownPredicateAt is more powerful, but it's too compile time
++        // consuming. So we avoid using it here.
++        if (L->contains(Term->getSuccessor(1)) &&
++            SE.isKnownPredicate(Pred, LHSS, RHSS))
++        MarkLiveEdge(BB, Term->getSuccessor(0));
+     else if (L->contains(Term->getSuccessor(0)) &&
+              SE.isKnownPredicate(ICmpInst::getInversePredicate(Pred), LHSS,
+-                                 RHSS))
+-      MarkLiveEdge(BB, Term->getSuccessor(1));
++                                 RHSS)) MarkLiveEdge(BB, Term->getSuccessor(1));
+     else
+       MarkAllSuccessorsLive(BB);
+   }

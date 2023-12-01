@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -16,8 +16,8 @@ export NUM_JOBS
 
 # Make sure we have the location and name of the calling script, using
 # the current value if it is already set.
-: ${SCRIPT_LOCATION:=$(dirname "$(readlink -f -- "$0")")}
-: ${SCRIPT_NAME:=$(basename -- "$0")}
+: "${SCRIPT_LOCATION:=$(dirname "$(readlink -f -- "$0")")}"
+: "${SCRIPT_NAME:=$(basename -- "$0")}"
 
 # Detect whether we're inside a chroot or not
 CHROOT_VERSION_FILE=/etc/cros_chroot_version
@@ -87,7 +87,11 @@ _dump_trace() {
 # Declare these asap so that code below can safely assume they exist.
 _message() {
   local prefix
-  prefix="$(date +%H:%M:%S) $1"
+  # Turn nanoseconds into milliseconds.
+  prefix="$(date +%H:%M:%S.%N)"
+  prefix="${prefix:0:-6}"
+
+  prefix+=" $1"
   shift
   if [[ $# -eq 0 ]]; then
     echo -e "${prefix}${CROS_LOG_PREFIX:-""}:${V_VIDOFF}" >&2
@@ -186,66 +190,9 @@ die_notrace() {
 # e.g. has "foo" "foo bar baz" is true, but has "f" "foo bar baz" is not.
 has() { [[ " ${*:2} " == *" $1 "* ]]; }
 
-# Directory locations inside the dev chroot; try the new default,
-# falling back to user specific paths if the upgrade has yet to
-# happen.
-_user="${USER}"
-[[ ${USER} == "root" ]] && _user="${SUDO_USER}"
-_CHROOT_TRUNK_DIRS=( "/home/${_user}/trunk" /mnt/host/source )
-_DEPOT_TOOLS_DIRS=( "/home/${_user}/depot_tools" /mnt/host/depot_tools )
-unset _user
-
-_process_mount_pt() {
-  # Given 4 arguments; the root path, the variable to set,
-  # the old location, and the new; finally, forcing the upgrade is doable
-  # via if a 5th arg is provided.
-  # This will then try to migrate the old to new if we can do so right now
-  # (else leaving symlinks in place w/in the new), and will set $1 to the
-  # new location.
-  local base=${1:-/} var=$2 old=$3 new=$4 force=${5:-false}
-  local _sudo=$([[ ${USER} != "root" ]] && echo sudo)
-  local val=${new}
-  if ${force} || [[ -L ${base}/${new} ]] || [[ ! -e ${base}/${new} ]]; then
-    # Ok, it's either a symlink or this is the first run.  Upgrade if we can-
-    # specifically, if we're outside the chroot and we can rmdir the old.
-    # If we cannot rmdir the old, that's due to a mount being bound to that
-    # point (even if we can't see it, it's there)- thus fallback to adding
-    # compat links.
-    if ${force} || ( [[ ${INSIDE_CHROOT} -eq 0 ]] && \
-        ${_sudo} rmdir "${base}/${old}" 2>/dev/null ); then
-      ${_sudo} rm -f "${base}/${new}" || :
-      ${_sudo} mkdir -p "${base}/${new}" "$(dirname "${base}/${old}" )"
-      ${_sudo} ln -s "${new}" "${base}/${old}"
-    else
-      if [[ ! -L ${base}/${new} ]]; then
-        # We can't do the upgrade right now; install compatibility links.
-        ${_sudo} mkdir -p "$(dirname "${base}/${new}")" "${base}/${old}"
-        ${_sudo} ln -s "${old}" "${base}/${new}"
-      fi
-      val=${old}
-    fi
-  fi
-  eval "${var}=\"${val}\""
-}
-
-set_chroot_trunk_dir() {
-  # This takes two optional arguments; the first being the path to the chroot
-  # base; this is only used by enter_chroot.  The second argument is whether
-  # or not to force the new pathways; this is only used by make_chroot.  Passing
-  # a non-null value for $2 forces the new paths.
-  if [[ ${INSIDE_CHROOT} -eq 0 ]] && [[ -z ${1-} ]]; then
-    # Can't do the upgrade, thus skip trying to do so.
-    CHROOT_TRUNK_DIR="${_CHROOT_TRUNK_DIRS[1]}"
-    DEPOT_TOOLS_DIR="${_DEPOT_TOOLS_DIRS[1]}"
-    return
-  fi
-  _process_mount_pt "${1:-}" CHROOT_TRUNK_DIR "${_CHROOT_TRUNK_DIRS[@]}" \
-      ${2:+true}
-  _process_mount_pt "${1:-}" DEPOT_TOOLS_DIR "${_DEPOT_TOOLS_DIRS[@]}" \
-      ${2:+true}
-}
-
-set_chroot_trunk_dir
+# Directory locations inside the dev chroot.
+CHROOT_TRUNK_DIR="/mnt/host/source"
+DEPOT_TOOLS_DIR="/mnt/host/depot_tools"
 
 # Construct a list of possible locations for the source tree.  This list is
 # based on various environment variables and globals that may have been set
@@ -342,6 +289,9 @@ DEFAULT_IMG_SUITE=${CHROMEOS_IMG_SUITE:-"karmic"}
 # Default location for chroot
 DEFAULT_CHROOT_DIR=${CHROMEOS_CHROOT_DIR:-"${GCLIENT_ROOT}/chroot"}
 
+# Default output directory location
+DEFAULT_OUT_DIR=${CHROMEOS_OUT_DIR:-"${GCLIENT_ROOT}/out"}
+
 # All output files from build should go under ${DEFAULT_BUILD_ROOT}, so that
 # they don't pollute the source directory.
 DEFAULT_BUILD_ROOT=${CHROMEOS_BUILD_ROOT:-"${SRC_ROOT}/build"}
@@ -362,9 +312,6 @@ if [[ -f ${GCLIENT_ROOT}/src/scripts/.default_board ]]; then
   fi
 fi
 
-# Directory to store built images.  Should be set by sourcing script when used.
-BUILD_DIR=
-
 # Path to the verified boot directory where we get signing related keys/scripts.
 VBOOT_DIR="${CHROOT_TRUNK_DIR}/src/platform/vboot_reference"
 VBOOT_TESTKEYS_DIR="${VBOOT_DIR}/tests/testkeys"
@@ -381,99 +328,6 @@ CHROMEOS_RECOVERY_IMAGE_NAME="recovery_image.bin"
 CHROMEOS_TEST_IMAGE_NAME="chromiumos_test_image.bin"
 CHROMEOS_FACTORY_INSTALL_SHIM_NAME="factory_install_shim.bin"
 SYSROOT_SETTINGS_FILE="/var/cache/edb/chromeos"
-
-# Install mask for portage ebuilds.  Used by build_image and gmergefs.
-# TODO: Is /usr/local/autotest-chrome still used by anyone?
-COMMON_INSTALL_MASK="
-  *.a
-  *.c
-  *.cc
-  *.cmake
-  *.go
-  *.la
-  *.h
-  *.hh
-  *.hpp
-  *.h++
-  *.hxx
-  *.proto
-  */.keep*
-  /build/initramfs
-  /build/libexec/tast
-  /build/manatee
-  /build/rootfs/dlc
-  /build/share
-  /etc/init.d
-  /etc/runlevels
-  /etc/selinux/intermediates
-  /etc/xinetd.d
-  /firmware
-  /lib/modules/*/vdso
-  /lib/rc
-  /opt/google/containers/android/vendor/lib*/pkgconfig
-  /opt/google/containers/android/build
-  /usr/bin/*-config
-  /usr/bin/Xnest
-  /usr/bin/Xvfb
-  /usr/include
-  /usr/lib/cros_rust_registry
-  /usr/lib/debug
-  /usr/lib/gopath
-  /usr/lib*/pkgconfig
-  /usr/local/autotest-chrome
-  /usr/man
-  /usr/share/aclocal
-  /usr/share/cups/drv
-  /usr/share/doc
-  /usr/share/gettext
-  /usr/share/gtk-2.0
-  /usr/share/gtk-doc
-  /usr/share/info
-  /usr/share/man
-  /usr/share/ppd
-  /usr/share/openrc
-  /usr/share/pkgconfig
-  /usr/share/profiling
-  /usr/share/readline
-  /usr/src
-  "
-
-# Mask for base, dev, and test images (build_image, build_image --test)
-DEFAULT_INSTALL_MASK="
-  ${COMMON_INSTALL_MASK}
-  /boot/config-*
-  /boot/System.map-*
-  /usr/local/build/autotest
-  /lib/modules/*/build
-  /lib/modules/*/source
-  test_*.ko
-  "
-
-# Mask for factory install shim (build_image factory_install)
-FACTORY_SHIM_INSTALL_MASK="
-  ${DEFAULT_INSTALL_MASK}
-  /opt/google/chrome
-  /opt/google/containers
-  /opt/google/vms
-  /usr/lib64/dri
-  /usr/lib/dri
-  /usr/share/X11
-  /usr/share/chromeos-assets/[^i]*
-  /usr/share/chromeos-assets/i[^m]*
-  /usr/share/fonts
-  /usr/share/locale
-  /usr/share/mime
-  /usr/share/oem
-  /usr/share/sounds
-  /usr/share/tts
-  /usr/share/zoneinfo
-  "
-
-# Mask for images without systemd.
-SYSTEMD_INSTALL_MASK="
-  /lib/systemd/network
-  /usr/lib/systemd/system
-"
 
 # -----------------------------------------------------------------------------
 # Functions
@@ -621,66 +475,25 @@ safe_umount() {
 # Setup a loopback device for a file and scan for partitions, with retries.
 #
 # $1 - The file to back the new loopback device.
-# $2-$N - Additional arguments to pass to losetup.
 loopback_partscan() {
-  local lb_dev image="$1"
-  shift
+  if [[ $# -ne 1 ]]; then
+    die "${FUNCNAME[0]}: function only takes 1 argument (the image), not $#: $*"
+  fi
 
-  # We set up a binary backoff for adding the partitions. We give 10 attempts
-  # each time nth time we fail, backing off by 1<<n. The maximum time then
-  # spent sleeping will be sum(2^n) from [0...10] which is 1023 seconds,
-  # or ~37 minutes.
-  local i partx_out partx_d_out sleep_seconds=1
-  for (( i = 0; i <= 10; i++ )); do
-    # Flush any dirty pages in the image before we do partx commands.
-    info "Running sync -f ${image}"
-    sync -f "${image}"
-
-    # This (perhaps) mounts the partitions as well.
-    lb_dev=$(sudo losetup --show -f "$@" "${image}")
-
-    # Try to clean the slate by removing any existing parts (best effort).
-    partx_d_out=$(sudo partx -v -d "${lb_dev}") || true
-
-    # Try to add the partitions back.
-    if ! partx_out=$(sudo partx -v -a "${lb_dev}"); then
-      local proc_parts
-      warn "Adding partitions with 'partx -v -a ${lb_dev}' failed."
-      warn "partx -d output:\n${partx_d_out}"
-      warn "partx -a output:\n${partx_out}"
-      proc_parts=$(cat /proc/partitions)
-      warn "/proc/partitions before detaching loopback:\n ${proc_parts}"
-      # Detach the image.
-      sudo losetup -d "${lb_dev}" || true
-      proc_parts=$(cat /proc/partitions)
-      warn "/proc/partitions after detaching loopback:\n ${proc_parts}"
-      warn "Sleeping ${sleep_seconds} before trying again."
-      sleep "${sleep_seconds}"
-      : $(( sleep_seconds <<= 1 ))
-    else
-      break
-    fi
-  done
-
-  echo "${lb_dev}"
+  local output
+  output=$("${GCLIENT_ROOT}"/chromite/scripts/cros_losetup attach "$1")
+  echo "${output}" | jq --raw-output .path
 }
 
 # Detach a loopback device set up earlier.
 #
 # $1 - The loop device to detach.
-# $2-$N - Additional arguments to pass to losetup.
 loopback_detach() {
-  # Retry the deletes before we detach.  crbug.com/469259
-  local i
-  for (( i = 0; i < 10; i++ )); do
-    if sudo partx -d "$1"; then
-      break
-    fi
-    warn "Sleeping & retrying ..."
-    sync
-    sleep 1
-  done
-  sudo losetup --detach "$@"
+  if [[ $# -ne 1 ]]; then
+    die "${FUNCNAME[0]}: function only takes 1 argument (the image), not $#: $*"
+  fi
+
+  "${GCLIENT_ROOT}"/chromite/scripts/cros_losetup detach "$1"
 }
 
 # Sets up symlinks for the developer root. It is necessary to symlink

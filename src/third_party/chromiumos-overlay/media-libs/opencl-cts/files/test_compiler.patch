@@ -1,0 +1,113 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8f5f447..0d57feb 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -7,7 +7,7 @@ project(CLConform${CONFORMANCE_SUFFIX})
+ 
+ set(CMAKE_C_STANDARD 99)
+ set(CMAKE_C_STANDARD_REQUIRED ON)
+-set(CMAKE_CXX_STANDARD 11)
++set(CMAKE_CXX_STANDARD 17)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
+ add_definitions(-DCL_TARGET_OPENCL_VERSION=300)
+diff --git a/test_conformance/compiler/main.cpp b/test_conformance/compiler/main.cpp
+index f0a9ef3..bccfcf4 100644
+--- a/test_conformance/compiler/main.cpp
++++ b/test_conformance/compiler/main.cpp
+@@ -20,6 +20,8 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
++#include <filesystem>
++
+ #if !defined(_WIN32)
+ #include <unistd.h>
+ #endif
+@@ -105,7 +107,41 @@ test_definition test_list[] = {
+ 
+ const int test_num = ARRAY_SIZE(test_list);
+ 
++std::string folder_path_string;
++
+ int main(int argc, const char *argv[])
+ {
+-    return runTestHarness(argc, argv, test_num, test_list, false, 0);
++    // Create temp folder specific for this execution
++    std::filesystem::path tmp_folder = std::filesystem::temp_directory_path();
++    std::filesystem::path suffix("OpenCL-CTS-test-compiler-XXXXXX");
++    std::string temp_folder((tmp_folder / suffix).string());
++    const char *folder = mkdtemp(&temp_folder.front());
++    if (folder == nullptr) {
++        return -1;
++    }
++    std::filesystem::path folder_path(folder);
++    folder_path_string = folder_path.string();
++
++
++    // create the 2 directories and the 2 files
++    std::filesystem::path includeTestDirectory = folder_path / "includeTestDirectory";
++    std::filesystem::create_directory(includeTestDirectory);
++    std::filesystem::path testIncludeFile = includeTestDirectory / "testIncludeFile.h";
++    FILE *f = fopen(testIncludeFile.string().c_str(), "w");
++    fprintf(f, "#define HEADER_FOUND 12\n");
++    fclose(f);
++
++    std::filesystem::path secondIncludeTestDirectory = folder_path / "secondIncludeTestDirectory";
++    std::filesystem::create_directory(secondIncludeTestDirectory);
++    std::filesystem::path testIncludeFile2 = secondIncludeTestDirectory / "testIncludeFile.h";
++    f = fopen(testIncludeFile2.string().c_str(), "w");
++    fprintf(f, "#define HEADER_FOUND 42\n");
++    fclose(f);
++
++    auto ret = runTestHarness(argc, argv, test_num, test_list, false, 0);
++
++    // Clean temp folder
++    std::filesystem::remove_all(folder_path);
++
++    return ret;
+ }
+diff --git a/test_conformance/compiler/test_build_options.cpp b/test_conformance/compiler/test_build_options.cpp
+index c25fd10..5be26f3 100644
+--- a/test_conformance/compiler/test_build_options.cpp
++++ b/test_conformance/compiler/test_build_options.cpp
+@@ -229,12 +229,15 @@ int test_options_build_macro_existence(cl_device_id deviceID, cl_context context
+     return 0;
+ }
+ 
++
++extern std::string folder_path_string;
++
+ int test_options_include_directory(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+ {
+     int error;
+ 
+     std::string sep  = dir_sep();
+-    std::string path = exe_dir();    // Directory where test executable is located.
++    std::string path = folder_path_string;
+     std::string include_dir;
+ 
+     clProgramWrapper program;
+diff --git a/test_conformance/compiler/test_preprocessor.cpp b/test_conformance/compiler/test_preprocessor.cpp
+index 7308950..fb07633 100644
+--- a/test_conformance/compiler/test_preprocessor.cpp
++++ b/test_conformance/compiler/test_preprocessor.cpp
+@@ -132,6 +132,7 @@ const char *include_kernel_code =
+ "\n"
+ "}\n";
+ 
++extern std::string folder_path_string;
+ 
+ int test_preprocessor_include(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+ 
+@@ -145,8 +146,8 @@ int test_preprocessor_include(cl_device_id deviceID, cl_context context, cl_comm
+   char include_dir[4096] = {0};
+   char include_kernel[4096] = {0};
+ 
+-  char const * sep  = get_dir_sep();
+-  char const * path = get_exe_dir();
++  char const * sep = get_dir_sep();
++  char const * path = strdup(folder_path_string.c_str());
+ 
+   /* Build with the include directory defined */
+   sprintf(include_dir,"%s%sincludeTestDirectory%stestIncludeFile.h", path, sep, sep);

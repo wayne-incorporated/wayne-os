@@ -1,0 +1,794 @@
+From d352045ddce803d2dd56665981217d2ea1c08e99 Mon Sep 17 00:00:00 2001
+From: David Green <david.green@arm.com>
+Date: Thu, 2 Dec 2021 17:10:26 +0000
+Subject: [PATCH] [ARM] Introduce i8neg and i8pos addressing modes
+
+Some instructions with i8 immediate ranges can only hold negative values
+(like t2LDRHi8), only hold positive values (like t2STRT) or hold +/-
+depending on the U bit (like the pre/post inc instructions. e.g
+t2LDRH_POST). This patch splits the AddrModeT2_i8 into AddrModeT2_i8,
+AddrModeT2_i8pos and AddrModeT2_i8neg to make this clear.
+
+This allows us to get the offset ranges of t2LDRHi8 correct in the
+load/store optimizer, fixing issues where we could end up creating
+instructions with positive offsets (which may then be encoded as ldrht).
+
+Differential Revision: https://reviews.llvm.org/D114638
+---
+ llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp      |  24 +-
+ llvm/lib/Target/ARM/ARMBaseInstrInfo.h        |  22 +-
+ llvm/lib/Target/ARM/ARMFrameLowering.cpp      |   2 +-
+ llvm/lib/Target/ARM/ARMInstrFormats.td        |  29 +-
+ llvm/lib/Target/ARM/ARMInstrThumb2.td         |  24 +-
+ llvm/lib/Target/ARM/ARMLoadStoreOptimizer.cpp |   4 +-
+ .../lib/Target/ARM/MCTargetDesc/ARMBaseInfo.h |  24 +-
+ llvm/lib/Target/ARM/Thumb2InstrInfo.cpp       |   3 +-
+ .../machine-outliner-stack-fixup-thumb.mir    |  32 +-
+ .../CodeGen/Thumb2/postinc-distribute.mir     | 422 ++++++++++++++++++
+ 10 files changed, 512 insertions(+), 74 deletions(-)
+
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+index a5dc45d5e65a..ca9d9f1e2229 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+@@ -5993,16 +5993,18 @@ bool ARMBaseInstrInfo::checkAndUpdateStackOffset(MachineInstr *MI,
+ 
+   // Stack might be involved but addressing mode doesn't handle any offset.
+   // Rq: AddrModeT1_[1|2|4] don't operate on SP
+-  if (AddrMode == ARMII::AddrMode1        // Arithmetic instructions
+-      || AddrMode == ARMII::AddrMode4     // Load/Store Multiple
+-      || AddrMode == ARMII::AddrMode6     // Neon Load/Store Multiple
+-      || AddrMode == ARMII::AddrModeT2_so // SP can't be used as based register
+-      || AddrMode == ARMII::AddrModeT2_pc // PCrel access
+-      || AddrMode == ARMII::AddrMode2     // Used by PRE and POST indexed LD/ST
+-      || AddrMode == ARMII::AddrModeT2_i7 // v8.1-M MVE
+-      || AddrMode == ARMII::AddrModeT2_i7s2 // v8.1-M MVE
+-      || AddrMode == ARMII::AddrModeT2_i7s4 // v8.1-M sys regs VLDR/VSTR
+-      || AddrMode == ARMII::AddrModeNone)
++  if (AddrMode == ARMII::AddrMode1 ||       // Arithmetic instructions
++      AddrMode == ARMII::AddrMode4 ||       // Load/Store Multiple
++      AddrMode == ARMII::AddrMode6 ||       // Neon Load/Store Multiple
++      AddrMode == ARMII::AddrModeT2_so ||   // SP can't be used as based register
++      AddrMode == ARMII::AddrModeT2_pc ||   // PCrel access
++      AddrMode == ARMII::AddrMode2 ||       // Used by PRE and POST indexed LD/ST
++      AddrMode == ARMII::AddrModeT2_i7 ||   // v8.1-M MVE
++      AddrMode == ARMII::AddrModeT2_i7s2 || // v8.1-M MVE
++      AddrMode == ARMII::AddrModeT2_i7s4 || // v8.1-M sys regs VLDR/VSTR
++      AddrMode == ARMII::AddrModeNone ||
++      AddrMode == ARMII::AddrModeT2_i8 ||   // Pre/Post inc instructions
++      AddrMode == ARMII::AddrModeT2_i8neg)  // Always negative imm
+     return false;
+ 
+   unsigned NumOps = MI->getDesc().getNumOperands();
+@@ -6040,7 +6042,7 @@ bool ARMBaseInstrInfo::checkAndUpdateStackOffset(MachineInstr *MI,
+     NumBits = 8;
+     Scale = 2;
+     break;
+-  case ARMII::AddrModeT2_i8:
++  case ARMII::AddrModeT2_i8pos:
+     NumBits = 8;
+     break;
+   case ARMII::AddrModeT2_i8s4:
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+index db9320962e81..b2e4d84a03a5 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+@@ -877,19 +877,23 @@ inline bool isLegalAddressImm(unsigned Opcode, int Imm,
+   unsigned AddrMode = (Desc.TSFlags & ARMII::AddrModeMask);
+   switch (AddrMode) {
+   case ARMII::AddrModeT2_i7:
+-    return std::abs(Imm) < (((1 << 7) * 1) - 1);
++    return std::abs(Imm) < ((1 << 7) * 1);
+   case ARMII::AddrModeT2_i7s2:
+-    return std::abs(Imm) < (((1 << 7) * 2) - 1) && Imm % 2 == 0;
++    return std::abs(Imm) < ((1 << 7) * 2) && Imm % 2 == 0;
+   case ARMII::AddrModeT2_i7s4:
+-    return std::abs(Imm) < (((1 << 7) * 4) - 1) && Imm % 4 == 0;
++    return std::abs(Imm) < ((1 << 7) * 4) && Imm % 4 == 0;
+   case ARMII::AddrModeT2_i8:
+-    return std::abs(Imm) < (((1 << 8) * 1) - 1);
+-  case ARMII::AddrMode2:
+-    return std::abs(Imm) < (((1 << 12) * 1) - 1);
+-  case ARMII::AddrModeT2_i12:
+-    return Imm >= 0 && Imm < (((1 << 12) * 1) - 1);
++    return std::abs(Imm) < ((1 << 8) * 1);
++  case ARMII::AddrModeT2_i8pos:
++    return Imm >= 0 && Imm < ((1 << 8) * 1);
++  case ARMII::AddrModeT2_i8neg:
++    return Imm < 0 && -Imm < ((1 << 8) * 1);
+   case ARMII::AddrModeT2_i8s4:
+-    return std::abs(Imm) < (((1 << 8) * 4) - 1) && Imm % 4 == 0;
++    return std::abs(Imm) < ((1 << 8) * 4) && Imm % 4 == 0;
++  case ARMII::AddrModeT2_i12:
++    return Imm >= 0 && Imm < ((1 << 12) * 1);
++  case ARMII::AddrMode2:
++    return std::abs(Imm) < ((1 << 12) * 1);
+   default:
+     llvm_unreachable("Unhandled Addressing mode");
+   }
+diff --git a/llvm/lib/Target/ARM/ARMFrameLowering.cpp b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
+index 71fa3e35eec2..b866cf952ff1 100644
+--- a/llvm/lib/Target/ARM/ARMFrameLowering.cpp
++++ b/llvm/lib/Target/ARM/ARMFrameLowering.cpp
+@@ -1693,7 +1693,7 @@ static unsigned estimateRSStackSizeLimit(MachineFunction &MF,
+           // Default 12 bit limit.
+           break;
+         case ARMII::AddrMode3:
+-        case ARMII::AddrModeT2_i8:
++        case ARMII::AddrModeT2_i8neg:
+           Limit = std::min(Limit, (1U << 8) - 1);
+           break;
+         case ARMII::AddrMode5FP16:
+diff --git a/llvm/lib/Target/ARM/ARMInstrFormats.td b/llvm/lib/Target/ARM/ARMInstrFormats.td
+index de351372abf2..ff5afd787c82 100644
+--- a/llvm/lib/Target/ARM/ARMInstrFormats.td
++++ b/llvm/lib/Target/ARM/ARMInstrFormats.td
+@@ -103,15 +103,17 @@ def AddrModeT1_4    : AddrMode<9>;
+ def AddrModeT1_s    : AddrMode<10>;
+ def AddrModeT2_i12  : AddrMode<11>;
+ def AddrModeT2_i8   : AddrMode<12>;
+-def AddrModeT2_so   : AddrMode<13>;
+-def AddrModeT2_pc   : AddrMode<14>;
+-def AddrModeT2_i8s4 : AddrMode<15>;
+-def AddrMode_i12    : AddrMode<16>;
+-def AddrMode5FP16   : AddrMode<17>;
+-def AddrModeT2_ldrex : AddrMode<18>;
+-def AddrModeT2_i7s4 : AddrMode<19>;
+-def AddrModeT2_i7s2 : AddrMode<20>;
+-def AddrModeT2_i7   : AddrMode<21>;
++def AddrModeT2_i8pos : AddrMode<13>;
++def AddrModeT2_i8neg : AddrMode<14>;
++def AddrModeT2_so   : AddrMode<15>;
++def AddrModeT2_pc   : AddrMode<16>;
++def AddrModeT2_i8s4 : AddrMode<17>;
++def AddrMode_i12    : AddrMode<18>;
++def AddrMode5FP16   : AddrMode<19>;
++def AddrModeT2_ldrex : AddrMode<20>;
++def AddrModeT2_i7s4 : AddrMode<21>;
++def AddrModeT2_i7s2 : AddrMode<22>;
++def AddrModeT2_i7   : AddrMode<23>;
+ 
+ // Load / store index mode.
+ class IndexMode<bits<2> val> {
+@@ -1392,9 +1394,12 @@ class T2I<dag oops, dag iops, InstrItinClass itin,
+ class T2Ii12<dag oops, dag iops, InstrItinClass itin,
+              string opc, string asm, list<dag> pattern>
+   : Thumb2I<oops, iops, AddrModeT2_i12, 4, itin, opc, asm, "",pattern>;
+-class T2Ii8<dag oops, dag iops, InstrItinClass itin,
+-            string opc, string asm, list<dag> pattern>
+-  : Thumb2I<oops, iops, AddrModeT2_i8, 4, itin, opc, asm, "", pattern>;
++class T2Ii8p<dag oops, dag iops, InstrItinClass itin,
++             string opc, string asm, list<dag> pattern>
++  : Thumb2I<oops, iops, AddrModeT2_i8pos, 4, itin, opc, asm, "", pattern>;
++class T2Ii8n<dag oops, dag iops, InstrItinClass itin,
++             string opc, string asm, list<dag> pattern>
++  : Thumb2I<oops, iops, AddrModeT2_i8neg, 4, itin, opc, asm, "", pattern>;
+ class T2Iso<dag oops, dag iops, InstrItinClass itin,
+             string opc, string asm, list<dag> pattern>
+   : Thumb2I<oops, iops, AddrModeT2_so, 4, itin, opc, asm, "", pattern>;
+diff --git a/llvm/lib/Target/ARM/ARMInstrThumb2.td b/llvm/lib/Target/ARM/ARMInstrThumb2.td
+index d216207a97fc..4471317f4ea4 100644
+--- a/llvm/lib/Target/ARM/ARMInstrThumb2.td
++++ b/llvm/lib/Target/ARM/ARMInstrThumb2.td
+@@ -1191,9 +1191,9 @@ multiclass T2I_ld<bit signed, bits<2> opcod, string opc,
+ 
+     let DecoderMethod = "DecodeT2LoadImm12";
+   }
+-  def i8  : T2Ii8 <(outs target:$Rt), (ins t2addrmode_negimm8:$addr), iii,
+-                   opc, "\t$Rt, $addr",
+-                   [(set target:$Rt, (opnode t2addrmode_negimm8:$addr))]>,
++  def i8  : T2Ii8n <(outs target:$Rt), (ins t2addrmode_negimm8:$addr), iii,
++                    opc, "\t$Rt, $addr",
++                    [(set target:$Rt, (opnode t2addrmode_negimm8:$addr))]>,
+             Sched<[WriteLd]> {
+     bits<4> Rt;
+     bits<13> addr;
+@@ -1284,9 +1284,9 @@ multiclass T2I_st<bits<2> opcod, string opc,
+     let Inst{23}    = addr{12};    // U
+     let Inst{11-0}  = addr{11-0};  // imm
+   }
+-  def i8  : T2Ii8 <(outs), (ins target:$Rt, t2addrmode_negimm8:$addr), iii,
+-                   opc, "\t$Rt, $addr",
+-                   [(opnode target:$Rt, t2addrmode_negimm8:$addr)]>,
++  def i8  : T2Ii8n <(outs), (ins target:$Rt, t2addrmode_negimm8:$addr), iii,
++                    opc, "\t$Rt, $addr",
++                    [(opnode target:$Rt, t2addrmode_negimm8:$addr)]>,
+             Sched<[WriteST]> {
+     let Inst{31-27} = 0b11111;
+     let Inst{26-23} = 0b0000;
+@@ -1580,8 +1580,8 @@ def t2LDR_POST_imm : t2AsmPseudo<"ldr${p}.w $Rt, $Rn, $imm",
+ // LDRT, LDRBT, LDRHT, LDRSBT, LDRSHT all have offset mode (PUW=0b110).
+ // Ref: A8.6.57 LDR (immediate, Thumb) Encoding T4
+ class T2IldT<bit signed, bits<2> type, string opc, InstrItinClass ii>
+-  : T2Ii8<(outs rGPR:$Rt), (ins t2addrmode_posimm8:$addr), ii, opc,
+-          "\t$Rt, $addr", []>, Sched<[WriteLd]> {
++  : T2Ii8p<(outs rGPR:$Rt), (ins t2addrmode_posimm8:$addr), ii, opc,
++           "\t$Rt, $addr", []>, Sched<[WriteLd]> {
+   bits<4> Rt;
+   bits<13> addr;
+   let Inst{31-27} = 0b11111;
+@@ -1747,8 +1747,8 @@ def t2STR_POST_imm : t2AsmPseudo<"str${p}.w $Rt, $Rn, $imm",
+ // only.
+ // Ref: A8.6.193 STR (immediate, Thumb) Encoding T4
+ class T2IstT<bits<2> type, string opc, InstrItinClass ii>
+-  : T2Ii8<(outs), (ins rGPR:$Rt, t2addrmode_imm8:$addr), ii, opc,
+-          "\t$Rt, $addr", []>, Sched<[WriteST]> {
++  : T2Ii8p<(outs), (ins rGPR:$Rt, t2addrmode_posimm8:$addr), ii, opc,
++           "\t$Rt, $addr", []>, Sched<[WriteST]> {
+   let Inst{31-27} = 0b11111;
+   let Inst{26-25} = 0b00;
+   let Inst{24} = 0; // not signed
+@@ -1851,8 +1851,8 @@ multiclass T2Ipl<bits<1> write, bits<1> instr, string opc> {
+     let DecoderMethod = "DecodeT2LoadImm12";
+   }
+ 
+-  def i8 : T2Ii8<(outs), (ins t2addrmode_negimm8:$addr), IIC_Preload, opc,
+-                "\t$addr",
++  def i8 : T2Ii8n<(outs), (ins t2addrmode_negimm8:$addr), IIC_Preload, opc,
++                 "\t$addr",
+             [(ARMPreload t2addrmode_negimm8:$addr, (i32 write), (i32 instr))]>,
+             Sched<[WritePreLd]> {
+     let Inst{31-25} = 0b1111100;
+diff --git a/llvm/lib/Target/ARM/ARMLoadStoreOptimizer.cpp b/llvm/lib/Target/ARM/ARMLoadStoreOptimizer.cpp
+index 4435b8d6b052..3b10c60a0654 100644
+--- a/llvm/lib/Target/ARM/ARMLoadStoreOptimizer.cpp
++++ b/llvm/lib/Target/ARM/ARMLoadStoreOptimizer.cpp
+@@ -2708,13 +2708,13 @@ static bool isLegalOrConvertableAddressImm(unsigned Opcode, int Imm,
+   if (isLegalAddressImm(Opcode, Imm, TII))
+     return true;
+ 
+-  // We can convert AddrModeT2_i12 to AddrModeT2_i8.
++  // We can convert AddrModeT2_i12 to AddrModeT2_i8neg.
+   const MCInstrDesc &Desc = TII->get(Opcode);
+   unsigned AddrMode = (Desc.TSFlags & ARMII::AddrModeMask);
+   switch (AddrMode) {
+   case ARMII::AddrModeT2_i12:
+     CodesizeEstimate += 1;
+-    return std::abs(Imm) < (((1 << 8) * 1) - 1);
++    return Imm < 0 && -Imm < ((1 << 8) * 1);
+   }
+   return false;
+ }
+diff --git a/llvm/lib/Target/ARM/MCTargetDesc/ARMBaseInfo.h b/llvm/lib/Target/ARM/MCTargetDesc/ARMBaseInfo.h
+index 43f7575df6db..f8de0320166a 100644
+--- a/llvm/lib/Target/ARM/MCTargetDesc/ARMBaseInfo.h
++++ b/llvm/lib/Target/ARM/MCTargetDesc/ARMBaseInfo.h
+@@ -195,16 +195,18 @@ namespace ARMII {
+     AddrModeT1_4    = 9,
+     AddrModeT1_s    = 10, // i8 * 4 for pc and sp relative data
+     AddrModeT2_i12  = 11,
+-    AddrModeT2_i8   = 12,
+-    AddrModeT2_so   = 13,
+-    AddrModeT2_pc   = 14, // +/- i12 for pc relative data
+-    AddrModeT2_i8s4 = 15, // i8 * 4
+-    AddrMode_i12    = 16,
+-    AddrMode5FP16   = 17,  // i8 * 2
+-    AddrModeT2_ldrex = 18, // i8 * 4, with unscaled offset in MCInst
+-    AddrModeT2_i7s4 = 19, // i7 * 4
+-    AddrModeT2_i7s2 = 20, // i7 * 2
+-    AddrModeT2_i7   = 21, // i7 * 1
++    AddrModeT2_i8   = 12, // +/- i8
++    AddrModeT2_i8pos = 13, // + i8
++    AddrModeT2_i8neg = 14, // - i8
++    AddrModeT2_so   = 15,
++    AddrModeT2_pc   = 16, // +/- i12 for pc relative data
++    AddrModeT2_i8s4 = 17, // i8 * 4
++    AddrMode_i12    = 18,
++    AddrMode5FP16   = 19,  // i8 * 2
++    AddrModeT2_ldrex = 20, // i8 * 4, with unscaled offset in MCInst
++    AddrModeT2_i7s4 = 21, // i7 * 4
++    AddrModeT2_i7s2 = 22, // i7 * 2
++    AddrModeT2_i7   = 23, // i7 * 1
+   };
+ 
+   inline static const char *AddrModeToString(AddrMode addrmode) {
+@@ -223,6 +225,8 @@ namespace ARMII {
+     case AddrModeT1_s:    return "AddrModeT1_s";
+     case AddrModeT2_i12:  return "AddrModeT2_i12";
+     case AddrModeT2_i8:   return "AddrModeT2_i8";
++    case AddrModeT2_i8pos: return "AddrModeT2_i8pos";
++    case AddrModeT2_i8neg: return "AddrModeT2_i8neg";
+     case AddrModeT2_so:   return "AddrModeT2_so";
+     case AddrModeT2_pc:   return "AddrModeT2_pc";
+     case AddrModeT2_i8s4: return "AddrModeT2_i8s4";
+diff --git a/llvm/lib/Target/ARM/Thumb2InstrInfo.cpp b/llvm/lib/Target/ARM/Thumb2InstrInfo.cpp
+index 0e121341ecba..ebd139af2219 100644
+--- a/llvm/lib/Target/ARM/Thumb2InstrInfo.cpp
++++ b/llvm/lib/Target/ARM/Thumb2InstrInfo.cpp
+@@ -634,7 +634,8 @@ bool llvm::rewriteT2FrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
+ 
+     unsigned NumBits = 0;
+     unsigned Scale = 1;
+-    if (AddrMode == ARMII::AddrModeT2_i8 || AddrMode == ARMII::AddrModeT2_i12) {
++    if (AddrMode == ARMII::AddrModeT2_i8neg ||
++        AddrMode == ARMII::AddrModeT2_i12) {
+       // i8 supports only negative, and i12 supports only positive, so
+       // based on Offset sign convert Opcode to the appropriate
+       // instruction
+diff --git a/llvm/test/CodeGen/ARM/machine-outliner-stack-fixup-thumb.mir b/llvm/test/CodeGen/ARM/machine-outliner-stack-fixup-thumb.mir
+index 6c940f15eba6..d03ab357d34b 100644
+--- a/llvm/test/CodeGen/ARM/machine-outliner-stack-fixup-thumb.mir
++++ b/llvm/test/CodeGen/ARM/machine-outliner-stack-fixup-thumb.mir
+@@ -51,23 +51,23 @@ body:             |
+     ;CHECK-LABEL: name:           CheckAddrModeT2_i8
+     ;CHECK: $r0 = tMOVr $r1, 14 /* CC::al */, $noreg
+     ;CHECK-NEXT: tBL 14 /* CC::al */, $noreg, @OUTLINED_FUNCTION_[[I8:[0-9]+]]
+-    ;CHECK-NEXT: t2STRHi8 $r0, $sp, 248, 14 /* CC::al */, $noreg
++    ;CHECK-NEXT: t2STRHT $r0, $sp, 248, 14 /* CC::al */, $noreg
+     $r0 = tMOVr $r1, 14, $noreg
+     tBL 14, $noreg, @foo, implicit-def dead $lr, implicit $sp
+-    t2STRHi8 $r0, $sp, 0, 14, $noreg
+-    t2STRHi8 $r0, $sp, 4, 14, $noreg
+-    t2STRHi8 $r0, $sp, 247, 14, $noreg
+-    t2STRHi8 $r0, $sp, 248, 14, $noreg
++    t2STRHT $r0, $sp, 0, 14, $noreg
++    t2STRHT $r0, $sp, 4, 14, $noreg
++    t2STRHT $r0, $sp, 247, 14, $noreg
++    t2STRHT $r0, $sp, 248, 14, $noreg
+     tBL 14, $noreg, @foo, implicit-def dead $lr, implicit $sp
+-    t2STRHi8 $r0, $sp, 0, 14, $noreg
+-    t2STRHi8 $r0, $sp, 4, 14, $noreg
+-    t2STRHi8 $r0, $sp, 247, 14, $noreg
+-    t2STRHi8 $r0, $sp, 248, 14, $noreg
++    t2STRHT $r0, $sp, 0, 14, $noreg
++    t2STRHT $r0, $sp, 4, 14, $noreg
++    t2STRHT $r0, $sp, 247, 14, $noreg
++    t2STRHT $r0, $sp, 248, 14, $noreg
+     tBL 14, $noreg, @foo, implicit-def dead $lr, implicit $sp
+-    t2STRHi8 $r0, $sp, 0, 14, $noreg
+-    t2STRHi8 $r0, $sp, 4, 14, $noreg
+-    t2STRHi8 $r0, $sp, 247, 14, $noreg
+-    t2STRHi8 $r0, $sp, 248, 14, $noreg
++    t2STRHT $r0, $sp, 0, 14, $noreg
++    t2STRHT $r0, $sp, 4, 14, $noreg
++    t2STRHT $r0, $sp, 247, 14, $noreg
++    t2STRHT $r0, $sp, 248, 14, $noreg
+     BX_RET 14, $noreg
+ ...
+ ---
+@@ -195,9 +195,9 @@ body:             |
+     ;CHECK-NEXT: frame-setup CFI_INSTRUCTION def_cfa_offset 8
+     ;CHECK-NEXT: frame-setup CFI_INSTRUCTION offset $lr, -8
+     ;CHECK-NEXT: tBL 14 /* CC::al */, $noreg, @foo, implicit-def dead $lr, implicit $sp
+-    ;CHECK-NEXT: t2STRHi8 $r0, $sp, 8, 14 /* CC::al */, $noreg
+-    ;CHECK-NEXT: t2STRHi8 $r0, $sp, 12, 14 /* CC::al */, $noreg
+-    ;CHECK-NEXT: t2STRHi8 $r0, $sp, 255, 14 /* CC::al */, $noreg
++    ;CHECK-NEXT: t2STRHT $r0, $sp, 8, 14 /* CC::al */, $noreg
++    ;CHECK-NEXT: t2STRHT $r0, $sp, 12, 14 /* CC::al */, $noreg
++    ;CHECK-NEXT: t2STRHT $r0, $sp, 255, 14 /* CC::al */, $noreg
+     ;CHECK-NEXT: $lr, $sp = t2LDR_POST $sp, 8, 14 /* CC::al */, $noreg
+ 
+     ;CHECK: name:           OUTLINED_FUNCTION_[[I8S4]]
+diff --git a/llvm/test/CodeGen/Thumb2/postinc-distribute.mir b/llvm/test/CodeGen/Thumb2/postinc-distribute.mir
+index e5a0b7bf3a02..e325e11ea109 100644
+--- a/llvm/test/CodeGen/Thumb2/postinc-distribute.mir
++++ b/llvm/test/CodeGen/Thumb2/postinc-distribute.mir
+@@ -323,3 +323,425 @@ body:             |
+     tBX_RET 14, $noreg, implicit $r0
+ 
+ ...
++---
++name:            t2LDRi12_posoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++  - { id: 3, class: rgpr, preferred-register: '' }
++  - { id: 4, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++body:             |
++  bb.0:
++    liveins: $r0
++
++    ; CHECK-LABEL: name: t2LDRi12_posoff
++    ; CHECK: liveins: $r0
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[t2LDRi12_:%[0-9]+]]:rgpr = t2LDRi12 [[COPY]], 0, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRi12_1:%[0-9]+]]:rgpr = t2LDRi12 [[COPY]], 4, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2ADDri:%[0-9]+]]:rgpr = nuw t2ADDri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: [[t2LDRi8_:%[0-9]+]]:rgpr = t2LDRi8 [[COPY]], -8, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2ADDri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = t2LDRi12 %0, 0, 14, $noreg :: (load (s32), align 4)
++    %2:rgpr = nuw t2ADDri %0, 32, 14, $noreg, $noreg
++    %3:rgpr = t2LDRi12 %0, 4, 14, $noreg :: (load (s32), align 4)
++    %4:rgpr = t2LDRi8 %0, -8, 14, $noreg :: (load (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2LDRHi12_posoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++  - { id: 3, class: rgpr, preferred-register: '' }
++  - { id: 4, class: rgpr, preferred-register: '' }
++  - { id: 5, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++body:             |
++  bb.0:
++    liveins: $r0
++
++    ; CHECK-LABEL: name: t2LDRHi12_posoff
++    ; CHECK: liveins: $r0
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[t2LDRH_POST:%[0-9]+]]:rgpr, [[t2LDRH_POST1:%[0-9]+]]:rgpr = t2LDRH_POST [[COPY]], 32, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRHi8_:%[0-9]+]]:rgpr = t2LDRHi8 [[t2LDRH_POST1]], -28, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRHi8_1:%[0-9]+]]:rgpr = t2LDRHi8 [[t2LDRH_POST1]], -40, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRSHi8_:%[0-9]+]]:rgpr = t2LDRSHi8 [[t2LDRH_POST1]], -20, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2LDRH_POST1]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = t2LDRHi12 %0, 0, 14, $noreg :: (load (s32), align 4)
++    %2:rgpr = nuw t2ADDri %0, 32, 14, $noreg, $noreg
++    %3:rgpr = t2LDRHi12 %0, 4, 14, $noreg :: (load (s32), align 4)
++    %4:rgpr = t2LDRHi8 %0, -8, 14, $noreg :: (load (s32), align 4)
++    %5:rgpr = t2LDRSHi12 %0, 12, 14, $noreg :: (load (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2LDRBi12_posoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++  - { id: 3, class: rgpr, preferred-register: '' }
++  - { id: 4, class: rgpr, preferred-register: '' }
++  - { id: 5, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++body:             |
++  bb.0:
++    liveins: $r0
++
++    ; CHECK-LABEL: name: t2LDRBi12_posoff
++    ; CHECK: liveins: $r0
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[t2LDRB_POST:%[0-9]+]]:rgpr, [[t2LDRB_POST1:%[0-9]+]]:rgpr = t2LDRB_POST [[COPY]], 32, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRBi8_:%[0-9]+]]:rgpr = t2LDRBi8 [[t2LDRB_POST1]], -28, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRBi8_1:%[0-9]+]]:rgpr = t2LDRBi8 [[t2LDRB_POST1]], -40, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRSBi8_:%[0-9]+]]:rgpr = t2LDRSBi8 [[t2LDRB_POST1]], -20, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2LDRB_POST1]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = t2LDRBi12 %0, 0, 14, $noreg :: (load (s32), align 4)
++    %2:rgpr = nuw t2ADDri %0, 32, 14, $noreg, $noreg
++    %3:rgpr = t2LDRBi12 %0, 4, 14, $noreg :: (load (s32), align 4)
++    %4:rgpr = t2LDRBi8 %0, -8, 14, $noreg :: (load (s32), align 4)
++    %12:rgpr = t2LDRSBi12 %0, 12, 14, $noreg :: (load (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2STRi12_posoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++  - { reg: '$r1', virtual-reg: '%1' }
++body:             |
++  bb.0:
++    liveins: $r0, $r1
++
++    ; CHECK-LABEL: name: t2STRi12_posoff
++    ; CHECK: liveins: $r0, $r1
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:rgpr = COPY $r1
++    ; CHECK-NEXT: [[t2ADDri:%[0-9]+]]:rgpr = nuw t2ADDri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: t2STRi12 [[COPY1]], [[COPY]], 0, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRi12 [[COPY1]], [[COPY]], 4, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRi8 [[COPY1]], [[COPY]], -8, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2ADDri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = COPY $r1
++    t2STRi12 %1:rgpr, %0, 0, 14, $noreg :: (store (s32), align 4)
++    %2:rgpr = nuw t2ADDri %0, 32, 14, $noreg, $noreg
++    t2STRi12 %1:rgpr, %0, 4, 14, $noreg :: (store (s32), align 4)
++    t2STRi8 %1:rgpr, %0, -8, 14, $noreg :: (store (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2STRHi12_posoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++  - { reg: '$r1', virtual-reg: '%1' }
++body:             |
++  bb.0:
++    liveins: $r0, $r1
++
++    ; CHECK-LABEL: name: t2STRHi12_posoff
++    ; CHECK: liveins: $r0, $r1
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:rgpr = COPY $r1
++    ; CHECK-NEXT: early-clobber %2:rgpr = t2STRH_POST [[COPY1]], [[COPY]], 32, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRHi8 [[COPY1]], %2, -28, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRHi8 [[COPY1]], %2, -40, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: $r0 = COPY %2
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = COPY $r1
++    t2STRHi12 %1:rgpr, %0, 0, 14, $noreg :: (store (s32), align 4)
++    %2:rgpr = nuw t2ADDri %0, 32, 14, $noreg, $noreg
++    t2STRHi12 %1:rgpr, %0, 4, 14, $noreg :: (store (s32), align 4)
++    t2STRHi8 %1:rgpr, %0, -8, 14, $noreg :: (store (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2STRBi12_posoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++  - { reg: '$r1', virtual-reg: '%1' }
++body:             |
++  bb.0:
++    liveins: $r0, $r1
++
++    ; CHECK-LABEL: name: t2STRBi12_posoff
++    ; CHECK: liveins: $r0, $r1
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:rgpr = COPY $r1
++    ; CHECK-NEXT: early-clobber %2:rgpr = t2STRB_POST [[COPY1]], [[COPY]], 32, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRBi8 [[COPY1]], %2, -28, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRBi8 [[COPY1]], %2, -40, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: $r0 = COPY %2
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = COPY $r1
++    t2STRBi12 %1:rgpr, %0, 0, 14, $noreg :: (store (s32), align 4)
++    %2:rgpr = nuw t2ADDri %0, 32, 14, $noreg, $noreg
++    t2STRBi12 %1:rgpr, %0, 4, 14, $noreg :: (store (s32), align 4)
++    t2STRBi8 %1:rgpr, %0, -8, 14, $noreg :: (store (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2LDRi12_negoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++  - { id: 3, class: rgpr, preferred-register: '' }
++  - { id: 4, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++body:             |
++  bb.0:
++    liveins: $r0
++
++    ; CHECK-LABEL: name: t2LDRi12_negoff
++    ; CHECK: liveins: $r0
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[t2LDRi12_:%[0-9]+]]:rgpr = t2LDRi12 [[COPY]], 0, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRi12_1:%[0-9]+]]:rgpr = t2LDRi12 [[COPY]], 4, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2SUBri:%[0-9]+]]:rgpr = nuw t2SUBri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: [[t2LDRi8_:%[0-9]+]]:rgpr = t2LDRi8 [[COPY]], -8, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2SUBri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = t2LDRi12 %0, 0, 14, $noreg :: (load (s32), align 4)
++    %2:rgpr = nuw t2SUBri %0, 32, 14, $noreg, $noreg
++    %3:rgpr = t2LDRi12 %0, 4, 14, $noreg :: (load (s32), align 4)
++    %4:rgpr = t2LDRi8 %0, -8, 14, $noreg :: (load (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2LDRHi12_negoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++  - { id: 3, class: rgpr, preferred-register: '' }
++  - { id: 4, class: rgpr, preferred-register: '' }
++  - { id: 5, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++body:             |
++  bb.0:
++    liveins: $r0
++
++    ; CHECK-LABEL: name: t2LDRHi12_negoff
++    ; CHECK: liveins: $r0
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[t2LDRHi12_:%[0-9]+]]:rgpr = t2LDRHi12 [[COPY]], 0, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2SUBri:%[0-9]+]]:rgpr = nuw t2SUBri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: [[t2LDRHi12_1:%[0-9]+]]:rgpr = t2LDRHi12 [[COPY]], 4, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRHi8_:%[0-9]+]]:rgpr = t2LDRHi8 [[COPY]], -8, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRSHi12_:%[0-9]+]]:rgpr = t2LDRSHi12 [[COPY]], 12, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2SUBri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = t2LDRHi12 %0, 0, 14, $noreg :: (load (s32), align 4)
++    %2:rgpr = nuw t2SUBri %0, 32, 14, $noreg, $noreg
++    %3:rgpr = t2LDRHi12 %0, 4, 14, $noreg :: (load (s32), align 4)
++    %4:rgpr = t2LDRHi8 %0, -8, 14, $noreg :: (load (s32), align 4)
++    %5:rgpr = t2LDRSHi12 %0, 12, 14, $noreg :: (load (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2LDRBi12_negoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++  - { id: 3, class: rgpr, preferred-register: '' }
++  - { id: 4, class: rgpr, preferred-register: '' }
++  - { id: 5, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++body:             |
++  bb.0:
++    liveins: $r0
++
++    ; CHECK-LABEL: name: t2LDRBi12_negoff
++    ; CHECK: liveins: $r0
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[t2LDRBi12_:%[0-9]+]]:rgpr = t2LDRBi12 [[COPY]], 0, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2SUBri:%[0-9]+]]:rgpr = nuw t2SUBri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: [[t2LDRBi12_1:%[0-9]+]]:rgpr = t2LDRBi12 [[COPY]], 4, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRBi8_:%[0-9]+]]:rgpr = t2LDRBi8 [[COPY]], -8, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: [[t2LDRSBi12_:%[0-9]+]]:rgpr = t2LDRSBi12 [[COPY]], 12, 14 /* CC::al */, $noreg :: (load (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2SUBri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = t2LDRBi12 %0, 0, 14, $noreg :: (load (s32), align 4)
++    %2:rgpr = nuw t2SUBri %0, 32, 14, $noreg, $noreg
++    %3:rgpr = t2LDRBi12 %0, 4, 14, $noreg :: (load (s32), align 4)
++    %4:rgpr = t2LDRBi8 %0, -8, 14, $noreg :: (load (s32), align 4)
++    %12:rgpr = t2LDRSBi12 %0, 12, 14, $noreg :: (load (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2STRi12_negoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++  - { reg: '$r1', virtual-reg: '%1' }
++body:             |
++  bb.0:
++    liveins: $r0, $r1
++
++    ; CHECK-LABEL: name: t2STRi12_negoff
++    ; CHECK: liveins: $r0, $r1
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:rgpr = COPY $r1
++    ; CHECK-NEXT: [[t2SUBri:%[0-9]+]]:rgpr = nuw t2SUBri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: t2STRi12 [[COPY1]], [[COPY]], 0, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRi12 [[COPY1]], [[COPY]], 4, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRi8 [[COPY1]], [[COPY]], -8, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2SUBri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = COPY $r1
++    t2STRi12 %1:rgpr, %0, 0, 14, $noreg :: (store (s32), align 4)
++    %2:rgpr = nuw t2SUBri %0, 32, 14, $noreg, $noreg
++    t2STRi12 %1:rgpr, %0, 4, 14, $noreg :: (store (s32), align 4)
++    t2STRi8 %1:rgpr, %0, -8, 14, $noreg :: (store (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2STRHi12_negoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++  - { reg: '$r1', virtual-reg: '%1' }
++body:             |
++  bb.0:
++    liveins: $r0, $r1
++
++    ; CHECK-LABEL: name: t2STRHi12_negoff
++    ; CHECK: liveins: $r0, $r1
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:rgpr = COPY $r1
++    ; CHECK-NEXT: t2STRHi12 [[COPY1]], [[COPY]], 0, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: [[t2SUBri:%[0-9]+]]:rgpr = nuw t2SUBri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: t2STRHi12 [[COPY1]], [[COPY]], 4, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRHi8 [[COPY1]], [[COPY]], -8, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2SUBri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = COPY $r1
++    t2STRHi12 %1:rgpr, %0, 0, 14, $noreg :: (store (s32), align 4)
++    %2:rgpr = nuw t2SUBri %0, 32, 14, $noreg, $noreg
++    t2STRHi12 %1:rgpr, %0, 4, 14, $noreg :: (store (s32), align 4)
++    t2STRHi8 %1:rgpr, %0, -8, 14, $noreg :: (store (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
++---
++name:            t2STRBi12_negoff
++tracksRegLiveness: true
++registers:
++  - { id: 0, class: gprnopc, preferred-register: '' }
++  - { id: 1, class: rgpr, preferred-register: '' }
++  - { id: 2, class: rgpr, preferred-register: '' }
++liveins:
++  - { reg: '$r0', virtual-reg: '%0' }
++  - { reg: '$r1', virtual-reg: '%1' }
++body:             |
++  bb.0:
++    liveins: $r0, $r1
++
++    ; CHECK-LABEL: name: t2STRBi12_negoff
++    ; CHECK: liveins: $r0, $r1
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gprnopc = COPY $r0
++    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:rgpr = COPY $r1
++    ; CHECK-NEXT: t2STRBi12 [[COPY1]], [[COPY]], 0, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: [[t2SUBri:%[0-9]+]]:rgpr = nuw t2SUBri [[COPY]], 32, 14 /* CC::al */, $noreg, $noreg
++    ; CHECK-NEXT: t2STRBi12 [[COPY1]], [[COPY]], 4, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: t2STRBi8 [[COPY1]], [[COPY]], -8, 14 /* CC::al */, $noreg :: (store (s32))
++    ; CHECK-NEXT: $r0 = COPY [[t2SUBri]]
++    ; CHECK-NEXT: tBX_RET 14 /* CC::al */, $noreg, implicit $r0
++    %0:gprnopc = COPY $r0
++    %1:rgpr = COPY $r1
++    t2STRBi12 %1:rgpr, %0, 0, 14, $noreg :: (store (s32), align 4)
++    %2:rgpr = nuw t2SUBri %0, 32, 14, $noreg, $noreg
++    t2STRBi12 %1:rgpr, %0, 4, 14, $noreg :: (store (s32), align 4)
++    t2STRBi8 %1:rgpr, %0, -8, 14, $noreg :: (store (s32), align 4)
++    $r0 = COPY %2
++    tBX_RET 14, $noreg, implicit $r0
++
++...
+-- 
+2.31.0
+

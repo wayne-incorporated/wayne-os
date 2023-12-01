@@ -1,0 +1,145 @@
+Author: Alan Ding <alanding@google.com>
+Date:   Fri Mar 17 14:18:03 2023 -0700
+
+    ureadahead: Update --use-existing-trace-events option for ARCVM
+    
+    Based on latest Android SElinux policy, unauthorized processes aren't
+    provided access to debugfs_tracing_debug context. debugfs_tracing_debug
+    security context is neverallow for read/write access in user builds but
+    debugfs_tracing context is allowed and not affected by this option.
+    
+    For debugfs_tracing context files (i.e. tracing_on), ureadahead will
+    still use them directly even with command line option. Updated name to
+    better reflect this usage and merged changes from upstream branch.
+    
+    There is no functional effect if option is not used.
+
+diff --git a/src/trace.c b/src/trace.c
+index 4aa3715..57a5816 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -130,8 +130,8 @@ trace (int daemonise,
+        const char *pack_file,
+        const char *path_prefix_filter,
+        const PathPrefixOption *path_prefix,
+-       int debug_tracing,
+-	   int force_ssd_mode)
++       int use_existing_trace_events,
++       int force_ssd_mode)
+ {
+ 	int                 dfd;
+ 	FILE                *fp;
+@@ -154,9 +154,9 @@ trace (int daemonise,
+ 		if (errno != ENOENT)
+ 			nih_return_system_error (-1);
+ 
++		/* Mount debugfs (and implicitly tracefs) if not already mounted */
+ 		dfd = open (PATH_DEBUGFS "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
+ 	}
+-	/* Mount debugfs (and implicitly tracefs) if not already mounted */
+ 	if (dfd < 0) {
+ 		if (errno != ENOENT)
+ 			nih_return_system_error (-1);
+@@ -196,8 +196,8 @@ trace (int daemonise,
+ 	if (!num_cpus)
+ 		num_cpus = 1;
+ 
+-	/* Enable tracing of open() syscalls */
+-	if (debug_tracing) {
++	if (! use_existing_trace_events) {
++		/* Enable tracing of open() syscalls */
+ 		if (set_value (dfd, "events/fs/do_sys_open/enable",
+ 			       TRUE, &old_sys_open_enabled) < 0)
+ 			goto error;
+@@ -257,7 +257,7 @@ trace (int daemonise,
+ 	if (set_value (dfd, "tracing_on",
+ 		       old_tracing_enabled, NULL) < 0)
+ 		goto error;
+-	if (debug_tracing) {
++	if (! use_existing_trace_events) {
+ 		if (old_uselib_enabled >= 0)
+ 			if (set_value (dfd, "events/fs/uselib/enable",
+ 				       old_uselib_enabled, NULL) < 0)
+@@ -364,7 +364,7 @@ read_trace (const void *parent,
+ 	    const PathPrefixOption *path_prefix,
+ 	    PackFile ** files,
+ 	    size_t *    num_files,
+-		int         force_ssd_mode)
++	    int         force_ssd_mode)
+ {
+ 	int   fd;
+ 	FILE *fp;
+@@ -687,7 +687,7 @@ trace_file (const void *parent,
+ 	    dev_t       dev,
+ 	    PackFile ** files,
+ 	    size_t *    num_files,
+-		int         force_ssd_mode)
++	    int         force_ssd_mode)
+ {
+ 	nih_local char *filename = NULL;
+ 	int             rotational;
+diff --git a/src/trace.h b/src/trace.h
+index 8d60b0a..56abf20 100644
+--- a/src/trace.h
++++ b/src/trace.h
+@@ -38,7 +38,7 @@ int trace (int daemonise, int timeout,
+            const char *pack_file,  /* May be null */
+            const char *path_prefix_filter,  /* May be null */
+            const PathPrefixOption *path_prefix,
+-           int debug_tracing,
++           int use_existing_trace_events,
+            int force_ssd_mode);
+ 
+ NIH_END_EXTERN
+diff --git a/src/ureadahead.c b/src/ureadahead.c
+index b91aefe..1fdd169 100644
+--- a/src/ureadahead.c
++++ b/src/ureadahead.c
+@@ -111,12 +111,14 @@ static char *pack_file = NULL;
+ static char *path_prefix_filter = NULL;
+ 
+ /**
+- * no_debug_tracing:
++ * use_existing_trace_events:
+  *
+- * Provide flag to disable tracing with tracing/events/fs/* and start them in
+- * init instead since such events can be never allowed while enforcing SELinux.
++ * Set to TRUE if trace events (tracing/events/fs/) used to build the pack file
++ * are enabled and disabled outside of ureadahead. Needed if trace events access
++ * is never allowed (while setting buffer size and tracing on/off is allowed) by
++ * the OS's SELinux policy.
+  */
+-static int no_debug_tracing = FALSE;
++static int use_existing_trace_events = FALSE;
+ 
+ /**
+  * force_ssd_mode:
+@@ -218,7 +220,7 @@ static NihOption options[] = {
+ 	  NULL, "SECONDS", &timeout, nih_option_int },
+ 	{ 0, "dump", N_("dump the current pack file"),
+ 	  NULL, NULL, &dump_pack, NULL },
+-	{ 0, "sort", N_("how to sort the pack file when dumping [default: path]"),
++	{ 0, "sort", N_("how to sort the pack file when dumping [default: open]"),
+ 	  NULL, "SORT", &sort_pack, sort_option },
+ 	{ 0, "path-prefix", N_("pathname to prepend for files on the device"),
+ 	  NULL, "PREFIX", &path_prefix, path_prefix_option },
+@@ -227,8 +229,8 @@ static NihOption options[] = {
+ 	  NULL, "PREFIX_FILTER", &path_prefix_filter, dup_string_handler },
+ 	{ 0, "pack-file", N_("Path of the pack file to use"),
+ 	  NULL, "PACK_FILE", &pack_file, dup_string_handler },
+-	{ 0, "no-debug-tracing", N_("do not enable debug tracing events"),
+-	  NULL, NULL, &no_debug_tracing, NULL },
++	{ 0, "use-existing-trace-events", N_("do not enable or disable trace events"),
++	  NULL, NULL, &use_existing_trace_events, NULL },
+ 	{ 0, "force-ssd-mode", N_("force ssd setting in pack file during tracing"),
+ 	  NULL, NULL, &force_ssd_mode, NULL },
+ 
+@@ -321,7 +323,7 @@ main (int   argc,
+ 
+ 	/* Trace to generate new pack files */
+ 	if (trace (daemonise, timeout, filename, pack_file,
+-		   path_prefix_filter, &path_prefix, (no_debug_tracing == FALSE),
++		   path_prefix_filter, &path_prefix, use_existing_trace_events,
+ 		   force_ssd_mode) < 0) {
+ 		NihError *err;
+ 

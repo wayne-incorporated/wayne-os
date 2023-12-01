@@ -1,0 +1,60 @@
+From 760d94b23cebb17f89f5cd994f5475d226a39820 Mon Sep 17 00:00:00 2001
+From: Amir Goldstein <amir73il@gmail.com>
+Date: Thu, 10 Jan 2019 19:04:43 +0200
+Subject: [PATCH] BACKPORT: fanotify: add support for create/attrib/move/delete
+ events
+
+Add support for events with data type FSNOTIFY_EVENT_INODE
+(e.g. create/attrib/move/delete) for inode and filesystem mark types.
+
+The "inode" events do not carry enough information (i.e. path) to
+report event->fd, so we do not allow setting a mask for those events
+unless group supports reporting fid.
+
+The "inode" events are not supported on a mount mark, because they do
+not carry enough information (i.e. path) to be filtered by mount point.
+
+The "dirent" events (create/move/delete) report the fid of the parent
+directory where events took place without specifying the filename of the
+child. In the future, fanotify may get support for reporting filename
+information for those events.
+
+Cc: <linux-api@vger.kernel.org>
+Signed-off-by: Amir Goldstein <amir73il@gmail.com>
+Signed-off-by: Jan Kara <jack@suse.cz>
+---
+ include/uapi/linux/fanotify.h      |  8 ++++++++
+ 1 files changed, 8 insertions(+)
+
+diff --git a/include/uapi/linux/fanotify.h b/include/uapi/linux/fanotify.h
+index f79c4e1a84b9a..f9522b381ffb7 100644
+--- a/include/uapi/linux/fanotify.h
++++ b/include/uapi/linux/fanotify.h
+@@ -7,9 +7,16 @@
+ /* the following events that user-space can register for */
+ #define FAN_ACCESS		0x00000001	/* File was accessed */
+ #define FAN_MODIFY		0x00000002	/* File was modified */
++#define FAN_ATTRIB		0x00000004	/* Metadata changed */
+ #define FAN_CLOSE_WRITE		0x00000008	/* Writtable file closed */
+ #define FAN_CLOSE_NOWRITE	0x00000010	/* Unwrittable file closed */
+ #define FAN_OPEN		0x00000020	/* File was opened */
++#define FAN_MOVED_FROM		0x00000040	/* File was moved from X */
++#define FAN_MOVED_TO		0x00000080	/* File was moved to Y */
++#define FAN_CREATE		0x00000100	/* Subfile was created */
++#define FAN_DELETE		0x00000200	/* Subfile was deleted */
++#define FAN_DELETE_SELF		0x00000400	/* Self was deleted */
++#define FAN_MOVE_SELF		0x00000800	/* Self was moved */
+ 
+ #define FAN_Q_OVERFLOW		0x00004000	/* Event queued overflowed */
+ 
+@@ -22,6 +29,7 @@
+ 
+ /* helper events */
+ #define FAN_CLOSE		(FAN_CLOSE_WRITE | FAN_CLOSE_NOWRITE) /* close */
++#define FAN_MOVE		(FAN_MOVED_FROM | FAN_MOVED_TO) /* moves */
+ 
+ /* flags used for fanotify_init() */
+ #define FAN_CLOEXEC		0x00000001
+-- 
+2.31.0
+

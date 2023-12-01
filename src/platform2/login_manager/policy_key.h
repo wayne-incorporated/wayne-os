@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <base/files/file_path.h>
-#include <base/macros.h>
+#include <crypto/signature_verifier.h>
 
 namespace crypto {
 class RSAPrivateKey;
@@ -31,10 +31,6 @@ class SystemUtils;
 // present, we will allow the owner's key to be set programmatically,
 // and will persist it to disk upon request.  Attempts to set the key
 // before on-disk storage has been checked will be denied.
-//
-// Note: Changes in the format of the owner key might break rollback
-// (go/rollback-data-restore). If possible, try to maintain backwards
-// compatibility for four release cycles.
 class PolicyKey {
  public:
   PolicyKey(const base::FilePath& key_file, NssUtil* nss);
@@ -72,11 +68,13 @@ class PolicyKey {
   virtual bool Persist();
 
   // Load key material from |public_key_der|, as long as |sig| is a valid
-  // signature over |public_key_der| with |key_|.
+  // signature over |public_key_der| with |key_| signed with |algorithm|.
   // We will _deny_ such an attempt if we do not have a key loaded.
   // If you're trying to set a key for the first time, use PopulateFromBuffer()
-  virtual bool Rotate(const std::vector<uint8_t>& public_key_der,
-                      const std::vector<uint8_t>& signature);
+  virtual bool Rotate(
+      const std::vector<uint8_t>& public_key_der,
+      const std::vector<uint8_t>& signature,
+      const crypto::SignatureVerifier::SignatureAlgorithm algorithm);
 
   // THIS IS ONLY INTENDED TO BE USED WHEN THE CURRENTLY REGISTERED KEY HAS BEEN
   // COMPROMISED OR LOST AND WE ARE RECOVERING.
@@ -84,11 +82,13 @@ class PolicyKey {
   virtual bool ClobberCompromisedKey(
       const std::vector<uint8_t>& public_key_der);
 
-  // Verify that |signature| is a valid sha1 w/ RSA signature over the data in
-  // |data| with |key_|.
+  // Verify that |signature| is a valid signature over the data in
+  // |data| with |key_| signed with |algorithm|.
   // Returns false if the sig is invalid, or there's an error.
-  virtual bool Verify(const std::vector<uint8_t>& data,
-                      const std::vector<uint8_t>& signature);
+  virtual bool Verify(
+      const std::vector<uint8_t>& data,
+      const std::vector<uint8_t>& signature,
+      const crypto::SignatureVerifier::SignatureAlgorithm algorithm);
 
   // Returned reference will be empty if we haven't populated |key_| yet.
   virtual const std::vector<uint8_t>& public_key_der() const { return key_; }

@@ -1,0 +1,78 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_header_files_include",
+    ":install_libcamera_client_include_camera",
+    ":install_libcamera_metadata_include_system",
+    ":libcros_camera_android_deps",
+    ":libcros_camera_android_deps_pkg_config",
+  ]
+}
+
+shared_library("libcros_camera_android_deps") {
+  sources = [
+    "//camera/android/libcamera_client/src/camera_metadata.cc",
+    "//camera/android/libcamera_metadata/src/camera_metadata.c",
+  ]
+  include_dirs = [
+    "//camera/android/header_files/include/hardware/libhardware/include",
+    "//camera/android/header_files/include/system/core/include",
+    "//camera/android/libcamera_client/include",
+    "//camera/android/libcamera_metadata/include",
+  ]
+  configs += [
+    "//camera/build:cros_camera_common",
+
+    # We don"t want to modify the Android sources to add the visibility
+    # attributes, so allow -fvisibility=default here.
+    # gnlint: disable=GnLintVisibilityFlags
+    "//common-mk:visibility_default",
+  ]
+  install_path = "lib"
+}
+
+generate_pkg_config("libcros_camera_android_deps_pkg_config") {
+  name = "libcros_camera_android_deps"
+  description = "Android dependencies for cros-camera"
+  version = getenv("PV")
+  requires_private = []
+  requires = []
+  cflags = [
+    "-I/usr/include/android",
+    "-I/usr/include/android/hardware/libhardware/include",
+    "-I/usr/include/android/system/core/include",
+  ]
+  libs = [ "-lcros_camera_android_deps" ]
+  install = true
+}
+
+install_config("install_header_files_include") {
+  sources = [
+    "header_files/include/hardware",
+    "header_files/include/system",
+  ]
+  recursive = true
+  install_path = "/usr/include/android/"
+}
+
+install_config("install_libcamera_metadata_include_system") {
+  sources = [
+    # Install into the system folder to avoid cros lint complaint of
+    # "include the directory when naming .h files"
+    "libcamera_metadata/include/camera_metadata_hidden.h",
+    "libcamera_metadata/include/system/camera_metadata.h",
+    "libcamera_metadata/include/system/camera_metadata_tags.h",
+    "libcamera_metadata/include/system/camera_vendor_tags.h",
+  ]
+  install_path = "/usr/include/android/system"
+}
+
+install_config("install_libcamera_client_include_camera") {
+  sources = [ "libcamera_client/include/camera/camera_metadata.h" ]
+  install_path = "/usr/include/android/camera"
+}

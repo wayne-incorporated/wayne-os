@@ -1,0 +1,57 @@
+Link libcxx with gcc_eh when linking with gcc_s is
+not desired. Normally, llvm's libunwind would be used but
+we are not using libunwind in ChromeOS right now because of
+some reported crashes when libunwind was used.
+https://crbug.com/747113
+
+diff --git a/libcxx/CMakeLists.txt b/libcxx/CMakeLists.txt
+index bdb2d56da85..d3e02306a4b 100644
+--- a/libcxx/CMakeLists.txt
++++ b/libcxx/CMakeLists.txt
+@@ -728,7 +728,7 @@ endif()
+ 
+ # Link system libraries =======================================================
+ function(cxx_link_system_libraries target)
+-  target_add_link_flags_if_supported(${target} PRIVATE "-nodefaultlibs")
++  target_add_link_flags_if_supported(${target} PRIVATE "-nostdlib++")
+   target_add_compile_flags_if_supported(${target} PRIVATE "/Zl")
+   target_add_link_flags_if_supported(${target} PRIVATE "/nodefaultlib")
+ 
+@@ -753,10 +753,7 @@ function(cxx_link_system_libraries target)
+   endif()
+ 
+   if (LIBCXX_USE_COMPILER_RT)
+-    find_compiler_rt_library(builtins LIBCXX_BUILTINS_LIBRARY)
+-    if (LIBCXX_BUILTINS_LIBRARY)
+-      target_link_libraries(${target} PRIVATE "${LIBCXX_BUILTINS_LIBRARY}")
+-    endif()
++    add_link_flags("-rtlib=compiler-rt")
+   elseif (LIBCXX_HAS_GCC_LIB)
+     target_link_libraries(${target} PRIVATE gcc)
+   elseif (LIBCXX_HAS_GCC_S_LIB)
+diff --git a/libcxx/cmake/config-ix.cmake b/libcxx/cmake/config-ix.cmake
+index cbb4dfd16da..e828a5c5031 100644
+--- a/libcxx/cmake/config-ix.cmake
++++ b/libcxx/cmake/config-ix.cmake
+@@ -33,7 +33,7 @@ endif()
+ # configuration checks to avoid spurious link errors.
+ check_c_compiler_flag(-nodefaultlibs LIBCXX_SUPPORTS_NODEFAULTLIBS_FLAG)
+ if (LIBCXX_SUPPORTS_NODEFAULTLIBS_FLAG)
+-  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -nodefaultlibs")
++  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -nostdlib++")
+   if (LIBCXX_HAS_C_LIB)
+     list(APPEND CMAKE_REQUIRED_LIBRARIES c)
+   endif ()
+diff --git a/libcxx/src/CMakeLists.txt b/libcxx/src/CMakeLists.txt
+index 898ec027f32..9db76f8ab94 100644
+--- a/libcxx/src/CMakeLists.txt
++++ b/libcxx/src/CMakeLists.txt
+@@ -181,6 +181,8 @@ if (LIBCXX_ENABLE_SHARED)
+       target_link_libraries(cxx_shared PUBLIC unwind_shared)
+     elseif (LIBCXXABI_STATICALLY_LINK_UNWINDER_IN_SHARED_LIBRARY AND (TARGET unwind_static OR HAVE_LIBUNWIND))
+       # libunwind is already included in libc++abi
++    elseif (NOT LIBCXX_HAS_GCC_S_LIB)
++      add_library_flags(gcc_eh)
+     else()
+       target_link_libraries(cxx_shared PUBLIC unwind)
+     endif()

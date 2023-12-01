@@ -1,0 +1,132 @@
+From db498366b1908630534711ab57f375646dd297e5 Mon Sep 17 00:00:00 2001
+From: Harry Cutts <hcutts@chromium.org>
+Date: Tue, 11 Aug 2020 14:56:58 -0700
+Subject: [PATCH] Enable safe mode for evtest
+
+This patch enables --safe for evtest. When evtest is called with --safe,
+all the sensitive event info will be hidden.
+---
+ evtest.c | 58 ++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 56 insertions(+), 2 deletions(-)
+
+diff --git a/evtest.c b/evtest.c
+index ba7a161..ac12bab 100644
+--- a/evtest.c
++++ b/evtest.c
+@@ -108,6 +108,7 @@ static const struct query_mode {
+ };
+ 
+ static int grab_flag = 0;
++static int safe_flag = 0;
+ static char* progname;
+ static volatile sig_atomic_t stop = 0;
+ 
+@@ -821,6 +822,8 @@ static const char * const * const names[EV_MAX + 1] = {
+ 	[EV_FF] = force,			[EV_FF_STATUS] = forcestatus,
+ };
+ 
++static int cached_absinfo[ABS_MAX][6] = {0};
++
+ /**
+  * Convert a string to a specific key/snd/led/sw code. The string can either
+  * be the name of the key in question (e.g. "SW_DOCK") or the numerical
+@@ -947,6 +950,10 @@ static int usage(void)
+ 	printf("\n");
+ 	printf(" Query mode: (check exit code)\n");
+ 	printf("   %s --query /dev/input/eventX <type> <value>\n", progname);
++	printf("\n");
++	printf(" Safe mode:\n");
++	printf("   %s --safe\n", program_invocation_short_name);
++	printf("     --safe  hide sensitive event information\n");
+ 
+ 	printf("\n");
+ 	printf("<type> is one of: EV_KEY, EV_SW, EV_LED, EV_SND\n");
+@@ -965,7 +972,7 @@ static int usage(void)
+  */
+ static void print_absdata(int fd, int axis)
+ {
+-	int abs[6] = {0};
++	int* abs = cached_absinfo[axis];
+ 	int k;
+ 
+ 	ioctl(fd, EVIOCGABS(axis), abs);
+@@ -1112,6 +1119,47 @@ static int print_device_info(int fd)
+ 	return 0;
+ }
+ 
++/**
++ * Print event safely and do not print any sensitive infomation.
++ *
++ * @param ev The event to print.
++ */
++static void safe_print_event(struct input_event* ev) {
++	const char* type_str = events[ev->type] ? events[ev->type] : "?";
++	const char* code_str =
++		names[ev->type] ? (names[ev->type][ev->code] ?
++				  names[ev->type][ev->code] : "?") : "?";
++	printf("type %d (%s)", ev->type, type_str);
++	switch (ev->type) {
++		case EV_KEY:
++			printf(", code *, value %d\n", ev->value);
++			break;
++		case EV_REL:
++			printf(", code %d (%s)\n", ev->code, code_str);
++			break;
++		case EV_ABS:
++			printf(", code %d (%s), ", ev->code, code_str);
++			if (ev->value == cached_absinfo[ev->code][1])
++				printf("%s\n", "value = abs_min");
++			else if (ev->value == cached_absinfo[ev->code][2])
++				printf("%s\n", "value = abs_max");
++			else if (ev->value > cached_absinfo[ev->code][2] &&
++				 ev->value < cached_absinfo[ev->code][1])
++				printf("%s\n", "value out of range (min, max)");
++			else
++				printf("%s\n", "value in range (min, max)");
++			break;
++		case EV_MSC:
++			if (ev->code == MSC_TIMESTAMP)
++				printf(", code %d (%s), value %s\n", ev->code,
++				       code_str, ev->value ? "non-zero" : "0");
++			else
++				printf(", code %d (%s)\n", ev->code, code_str);
++		default:
++			break;
++	}
++}
++
+ /**
+  * Print device events as they come in.
+  *
+@@ -1145,7 +1193,10 @@ static int print_events(int fd)
+ 			type = ev[i].type;
+ 			code = ev[i].code;
+ 
+-			printf("Event: time %ld.%06ld, ", ev[i].input_event_sec, ev[i].input_event_usec);
++			if (safe_flag)
++				printf("Event: time %ld, ", ev[i].input_event_sec);
++			else
++				printf("Event: time %ld.%06ld, ", ev[i].input_event_sec, ev[i].input_event_usec);
+ 
+ 			if (type == EV_SYN) {
+ 				if (code == SYN_MT_REPORT)
+@@ -1154,6 +1205,8 @@ static int print_events(int fd)
+ 					printf(">>>>>>>>>>>>>> %s <<<<<<<<<<<<\n", codename(type, code));
+ 				else
+ 					printf("-------------- %s ------------\n", codename(type, code));
++			} else if (safe_flag) {
++				safe_print_event(&ev[i]);
+ 			} else {
+ 				printf("type %d (%s), code %d (%s), ",
+ 					type, typename(type),
+@@ -1337,6 +1390,7 @@ static int do_query(const char *device, const char *event_type, const char *keyn
+ static const struct option long_options[] = {
+ 	{ "grab", no_argument, &grab_flag, 1 },
+ 	{ "query", no_argument, NULL, MODE_QUERY },
++	{ "safe", no_argument, &safe_flag, 1 },
+ 	{ "version", no_argument, NULL, MODE_VERSION },
+ 	{ 0, },
+ };
+-- 
+2.36.1.124.g0e6072fb45-goog
+

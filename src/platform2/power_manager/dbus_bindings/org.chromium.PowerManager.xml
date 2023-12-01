@@ -1,0 +1,414 @@
+<?xml version="1.0"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node name="/org/chromium/PowerManager"
+  xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+  <interface name="org.chromium.PowerManager">
+    <method name="RequestShutdown">
+      <tp:docstring>
+        The |reason| arg is a power_manager::RequestShutdownReason value.
+        The |description| arg is a human-readable string describing the reason
+        for the request; it is logged by powerd.
+      </tp:docstring>
+      <arg name="reason" direction="in" type="i" />
+      <arg name="description" direction="in" type="s" />
+    </method>
+    <method name="RequestRestart">
+      <tp:docstring>
+        The |reason| arg is a power_manager::RequestRestartReason value.
+        The |description| arg is a human-readable string describing the reason
+        for the request; it is logged by powerd.
+      </tp:docstring>
+      <arg name="reason" direction="in" type="i" />
+      <arg name="description" direction="in" type="s" />
+    </method>
+    <method name="ChangeWifiRegDomain">
+      <tp:docstring>
+        The |domain| arg is a power_manager::WifiRegDomainDbus value.
+        Change the WiFi regdomain.
+      </tp:docstring>
+      <arg name="domain" direction="in" type="i" />
+    </method>
+    <method name="RequestSuspend">
+      <tp:docstring>
+        The |external_wakeup_count| arg is optional, and it will call two
+        different methods in the backend. This can't be expressed in the DBus
+        Introspection XML file.
+      </tp:docstring>
+      <arg name="external_wakeup_count" direction="in" type="t" />
+      <tp:docstring>
+        The |wakeup_timeout| arg is optional. It specifies a timeout after
+        which the system should resume. Supply 0 for no timeout.
+      </tp:docstring>
+      <arg name="wakeup_timeout" direction="in" type="i" />
+      <tp:docstring>
+        The |suspend_flavor| arg is optional. It specifies the type of
+        suspend to perform. See enum RequestSuspendFlavor for values.
+        Not specifying a value is equivalent to 0, REQUEST_SUSPEND_DEFAULT.
+      </tp:docstring>
+      <arg name="suspend_flavor" direction="in" type="u" />
+    </method>
+
+    <!-- Screen brightness control -->
+    <method name="SetScreenBrightness">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::SetBacklightBrightnessRequest protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <method name="DecreaseScreenBrightness">
+      <arg name="allow_off" direction="in" type="b" />
+    </method>
+    <method name="IncreaseScreenBrightness" />
+    <method name="GetScreenBrightnessPercent">
+      <arg name="percent" direction="out" type="d" />
+    </method>
+
+    <!-- Keyboard backlight control -->
+    <method name="DecreaseKeyboardBrightness" />
+    <method name="IncreaseKeyboardBrightness" />
+    <method name="ToggleKeyboardBacklight">
+      <tp:docstring>
+        Toggle the on/off state of the keyboard backlight.
+
+        If the keyboard's backlight is currently turned on, it will be
+        disabled, and vice versa.
+      </tp:docstring>
+    </method>
+    <method name="SetKeyboardBrightness">
+      <tp:docstring>
+        Set the brightness of the keyboard backlight.
+
+        The |serialized_proto| arg is a serialized
+        power_manager::SetBacklightBrightnessRequest protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <method name="GetKeyboardBrightnessPercent">
+      <tp:docstring>
+        Get the current brightness of the keyboard backlight as
+        a percentage.
+
+        If |success| is true, the returned value |percent| will be
+        a value between 0.0 and 100.0 inclusive, representing the
+        brightness. The value 0.0 represents "off", while 100.0
+        represents "full brightness".
+      </tp:docstring>
+      <arg name="percent" direction="out" type="d" />
+      <arg name="success" direction="out" type="b" />
+    </method>
+
+    <method name="GetPowerSupplyProperties">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::PowerSupplyProperties protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="out" type="ay" />
+    </method>
+    <method name="GetBatteryState">
+      <tp:docstring>
+        The |external_power_type| arg is a native enum:
+        power_manager::system::ExternalPowerType.
+        The |battery_state| arg is an enum created to be compatible
+        with the upower battery state enum:
+        power_manager::system::UpowerBatteryState.
+      </tp:docstring>
+      <arg name="external_power_type" direction="out" type="u" />
+      <arg name="battery_state" direction="out" type="u" />
+      <arg name="display_battery_percentage" direction="out" type="d" />
+    </method>
+    <method name="HandleVideoActivity">
+      <arg name="fullscreen" direction="in" type="b" />
+    </method>
+    <method name="HandleUserActivity">
+      <tp:docstring>
+        The |type| arg is a power_manager::UserActivityType.
+      </tp:docstring>
+      <arg name="type" direction="in" type="i" />
+    </method>
+    <method name="SetIsProjecting">
+      <arg name="is_projecting" direction="in" type="b" />
+    </method>
+    <method name="SetPolicy">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::PowerManagementPolicy protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <method name="SetPowerSource">
+      <arg name="id" direction="in" type="s" />
+    </method>
+    <method name="HandlePowerButtonAcknowledgment">
+      <tp:docstring>
+        The |timestamp_internal| arg is represented as the return value of
+        (|timestamp| - base::TimeTicks()).InMicroseconds().
+      </tp:docstring>
+      <arg name="timestamp_internal" direction="in" type="x" />
+    </method>
+    <method name="IgnoreNextPowerButtonPress">
+      <tp:docstring>
+        The |timeout_internal| arg is represented as the return value of
+        base::TimeDelta::InMicroseconds(). Setting it to 0 cancels a
+        previously set period.
+      </tp:docstring>
+      <arg name="timeout_internal" direction="in" type="x" />
+    </method>
+
+    <method name="RegisterSuspendDelay">
+      <tp:docstring>
+        The |serialized_request_proto| arg is a serialized
+        power_manager::RegisterSuspendDelayRequest protobuf.
+        The |serialized_reply_proto| arg is a serialized
+        RegisterSuspendDelayReply protobuf.
+      </tp:docstring>
+      <arg name="serialized_request_proto" direction="in" type="ay" />
+      <arg name="serialized_reply_proto" direction="out" type="ay" />
+    </method>
+    <method name="UnregisterSuspendDelay">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::UnregisterSuspendDelayRequest protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+
+    <method name="HandleSuspendReadiness">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::SuspendReadinessInfo protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <method name="RegisterDarkSuspendDelay">
+      <tp:docstring>
+        The |serialized_request_proto| arg is a serialized
+        power_manager::RegisterSuspendDelayRequest protobuf.
+        The |serialized_reply_proto| arg is a serialized
+        RegisterSuspendDelayReply protobuf.
+      </tp:docstring>
+      <arg name="serialized_request_proto" direction="in" type="ay" />
+      <arg name="serialized_reply_proto" direction="out" type="ay" />
+    </method>
+    <method name="UnregisterDarkSuspendDelay">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::UnregisterSuspendDelayRequest protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <method name="HandleDarkSuspendReadiness">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::SuspendReadinessInfo protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <method name="RecordDarkResumeWakeReason">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::DarkResumeWakeReason protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <method name="GetInactivityDelays">
+      <tp:docstring>
+        |serialized_reply_proto| is a serialized
+        power_manager::PowerManagementPolicy::Delays protobuf describing the
+        current inactivity delays.
+      </tp:docstring>
+      <arg name="serialized_reply_proto" direction="out" type="ay" />
+    </method>
+    <method name="HasAmbientColorDevice">
+      <arg name="has_device" direction="out" type="b" />
+    </method>
+
+    <method name="GetThermalState">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::ThermalEvent protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="out" type="ay" />
+    </method>
+
+    <method name="SetExternalDisplayALSBrightness">
+      <arg name="enabled" direction="in" type="b" />
+    </method>
+
+    <method name="GetExternalDisplayALSBrightness">
+      <arg name="enabled" direction="out" type="b" />
+    </method>
+
+    <method name="ChargeNowForAdaptiveCharging">
+      <tp:docstring>
+        Stop delaying charging for Adaptive Charging for this charge session.
+      </tp:docstring>
+    </method>
+
+    <method name="GetChargeHistory">
+      <tp:docstring>
+        Fetches the charge history for up to the last 30 days.
+        |serialized_proto| is a serialized power_manager::ChargeHistory
+        protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="out" type="ay" />
+    </method>
+
+    <!-- Battery Saver Mode -->
+    <method name="GetBatterySaverModeState">
+      <tp:docstring>
+        Get the current state of Battery Saver Mode. The |serialized_proto| arg
+        is a serialized |power_manager::BatterySaverModeState| protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="out" type="ay" />
+    </method>
+    <method name="SetBatterySaverModeState">
+      <tp:docstring>
+        Update the state of Battery Saver Mode. The |serialized_proto| is a
+        serialized |power_manager::SetBatterySaverModeStateRequest| protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="in" type="ay" />
+    </method>
+    <signal name="BatterySaverModeStateChanged">
+      <tp:docstring>
+        Called when the state of Battery Saver Mode has changed, and on
+        powerd startup. The |serialized_proto| is a serialized
+        |power_manager::BatterySaverModeState| protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="out" type="ay" />
+    </signal>
+
+    <!-- Signals -->
+    <signal name="ScreenBrightnessChanged">
+      <tp:docstring>
+        |serialized_proto| is a serialized
+        power_manager::BacklightBrightnessChange protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="out" type="ay" />
+    </signal>
+    <signal name="KeyboardBrightnessChanged">
+      <tp:docstring>
+        |serialized_proto| is a serialized
+        power_manager::BacklightBrightnessChange protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" direction="out" type="ay" />
+    </signal>
+
+    <signal name="PeripheralBatteryStatus">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::PeripheralBatteryStatus protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <signal name="PowerSupplyPoll">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::PowerSupplyProperties protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <method name="BatteryStatePoll">
+      <tp:docstring>
+        The |external_power_type| arg is a native enum:
+        power_manager::system::ExternalPowerType.
+        The |battery_state| arg is an enum created to be compatible
+        with the upower battery state enum:
+        power_manager::system::UpowerBatteryState.
+      </tp:docstring>
+      <arg name="external_power_type" direction="out" type="u" />
+      <arg name="battery_state" direction="out" type="u" />
+      <arg name="display_battery_percentage" direction="out" type="d" />
+    </method>
+
+    <signal name="LidOpened">
+      <tp:docstring>
+        Lid open signal.
+      </tp:docstring>
+    </signal>
+    <signal name="LidClosed">
+      <tp:docstring>
+        Lid close signal.
+      </tp:docstring>
+    </signal>
+
+    <signal name="SuspendImminent">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::SuspendImminent protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <signal name="SuspendDone">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::SuspendDone protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <signal name="DarkSuspendImminent">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::SuspendImminent protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <signal name="HibernateResumeReady">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::HibernateResumeReady protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+
+    <signal name="InputEvent">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::InputEvent protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+
+    <signal name="IdleActionImminent">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::IdleActionImminent protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <signal name="IdleActionDeferred" />
+
+    <signal name="ScreenIdleStateChanged">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::ScreenIdleState protobuf describing the current
+        idle-related state of the display.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <signal name="InactivityDelaysChanged">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::PowerManagementPolicy::Delays protobuf describing the
+        current inactivity delays.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+    <signal name="AmbientColorTemperatureChanged">
+      <tp:docstring>
+        |color_temp| describes the correlated color temperature of the current
+        ambient light conditions.
+      </tp:docstring>
+      <arg name="color_temp" type="u" />
+    </signal>
+
+    <signal name="ThermalEvent">
+      <tp:docstring>
+        The |serialized_proto| arg is a serialized
+        power_manager::ThermalEvent protobuf.
+      </tp:docstring>
+      <arg name="serialized_proto" type="ay" />
+    </signal>
+  </interface>
+</node>

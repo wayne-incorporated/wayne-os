@@ -1,0 +1,27 @@
+we already patch the python modules behind the python-config scripts,
+but the shell python-config script is completely unrelated.
+
+we throw away the -L$libdir path because $libdir is in the toolchain's
+search path already, so we don't need the redundancy.
+
+--- a/Misc/python-config.sh.in
++++ b/Misc/python-config.sh.in
+@@ -25,6 +25,9 @@ installed_prefix ()
+ }
+ 
+ prefix_real=$(installed_prefix "$0")
++if [ "${prefix_real}" = "/usr" ]; then
++  prefix_real="${SYSROOT}/usr"
++fi
+ 
+ # Use sed to fix paths from their built-to locations to their installed-to
+ # locations. Keep prefix & exec_prefix using their original values in case
+@@ -92,7 +95,7 @@ do
+             if [ -z "$PYTHONFRAMEWORK" ] ; then
+                 LINKFORSHAREDUSED=$LINKFORSHARED
+             fi
+-            echo "-L$libdir $LIBS $LINKFORSHAREDUSED"
++            echo "$LIBS $LINKFORSHAREDUSED"
+         ;;
+         --extension-suffix)
+             echo "$SO"

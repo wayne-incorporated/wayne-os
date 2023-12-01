@@ -1,0 +1,23 @@
+# Copyright 2016 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+[Unit]
+Description=Run the shill network connection manager
+Before=network.target
+After=@expected_started_services@
+Requisite=@expected_started_services@
+Conflicts=pre-shutdown.service
+[Service]
+# Default parameters to be overridden by systemd configuration.
+Environment="SHILL_LOG_LEVEL=0" \
+	"SHILL_LOG_SCOPES=" \
+	"BLOCKED_DEVICES=" \
+	"SHILL_TEST_DEVICES="
+Restart=on-failure
+
+ExecStartPre=/bin/sh /usr/share/cros/init/shill-pre-start.sh
+
+ExecStart=/bin/sh /usr/share/cros/init/shill.sh
+
+ExecStopPost=/usr/sbin/bootstat shill-stop

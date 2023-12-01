@@ -1,0 +1,57 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# This seccomp policy is used by debugd while creating the sandbox to run the
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+# following command:
+# ectool inventory
+#
+# This policy file was created using the following:
+# - Following the instructions listed in:
+# https://chromium.googlesource.com/chromiumos/docs/+/HEAD/
+# sandboxing.md#detailed-instructions-for-generating-a-seccomp-policy
+#
+# - Modifications to the ioctl settings based on similar usage in:
+# src/platform2/diagnostics/cros_healthd/seccomp/
+# ectool_i2cread-seccomp-arm64.policy
+openat: 1
+write: 1
+mmap: arg2 in ~PROT_EXEC
+mprotect: arg2 in ~PROT_EXEC
+fstat: 1
+newfstatat: 1
+close: 1
+read: 1
+# ioctl:
+# arg1 == _IOC(_IOC_READ|_IOC_WRITE, 0xec, 0x0, 0x28) (0xc0283a00) ||
+# arg1 == CROS_EC_DEV_IOCRDMEM (0xc108ec01) ||
+# arg1 == CROS_EC_DEV_IOCXCMD (0xc014ec00)
+#
+# Driver type 0x3a (":") = CROS_EC_DEV_IOC
+# (Old iotcl format, used by ChromeOS 3.18 and older)
+#
+# Driver type 0xec = CROS_EC_DEV_IOC_V2
+# (New ioctl format, used by ChromeOS 4.4 or later as well as upstream 4.0+)
+# Please refer to src/platform/ec/util/cros_ec_dev.h for more info.
+ioctl: arg1 == 0xc0283a00 || arg1 == 0xc108ec01 || arg1 == 0xc014ec00
+brk: 1
+rt_sigaction: 1
+faccessat: 1
+faccessat2: 1
+munmap: 1
+set_tid_address: 1
+set_robust_list: 1
+rt_sigprocmask: 1
+prlimit64: 1
+uname: 1
+exit_group: 1
+restart_syscall: 1
+exit: 1
+rt_sigreturn: 1
+connect: 1
+lseek: 1
+clock_gettime: 1
+gettimeofday: 1

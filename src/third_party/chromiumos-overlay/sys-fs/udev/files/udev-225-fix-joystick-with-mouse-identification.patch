@@ -1,0 +1,36 @@
+From c4306a7e7f4ac28696b90171e971f56ccb0fcc4f Mon Sep 17 00:00:00 2001
+From: Harry Cutts <hcutts@chromium.org>
+Date: Mon, 3 May 2021 12:05:48 -0700
+Subject: [PATCH] udev: Drop VMware USB mouse workaround
+
+This was preventing the SteelSeries Stratus Duo (a gamepad which also
+identifies as a mouse) from being given the `ID_INPUT_JOYSTICK` property
+on Kernel 4.4.
+
+BUG=b:186885455
+TEST=Connect the Stratus Duo by Bluetooth, check it shows up in a
+     gamepad tester like gamepadviewer.com
+
+Change-Id: I3e6c2da521f95b14ca11a9e26ca72248f16ba8d6
+---
+ src/udev/udev-builtin-input_id.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/src/udev/udev-builtin-input_id.c b/src/udev/udev-builtin-input_id.c
+index e3fa4bc162..2bfc75992d 100644
+--- a/src/udev/udev-builtin-input_id.c
++++ b/src/udev/udev-builtin-input_id.c
+@@ -197,10 +197,6 @@ static bool test_pointers(struct udev_device *dev,
+                         is_tablet = true;
+                 else if (finger_but_no_pen && !is_direct)
+                         is_touchpad = true;
+-                else if (has_mouse_button)
+-                        /* This path is taken by VMware's USB mouse, which has
+-                         * absolute axes, but no touch/pressure button. */
+-                        is_mouse = true;
+                 else if (has_touch)
+                         is_touchscreen = true;
+                 else if (has_joystick_axes_or_buttons)
+-- 
+2.31.1.527.g47e6f16901-goog
+

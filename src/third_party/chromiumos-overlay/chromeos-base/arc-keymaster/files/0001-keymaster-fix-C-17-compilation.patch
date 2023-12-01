@@ -1,0 +1,53 @@
+From 126a0ce055a9e894b1a512954f0328f04e2ec314 Mon Sep 17 00:00:00 2001
+From: Tom Hughes <tomhughes@chromium.org>
+Date: Thu, 17 Sep 2020 16:28:48 +0000
+Subject: [PATCH] keymaster: fix C++17 compilation
+
+keymaster has been fixed upstream (https://r.android.com/1412947), but
+the pie-release branch that we're using is no longer accepting changes,
+so we need to manually patch for now.
+
+BUG=b:162949739
+TEST=emerge-volteer arc-keymaster
+
+Change-Id: I8ba9d6e4d986b3a5275cc85faee5f5576d5cb3d9
+---
+ android_keymaster/keymaster_stl.cpp | 4 ++--
+ include/keymaster/new               | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/android_keymaster/keymaster_stl.cpp b/android_keymaster/keymaster_stl.cpp
+index a18823c..0f9c50f 100644
+--- a/android_keymaster/keymaster_stl.cpp
++++ b/android_keymaster/keymaster_stl.cpp
+@@ -24,10 +24,10 @@ struct nothrow_t {};
+ 
+ const std::nothrow_t __attribute__((weak)) std::nothrow = {};
+ 
+-void* __attribute__((weak)) operator new(size_t __sz, const std::nothrow_t&) {
++void* __attribute__((weak)) operator new(size_t __sz, const std::nothrow_t&) noexcept {
+     return malloc(__sz);
+ }
+-void* __attribute__((weak)) operator new[](size_t __sz, const std::nothrow_t&) {
++void* __attribute__((weak)) operator new[](size_t __sz, const std::nothrow_t&) noexcept {
+     return malloc(__sz);
+ }
+ 
+diff --git a/include/keymaster/new b/include/keymaster/new
+index 7ffedee..4189ead 100644
+--- a/include/keymaster/new
++++ b/include/keymaster/new
+@@ -24,8 +24,8 @@ namespace std {
+ struct nothrow_t;
+ extern const nothrow_t nothrow;
+ }
+-void* operator new(size_t __sz, const std::nothrow_t&);
+-void* operator new[](size_t __sz, const std::nothrow_t&);
++void* operator new(size_t __sz, const std::nothrow_t&) noexcept;
++void* operator new[](size_t __sz, const std::nothrow_t&) noexcept;
+ void operator delete(void* ptr);
+ void operator delete[](void* ptr);
+ 
+-- 
+2.26.2
+

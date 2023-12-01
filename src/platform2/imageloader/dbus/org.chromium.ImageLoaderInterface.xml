@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Copyright 2016 The Chromium Authors
+  Use of this source code is governed by a BSD-style license that can be
+  found in the LICENSE file.
+-->
+<node name="/org/chromium/ImageLoader"
+  xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+<interface name="org.chromium.ImageLoaderInterface">
+  <method name="RegisterComponent">
+    <tp:docstring>
+      Registers a component with ImageLoader. ImageLoader will verify
+      the integrity and Google signature of the component and, if and
+      only if valid, copy the component into its internal storage.
+    </tp:docstring>
+    <arg name="name" type="s" direction="in">
+      <tp:docstring>
+        The name of the component.
+      </tp:docstring>
+    </arg>
+    <arg name="version" type="s" direction="in">
+      <tp:docstring>
+        The version of the component.
+      </tp:docstring>
+    </arg>
+    <arg name="component_folder_abs_path" type="s" direction="in">
+      <tp:docstring>
+        The absolute path to the current component folder that ImageLoader
+        will verify and copy the component from.
+      </tp:docstring>
+    </arg>
+    <arg name="success" type="b" direction="out">
+      <tp:docstring>
+        The result of the component registration (success or failure).
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="GetComponentVersion">
+    <tp:docstring>
+      Returns the currently registered version of the given component.
+    </tp:docstring>
+    <arg name="name" type="s" direction="in">
+    <tp:docstring>
+      The name of the component.
+    </tp:docstring>
+    </arg>
+    <arg name="version" type="s" direction="out">
+    <tp:docstring>
+      The returned version of the component.
+    </tp:docstring>
+    </arg>
+  </method>
+  <method name="LoadComponent">
+    <tp:docstring>
+      Loads the component, if and only if the component verifies the
+      signature check, and returns the mount point.
+    </tp:docstring>
+    <arg name="name" type="s" direction="in">
+    <tp:docstring>
+      The name of the component.
+    </tp:docstring>
+    </arg>
+    <arg name="mount_point" type="s" direction="out">
+      <tp:docstring>
+        The mount point of the verified and mounted component.
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="LoadComponentAtPath">
+    <tp:docstring>
+      Loads the component at the given path, if and only if the component
+      verifies the signature check, and returns the mount point.
+    </tp:docstring>
+    <arg name="name" type="s" direction="in">
+      <tp:docstring>
+        The name of the component.
+      </tp:docstring>
+    </arg>
+    <arg name="absolute_path" type="s" direction="in">
+      <tp:docstring>
+        The absolute path where the component is located.
+      </tp:docstring>
+    </arg>
+    <arg name="mount_point" type="s" direction="out">
+      <tp:docstring>
+        The mount point of the verified and mounted component.
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="LoadDlcImage">
+    <tp:docstring>
+      Loads a DLC module image.
+    </tp:docstring>
+    <arg name="id" type="s" direction="in">
+      <tp:docstring>
+        The ID of the DLC module.
+      </tp:docstring>
+    </arg>
+    <arg name="package" type="s" direction="in">
+      <tp:docstring>
+        The package ID of the DLC module.
+      </tp:docstring>
+    </arg>
+    <arg name="a_or_b" type="s" direction="in">
+      <tp:docstring>
+        Whether to load image A or image B ({"Dlc-A", "Dlc-B"}). Each DLC module
+        has two images (A and B) which corresponds to the two rootfs partitions
+        (Root-A and Root-B). e.g. If current active roofs partition is Root-A,
+        then "Dlc-A" should be passed in.
+      </tp:docstring>
+    </arg>
+    <arg name="mount_point" type="s" direction="out">
+      <tp:docstring>
+        The mount point of the verified and mounted image. When successful,
+        |mount_point| is "/run/imageloader/|id|". Otherwise it is empty.
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="LoadDlc">
+    <tp:docstring>
+      Loads a DLC image.
+    </tp:docstring>
+    <arg name="load_request" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (LoadDlcRequest,
+        platform2/system_api/dbus/imageloader/imageloader.proto) of
+        arguments that determine now a DLC gets verified and mounted.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="imageloader::LoadDlcRequest"/>
+    </arg>
+    <arg name="mount_point" type="s" direction="out">
+      <tp:docstring>
+        The mount point of the verified and mounted image. When successful,
+        |mount_point| is "/run/imageloader/|DLC_ID|". Otherwise it is empty.
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="RemoveComponent">
+    <tp:docstring>
+      Remove all versions of a component if removable.
+    </tp:docstring>
+    <arg name="name" type="s" direction="in">
+      <tp:docstring>
+        The name of the component.
+      </tp:docstring>
+    </arg>
+    <arg name="success" type="b" direction="out">
+      <tp:docstring>
+        The result of the component removal (success or failure).
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="GetComponentMetadata">
+    <tp:docstring>
+      Get the metadata for a registered component.
+    </tp:docstring>
+    <arg name="name" type="s" direction="in">
+      <tp:docstring>
+        The name of the component.
+      </tp:docstring>
+    </arg>
+    <arg name="metadata" type="a{ss}" direction="out">
+      <tp:docstring>
+        The metadata associated with this component.
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="UnmountComponent">
+    <tp:docstring>
+      Unmount all mount points of a component.
+    </tp:docstring>
+    <arg name="name" type="s" direction="in">
+      <tp:docstring>
+        The name of the component.
+      </tp:docstring>
+    </arg>
+    <arg name="success" type="b" direction="out">
+      <tp:docstring>
+        The result of the component unmount (success or failure).
+      </tp:docstring>
+    </arg>
+  </method>
+  <method name="UnloadDlcImage">
+    <tp:docstring>
+      Unmounts a DLC image.
+    </tp:docstring>
+    <arg name="id" type="s" direction="in">
+      <tp:docstring>
+        ID of the DLC.
+      </tp:docstring>
+    </arg>
+    <arg name="package" type="s" direction="in">
+      <tp:docstring>
+        Package ID of the DLC.
+      </tp:docstring>
+    </arg>
+    <arg name="success" type="b" direction="out">
+      <tp:docstring>
+        The result of the Dlc unmount (success or failure).
+      </tp:docstring>
+    </arg>
+  </method>
+</interface>
+</node>

@@ -1,0 +1,87 @@
+Patch 23 is from upstream libmtp git master branch commit:
+https://github.com/libmtp/libmtp/commit/fed623576b5f2c78f470c1c5f6d94c8ed754be31
+
+diff --git a/src/libopenusb1-glue.c b/src/libopenusb1-glue.c
+index 8dd9e06..c93750d 100644
+--- a/src/libopenusb1-glue.c
++++ b/src/libopenusb1-glue.c
+@@ -1179,7 +1179,10 @@ ptp_usb_sendreq(PTPParams* params, PTPContainer* req, int dataphase) {
+     usbreq.payload.params.param5 = htod32(req->Param5);
+     /* send it to responder */
+     towrite = PTP_USB_BULK_REQ_LEN - (sizeof (uint32_t)*(5 - req->Nparam));
+-    ptp_init_send_memory_handler(&memhandler, (unsigned char*) &usbreq, towrite);
++    ret = ptp_init_send_memory_handler(&memhandler, (unsigned char*) &usbreq, towrite);
++    if (ret != PTP_RC_OK) {
++        return ret;
++    }
+     ret = ptp_write_func(
+             towrite,
+             &memhandler,
+@@ -1244,7 +1247,10 @@ ptp_usb_senddata(PTPParams* params, PTPContainer* ptp,
+             return PTP_RC_GeneralError;
+         }
+     }
+-    ptp_init_send_memory_handler(&memhandler, (unsigned char *) &usbdata, wlen);
++    ret = ptp_init_send_memory_handler(&memhandler, (unsigned char *) &usbdata, wlen);
++    if (ret != PTP_RC_OK) {
++        return ret;
++    }
+     /* send first part of data */
+     ret = ptp_write_func(wlen, &memhandler, params->data, &written);
+     ptp_exit_send_memory_handler(&memhandler);
+diff --git a/src/libusb-glue.c b/src/libusb-glue.c
+index b770163..1ed57c6 100644
+--- a/src/libusb-glue.c
++++ b/src/libusb-glue.c
+@@ -1171,7 +1171,10 @@ ptp_usb_sendreq (PTPParams* params, PTPContainer* req, int dataphase)
+ 	usbreq.payload.params.param5=htod32(req->Param5);
+ 	/* send it to responder */
+ 	towrite = PTP_USB_BULK_REQ_LEN-(sizeof(uint32_t)*(5-req->Nparam));
+-	ptp_init_send_memory_handler (&memhandler, (unsigned char*)&usbreq, towrite);
++	ret = ptp_init_send_memory_handler (&memhandler, (unsigned char*)&usbreq, towrite);
++	if (ret != PTP_RC_OK) {
++		return ret;
++	}
+ 	ret=ptp_write_func(
+ 		towrite,
+ 		&memhandler,
+@@ -1234,7 +1237,10 @@ ptp_usb_senddata (PTPParams* params, PTPContainer* ptp,
+ 		if (gotlen != datawlen)
+ 			return PTP_RC_GeneralError;
+ 	}
+-	ptp_init_send_memory_handler (&memhandler, (unsigned char *)&usbdata, wlen);
++	ret = ptp_init_send_memory_handler (&memhandler, (unsigned char *)&usbdata, wlen);
++	if (ret != PTP_RC_OK) {
++		return ret;
++	}
+ 	/* send first part of data */
+ 	ret = ptp_write_func(wlen, &memhandler, params->data, &written);
+ 	ptp_exit_send_memory_handler (&memhandler);
+diff --git a/src/libusb1-glue.c b/src/libusb1-glue.c
+index bb61e36..73fe874 100644
+--- a/src/libusb1-glue.c
++++ b/src/libusb1-glue.c
+@@ -1269,7 +1269,10 @@ ptp_usb_sendreq (PTPParams* params, PTPContainer* req, int dataphase)
+ 	usbreq.payload.params.param5=htod32(req->Param5);
+ 	/* send it to responder */
+ 	towrite = PTP_USB_BULK_REQ_LEN-(sizeof(uint32_t)*(5-req->Nparam));
+-	ptp_init_send_memory_handler (&memhandler, (unsigned char*)&usbreq, towrite);
++	ret = ptp_init_send_memory_handler (&memhandler, (unsigned char*)&usbreq, towrite);
++	if (ret != PTP_RC_OK) {
++		return ret;
++	}
+ 	ret=ptp_write_func(
+ 		towrite,
+ 		&memhandler,
+@@ -1332,7 +1335,10 @@ ptp_usb_senddata (PTPParams* params, PTPContainer* ptp,
+ 		if (gotlen != datawlen)
+ 			return PTP_RC_GeneralError;
+ 	}
+-	ptp_init_send_memory_handler (&memhandler, (unsigned char *)&usbdata, wlen);
++	ret = ptp_init_send_memory_handler (&memhandler, (unsigned char *)&usbdata, wlen);
++	if (ret != PTP_RC_OK) {
++		return ret;
++	}
+ 	/* send first part of data */
+ 	ret = ptp_write_func(wlen, &memhandler, params->data, &written);
+ 	ptp_exit_send_memory_handler (&memhandler);

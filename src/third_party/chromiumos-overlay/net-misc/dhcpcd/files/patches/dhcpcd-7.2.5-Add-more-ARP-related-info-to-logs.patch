@@ -1,0 +1,35 @@
+From 82784fbae9d24df30721a5379336feea103669d6 Mon Sep 17 00:00:00 2001
+From: Andrzej Ostruszka <amo@semihalf.com>
+Date: Wed, 29 Sep 2021 16:27:16 +0000
+Subject: [PATCH 19/19] Add more ARP related info to logs
+
+This is just a minor indication whether we are doing unicast "ARP(U)" or
+broadcast "ARP(B)", that can be helpful during log analysis.
+---
+ src/arp.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/arp.c b/src/arp.c
+index c07e0f6c..601b0a64 100644
+--- a/src/arp.c
++++ b/src/arp.c
+@@ -296,12 +296,12 @@ arp_probe1(void *arg)
+ 		tv.tv_nsec = 0;
+ 		eloop_timeout_add_tv(ifp->ctx->eloop, &tv, arp_probed, astate);
+ 	}
+-	loginfox("%s: ARP probing %s (%d of %d), next in %0.1f seconds",
+-	    ifp->name, inet_ntoa(astate->addr),
+-	    astate->probes ? astate->probes : PROBE_NUM, PROBE_NUM,
+-	    timespec_to_double(&tv));
+ 	if (astate->dest_hwlen == ifp->hwlen)
+ 		dest_hwaddr = astate->dest_hwaddr;
++	loginfox("%s: ARP(%c) probing %s (%d of %d), next in %0.1f seconds",
++	    ifp->name, dest_hwaddr ? 'U' : 'B', inet_ntoa(astate->addr),
++	    astate->probes ? astate->probes : PROBE_NUM, PROBE_NUM,
++	    timespec_to_double(&tv));
+ 	if (arp_request(ifp, astate->src_addr.s_addr,
+ 			astate->addr.s_addr, dest_hwaddr) == -1)
+ 		logerr(__func__);
+-- 
+2.33.0.800.g4c38ced690-goog
+

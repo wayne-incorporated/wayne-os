@@ -1,0 +1,30 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+buffers {
+  size_kb: 32768
+  fill_policy: DISCARD
+}
+
+data_sources {
+  config {
+    name: "linux.ftrace"
+    ftrace_config {
+      ftrace_events: "sched/sched_switch"
+      ftrace_events: "sched/sched_process_exit"
+      ftrace_events: "sched/sched_process_free"
+      ftrace_events: "task/task_newtask"
+      ftrace_events: "task/task_rename"
+      preserve_ftrace_buffer: true
+    }
+  }
+}
+
+data_sources: {
+  config {
+    name: "linux.process_stats"
+  }
+}
+
+duration_ms: 10000

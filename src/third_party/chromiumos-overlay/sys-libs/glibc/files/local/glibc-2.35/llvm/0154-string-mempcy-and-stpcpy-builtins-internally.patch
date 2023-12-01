@@ -1,0 +1,36 @@
+From ce6be2f6c1a7a9df2bf64912149ed43b5d287995 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 31 Mar 2022 15:18:02 -0300
+Subject: [PATCH 154/163] string: mempcy and stpcpy builtins internally
+
+---
+ include/string.h | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/include/string.h b/include/string.h
+index 44c4049053..987afbd304 100644
+--- a/include/string.h
++++ b/include/string.h
+@@ -172,13 +172,17 @@ extern __typeof (strnlen) strnlen attribute_hidden;
+ extern __typeof (strsep) strsep attribute_hidden;
+ #endif
+ 
+-#if (!IS_IN (libc) || !defined SHARED) \
+-  && !defined NO_MEMPCPY_STPCPY_REDIRECT
++#if IS_IN (libc) && !defined NO_MEMPCPY_STPCPY_REDIRECT
+ /* Redirect calls to __builtin_mempcpy and __builtin_stpcpy to call
+    __mempcpy and __stpcpy if not inlined.  */
++# ifdef SHARED
++__asm__ ("mempcpy = __GI_mempcpy");
++__asm__ ("stpcpy = __GI_stpcpy");
++# else
+ __asm__ ("mempcpy = __mempcpy");
+ __asm__ ("stpcpy = __stpcpy");
+ #endif
++#endif
+ 
+ extern void *__memcpy_chk (void *__restrict __dest,
+ 			   const void *__restrict __src, size_t __len,
+-- 
+2.37.2
+

@@ -1,0 +1,70 @@
+#
+# Copyright 2018 The ChromiumOS Authors
+#
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+imports:
+  - "include/kernel-info.yaml"
+
+audio_common: &audio_common
+  main:
+    <<: *kernel-info
+    $cras_root: "/etc/cras"
+    $ucm_root: "/usr/share/alsa/ucm"
+    $card: "kblda7219max"
+
+    cras-config-dir: "{{$device-name}}"
+    ucm-suffix: "{{$device-name}}"
+
+    $cras-source: "{{cras-config-dir}}/audio/cras-config"
+    $cras-dest: "{{$cras_root}}/{{cras-config-dir}}"
+    $ucm-source: "{{cras-config-dir}}/audio/ucm-config{{$ucm-source-suffix}}"
+    $ucm-dest: "{{$ucm_root}}/{{$card}}.{{ucm-suffix}}"
+
+    files:
+      - source: "{{$cras-source}}/{{$card}}"
+        destination: "{{$cras-dest}}/{{$card}}"
+      - source: "{{$cras-source}}/aec.ini"
+        destination: "{{$cras-dest}}/aec.ini"
+      - source: "{{$cras-source}}/apm.ini"
+        destination: "{{$cras-dest}}/apm.ini"
+      - source: "{{$cras-source}}/board.ini"
+        destination: "{{$cras-dest}}/board.ini"
+      - source: "{{$cras-source}}/dsp.ini"
+        destination: "{{$cras-dest}}/dsp.ini"
+      - source: "{{$ucm-source}}/HiFi{{$kernel-specific-suffix}}.conf"
+        destination: "{{$ucm-dest}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card}}.conf"
+        destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}.conf"
+
+device_config: &device_config
+  name: "{{$device-name}}"
+  identity:
+    platform-name: "Kalista"
+    frid: "Google_{{$fw-name}}"
+    sku-id: "{{$sku-id}}"
+  hardware-properties:
+    form-factor: CHROMEBASE
+    psu-type: "AC_only"
+  firmware:
+    no-firmware: True
+  test-label: "{{$device-name}}"
+  audio:
+    <<: *audio_common
+    $ucm-source-suffix: ""
+  power:
+    suspend-to-idle: "0"
+    # Max brightness is 7500, as reported by
+    # /sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/max_brightness
+    min-visible-backlight-level: "2250"
+    turn-off-screen-timeout-ms: "0"
+
+
+chromeos:
+  devices:
+    - $device-name: "karma"
+      $fw-name: "Karma"
+      skus:
+        - $sku-id: 0x7
+          config: *device_config

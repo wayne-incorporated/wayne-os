@@ -1,0 +1,605 @@
+commit 22eb1dae3fb20ca8ada865de1d95baab0e08a060
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Sun Feb 13 10:23:32 2022 -0700
+
+    Revert "[AArch64] Adds SUBS and ADDS instructions to the MIPeepholeOpt."
+    
+    This reverts commit af45d0fd94b21620b61c8c4900b81486fd85aeb7.
+    
+    This causes assertions failures when compiling the Linux kernel. See
+    https://reviews.llvm.org/D118663 for a reduced reproducer.
+
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index 64336c4489c4..790078496462 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -1547,6 +1547,27 @@ findCondCodeUseOperandIdxForBranchOrSelect(const MachineInstr &Instr) {
+   }
+ }
+ 
++namespace {
++
++struct UsedNZCV {
++  bool N = false;
++  bool Z = false;
++  bool C = false;
++  bool V = false;
++
++  UsedNZCV() = default;
++
++  UsedNZCV &operator|=(const UsedNZCV &UsedFlags) {
++    this->N |= UsedFlags.N;
++    this->Z |= UsedFlags.Z;
++    this->C |= UsedFlags.C;
++    this->V |= UsedFlags.V;
++    return *this;
++  }
++};
++
++} // end anonymous namespace
++
+ /// Find a condition code used by the instruction.
+ /// Returns AArch64CC::Invalid if either the instruction does not use condition
+ /// codes or we don't optimize CmpInstr in the presence of such instructions.
+@@ -1601,15 +1622,15 @@ static UsedNZCV getUsedNZCV(AArch64CC::CondCode CC) {
+   return UsedFlags;
+ }
+ 
+-/// \returns Conditions flags used after \p CmpInstr in its MachineBB if NZCV
+-/// flags are not alive in successors of the same \p CmpInstr and \p MI parent.
+-/// \returns None otherwise.
++/// \returns Conditions flags used after \p CmpInstr in its MachineBB if they
++/// are not containing C or V flags and NZCV flags are not alive in successors
++/// of the same \p CmpInstr and \p MI parent. \returns None otherwise.
+ ///
+ /// Collect instructions using that flags in \p CCUseInstrs if provided.
+-Optional<UsedNZCV>
+-llvm::examineCFlagsUse(MachineInstr &MI, MachineInstr &CmpInstr,
+-                       const TargetRegisterInfo &TRI,
+-                       SmallVectorImpl<MachineInstr *> *CCUseInstrs) {
++static Optional<UsedNZCV>
++examineCFlagsUse(MachineInstr &MI, MachineInstr &CmpInstr,
++                 const TargetRegisterInfo &TRI,
++                 SmallVectorImpl<MachineInstr *> *CCUseInstrs = nullptr) {
+   MachineBasicBlock *CmpParent = CmpInstr.getParent();
+   if (MI.getParent() != CmpParent)
+     return None;
+@@ -1631,6 +1652,8 @@ llvm::examineCFlagsUse(MachineInstr &MI, MachineInstr &CmpInstr,
+     if (Instr.modifiesRegister(AArch64::NZCV, &TRI))
+       break;
+   }
++  if (NZCVUsedAfterCmp.C || NZCVUsedAfterCmp.V)
++    return None;
+   return NZCVUsedAfterCmp;
+ }
+ 
+@@ -1661,8 +1684,7 @@ static bool canInstrSubstituteCmpInstr(MachineInstr &MI, MachineInstr &CmpInstr,
+   if (!isADDSRegImm(CmpOpcode) && !isSUBSRegImm(CmpOpcode))
+     return false;
+ 
+-  Optional<UsedNZCV> NZVCUsed = examineCFlagsUse(MI, CmpInstr, TRI);
+-  if (!NZVCUsed || NZVCUsed->C || NZVCUsed->V)
++  if (!examineCFlagsUse(MI, CmpInstr, TRI))
+     return false;
+ 
+   AccessKind AccessToCheck = AK_Write;
+@@ -1751,7 +1773,7 @@ static bool canCmpInstrBeRemoved(MachineInstr &MI, MachineInstr &CmpInstr,
+       examineCFlagsUse(MI, CmpInstr, TRI, &CCUseInstrs);
+   // Condition flags are not used in CmpInstr basic block successors and only
+   // Z or N flags allowed to be used after CmpInstr within its basic block
+-  if (!NZCVUsedAfterCmp || NZCVUsedAfterCmp->C || NZCVUsedAfterCmp->V)
++  if (!NZCVUsedAfterCmp)
+     return false;
+   // Z or N flag used after CmpInstr must correspond to the flag used in MI
+   if ((MIUsedNZCV.Z && NZCVUsedAfterCmp->N) ||
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.h b/llvm/lib/Target/AArch64/AArch64InstrInfo.h
+index 0da812b1363c..1054bea40e68 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.h
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.h
+@@ -356,33 +356,6 @@ private:
+                           const MachineRegisterInfo *MRI) const;
+ };
+ 
+-struct UsedNZCV {
+-  bool N = false;
+-  bool Z = false;
+-  bool C = false;
+-  bool V = false;
+-
+-  UsedNZCV() = default;
+-
+-  UsedNZCV &operator|=(const UsedNZCV &UsedFlags) {
+-    this->N |= UsedFlags.N;
+-    this->Z |= UsedFlags.Z;
+-    this->C |= UsedFlags.C;
+-    this->V |= UsedFlags.V;
+-    return *this;
+-  }
+-};
+-
+-/// \returns Conditions flags used after \p CmpInstr in its MachineBB if  NZCV
+-/// flags are not alive in successors of the same \p CmpInstr and \p MI parent.
+-/// \returns None otherwise.
+-///
+-/// Collect instructions using that flags in \p CCUseInstrs if provided.
+-Optional<UsedNZCV>
+-examineCFlagsUse(MachineInstr &MI, MachineInstr &CmpInstr,
+-                 const TargetRegisterInfo &TRI,
+-                 SmallVectorImpl<MachineInstr *> *CCUseInstrs = nullptr);
+-
+ /// Return true if there is an instruction /after/ \p DefMI and before \p UseMI
+ /// which either reads or clobbers NZCV.
+ bool isNZCVTouchedInInstructionRange(const MachineInstr &DefMI,
+diff --git a/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp b/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp
+index 6b593274ab2f..1fc5617b49f6 100644
+--- a/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp
++++ b/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp
+@@ -60,13 +60,12 @@ struct AArch64MIPeepholeOpt : public MachineFunctionPass {
+   MachineLoopInfo *MLI;
+   MachineRegisterInfo *MRI;
+ 
+-  using OpcodePair = std::pair<unsigned, unsigned>;
+   template <typename T>
+   using SplitAndOpcFunc =
+-      std::function<Optional<OpcodePair>(T, unsigned, T &, T &)>;
++      std::function<Optional<unsigned>(T, unsigned, T &, T &)>;
+   using BuildMIFunc =
+-      std::function<void(MachineInstr &, OpcodePair, unsigned, unsigned,
+-                         Register, Register, Register)>;
++      std::function<void(MachineInstr &, unsigned, unsigned, unsigned, Register,
++                         Register, Register)>;
+ 
+   /// For instructions where an immediate operand could be split into two
+   /// separate immediate instructions, use the splitTwoPartImm two handle the
+@@ -94,10 +93,6 @@ struct AArch64MIPeepholeOpt : public MachineFunctionPass {
+   bool visitADDSUB(unsigned PosOpc, unsigned NegOpc, MachineInstr &MI,
+                    SmallSetVector<MachineInstr *, 8> &ToBeRemoved);
+   template <typename T>
+-  bool visitADDSSUBS(OpcodePair PosOpcs, OpcodePair NegOpcs, MachineInstr &MI,
+-                     SmallSetVector<MachineInstr *, 8> &ToBeRemoved);
+-
+-  template <typename T>
+   bool visitAND(unsigned Opc, MachineInstr &MI,
+                 SmallSetVector<MachineInstr *, 8> &ToBeRemoved);
+   bool visitORR(MachineInstr &MI,
+@@ -176,20 +171,20 @@ bool AArch64MIPeepholeOpt::visitAND(
+ 
+   return splitTwoPartImm<T>(
+       MI, ToBeRemoved,
+-      [Opc](T Imm, unsigned RegSize, T &Imm0, T &Imm1) -> Optional<OpcodePair> {
++      [Opc](T Imm, unsigned RegSize, T &Imm0, T &Imm1) -> Optional<unsigned> {
+         if (splitBitmaskImm(Imm, RegSize, Imm0, Imm1))
+-          return std::make_pair(Opc, Opc);
++          return Opc;
+         return None;
+       },
+-      [&TII = TII](MachineInstr &MI, OpcodePair Opcode, unsigned Imm0,
++      [&TII = TII](MachineInstr &MI, unsigned Opcode, unsigned Imm0,
+                    unsigned Imm1, Register SrcReg, Register NewTmpReg,
+                    Register NewDstReg) {
+         DebugLoc DL = MI.getDebugLoc();
+         MachineBasicBlock *MBB = MI.getParent();
+-        BuildMI(*MBB, MI, DL, TII->get(Opcode.first), NewTmpReg)
++        BuildMI(*MBB, MI, DL, TII->get(Opcode), NewTmpReg)
+             .addReg(SrcReg)
+             .addImm(Imm0);
+-        BuildMI(*MBB, MI, DL, TII->get(Opcode.second), NewDstReg)
++        BuildMI(*MBB, MI, DL, TII->get(Opcode), NewDstReg)
+             .addReg(NewTmpReg)
+             .addImm(Imm1);
+       });
+@@ -278,64 +273,23 @@ bool AArch64MIPeepholeOpt::visitADDSUB(
+   return splitTwoPartImm<T>(
+       MI, ToBeRemoved,
+       [PosOpc, NegOpc](T Imm, unsigned RegSize, T &Imm0,
+-                       T &Imm1) -> Optional<OpcodePair> {
++                       T &Imm1) -> Optional<unsigned> {
+         if (splitAddSubImm(Imm, RegSize, Imm0, Imm1))
+-          return std::make_pair(PosOpc, PosOpc);
++          return PosOpc;
+         if (splitAddSubImm(-Imm, RegSize, Imm0, Imm1))
+-          return std::make_pair(NegOpc, NegOpc);
++          return NegOpc;
+         return None;
+       },
+-      [&TII = TII](MachineInstr &MI, OpcodePair Opcode, unsigned Imm0,
+-                   unsigned Imm1, Register SrcReg, Register NewTmpReg,
+-                   Register NewDstReg) {
+-        DebugLoc DL = MI.getDebugLoc();
+-        MachineBasicBlock *MBB = MI.getParent();
+-        BuildMI(*MBB, MI, DL, TII->get(Opcode.first), NewTmpReg)
+-            .addReg(SrcReg)
+-            .addImm(Imm0)
+-            .addImm(12);
+-        BuildMI(*MBB, MI, DL, TII->get(Opcode.second), NewDstReg)
+-            .addReg(NewTmpReg)
+-            .addImm(Imm1)
+-            .addImm(0);
+-      });
+-}
+-
+-template <typename T>
+-bool AArch64MIPeepholeOpt::visitADDSSUBS(
+-    OpcodePair PosOpcs, OpcodePair NegOpcs, MachineInstr &MI,
+-    SmallSetVector<MachineInstr *, 8> &ToBeRemoved) {
+-  // Try the same transformation as ADDSUB but with additional requirement
+-  // that the condition code usages are only for Equal and Not Equal
+-  return splitTwoPartImm<T>(
+-      MI, ToBeRemoved,
+-      [PosOpcs, NegOpcs, &MI, &TRI = TRI, &MRI = MRI](
+-          T Imm, unsigned RegSize, T &Imm0, T &Imm1) -> Optional<OpcodePair> {
+-        OpcodePair OP;
+-        if (splitAddSubImm(Imm, RegSize, Imm0, Imm1))
+-          OP = PosOpcs;
+-        else if (splitAddSubImm(-Imm, RegSize, Imm0, Imm1))
+-          OP = NegOpcs;
+-        else
+-          return None;
+-        // Check conditional uses last since it is expensive for scanning
+-        // proceeding instructions
+-        MachineInstr &SrcMI = *MRI->getUniqueVRegDef(MI.getOperand(1).getReg());
+-        Optional<UsedNZCV> NZCVUsed = examineCFlagsUse(SrcMI, MI, *TRI);
+-        if (!NZCVUsed || NZCVUsed->C || NZCVUsed->V)
+-          return None;
+-        return OP;
+-      },
+-      [&TII = TII](MachineInstr &MI, OpcodePair Opcode, unsigned Imm0,
++      [&TII = TII](MachineInstr &MI, unsigned Opcode, unsigned Imm0,
+                    unsigned Imm1, Register SrcReg, Register NewTmpReg,
+                    Register NewDstReg) {
+         DebugLoc DL = MI.getDebugLoc();
+         MachineBasicBlock *MBB = MI.getParent();
+-        BuildMI(*MBB, MI, DL, TII->get(Opcode.first), NewTmpReg)
++        BuildMI(*MBB, MI, DL, TII->get(Opcode), NewTmpReg)
+             .addReg(SrcReg)
+             .addImm(Imm0)
+             .addImm(12);
+-        BuildMI(*MBB, MI, DL, TII->get(Opcode.second), NewDstReg)
++        BuildMI(*MBB, MI, DL, TII->get(Opcode), NewDstReg)
+             .addReg(NewTmpReg)
+             .addImm(Imm1)
+             .addImm(0);
+@@ -403,49 +357,32 @@ bool AArch64MIPeepholeOpt::splitTwoPartImm(
+   // number since it was sign extended when we assign to the 64-bit Imm.
+   if (SubregToRegMI)
+     Imm &= 0xFFFFFFFF;
+-  OpcodePair Opcode;
++  unsigned Opcode;
+   if (auto R = SplitAndOpc(Imm, RegSize, Imm0, Imm1))
+     Opcode = R.getValue();
+   else
+     return false;
+ 
+-  // Create new MIs using the first and second opcodes. Opcodes might differ for
+-  // flag setting operations that should only set flags on second instruction.
+-  // NewTmpReg = Opcode.first SrcReg Imm0
+-  // NewDstReg = Opcode.second NewTmpReg Imm1
+-
+-  // Determine register classes for destinations and register operands
++  // Create new ADD/SUB MIs.
+   MachineFunction *MF = MI.getMF();
+-  const TargetRegisterClass *FirstInstrDstRC =
+-      TII->getRegClass(TII->get(Opcode.first), 0, TRI, *MF);
+-  const TargetRegisterClass *FirstInstrOperandRC =
+-      TII->getRegClass(TII->get(Opcode.first), 1, TRI, *MF);
+-  const TargetRegisterClass *SecondInstrDstRC =
+-      (Opcode.first == Opcode.second)
+-          ? FirstInstrDstRC
+-          : TII->getRegClass(TII->get(Opcode.second), 0, TRI, *MF);
+-  const TargetRegisterClass *SecondInstrOperandRC =
+-      (Opcode.first == Opcode.second)
+-          ? FirstInstrOperandRC
+-          : TII->getRegClass(TII->get(Opcode.second), 1, TRI, *MF);
+-
+-  // Get old registers destinations and new register destinations
++  const TargetRegisterClass *RC =
++      TII->getRegClass(TII->get(Opcode), 0, TRI, *MF);
++  const TargetRegisterClass *ORC =
++      TII->getRegClass(TII->get(Opcode), 1, TRI, *MF);
+   Register DstReg = MI.getOperand(0).getReg();
+   Register SrcReg = MI.getOperand(1).getReg();
+-  Register NewTmpReg = MRI->createVirtualRegister(FirstInstrDstRC);
+-  Register NewDstReg = MRI->createVirtualRegister(SecondInstrDstRC);
++  Register NewTmpReg = MRI->createVirtualRegister(RC);
++  Register NewDstReg = MRI->createVirtualRegister(RC);
+ 
+-  // Constrain registers based on their new uses
+-  MRI->constrainRegClass(SrcReg, FirstInstrOperandRC);
+-  MRI->constrainRegClass(NewTmpReg, SecondInstrOperandRC);
++  MRI->constrainRegClass(SrcReg, RC);
++  MRI->constrainRegClass(NewTmpReg, ORC);
+   MRI->constrainRegClass(NewDstReg, MRI->getRegClass(DstReg));
+ 
+-  // Call the delegating operation to build the instruction
+   BuildInstr(MI, Opcode, Imm0, Imm1, SrcReg, NewTmpReg, NewDstReg);
+ 
++  MRI->replaceRegWith(DstReg, NewDstReg);
+   // replaceRegWith changes MI's definition register. Keep it for SSA form until
+   // deleting MI.
+-  MRI->replaceRegWith(DstReg, NewDstReg);
+   MI.getOperand(0).setReg(DstReg);
+ 
+   // Record the MIs need to be removed.
+@@ -502,26 +439,6 @@ bool AArch64MIPeepholeOpt::runOnMachineFunction(MachineFunction &MF) {
+         Changed = visitADDSUB<uint64_t>(AArch64::SUBXri, AArch64::ADDXri, MI,
+                                         ToBeRemoved);
+         break;
+-      case AArch64::ADDSWrr:
+-        Changed = visitADDSSUBS<uint32_t>({AArch64::ADDWri, AArch64::ADDSWri},
+-                                          {AArch64::SUBWri, AArch64::SUBSWri},
+-                                          MI, ToBeRemoved);
+-        break;
+-      case AArch64::SUBSWrr:
+-        Changed = visitADDSSUBS<uint32_t>({AArch64::SUBWri, AArch64::SUBSWri},
+-                                          {AArch64::ADDWri, AArch64::ADDSWri},
+-                                          MI, ToBeRemoved);
+-        break;
+-      case AArch64::ADDSXrr:
+-        Changed = visitADDSSUBS<uint64_t>({AArch64::ADDXri, AArch64::ADDSXri},
+-                                          {AArch64::SUBXri, AArch64::SUBSXri},
+-                                          MI, ToBeRemoved);
+-        break;
+-      case AArch64::SUBSXrr:
+-        Changed = visitADDSSUBS<uint64_t>({AArch64::SUBXri, AArch64::SUBSXri},
+-                                          {AArch64::ADDXri, AArch64::ADDSXri},
+-                                          MI, ToBeRemoved);
+-        break;
+       }
+     }
+   }
+diff --git a/llvm/test/CodeGen/AArch64/addsub.ll b/llvm/test/CodeGen/AArch64/addsub.ll
+index 6d150025b368..b95c15ac6d07 100644
+--- a/llvm/test/CodeGen/AArch64/addsub.ll
++++ b/llvm/test/CodeGen/AArch64/addsub.ll
+@@ -406,216 +406,4 @@ define i64 @addl_0x80000000(i64 %a) {
+   ret i64 %b
+ }
+ 
+-; ADDS and SUBS Optimizations
+-; Checks with all types first, then checks that only EQ and NE optimize
+-define i1 @eq_i(i32 %0) {
+-; CHECK-LABEL: eq_i:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    sub w8, w0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmp w8, #273
+-; CHECK-NEXT:    cset w0, eq
+-; CHECK-NEXT:    ret
+-  %2 = icmp eq i32 %0, 1118481
+-  ret i1 %2
+-}
+-
+-define i1 @eq_l(i64 %0) {
+-; CHECK-LABEL: eq_l:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    sub x8, x0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmp x8, #273
+-; CHECK-NEXT:    cset w0, eq
+-; CHECK-NEXT:    ret
+-  %2 = icmp eq i64 %0, 1118481
+-  ret i1 %2
+-}
+-
+-define i1 @ne_i(i32 %0) {
+-; CHECK-LABEL: ne_i:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    sub w8, w0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmp w8, #273
+-; CHECK-NEXT:    cset w0, ne
+-; CHECK-NEXT:    ret
+-  %2 = icmp ne i32 %0, 1118481
+-  ret i1 %2
+-}
+-
+-define i1 @ne_l(i64 %0) {
+-; CHECK-LABEL: ne_l:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    sub x8, x0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmp x8, #273
+-; CHECK-NEXT:    cset w0, ne
+-; CHECK-NEXT:    ret
+-  %2 = icmp ne i64 %0, 1118481
+-  ret i1 %2
+-}
+-
+-define i1 @eq_in(i32 %0) {
+-; CHECK-LABEL: eq_in:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    add w8, w0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmn w8, #273
+-; CHECK-NEXT:    cset w0, eq
+-; CHECK-NEXT:    ret
+-  %2 = icmp eq i32 %0, -1118481
+-  ret i1 %2
+-}
+-
+-define i1 @eq_ln(i64 %0) {
+-; CHECK-LABEL: eq_ln:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    add x8, x0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmn x8, #273
+-; CHECK-NEXT:    cset w0, eq
+-; CHECK-NEXT:    ret
+-  %2 = icmp eq i64 %0, -1118481
+-  ret i1 %2
+-}
+-
+-define i1 @ne_in(i32 %0) {
+-; CHECK-LABEL: ne_in:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    add w8, w0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmn w8, #273
+-; CHECK-NEXT:    cset w0, ne
+-; CHECK-NEXT:    ret
+-  %2 = icmp ne i32 %0, -1118481
+-  ret i1 %2
+-}
+-
+-define i1 @ne_ln(i64 %0) {
+-; CHECK-LABEL: ne_ln:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    add x8, x0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    cmn x8, #273
+-; CHECK-NEXT:    cset w0, ne
+-; CHECK-NEXT:    ret
+-  %2 = icmp ne i64 %0, -1118481
+-  ret i1 %2
+-}
+-
+-define i1 @reject_eq(i32 %0) {
+-; CHECK-LABEL: reject_eq:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    mov w8, #51712
+-; CHECK-NEXT:    movk w8, #15258, lsl #16
+-; CHECK-NEXT:    cmp w0, w8
+-; CHECK-NEXT:    cset w0, eq
+-; CHECK-NEXT:    ret
+-  %2 = icmp eq i32 %0, 1000000000
+-  ret i1 %2
+-}
+-
+-define i1 @reject_non_eqne_csinc(i32 %0) {
+-; CHECK-LABEL: reject_non_eqne_csinc:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    mov w8, #4369
+-; CHECK-NEXT:    movk w8, #17, lsl #16
+-; CHECK-NEXT:    cmp w0, w8
+-; CHECK-NEXT:    cset w0, lo
+-; CHECK-NEXT:    ret
+-  %2 = icmp ult i32 %0, 1118481
+-  ret i1 %2
+-}
+-
+-define i32 @accept_csel(i32 %0) {
+-; CHECK-LABEL: accept_csel:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    sub w9, w0, #273, lsl #12 // =1118208
+-; CHECK-NEXT:    mov w8, #17
+-; CHECK-NEXT:    cmp w9, #273
+-; CHECK-NEXT:    mov w9, #11
+-; CHECK-NEXT:    csel w0, w9, w8, eq
+-; CHECK-NEXT:    ret
+-  %2 = icmp eq i32 %0, 1118481
+-  %3 = select i1 %2, i32 11, i32 17
+-  ret i32 %3
+-}
+-
+-define i32 @reject_non_eqne_csel(i32 %0) {
+-; CHECK-LABEL: reject_non_eqne_csel:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    mov w8, #4369
+-; CHECK-NEXT:    mov w9, #11
+-; CHECK-NEXT:    movk w8, #17, lsl #16
+-; CHECK-NEXT:    cmp w0, w8
+-; CHECK-NEXT:    mov w8, #17
+-; CHECK-NEXT:    csel w0, w9, w8, lo
+-; CHECK-NEXT:    ret
+-  %2 = icmp ult i32 %0, 1118481
+-  %3 = select i1 %2, i32 11, i32 17
+-  ret i32 %3
+-}
+-
+-declare void @fooy()
+-
+-define void @accept_branch(i32 %0) {
+-; CHECK-LABEL: accept_branch:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    sub w8, w0, #291, lsl #12 // =1191936
+-; CHECK-NEXT:    cmp w8, #1110
+-; CHECK-NEXT:    b.eq .LBB32_2
+-; CHECK-NEXT:  // %bb.1:
+-; CHECK-NEXT:    ret
+-; CHECK-NEXT:  .LBB32_2:
+-; CHECK-NEXT:    b fooy
+-  %2 = icmp ne i32 %0, 1193046
+-  br i1 %2, label %4, label %3
+-3:                                                ; preds = %1
+-  tail call void @fooy()
+-  br label %4
+-4:                                                ; preds = %3, %1
+-  ret void
+-}
+-
+-define void @reject_non_eqne_branch(i32 %0) {
+-; CHECK-LABEL: reject_non_eqne_branch:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    mov w8, #13398
+-; CHECK-NEXT:    movk w8, #18, lsl #16
+-; CHECK-NEXT:    cmp w0, w8
+-; CHECK-NEXT:    b.le .LBB33_2
+-; CHECK-NEXT:  // %bb.1:
+-; CHECK-NEXT:    ret
+-; CHECK-NEXT:  .LBB33_2:
+-; CHECK-NEXT:    b fooy
+-  %2 = icmp sgt i32 %0, 1193046
+-  br i1 %2, label %4, label %3
+-3:                                                ; preds = %1
+-  tail call void @fooy()
+-  br label %4
+-4:                                                ; preds = %3, %1
+-  ret void
+-}
+-
+-define i32 @reject_multiple_usages(i32 %0) {
+-; CHECK-LABEL: reject_multiple_usages:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    mov w8, #4369
+-; CHECK-NEXT:    mov w9, #3
+-; CHECK-NEXT:    movk w8, #17, lsl #16
+-; CHECK-NEXT:    mov w10, #17
+-; CHECK-NEXT:    cmp w0, w8
+-; CHECK-NEXT:    mov w8, #9
+-; CHECK-NEXT:    mov w11, #12
+-; CHECK-NEXT:    csel w8, w8, w9, eq
+-; CHECK-NEXT:    csel w9, w11, w10, hi
+-; CHECK-NEXT:    add w8, w8, w9
+-; CHECK-NEXT:    mov w9, #53312
+-; CHECK-NEXT:    movk w9, #2, lsl #16
+-; CHECK-NEXT:    cmp w0, w9
+-; CHECK-NEXT:    mov w9, #26304
+-; CHECK-NEXT:    movk w9, #1433, lsl #16
+-; CHECK-NEXT:    csel w0, w8, w9, hi
+-; CHECK-NEXT:    ret
+-  %2 = icmp eq i32 %0, 1118481
+-  %3 = icmp ugt i32 %0, 1118481
+-  %4 = select i1 %2, i32 9, i32 3
+-  %5 = select i1 %3, i32 12, i32 17
+-  %6 = add i32 %4, %5
+-  %7 = icmp ugt i32 %0, 184384
+-  %8 = select i1 %7, i32 %6, i32 93939392
+-  ret i32 %8
+-}
++; TODO: adds/subs
+diff --git a/llvm/test/CodeGen/AArch64/arm64-instruction-mix-remarks.ll b/llvm/test/CodeGen/AArch64/arm64-instruction-mix-remarks.ll
+index 0c2cf1778722..f5a4a45adbc0 100644
+--- a/llvm/test/CodeGen/AArch64/arm64-instruction-mix-remarks.ll
++++ b/llvm/test/CodeGen/AArch64/arm64-instruction-mix-remarks.ll
+@@ -12,8 +12,8 @@
+ ; YAML:      - INST_add:    '2'
+ ; YAML:      - INST_b.:     '1'
+ ; YAML:      - INST_ldr:    '1'
+-; YAML:      - INST_orr:    '1'
+-; YAML:      - INST_sub:   '1'
++; YAML:      - INST_movk:   '1'
++; YAML:      - INST_movz:   '1'
+ ; YAML:      - INST_subs:   '1'
+ 
+ ; YAML:      Name:            InstructionMix
+@@ -27,12 +27,13 @@
+ define i32 @foo(i32* %ptr, i32 %x, i64 %y) !dbg !3 {
+ ; CHECK-LABEL: foo:
+ ; CHECK:       ; %bb.0: ; %entry
+-; CHECK-NEXT:    ldr w9, [x0]
++; CHECK-NEXT:    ldr w10, [x0]
+ ; CHECK-NEXT:    mov x8, x0
+-; CHECK-NEXT:    add w0, w9, w1
+-; CHECK-NEXT:    add x9, x0, x2
+-; CHECK-NEXT:    sub x9, x9, #244, lsl #12 ; =999424
+-; CHECK-NEXT:    cmp x9, #575
++; CHECK-NEXT:    mov w9, #16959
++; CHECK-NEXT:    movk w9, #15, lsl #16
++; CHECK-NEXT:    add w0, w10, w1
++; CHECK-NEXT:    add x10, x0, x2
++; CHECK-NEXT:    cmp x10, x9
+ ; CHECK-NEXT:    b.eq LBB0_2
+ ; CHECK-NEXT:  ; %bb.1: ; %else
+ ; CHECK-NEXT:    mul w9, w0, w1

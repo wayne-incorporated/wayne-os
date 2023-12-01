@@ -1,0 +1,61 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":libchromeos-ui" ]
+  if (use.test) {
+    deps += [ ":libchromeos-ui-test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+  ]
+  include_dirs = [ "." ]
+}
+
+# Sources shared among unit test and shared_library.
+# If the test directly depends on shared_library, it refers .so file under the
+# system path. However the file is not updated with latest change before test
+# runs although it's built under the output directory. (crbug.com/930484)
+source_set("libchromeos-ui_source_set") {
+  configs += [
+    # Use -fPIC so this code can be linked into a shared library.
+    "//common-mk:pic",
+    ":target_defaults",
+  ]
+  sources = [
+    "chromeos/ui/chromium_command_builder.cc",
+    "chromeos/ui/util.cc",
+  ]
+}
+
+shared_library("libchromeos-ui") {
+  configs += [ ":target_defaults" ]
+  deps = [ ":libchromeos-ui_source_set" ]
+}
+
+if (use.test) {
+  executable("libchromeos-ui-test") {
+    sources = [
+      "chromeos/ui/chromium_command_builder_test.cc",
+      "chromeos/ui/util_test.cc",
+    ]
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libchromeos-ui_source_set",
+      "//common-mk/testrunner",
+    ]
+  }
+}

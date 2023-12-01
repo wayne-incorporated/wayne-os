@@ -1,0 +1,63 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This board only supports a single config, defined below, as it is a
+# migrated pre-unibuild device.
+device-config: &device_config
+  brand-code: XWJE
+  demo-mode:
+    highlights-extension-id: "gjeelkjnolfmhphfhhjokaijbicopfln"
+    screensaver-extension-id: "bnabjkecnachpogjlfilfcnlpcmacglh"
+  firmware:
+    build-targets:
+      coreboot: atlas
+      depthcharge: atlas
+      libpayload: atlas
+      ec: atlas
+    image-name: atlas
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    psu-type: battery
+  identity:
+    platform-name: Poppy
+    frid: "Google_Atlas"
+  camera:
+    count: 1
+    devices:
+      - interface: "mipi"
+        facing: "front"
+        orientation: 0
+        flags:
+          support-autofocus: True
+          support-1080p: True
+  name: atlas
+  power:
+    als-smoothing-constant: '0.3'
+    battery-stabilized-after-startup-ms: '25000'
+    disable-dark-resume: '0'
+    internal-backlight-als-steps: |-
+      20.24 20.24 -1 15
+      30.02 30.02 8 40
+      38.30 38.30 25 100
+      48.54 48.54 70 250
+      61.76 61.76 180 360
+      73.08 73.08 250 500
+      87.58 87.58 350 1700
+      95.16 95.16 1100 6750
+      100.0 100.0 5250 -1
+    internal-backlight-no-als-ac-brightness: '48.54'
+    internal-backlight-no-als-battery-brightness: '48.54'
+    keyboard-backlight-als-steps: |-
+      40.0 -1 30
+      0.0 10 -1
+    low-battery-shutdown-percent: '3.0'
+    adaptive-charging-hold-delta-percent: '3.0'
+    suspend-to-idle: '1'
+    wake-on-dp: '1'
+
+# Required dunder for chromeos-config to support a single device.
+chromeos:
+  devices:
+    - skus:
+        - config: *device_config

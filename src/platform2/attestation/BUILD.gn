@@ -1,0 +1,448 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# TODO: Fix the visibility on these shared libs.
+# gnlint: disable=GnLintVisibilityFlags
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":attestation_client",
+    ":attestationd",
+    ":install_init",
+    ":install_minijail_conf",
+    ":install_policy",
+    ":install_systemd",
+    ":libattestation",
+    ":pca_agent_client",
+    ":pca_agentd",
+  ]
+  if (use.test) {
+    deps += [ ":attestation_testrunner" ]
+  }
+}
+
+config("local_proto_include") {
+  # This config is used when any build target used the local protobufs.
+  # The local protobuf used some other protos in system_api, so we'll need
+  # to fix the include path so that it builds correctly.
+  include_dirs = [ "${sysroot}/usr/include/attestation/proto_bindings/" ]
+}
+
+config("local_print_proto_include") {
+  # This config is used when any build target used the print_proto.
+  include_dirs = [ "${target_gen_dir}/.." ]
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    # This is a list of pkg-config dependencies
+    "libbrillo",
+    "libchrome",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+  defines = [
+    "USE_TPM1=${use.tpm}",
+    "USE_TPM2=${use.tpm2}",
+    "USE_TPM2_SIMULATOR=${use.tpm2_simulator}",
+    "USE_TPM_DYNAMIC=${use.tpm_dynamic}",
+    "USE_GENERIC_TPM2=${use.generic_tpm2}",
+    "USE_CR50_ONBOARD=${use.cr50_onboard}",
+    "USE_TI50_ONBOARD=${use.ti50_onboard}",
+  ]
+  cflags = [ "-Wconsumed" ]
+}
+
+# A library for just the protobufs.
+proto_library("proto_library_proto") {
+  proto_in_dir = "common"
+  proto_out_dir = "include/attestation/common"
+  proto_lib_dirs = [ "${sysroot}/usr/include/chromeos/dbus/attestation/" ]
+  sources = [ "${proto_in_dir}/database.proto" ]
+  standalone = true
+
+  # Use -fPIC so this code can be linked into a shared library.
+  use_pic = true
+  configs = [ ":local_proto_include" ]
+}
+
+action("print_proto_library") {
+  dbus_proto_path = "${sysroot}/usr/include/chromeos/dbus/attestation"
+  script = "../libhwsec-foundation/utility/proto_print.py"
+  inputs = [
+    "${dbus_proto_path}/attestation_ca.proto",
+    "${dbus_proto_path}/interface.proto",
+    "${dbus_proto_path}/keystore.proto",
+  ]
+  outputs = [
+    "${target_gen_dir}/common/print_attestation_ca_proto.cc",
+    "${target_gen_dir}/common/print_interface_proto.cc",
+    "${target_gen_dir}/common/print_keystore_proto.cc",
+  ]
+  args = [
+           "--subdir",
+           "common",
+           "--proto-include",
+           "attestation/proto_bindings",
+           "--output-dir",
+           "${target_gen_dir}/common",
+         ] + inputs
+}
+
+source_set("proto_library") {
+  sources = get_target_outputs(":print_proto_library")
+  configs += [
+    "//common-mk:nouse_thin_archive",
+    "//common-mk:pic",
+    ":local_print_proto_include",
+    ":target_defaults",
+  ]
+  public_deps = [ ":print_proto_library" ]
+}
+
+# A library for common code.
+pkg_config("common_library_config") {
+  pkg_deps = [
+    "openssl",
+    "vboot_host",
+  ]
+  libs = [
+    "hwsec",
+    "hwsec-foundation",
+    "tpm_manager",
+  ]
+}
+
+config("common_library_with_tpm2_config") {
+  libs = [ "trunks" ]
+}
+
+config("common_library_without_tpm2_config") {
+  libs = [ "tspi" ]
+}
+
+source_set("common_library") {
+  sources = [
+    "common/crypto_utility_impl.cc",
+    "common/nvram_quoter_factory.cc",
+    "common/tpm_utility_common.cc",
+    "common/tpm_utility_factory.cc",
+  ]
+  all_dependent_configs = [ ":common_library_config" ]
+  configs += [
+    "//common-mk:nouse_thin_archive",
+    ":target_defaults",
+    ":local_proto_include",
+  ]
+  deps = [
+    ":proto_library",
+    ":proto_library_proto",
+  ]
+  if (use.tpm2) {
+    sources += [ "common/tpm_utility_v2.cc" ]
+    all_dependent_configs += [ ":common_library_with_tpm2_config" ]
+  }
+  if (use.tpm) {
+    sources += [ "common/tpm_utility_v1.cc" ]
+    all_dependent_configs += [ ":common_library_without_tpm2_config" ]
+  }
+  if (use.cr50_onboard || use.ti50_onboard) {
+    sources += [ "common/gsc_nvram_quoter.cc" ]
+  } else {
+    sources += [ "common/null_nvram_quoter.cc" ]
+  }
+}
+
+# A shared library for clients.
+shared_library("libattestation") {
+  install_path = "lib"
+  configs += [
+    "//common-mk:nouse_thin_archive",
+    ":local_proto_include",
+    ":target_defaults",
+  ]
+  libs = [ "system_api" ]
+  deps = [
+    ":proto_library",
+    ":proto_library_proto",
+  ]
+}
+
+# A client command line utility.
+executable("attestation_client") {
+  sources = [ "client/main.cc" ]
+  configs += [
+    ":target_defaults",
+    ":local_proto_include",
+  ]
+  install_path = "bin"
+
+  # NOSORT
+  pkg_deps = [
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+    "protobuf",
+  ]
+  deps = [
+    ":common_library",
+    ":proto_library",
+    ":proto_library_proto",
+  ]
+}
+
+# A library for server code.
+config("server_library_config") {
+  libs = [ "chaps" ]
+
+  # TODO(crbug.com/1082873) Remove after fixing usage of deprecated declarations.
+  cflags_cc = [ "-Wno-error=deprecated-declarations" ]
+}
+
+source_set("server_library") {
+  sources = [
+    "server/attestation_flow.cc",
+    "server/attestation_service.cc",
+    "server/attestation_service_metrics.cc",
+    "server/certificate_queue.cc",
+    "server/database_impl.cc",
+    "server/dbus_service.cc",
+    "server/enrollment_queue.cc",
+    "server/google_keys.cc",
+    "server/pkcs11_key_store.cc",
+  ]
+  all_dependent_configs = [ ":server_library_config" ]
+  configs += [
+    ":target_defaults",
+    ":local_proto_include",
+  ]
+  deps = [
+    ":pca-agent-proxies",
+    ":proto_library",
+    ":proto_library_proto",
+  ]
+}
+
+# The attestation daemon.
+pkg_config("attestationd_config") {
+  pkg_deps = [
+    "libmetrics",
+    "libminijail",
+  ]
+}
+
+executable("attestationd") {
+  sources = [ "server/main.cc" ]
+  configs += [
+    ":attestationd_config",
+    ":local_proto_include",
+    ":target_defaults",
+  ]
+  install_path = "sbin"
+  libs = [
+    "hwsec-profiling",
+    "policy",
+  ]
+
+  # NOSORT
+  pkg_deps = [
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+    "protobuf",
+  ]
+  deps = [
+    ":common_library",
+    ":proto_library",
+    ":proto_library_proto",
+    ":server_library",
+  ]
+}
+
+generate_dbus_adaptors("pca-agent-adaptors") {
+  sources = [ "pca_agent/dbus_bindings/org.chromium.PcaAgent.xml" ]
+  dbus_adaptors_out_dir = "include/attestation/pca-agent/dbus_adaptors"
+  dbus_service_config = "pca_agent/dbus_bindings/dbus-service-config.json"
+}
+
+generate_dbus_proxies("pca-agent-proxies") {
+  sources = [ "pca_agent/dbus_bindings/org.chromium.PcaAgent.xml" ]
+  dbus_service_config = "pca_agent/dbus_bindings/dbus-service-config.json"
+  mock_output_file = "include/attestation/pca_agent/dbus-proxy-mocks.h"
+  proxy_output_file = "include/attestation/pca_agent/dbus-proxies.h"
+  proxy_path_in_mocks = "attestation/pca_agent/dbus-proxies.h"
+}
+
+source_set("pca_agent_server_library") {
+  sources = [
+    "pca_agent/server/default_transport_factory.cc",
+    "pca_agent/server/pca_agent_service.cc",
+    "pca_agent/server/pca_request.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":pca-agent-adaptors" ]
+}
+
+executable("pca_agentd") {
+  sources = [ "pca_agent/server/main.cc" ]
+  configs += [
+    ":attestationd_config",
+    ":target_defaults",
+  ]
+  install_path = "sbin"
+
+  # NOSORT
+  pkg_deps = [
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+    "protobuf",
+  ]
+  libs = [ "hwsec-profiling" ]
+
+  deps = [
+    ":pca-agent-adaptors",
+    ":pca_agent_server_library",
+  ]
+}
+
+executable("pca_agent_client") {
+  sources = [ "pca_agent/client/main.cc" ]
+  configs += [
+    ":local_print_proto_include",
+    ":target_defaults",
+  ]
+  install_path = "bin"
+
+  # NOSORT
+  pkg_deps = [
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+    "protobuf",
+  ]
+  deps = [
+    ":pca-agent-proxies",
+    ":proto_library",
+  ]
+}
+
+install_config("install_systemd") {
+  sources = [
+    "pca_agent/server/org.chromium.PcaAgent.conf",
+    "server/org.chromium.Attestation.conf",
+  ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_init") {
+  sources = [
+    "pca_agent/server/pca_agentd.conf",
+    "server/attestationd.conf",
+  ]
+  install_path = "/etc/init"
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "pca_agent/server/minijail/pca_agentd.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_policy") {
+  _arch = getenv("ARCH")
+  sources = [
+    "pca_agent/server/pca_agentd-seccomp-${_arch}.policy",
+    "server/attestationd-seccomp-${_arch}.policy",
+  ]
+  install_path = "/usr/share/policy"
+
+  # NOSORT
+  outputs = [
+    "pca_agentd-seccomp.policy",
+    "attestationd-seccomp.policy",
+  ]
+}
+
+if (use.test) {
+  pkg_config("attestation_testrunner_config") {
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+      "libmetrics",
+    ]
+  }
+  executable("attestation_testrunner") {
+    sources = [
+      "attestation_testrunner.cc",
+      "common/crypto_utility_impl_test.cc",
+      "common/mock_crypto_utility.cc",
+      "common/mock_tpm_utility.cc",
+      "pca_agent/server/pca_request_test.cc",
+      "server/certificate_queue_test.cc",
+      "server/database_impl_test.cc",
+      "server/dbus_service_test.cc",
+      "server/enrollment_queue_test.cc",
+      "server/mock_database.cc",
+      "server/mock_key_store.cc",
+      "server/pkcs11_key_store_test.cc",
+    ]
+
+    libs = [
+      "hwsec_test",
+      "policy",
+    ]
+
+    if (use.tpm2) {
+      sources += [ "common/tpm_utility_v2_test.cc" ]
+      libs += [ "trunks_test" ]
+    }
+
+    if (use.cr50_onboard || use.ti50_onboard) {
+      sources += [ "common/gsc_nvram_quoter_test.cc" ]
+    }
+
+    if (use.tpm || use.tpm2) {
+      sources += [
+        "common/tpm_utility_common_test.cc",
+        "server/attestation_service_test.cc",
+      ]
+    }
+
+    configs += [
+      "//common-mk:test",
+      ":attestation_testrunner_config",
+      ":local_proto_include",
+      ":target_defaults",
+    ]
+    run_test = true
+
+    # NOSORT
+    pkg_deps = [
+      # system_api depends on protobuf (or protobuf-lite). It must appear
+      # before protobuf here or the linker flags won't be in the right
+      # order.
+      "system_api",
+      "protobuf-lite",
+    ]
+    deps = [
+      ":common_library",
+      ":pca_agent_server_library",
+      ":proto_library",
+      ":proto_library_proto",
+      ":server_library",
+    ]
+  }
+}

@@ -1,0 +1,327 @@
+#
+# Copyright 2018 The ChromiumOS Authors
+#
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+imports:
+  - "include/kernel-info.yaml"
+
+audio-main-common: &audio_main_common
+  <<: *kernel-info
+  $cras_root: "/etc/cras"
+  $ucm_root: "/usr/share/alsa/ucm"
+  $card: "kblda7219max"
+  cras-config-dir: "{{$cras}}"
+  ucm-suffix: "{{$ucm}}"
+  $audio-source: "{{cras-config-dir}}/audio-{{$kernel-version}}"
+  $cras-source: "{{$audio-source}}/cras-config"
+  $cras-dest: "{{$cras_root}}/{{cras-config-dir}}"
+  $ucm-source: "{{$audio-source}}/ucm-config{{$ucm-source-suffix}}"
+  $ucm-dest: "{{$ucm_root}}/{{$card}}.{{ucm-suffix}}"
+
+audio-main-files: &audio_main_files
+  files-map-card-settings: &files_map_card_settings
+    source: "{{$cras-source}}/{{$card}}"
+    destination: "{{$cras-dest}}/{{$card}}"
+  files-map-dsp-ini: &files_map_dsp_ini
+    source: "{{$cras-source}}/dsp.ini"
+    destination: "{{$cras-dest}}/dsp.ini"
+  files-map-HiFi-conf: &files_map_HiFi_conf
+    source: "{{$ucm-source}}/HiFi.conf"
+    destination: "{{$ucm-dest}}/HiFi.conf"
+  files-map-card-conf: &files_map_card_conf
+    source: "{{$ucm-source}}/{{$card}}.conf"
+    destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}.conf"
+  files-map-board-ini: &files_map_board_ini
+    source: "{{$cras-source}}/board.ini"
+    destination: "{{$cras-dest}}/board.ini"
+
+audio-common: &audio_common
+  main:
+    <<: *audio_main_common
+    files:
+      - *files_map_card_settings
+      - *files_map_dsp_ini
+      - *files_map_HiFi_conf
+      - *files_map_card_conf
+
+audio-boardini-setting: &audio_boardini_setting
+  main:
+    <<: *audio_main_common
+    files:
+      - *files_map_card_settings
+      - *files_map_dsp_ini
+      - *files_map_HiFi_conf
+      - *files_map_card_conf
+      - *files_map_board_ini
+
+common-config: &common_config
+  name: "{{$device-name}}"
+  identity:
+    platform-name: "Poppy"
+    frid: "Google_Nami"
+    sku-id: "{{$sku-id}}"
+  firmware:
+    build-targets:
+      ec: "nami"
+    no-firmware: True
+  power: &power_common
+    charging-ports: |
+      CROS_USB_PD_CHARGER0 RIGHT
+      CROS_USB_PD_CHARGER1 LEFT
+    low-battery-shutdown-percent: "4.0"
+    power-supply-full-factor: "1.00"
+    suspend-to-idle: "1"
+    $has-ambient-light-sensor: "0"
+    has-ambient-light-sensor: "{{$has-ambient-light-sensor}}"
+    $internal-backlight-als-steps: |-
+      80.0 50.0 -1 400
+      100.0 80.0 100 -1
+    internal-backlight-als-steps: "{{$internal-backlight-als-steps}}"
+    $internal-backlight-no-als-battery-brightness: "50.0"
+    internal-backlight-no-als-battery-brightness: "{{$internal-backlight-no-als-battery-brightness}}"
+    min-visible-backlight-level: "75"
+    $touchpad-wakeup: "0"
+    touchpad-wakeup: "{{$touchpad-wakeup}}"
+    $has-keyboard-backlight: "1"
+    has-keyboard-backlight: "{{$has-keyboard-backlight}}"
+    battery-stabilized-after-startup-ms: "10000"
+  thermal:
+    $dptf-file: "dptf.dv"
+    dptf-dv: "{{$device-name}}/{{$dptf-file}}"
+    files:
+      - source: "{{dptf-dv}}"
+        destination: "/etc/dptf/{{dptf-dv}}"
+  test-label: "{{$device-name}}"
+  hardware-properties:
+    form-factor: CHROMEBOOK
+
+device-specific-audio-device-config: &device_specific_audio_device_config
+  <<: *common_config
+  audio:
+    <<: *audio_common
+    $cras: "{{$device-name}}"
+    $ucm: "{{$device-name}}"
+    $ucm-source-suffix: ""
+
+device-specific-audio-config-boardini: &device_specific_audio_config_boardini
+  <<: *common_config
+  audio:
+    <<: *audio_boardini_setting
+    $cras: "{{$device-name}}"
+    $ucm: "{{$device-name}}"
+    $ucm-source-suffix: ""
+
+convertible-device-config: &convertible_device_config
+  <<: *device_specific_audio_device_config
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    is-lid-convertible: True
+    has-lid-accelerometer: True
+    has-base-accelerometer: True
+    has-base-gyroscope: True
+  power:
+    <<: *power_common
+    $set-wifi-transmit-power-for-tablet-mode: "1"
+    set-wifi-transmit-power-for-tablet-mode: "{{$set-wifi-transmit-power-for-tablet-mode}}"
+
+cros-healthd-sku-number-enabled: &cros_healthd_sku_number_enabled
+  cros-healthd:
+    cached-vpd:
+      has-sku-number: True
+
+chromeos:
+  devices:
+    - $device-name: "akali"
+      $touchpad-wakeup: "1"
+      skus:
+        - $sku-id: 0x29e1
+          config: *device_specific_audio_device_config
+# TODO (EVT only, to be removed)
+        - $sku-id: 0x2861
+          config: *device_specific_audio_device_config
+    - $device-name: "akali360"
+      skus:
+        - $sku-id: 0x2be7
+          config: *convertible_device_config
+# TODO (EVT only, to be removed)
+        - $sku-id: 0x2a67
+          config: *convertible_device_config
+    - $device-name: "nami"
+      $has-ambient-light-sensor: "1"
+      skus:
+        - $sku-id: 0x3a7b
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+    - $device-name: "pantheon"
+      $internal-backlight-no-als-battery-brightness: "51.0"
+      skus:
+        - $sku-id: 0x3f62
+          config:
+            <<: *convertible_device_config
+            $has-keyboard-backlight: "0"
+        - $sku-id: 0x3f63
+          config: *convertible_device_config
+        - $sku-id: 0x3f67
+          config: *convertible_device_config
+# TODO (EVT only, to be removed)
+        - $sku-id: 0x3e63
+          config: *convertible_device_config
+# TODO (EVT only, to be removed)
+        - $sku-id: 0x3e67
+          config: *convertible_device_config
+        - $sku-id: 0x100bf62
+          config:
+            <<: *convertible_device_config
+            $has-keyboard-backlight: "0"
+            $dptf-file: "dptf-pyke.dv"
+        - $sku-id: 0x100bf63
+          config:
+            <<: *convertible_device_config
+            $dptf-file: "dptf-pyke.dv"
+    - $device-name: "sona"
+      $internal-backlight-no-als-battery-brightness: "63.0"
+      skus:
+        - $sku-id: 0x3ae2
+          config:
+            <<: *convertible_device_config
+            <<: *device_specific_audio_config_boardini
+            <<: *cros_healthd_sku_number_enabled
+            $set-wifi-transmit-power-for-tablet-mode: "0"
+            $has-keyboard-backlight: "0"
+        - $sku-id: 0x3ae3
+          config:
+            <<: *convertible_device_config
+            <<: *device_specific_audio_config_boardini
+            <<: *cros_healthd_sku_number_enabled
+            $set-wifi-transmit-power-for-tablet-mode: "0"
+    - $device-name: "syndra"
+      $touchpad-wakeup: "1"
+      $internal-backlight-no-als-battery-brightness: "63.0"
+      skus:
+        - $sku-id: 0x2bc63
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+        - $sku-id: 0x2bc62
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x2bc61
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+        - $sku-id: 0x2bc60
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x6bc63
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+        - $sku-id: 0x6bc62
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x6bc61
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+        - $sku-id: 0x6bc60
+          config:
+            <<: *device_specific_audio_device_config
+            <<: *cros_healthd_sku_number_enabled
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+    - $device-name: "vayne"
+      skus:
+        - $sku-id: 0x3a67
+          config: *convertible_device_config
+# TODO (EVT only, to be removed)
+        - $sku-id: 0x3a63
+          config: *convertible_device_config
+# TODO (EVT only, to be removed)
+        - $sku-id: 0x3a7f
+          config: *convertible_device_config
+    - $device-name: "ekko"
+      $touchpad-wakeup: "1"
+      skus:
+        - $sku-id: 0x10118e3
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x10018e3
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x10118e1
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x10018e1
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x10118e2
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x10018e2
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x10118e0
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x10018e0
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+    - $device-name: "bard"
+      $touchpad-wakeup: "1"
+      skus:
+        - $sku-id: 0x1019ce3
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x1009ce3
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x1019ce1
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x1009ce1
+          config: *device_specific_audio_device_config
+        - $sku-id: 0x1009ce0
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x1009ce2
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x1019ce0
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"
+        - $sku-id: 0x1019ce2
+          config:
+            <<: *device_specific_audio_device_config
+            power:
+              <<: *power_common
+              $has-keyboard-backlight: "0"

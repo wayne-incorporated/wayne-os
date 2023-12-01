@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# go/deshell-chromeos: this script is for test image only and should never
+# be shipped to a release image.
+
+usage() {
+  cat <<EOF
+Usage: l3info [--address] [--neighbor] [--route] [--firewall] [--all]
+
+  --address: Print link and address information in all netns
+
+  --neighbor: Print neighbor information in all netns
+
+  --route: Print route and routing policy information
+
+  --firewall: Print iptables information (requires root)
+
+  --all: Equivalent to l3info --address --neighbor --route --firewall
+EOF
+}
+
+log_run() {
+  echo "#" "$@"
+  "$@"
+  echo
+}
+
+# Short awk script to dedupe inputs without sorting.
+dedupe() {
+  awk '!x[$0]++'
+}
+
+print_route() {
+  local family
+  local table
+  for family in 4 6; do
+    log_run ip -"${family}" rule show
+    for table in $(ip -"${family}" rule show \
+      | sed -E 's/.*lookup (.*)$/\1/' | dedupe); do
+      if [[ "${table}" != "default" && "${table}" != "local" ]]; then
+        log_run ip -"${family}" route show table "${table}"
+      fi
+    done
+  done
+}
+
+print_iptables() {
+  local iptables_command
+  local table
+  for iptables_command in iptables ip6tables; do
+    for table in filter mangle nat; do
+      log_run "${iptables_command}" -v -t "${table}" -S
+    done
+  done
+}
+
+print_address() {
+  # `ip addr show` prints both IPv4 and IPv6 addresses.
+  log_run ip addr show
+  log_run ip -all netns exec ip addr show
+}
+
+print_neighbor() {
+  # `ip neigh show` prints both IPv4 ARP and IPv6 NDP table.
+  log_run ip neigh show
+  log_run ip -all netns exec ip neigh show
+}
+
+main() {
+  if [ $# -eq 0 ]; then
+    usage
+    exit 1
+  fi
+  local param
+  for param in "$@"; do
+    case "${param}" in
+    route|--route)
+      print_route
+      ;;
+    firewall|--firewall)
+      print_iptables
+      ;;
+    address|addr|--address|--addr)
+      print_address
+      ;;
+    neighbor|--neighbor)
+      print_neighbor
+      ;;
+    all|--all)
+      print_address
+      print_neighbor
+      print_route
+      print_iptables
+      exit 0
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+    esac
+  done
+  exit 0
+}
+
+main "$@"

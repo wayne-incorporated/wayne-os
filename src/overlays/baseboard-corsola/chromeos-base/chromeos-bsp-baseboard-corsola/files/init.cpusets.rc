@@ -1,0 +1,17 @@
+# Copyright 2022 The ChromiumOS Authors.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+
+on property:sys.boot_completed=1
+    # Allow foreground apps to have all CPUs.  Restrict background apps to
+    # little cores to keep them more power efficient.  NOTE: this is a bit of
+    # a stopgap solution for now.  It would be better if we told the kernel
+    # a high-level goal for tasks and it could figure out the rest.
+    # 0-5 are Cortex A55, 6-7 are Cortex A76. See http://b/255256491#comment2
+    # and go/corsola for details.
+    write /dev/cpuset/foreground/cpus 0-7
+    write /dev/cpuset/background/cpus 0-5
+    write /dev/cpuset/system-background/cpus 0-5
+    write /dev/cpuset/restricted/cpus 0-5
+    write /dev/cpuset/top-app/cpus 0-7

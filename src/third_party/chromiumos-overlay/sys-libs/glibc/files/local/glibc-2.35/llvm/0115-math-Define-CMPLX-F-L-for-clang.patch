@@ -1,0 +1,25 @@
+From 1cc0fae93d9d216a4e4e9cde1d0da7e8ac336028 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 13:13:43 -0300
+Subject: [PATCH 115/163] math: Define CMPLX(F,L) for clang
+
+---
+ math/complex.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/math/complex.h b/math/complex.h
+index 5948fa849e..7bbef4b6b2 100644
+--- a/math/complex.h
++++ b/math/complex.h
+@@ -52,7 +52,7 @@ __BEGIN_DECLS
+ #undef I
+ #define I _Complex_I
+ 
+-#if defined __USE_ISOC11 && __GNUC_PREREQ (4, 7)
++#if defined __USE_ISOC11 && (__GNUC_PREREQ (4, 7) || defined __clang__)
+ /* Macros to expand into expression of specified complex type.  */
+ # define CMPLX(x, y) __builtin_complex ((double) (x), (double) (y))
+ # define CMPLXF(x, y) __builtin_complex ((float) (x), (float) (y))
+-- 
+2.37.2
+

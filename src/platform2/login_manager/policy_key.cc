@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include <base/files/file_util.h>
 #include <base/logging.h>
 #include <crypto/rsa_private_key.h>
+#include <crypto/signature_verifier.h>
 
 #include "login_manager/nss_util.h"
 #include "login_manager/system_utils_impl.h"
@@ -118,13 +119,15 @@ bool PolicyKey::Persist() {
   return true;
 }
 
-bool PolicyKey::Rotate(const std::vector<uint8_t>& public_key_der,
-                       const std::vector<uint8_t>& signature) {
+bool PolicyKey::Rotate(
+    const std::vector<uint8_t>& public_key_der,
+    const std::vector<uint8_t>& signature,
+    const crypto::SignatureVerifier::SignatureAlgorithm algorithm) {
   if (!IsPopulated()) {
     LOG(ERROR) << "Don't yet have an owner key!";
     return false;
   }
-  if (Verify(public_key_der, signature)) {
+  if (Verify(public_key_der, signature, algorithm)) {
     key_ = public_key_der;
     have_replaced_ = true;
     return true;
@@ -144,9 +147,11 @@ bool PolicyKey::ClobberCompromisedKey(
   return have_replaced_ = true;
 }
 
-bool PolicyKey::Verify(const std::vector<uint8_t>& data,
-                       const std::vector<uint8_t>& signature) {
-  if (!nss_->Verify(signature, data, key_)) {
+bool PolicyKey::Verify(
+    const std::vector<uint8_t>& data,
+    const std::vector<uint8_t>& signature,
+    const crypto::SignatureVerifier::SignatureAlgorithm algorithm) {
+  if (!nss_->Verify(signature, data, key_, algorithm)) {
     LOG(ERROR) << "Signature verification failed";
     return false;
   }

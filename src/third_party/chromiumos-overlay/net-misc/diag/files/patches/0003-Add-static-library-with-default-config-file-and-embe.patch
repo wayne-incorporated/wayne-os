@@ -1,0 +1,111 @@
+From 1a2e8ecc049122579ef3d486d2f8542c8841b42a Mon Sep 17 00:00:00 2001
+From: Anuradha Bathina <quic_abathina@quicinc.com>
+Date: Thu, 3 Feb 2022 14:17:33 -0800
+Subject: [PATCH] Add static library with default config file and embed same
+ libdiag in ODL binary.
+
+[mka]:
+- added dummy config with weak symbols to make libdiagcfg.a
+  optional
+- fixed some formatting issues
+---
+ Makefile                   |  3 +++
+ tools/diag-log_on_device.c | 27 +++++++++++++++++++++------
+ 2 files changed, 24 insertions(+), 6 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index dc22396..a6a3567 100644
+--- a/Makefile
++++ b/Makefile
+@@ -18,6 +18,9 @@ ifeq ($(HAVE_LIBQRTR),1)
+ CFLAGS += -DHAS_LIBQRTR=1
+ LDFLAGS += -lqrtr
+ endif
++ifeq ($(HAVE_LIBDIAGCFG),1)
++LDFLAGS += -ldiagcfg
++endif
+ 
+ SRCS := router/app_cmds.c \
+ 	router/circ_buf.c \
+diff --git a/tools/diag-log_on_device.c b/tools/diag-log_on_device.c
+index 0be46af..867946c 100644
+--- a/tools/diag-log_on_device.c
++++ b/tools/diag-log_on_device.c
+@@ -68,7 +68,8 @@
+ #define FILE_NAME_LEN 500
+ #define MASK_FILE_BUF_SIZE 8192
+ 
+-
++char __attribute__((weak)) _binary_diag_cfg_start[] = {0};
++char __attribute__((weak)) _binary_diag_cfg_end[] = {0};
+ 
+ struct buffer_pool {
+ 	unsigned int bytes_in_buff;
+@@ -108,6 +109,8 @@ char timestamp_buf[30];
+ char file_name_curr[FILE_NAME_LEN];
+ static char *open_mask_file= NULL;
+ static int diag_mask_file = 0;
++static int default_mask_file = 0;
++static int mask_file_size = 0;
+ static int diag_timeout;
+ int num_bytes_read;
+ unsigned int max_file_num = 10;
+@@ -486,6 +489,7 @@ int delete_log()
+ int main(int argc, char **argv)
+ {
+ 	int ret;
++	int i;
+ 	int c,ch,found_cmd;
+ 	struct sockaddr_un addr;
+ 	struct timeval tv = {20, 0};
+@@ -497,6 +501,8 @@ int main(int argc, char **argv)
+ 	*(int *)mask_buf = USER_SPACE_DATA_TYPE;
+ 	*(int *)mask_log = USER_SPACE_LOG_EVENT; 
+ 	
++	default_mask_file = 0;
++	mask_file_size = 0;
+ 	count_mask_bytes = 4;
+ 	memset (&act, '\0', sizeof(act));
+ 	act.sa_sigaction = &log_timeout;
+@@ -562,6 +568,8 @@ int main(int argc, char **argv)
+ 		case 'f':
+ 			open_mask_file = strdup(optarg);
+ 			diag_mask_file = 1;
++			if (strcmp(open_mask_file, "default") == 0)
++				default_mask_file = 1;
+ 			break;
+ 		case 't':
+ 			printf("Timeout for QMDL Logging\n");
+@@ -604,17 +612,24 @@ int main(int argc, char **argv)
+ 			pthread_cancel(read_thread_hdl);
+ 		goto failure_case2;
+ 	}
+-
+-	if ((read_mask_fp = fopen(open_mask_file, "rb")) == NULL) {
++/*In case of default log mask, read cfg from binary, else read user input file  */
++	if (default_mask_file) {
++		mask_file_size = (_binary_diag_cfg_end - _binary_diag_cfg_start);
++		i = 0;
++		printf("Reading default cfg file from library.\n");
++	} else if ((read_mask_fp = fopen(open_mask_file, "rb")) == NULL) {
+ 		printf("can't open mask file: %s, errno: %d\n", open_mask_file,errno);
+ 		goto failure_case1;
+ 	}
+ 
+ 	if(diag_mask_file){
+ 		while(1){
+-			ch = fgetc(read_mask_fp);
+-			if (ch == EOF)
+-			break;  
++			if (default_mask_file)
++				ch = _binary_diag_cfg_start[i];
++			else
++				ch = fgetc(read_mask_fp);
++			if (ch == EOF || (default_mask_file && i++ >= mask_file_size) )
++				break;
+ 			mask_buf[count_mask_bytes] = ch;
+ 			if (mask_buf[count_mask_bytes] == CONTROL_CHAR) {
+ 
+-- 
+2.35.0.263.gb82422642f-goog
+

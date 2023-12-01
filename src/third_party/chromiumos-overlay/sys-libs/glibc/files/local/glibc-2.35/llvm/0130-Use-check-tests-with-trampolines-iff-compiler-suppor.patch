@@ -1,0 +1,165 @@
+From 2f4f341a30c50bc1396c2af07c7814ab1f3842b0 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 08:58:03 -0300
+Subject: [PATCH 130/163] Use check tests with trampolines iff compiler
+ supports it
+
+---
+ configure     | 32 ++++++++++++++++++++++++++++++++
+ configure.ac  | 20 ++++++++++++++++++++
+ elf/Makefile  | 10 +++++-----
+ nptl/Makefile |  6 ++++--
+ 4 files changed, 61 insertions(+), 7 deletions(-)
+
+diff --git a/configure b/configure
+index 25c19b7a38..8b1c2c01d6 100755
+--- a/configure
++++ b/configure
+@@ -6616,6 +6616,38 @@ if test $libc_cv_cc_loop_to_function = yes; then
+ fi
+ 
+ 
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking if $CC has support for trampolines" >&5
++$as_echo_n "checking if $CC has support for trampolines... " >&6; }
++if ${libc_cv_cc_trampoline+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  cat > conftest.c <<EOF
++void bar (void (*callback) (void));
++int foo (void)
++{
++  int var = 0;
++  void callback (void) { var = 1; }
++  bar (callback);
++  return var;
++}
++EOF
++libc_cv_cc_trampoline=no
++if { ac_try='${CC-cc} $CFLAGS $CPPFLAGS -Werror -c conftest.c'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }
++then
++  libc_cv_cc_trampoline=yes
++fi
++rm -f conftest*
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_cc_trampoline" >&5
++$as_echo "$libc_cv_cc_trampoline" >&6; }
++config_vars="$config_vars
++have-cc-trampoline = $libc_cv_cc_trampoline"
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libgd" >&5
+ $as_echo_n "checking for libgd... " >&6; }
+ if test "$with_gd" != "no"; then
+diff --git a/configure.ac b/configure.ac
+index c1dc88f2b4..839d3d5815 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1652,6 +1652,26 @@ if test $libc_cv_cc_loop_to_function = yes; then
+ fi
+ AC_SUBST(libc_cv_cc_loop_to_function)
+ 
++AC_CACHE_CHECK(if $CC has support for trampolines, libc_cv_cc_trampoline, [dnl
++cat > conftest.c <<EOF
++void bar (void (*callback) (void));
++int foo (void)
++{
++  int var = 0;
++  void callback (void) { var = 1; }
++  bar (callback);
++  return var;
++}
++EOF
++libc_cv_cc_trampoline=no
++if AC_TRY_COMMAND([${CC-cc} $CFLAGS $CPPFLAGS -Werror -c conftest.c])
++then
++  libc_cv_cc_trampoline=yes
++fi
++rm -f conftest*])
++LIBC_CONFIG_VAR([have-cc-trampoline],
++		[$libc_cv_cc_trampoline])
++
+ dnl Check whether we have the gd library available.
+ AC_MSG_CHECKING(for libgd)
+ if test "$with_gd" != "no"; then
+diff --git a/elf/Makefile b/elf/Makefile
+index 853b658033..6703bcd385 100644
+--- a/elf/Makefile
++++ b/elf/Makefile
+@@ -512,7 +512,7 @@ endif
+ selinux-enabled := $(shell cat /selinux/enforce 2> /dev/null)
+ 
+ ifneq ($(selinux-enabled),1)
+-tests-execstack-yes = \
++tests-execstack-yesyes = \
+   tst-execstack \
+   tst-execstack-needed \
+   tst-execstack-prog \
+@@ -583,7 +583,7 @@ $(objpfx)tst-valgrind-smoke.out: tst-valgrind-smoke.sh $(objpfx)ld.so $(objpfx)v
+ 	$(SHELL) $< $(objpfx)ld.so  $(rtlddir)/$(rtld-installed-name) '$(test-wrapper-env)' \
+ 		'$(run-program-env)' '$(rpath-link)' $(objpfx)valgrind-test > $@; $(evaluate-test)
+ 
+-tests += $(tests-execstack-$(have-z-execstack))
++tests += $(tests-execstack-$(have-z-execstack)$(have-cc-trampoline))
+ ifeq ($(run-built-tests),yes)
+ tests-special += \
+   $(objpfx)noload-mem.out \
+@@ -917,7 +917,7 @@ modules-names-cxx = \
+ 
+ modules-names += \
+   $(if $(CXX),$(modules-names-cxx)) \
+-  $(modules-execstack-$(have-z-execstack)) \
++  $(modules-execstack-$(have-z-execstack)$(have-cc-trampoline)) \
+   $(tlsmod17a-modules) \
+   $(tlsmod18a-modules) \
+   $(tst-tls-many-dynamic-modules) \
+@@ -978,7 +978,7 @@ tests-pie += vismain
+ CFLAGS-vismain.c += $(PIE-ccflag)
+ endif
+ endif
+-modules-execstack-yes = tst-execstack-mod
++modules-execstack-yesyes = tst-execstack-mod
+ extra-test-objs += $(addsuffix .os,$(strip $(modules-names)))
+ 
+ # filtmod1.so, tst-big-note-lib.so, tst-ro-dynamic-mod.so have special
+@@ -1759,7 +1759,7 @@ $(objpfx)unload8.out: $(objpfx)unload8mod1.so $(objpfx)unload8mod1x.so
+ 
+ $(objpfx)tst-tls9-static.out: $(objpfx)tst-tlsmod5.so $(objpfx)tst-tlsmod6.so
+ 
+-ifeq ($(have-z-execstack),yes)
++ifeq ($(have-z-execstack)$(have-cc-trampoline),yesyes)
+ $(objpfx)tst-execstack.out: $(objpfx)tst-execstack-mod.so
+ CPPFLAGS-tst-execstack.c += -DUSE_PTHREADS=0
+ LDFLAGS-tst-execstack = -Wl,-z,noexecstack
+diff --git a/nptl/Makefile b/nptl/Makefile
+index b585663974..dbbe0ae737 100644
+--- a/nptl/Makefile
++++ b/nptl/Makefile
+@@ -387,7 +387,7 @@ tests += tst-cancelx7 tst-cancelx17
+ ifeq ($(build-shared),yes)
+ tests += tst-compat-forwarder tst-audit-threads
+ tests-internal += tst-tls3 tst-tls3-malloc tst-tls5 tst-stackguard1
+-ifeq ($(have-z-execstack),yes)
++ifeq ($(have-z-execstack)$(have-cc-trampoline),yesyes)
+ tests += tst-execstack
+ endif
+ endif
+@@ -395,9 +395,11 @@ endif
+ modules-names = tst-tls3mod \
+ 		tst-tls5mod tst-tls5moda tst-tls5modb tst-tls5modc \
+ 		tst-tls5modd tst-tls5mode tst-tls5modf tst-stack4mod \
+-		tst-execstack-mod \
+ 		tst-compat-forwarder-mod tst-audit-threads-mod1 \
+ 		tst-audit-threads-mod2
++ifeq ($(have-z-execstack)$(have-cc-trampoline),yesyes)
++modules-names += tst-execstack-mod
++endif
+ extra-test-objs += $(addsuffix .os,$(strip $(modules-names))) \
+ 		   tst-cleanup4aux.o tst-cleanupx4aux.o
+ test-extras += tst-cleanup4aux tst-cleanupx4aux
+-- 
+2.37.2
+

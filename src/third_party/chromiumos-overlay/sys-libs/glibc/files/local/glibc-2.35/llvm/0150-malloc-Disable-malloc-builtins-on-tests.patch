@@ -1,0 +1,58 @@
+From 94216b13f0b3820b3a8240c685d1b51b71f6aad5 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 30 Mar 2022 15:42:18 -0300
+Subject: [PATCH 150/163] malloc: Disable malloc builtins on tests
+
+To avoid compiler optimize away memory allocation calls, which might
+interfere when both valid and invalid calls checks.
+---
+ malloc/Makefile       | 11 +++++++++++
+ malloc/tst-malloc.c   |  1 +
+ malloc/tst-memalign.c |  3 +--
+ 3 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/malloc/Makefile b/malloc/Makefile
+index 2329cf718a..f9d62f1443 100644
+--- a/malloc/Makefile
++++ b/malloc/Makefile
+@@ -367,3 +367,14 @@ tst-mallocstate-malloc-check-ENV = LD_PRELOAD=$(objpfx)libc_malloc_debug.so
+ # libc_malloc_debug.so.
+ $(objpfx)tst-mallocstate: $(objpfx)libc_malloc_debug.so
+ $(objpfx)tst-mallocstate-malloc-check: $(objpfx)libc_malloc_debug.so
++
++CFLAGS-tst-memalign.c += -fno-builtin
++CFLAGS-tst-malloc.c += -fno-builtin
++CFLAGS-tst-malloc-backtrace.c += -fno-builtin
++CFLAGS-tst-malloc-check.c += -fno-builtin
++CFLAGS-tst-malloc-too-large.c += -fno-builtin
++CFLAGS-tst-realloc.c += -fno-builtin
++CFLAGS-tst-valloc.c += -fno-builtin
++CFLAGS-tst-compathooks-off.c += -fno-builtin
++CFLAGS-tst-compathooks-on.c += -fno-builtin
++CFLAGS-tst-mallinfo2.c += -fno-builtin
+diff --git a/malloc/tst-malloc.c b/malloc/tst-malloc.c
+index 62e3b9b95c..e3855035e7 100644
+--- a/malloc/tst-malloc.c
++++ b/malloc/tst-malloc.c
+@@ -46,6 +46,7 @@ do_test (void)
+   p = malloc (-1);
+   DIAG_POP_NEEDS_COMMENT;
+   save = errno;
++  asm volatile("" ::: "memory");
+ 
+   if (p != NULL)
+     merror ("malloc (-1) succeeded.");
+diff --git a/malloc/tst-memalign.c b/malloc/tst-memalign.c
+index b5933f4741..5da00954e2 100644
+--- a/malloc/tst-memalign.c
++++ b/malloc/tst-memalign.c
+@@ -124,5 +124,4 @@ do_test (void)
+   return errors != 0;
+ }
+ 
+-#define TEST_FUNCTION do_test ()
+-#include "../test-skeleton.c"
++#include <support/test-driver.c>
+-- 
+2.37.2
+

@@ -1,0 +1,75 @@
+From 080802787854992e0029ea89c6194003087fc1bd Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 15:46:10 -0300
+Subject: [PATCH 143/163] elf: Do not cast TLS_DTV_UNALLOCATED to void
+
+The test-as-const-tlsdesc uses _Static_assert to verify the constants
+generated and clang warns the expression is not an integral constant
+expression because the cast performs a conversion (and it is no
+allowed).
+---
+ elf/dl-tls.c                | 2 ++
+ sysdeps/aarch64/tlsdesc.sym | 2 +-
+ sysdeps/arc/dl-tls.h        | 2 +-
+ sysdeps/generic/dl-dtv.h    | 2 +-
+ sysdeps/riscv/dl-tls.h      | 2 +-
+ 5 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/elf/dl-tls.c b/elf/dl-tls.c
+index 093cdddb7e..5c80122c3e 100644
+--- a/elf/dl-tls.c
++++ b/elf/dl-tls.c
+@@ -75,6 +75,8 @@
+ /* Default for dl_tls_static_optional.  */
+ #define OPTIONAL_TLS 512
+ 
++#define TLS_DTV_UNALLOCATED ((void *) TLS_DTV_UNALLOCATED_VALUE)
++
+ /* Compute the static TLS surplus based on the namespace count and the
+    TLS space that can be used for optimizations.  */
+ static inline int
+diff --git a/sysdeps/aarch64/tlsdesc.sym b/sysdeps/aarch64/tlsdesc.sym
+index a06a719779..477585bdcb 100644
+--- a/sysdeps/aarch64/tlsdesc.sym
++++ b/sysdeps/aarch64/tlsdesc.sym
+@@ -15,4 +15,4 @@ TLSDESC_MODID		offsetof(struct tlsdesc_dynamic_arg, tlsinfo.ti_module)
+ TLSDESC_MODOFF		offsetof(struct tlsdesc_dynamic_arg, tlsinfo.ti_offset)
+ TCBHEAD_DTV		offsetof(tcbhead_t, dtv)
+ DTV_COUNTER		offsetof(dtv_t, counter)
+-TLS_DTV_UNALLOCATED	TLS_DTV_UNALLOCATED
++TLS_DTV_UNALLOCATED	TLS_DTV_UNALLOCATED_VALUE
+diff --git a/sysdeps/arc/dl-tls.h b/sysdeps/arc/dl-tls.h
+index 56ed58fdbb..a6d652dfde 100644
+--- a/sysdeps/arc/dl-tls.h
++++ b/sysdeps/arc/dl-tls.h
+@@ -27,4 +27,4 @@ typedef struct
+ extern void *__tls_get_addr (tls_index *ti);
+ 
+ /* Value used for dtv entries for which the allocation is delayed.  */
+-#define TLS_DTV_UNALLOCATED	((void *) -1l)
++#define TLS_DTV_UNALLOCATED_VALE -1l
+diff --git a/sysdeps/generic/dl-dtv.h b/sysdeps/generic/dl-dtv.h
+index 3fa85badb3..82aa3cafd4 100644
+--- a/sysdeps/generic/dl-dtv.h
++++ b/sysdeps/generic/dl-dtv.h
+@@ -33,6 +33,6 @@ typedef union dtv
+ } dtv_t;
+ 
+ /* Value used for dtv entries for which the allocation is delayed.  */
+-#define TLS_DTV_UNALLOCATED ((void *) -1l)
++#define TLS_DTV_UNALLOCATED_VALUE -1l
+ 
+ #endif /* _DLT_DTV_H */
+diff --git a/sysdeps/riscv/dl-tls.h b/sysdeps/riscv/dl-tls.h
+index e5768347ca..f430b20b3b 100644
+--- a/sysdeps/riscv/dl-tls.h
++++ b/sysdeps/riscv/dl-tls.h
+@@ -45,4 +45,4 @@ extern void *__tls_get_addr (tls_index *ti);
+ #define __TLS_GET_ADDR(__ti)	(__tls_get_addr (__ti) - TLS_DTV_OFFSET)
+ 
+ /* Value used for dtv entries for which the allocation is delayed.  */
+-#define TLS_DTV_UNALLOCATED	((void *) -1l)
++#define TLS_DTV_UNALLOCATED_VALUE -1l
+-- 
+2.37.2
+

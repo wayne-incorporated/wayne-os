@@ -1,0 +1,40 @@
+This patch moves the SHT_RELR section type to the generic range, so we
+can load binaries containg SHT_RELR sections "created by the experimental
+support in sys-devel/binutils.  The proposal for adding SHT_RELR sections 
+in the generic-abi is at 
+https://groups.google.com/forum/#!topic/generic-abi/bX460iggiKg
+
+This patch was originally created for GDB-8.0.1, by Rahul Chaudhry, on 
+May 2, 2018.
+
+diff --git a/include/elf/common.h b/include/elf/common.h
+index 75c4fb7..900993a 100644
+--- a/include/elf/common.h
++++ b/include/elf/common.h
+@@ -505,6 +505,7 @@
+ #define SHT_PREINIT_ARRAY 16		/* Array of ptrs to pre-init funcs */
+ #define SHT_GROUP	  17		/* Section contains a section group */
+ #define SHT_SYMTAB_SHNDX  18		/* Indices for SHN_XINDEX entries */
++#define SHT_RELR          19            /* Relative relocations, only offsets */
+ 
+ #define SHT_LOOS	0x60000000	/* First of OS specific semantics */
+ #define SHT_HIOS	0x6fffffff	/* Last of OS specific semantics */
+@@ -979,6 +980,10 @@
+ #define DT_PREINIT_ARRAY   32
+ #define DT_PREINIT_ARRAYSZ 33
+ #define DT_SYMTAB_SHNDX    34
++#define DT_RELRSZ          35
++#define DT_RELR            36
++#define DT_RELRENT         37
++
+ 
+ /* Note, the Oct 4, 1999 draft of the ELF ABI changed the values
+    for DT_LOOS and DT_HIOS.  Some implementations however, use
+@@ -1025,6 +1030,7 @@
+ #define DT_SYMINFO	0x6ffffeff
+ #define DT_ADDRRNGHI	0x6ffffeff
+ 
++#define DT_RELRCOUNT    0x6ffffff8
+ #define DT_RELACOUNT	0x6ffffff9
+ #define DT_RELCOUNT	0x6ffffffa
+ #define DT_FLAGS_1	0x6ffffffb

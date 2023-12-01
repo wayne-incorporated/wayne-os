@@ -1,0 +1,158 @@
+From af753f8df59fc79d386a0be4cd84b5c680182752 Mon Sep 17 00:00:00 2001
+From: Benjamin Gordon <bmgordon@chromium.org>
+Date: Mon, 22 May 2023 14:28:03 -0600
+Subject: [PATCH 3/3] domain: Process avahi_domain_equal in one pass
+
+Currently avahi_domain_equal makes three passes over each input: one to
+unescape any escape sequences, one to check that the result is valid
+UTF-8, and one to compare the two strings.  The UTF-8 check is simply
+unnecessary for the purpose of deciding if two domain strings are equal.
+The other two checks can be done in a single pass by comparing and
+escaping character-by-character.  For the common case where two strings
+differ in an early part of the string before any escape characters are
+hit, this eliminates two full passes and most of the third.  This is
+especially helpful for ChromeOS-generated hostnames, which are 32 random
+characters that never contain escape sequences.
+---
+ avahi-common/domain.c | 106 +++++++++++++++++++++++++-----------------
+ 1 file changed, 64 insertions(+), 42 deletions(-)
+
+diff --git a/avahi-common/domain.c b/avahi-common/domain.c
+index 3b1ab68..874c439 100644
+--- a/avahi-common/domain.c
++++ b/avahi-common/domain.c
+@@ -37,6 +37,46 @@
+ #include "address.h"
+ #include "utf8.h"
+ 
++/* Read an escape sequence from *name and write the unescaped result to dest */
++int avahi_unescape_char(const char **name, char *dest) {
++    if (**name !=  '\\') {
++        *dest = **name;
++        (*name) ++;
++        return 1;
++    }
++
++    /* Move past first backslash. */
++    (*name) ++;
++
++    if (**name == 0)
++        /* Ending NUL */
++        return 0;
++
++    else if (**name == '\\' || **name == '.') {
++        /* Escaped backslash or dot */
++        *dest = *((*name) ++);
++        return 1;
++    } else if (isdigit(**name)) {
++        int n;
++
++        /* Escaped literal ASCII character */
++
++        if (!isdigit(*(*name+1)) || !isdigit(*(*name+2)))
++            return 0;
++
++        n = ((uint8_t) (**name - '0') * 100) + ((uint8_t) (*(*name+1) - '0') * 10) + ((uint8_t) (*(*name +2) - '0'));
++
++        if (n > 255 || n == 0)
++            return 0;
++
++        *dest = (char) n;
++
++        (*name) += 3;
++        return 1;
++    } else
++        return 0;
++}
++
+ /* Read the first label from string *name, unescape "\" and write it to dest */
+ char *avahi_unescape_label(const char **name, char *dest, size_t size) {
+     unsigned i = 0;
+@@ -61,37 +101,8 @@ char *avahi_unescape_label(const char **name, char *dest, size_t size) {
+             break;
+ 
+         if (**name == '\\') {
+-            /* Escaped character */
+-
+-            (*name) ++;
+-
+-            if (**name == 0)
+-                /* Ending NUL */
+-                return NULL;
+-
+-            else if (**name == '\\' || **name == '.') {
+-                /* Escaped backslash or dot */
+-                *(d++) = *((*name) ++);
+-                i++;
+-            } else if (isdigit(**name)) {
+-                int n;
+-
+-                /* Escaped literal ASCII character */
+-
+-                if (!isdigit(*(*name+1)) || !isdigit(*(*name+2)))
+-                    return NULL;
+-
+-                n = ((uint8_t) (**name - '0') * 100) + ((uint8_t) (*(*name+1) - '0') * 10) + ((uint8_t) (*(*name +2) - '0'));
+-
+-                if (n > 255 || n == 0)
+-                    return NULL;
+-
+-                *(d++) = (char) n;
+-                i++;
+-
+-                (*name) += 3;
+-            } else
+-                return NULL;
++            if (!avahi_unescape_char(name, d++))
++              return NULL;
+ 
+         } else {
+ 
+@@ -233,22 +244,33 @@ int avahi_domain_equal(const char *a, const char *b) {
+     if (a == b)
+         return 1;
+ 
+-    for (;;) {
+-        char ca[AVAHI_LABEL_MAX], cb[AVAHI_LABEL_MAX], *r;
++    while (*a && *b) {
++        char a1, b1;
+ 
+-        r = avahi_unescape_label(&a, ca, sizeof(ca));
+-        assert(r);
+-        r = avahi_unescape_label(&b, cb, sizeof(cb));
+-        assert(r);
+-
+-        if (strcasecmp(ca, cb))
++        /* Component parts must have the same lengths */
++        if (*a == '.' && *b != '.')
++            return 0;
++        if (*b == '.' && *a != '.')
+             return 0;
+ 
+-        if (!*a && !*b)
+-            return 1;
++        if (*a == '\\') {
++            assert(avahi_unescape_char(&a, &a1));
++        } else {
++            a1 = *a++;
++        }
++        if (*b == '\\') {
++            assert(avahi_unescape_char(&b, &b1));
++        } else {
++            b1 = *b++;
++        }
++        if (tolower(a1) != tolower(b1)) {
++            return 0;
++        }
+     }
++    if (!*a && !*b)
++        return 1;
+ 
+-    return 1;
++    return 0;
+ }
+ 
+ int avahi_is_valid_service_type_generic(const char *t) {
+-- 
+2.40.1.698.g37aff9b760-goog
+

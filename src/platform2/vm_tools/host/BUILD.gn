@@ -1,0 +1,465 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("host") {
+  deps = [
+    ":cicerone_client",
+    ":maitred_client",
+    ":seneschal",
+    ":seneschal_client",
+    ":vm_cicerone",
+    ":vm_concierge",
+    ":vmlog_forwarder",
+    ":vsh",
+    "//vm_tools:vshd",
+  ]
+  if (use.arcvm) {
+    deps += [ ":vm_pstore_dump" ]
+  }
+  if (use.test) {
+    deps += [
+      ":cicerone_test",
+      ":concierge_test",
+      ":syslog_forwarder_test",
+      ":vsh_test",
+    ]
+    if (use.arcvm) {
+      deps += [ ":vm_pstore_dump_test" ]
+    }
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":cicerone_container_listener_fuzzer",
+      ":vsh_client_fuzzer",
+    ]
+  }
+}
+
+# D-Bus bindings from other platform2 projects need to be listed here so that
+# the system include paths for the headers are added through pkg-config.
+pkg_config("host_target_defaults_pkgs") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+    "libnet-base",
+    "libpatchpanel-client",
+    "libpatchpanel-util",
+  ]
+}
+
+config("host_target_defaults") {
+  configs = [ ":host_target_defaults_pkgs" ]
+  defines = [
+    "USE_PMEM_DEVICE_FOR_ROOTFS=${use.amd64}",
+    "USE_CROSVM_VIRTIO_VIDEO=${use.crosvm_virtio_video}",
+    "USE_CROSVM_VULKAN=${use.vulkan}",
+    "USE_BIG_GL=${use.libglvnd}",
+    "USE_CROSVM_VIRTGPU_NATIVE_CONTEXT=${use.virtgpu_native_context}",
+    "USE_CROSVM_CROSS_DOMAIN_CONTEXT=${use.cross_domain_context}",
+    "USE_IIOSERVICE=${use.iioservice}",
+  ]
+}
+
+executable("maitred_client") {
+  sources = [ "../maitred/client.cc" ]
+  configs += [ ":host_target_defaults" ]
+  libs = [ "grpc" ]
+  pkg_deps = [
+    "grpc++",
+    "protobuf",
+    "vm_protos",
+  ]
+}
+
+static_library("libforwarder") {
+  sources = [
+    "../syslog/collector.cc",
+    "../syslog/forwarder.cc",
+    "../syslog/host_collector.cc",
+    "../syslog/log_pipe.cc",
+    "../syslog/parser.cc",
+    "../syslog/rotator.cc",
+    "../syslog/scrubber.cc",
+  ]
+  configs += [ ":host_target_defaults" ]
+  all_dependent_pkg_deps = [
+    "grpc++",
+    "protobuf",
+    "system_api",
+    "vm_protos",
+  ]
+}
+
+executable("vmlog_forwarder") {
+  sources = [ "../syslog/host_server.cc" ]
+  configs += [ ":host_target_defaults" ]
+  deps = [
+    ":libforwarder",
+    "//vm_tools:libvm_tools_common",
+  ]
+}
+
+static_library("libvsh-client") {
+  sources = [
+    "../vsh/scoped_termios.cc",
+    "../vsh/vsh_client.cc",
+  ]
+  configs += [ ":host_target_defaults" ]
+  pkg_deps = [
+    "system_api",
+    "vm_protos",
+  ]
+  deps = [ "//vm_tools:libvsh" ]
+  all_dependent_pkg_deps = [ "vm_protos" ]
+  if (use.fuzzer) {
+    all_dependent_pkg_deps += [ "protobuf" ]
+  } else {
+    all_dependent_pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+executable("vsh") {
+  sources = [ "../vsh/vsh.cc" ]
+  configs += [ ":host_target_defaults" ]
+  pkg_deps = [
+    "system_api",
+    "vm_protos",
+  ]
+  deps = [ ":libvsh-client" ]
+}
+
+generate_dbus_adaptors("vm_concierge-adaptors") {
+  dbus_service_config = "../dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/vm_tools/concierge/dbus_adaptors"
+  sources = [ "../dbus_bindings/org.chromium.VmConcierge.xml" ]
+}
+
+proto_library("vm_concierge-protos") {
+  proto_in_dir = "../concierge"
+  proto_out_dir = "include/vm_concierge"
+  sources = [ "${proto_in_dir}/vmm_swap_policy.proto" ]
+}
+
+static_library("libconcierge") {
+  sources = [
+    "../concierge/arc_vm.cc",
+    "../concierge/balloon_policy.cc",
+    "../concierge/crosvm_control.cc",
+    "../concierge/crosvm_control_impl.cc",
+    "../concierge/disk_image.cc",
+    "../concierge/dlc_helper.cc",
+    "../concierge/mglru_util.cc",
+    "../concierge/pci_utils.cc",
+    "../concierge/plugin_vm.cc",
+    "../concierge/plugin_vm_helper.cc",
+    "../concierge/power_manager_client.cc",
+    "../concierge/seneschal_server_proxy.cc",
+    "../concierge/service.cc",
+    "../concierge/service_arc.cc",
+    "../concierge/service_plugin.cc",
+    "../concierge/shadercached_helper.cc",
+    "../concierge/shared_data.cc",
+    "../concierge/shill_client.cc",
+    "../concierge/ssh_keys.cc",
+    "../concierge/startup_listener_impl.cc",
+    "../concierge/sysfs_notify_watcher.cc",
+    "../concierge/sysfs_notify_watcher_impl.cc",
+    "../concierge/tap_device_builder.cc",
+    "../concierge/termina_vm.cc",
+    "../concierge/untrusted_vm_utils.cc",
+    "../concierge/vm_base_impl.cc",
+    "../concierge/vm_builder.cc",
+    "../concierge/vm_permission_interface.cc",
+    "../concierge/vm_util.cc",
+    "../concierge/vm_wl_interface.cc",
+    "../concierge/vmm_swap_low_disk_policy.cc",
+    "../concierge/vmm_swap_tbw_policy.cc",
+    "../concierge/vmm_swap_usage_policy.cc",
+    "../concierge/vmplugin_dispatcher_interface.cc",
+    "../concierge/vsock_cid_pool.cc",
+  ]
+  configs += [ ":host_target_defaults" ]
+  libs = [
+    "grpc",
+    "crosvm_control",
+  ]
+  all_dependent_pkg_deps = [
+    "blkid",
+    "grpc++",
+    "libarchive",
+    "libcrossystem",
+    "libdlcservice-client",
+    "libminijail",
+    "libqcow_utils",
+    "libshill-client",
+    "libspaced",
+    "protobuf",
+    "re2",
+    "system_api",
+    "vboot_host",
+    "vm_protos",
+  ]
+  defines = [ "USE_ARCVM_GKI=${use.arcvm_gki}" ]
+
+  cflags_cc = [
+    "-Werror=deprecated-declarations",
+    "-Wthread-safety",
+  ]
+  deps = [
+    ":vm_concierge-adaptors",
+    ":vm_concierge-protos",
+    "//featured:libfeatures",
+  ]
+}
+
+executable("vm_concierge") {
+  sources = [ "../concierge/main.cc" ]
+  configs += [ ":host_target_defaults" ]
+  deps = [
+    ":libconcierge",
+    "//vm_tools:libvm_tools_common",
+  ]
+}
+
+static_library("libcicerone") {
+  sources = [
+    "../cicerone/container.cc",
+    "../cicerone/container_listener_impl.cc",
+    "../cicerone/crash_listener_impl.cc",
+    "../cicerone/grpc_util.cc",
+    "../cicerone/guest_metrics.cc",
+    "../cicerone/service.cc",
+    "../cicerone/shadercached_helper.cc",
+    "../cicerone/shill_client.cc",
+    "../cicerone/tremplin_listener_impl.cc",
+    "../cicerone/virtual_machine.cc",
+  ]
+  configs += [ ":host_target_defaults" ]
+  libs = [ "grpc" ]
+  all_dependent_pkg_deps = [
+    "grpc++",
+    "libmetrics",
+    "libshill-client",
+    "protobuf",
+    "re2",
+    "system_api",
+    "vm_protos",
+  ]
+}
+
+executable("vm_cicerone") {
+  sources = [ "../cicerone/main.cc" ]
+  configs += [ ":host_target_defaults" ]
+  deps = [ ":libcicerone" ]
+}
+
+executable("cicerone_client") {
+  sources = [ "../cicerone/client.cc" ]
+  configs += [ ":host_target_defaults" ]
+  pkg_deps = [
+    "protobuf",
+    "system_api",
+  ]
+}
+
+if (use.arcvm) {
+  static_library("libvm_pstore_dump") {
+    sources = [ "../pstore_dump/persistent_ram_buffer.cc" ]
+    configs += [ ":host_target_defaults" ]
+    deps = [ "//vm_tools:libvm_tools_common" ]
+  }
+
+  executable("vm_pstore_dump") {
+    sources = [ "../pstore_dump/main.cc" ]
+    configs += [ ":host_target_defaults" ]
+    deps = [ ":libvm_pstore_dump" ]
+  }
+}
+
+static_library("libseneschal") {
+  sources = [ "../seneschal/service.cc" ]
+  configs += [ ":host_target_defaults" ]
+  all_dependent_pkg_deps = [
+    "libminijail",
+    "protobuf",
+    "system_api",
+  ]
+}
+
+executable("seneschal") {
+  sources = [ "../seneschal/main.cc" ]
+  configs += [ ":host_target_defaults" ]
+  deps = [ ":libseneschal" ]
+}
+
+executable("seneschal_client") {
+  sources = [ "../seneschal/client.cc" ]
+  configs += [ ":host_target_defaults" ]
+  pkg_deps = [
+    "protobuf",
+    "system_api",
+  ]
+}
+
+if (use.test || use.fuzzer) {
+  static_library("service_testing_helper_lib") {
+    sources = [
+      "../cicerone/dbus_message_testing_helper.cc",
+      "../cicerone/dbus_message_testing_helper.h",
+      "../cicerone/mock_tremplin_stub.h",
+      "../cicerone/service_testing_helper.cc",
+      "../cicerone/service_testing_helper.h",
+    ]
+    configs += [ ":host_target_defaults" ]
+    all_dependent_pkg_deps = [ "libchrome-test" ]
+    deps = [ ":libcicerone" ]
+  }
+}
+
+if (use.test) {
+  executable("syslog_forwarder_test") {
+    sources = [
+      "../syslog/forwarder_test.cc",
+      "../syslog/log_pipe_test.cc",
+      "../syslog/rotator_test.cc",
+      "../syslog/scrubber_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":host_target_defaults",
+    ]
+    deps = [
+      ":libforwarder",
+      "//common-mk/testrunner:testrunner",
+      "//vm_tools:libvm_tools_common",
+    ]
+  }
+
+  executable("cicerone_test") {
+    sources = [
+      "../cicerone/container_listener_impl_test.cc",
+      "../cicerone/crash_listener_impl_test.cc",
+      "../cicerone/tremplin_listener_impl_test.cc",
+      "../cicerone/virtual_machine_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":host_target_defaults",
+    ]
+    deps = [
+      ":libcicerone",
+      ":service_testing_helper_lib",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("concierge_test") {
+    sources = [
+      "../concierge/arc_vm_test.cc",
+      "../concierge/balloon_policy_test.cc",
+      "../concierge/dlc_helper_test.cc",
+      "../concierge/fake_crosvm_control.cc",
+      "../concierge/future_test.cc",
+      "../concierge/if_method_exists_test.cc",
+      "../concierge/mglru_util_test.cc",
+      "../concierge/power_manager_client_test.cc",
+      "../concierge/shadercached_helper_test.cc",
+      "../concierge/shared_data_test.cc",
+      "../concierge/termina_vm_test.cc",
+      "../concierge/untrusted_vm_utils_test.cc",
+      "../concierge/vm_builder_test.cc",
+      "../concierge/vm_util_test.cc",
+      "../concierge/vm_wl_interface_test.cc",
+      "../concierge/vmm_swap_low_disk_policy_test.cc",
+      "../concierge/vmm_swap_tbw_policy_test.cc",
+      "../concierge/vmm_swap_usage_policy_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":host_target_defaults",
+    ]
+    pkg_deps = [
+      "libchrome-test",
+      "libcrossystem-test",
+      "libdlcservice-client-test",
+      "libspaced-test",
+    ]
+    deps = [
+      ":libconcierge",
+      "//common-mk/testrunner:testrunner",
+      "//vm_tools:libvm_tools_common",
+    ]
+  }
+  executable("vsh_test") {
+    sources = [ "../vsh/utils_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":host_target_defaults",
+    ]
+    pkg_deps = [ "vm_protos" ]
+    deps = [
+      "//common-mk/testrunner:testrunner",
+      "//vm_tools:libvm_tools_common",
+      "//vm_tools:libvsh",
+    ]
+  }
+
+  if (use.arcvm) {
+    executable("vm_pstore_dump_test") {
+      sources = [ "../pstore_dump/persistent_ram_buffer_test.cc" ]
+      configs += [
+        "//common-mk:test",
+        ":host_target_defaults",
+      ]
+      deps = [
+        ":libvm_pstore_dump",
+        "//common-mk/testrunner:testrunner",
+      ]
+    }
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("vm_host_tools_fuzzer_pkg_deps") {
+    pkg_deps = [
+      "libprotobuf-mutator",
+      "protobuf",
+      "vm_protos",
+    ]
+  }
+  executable("cicerone_container_listener_fuzzer") {
+    sources = [ "../cicerone/container_listener_impl_fuzzer.cc" ]
+
+    # //common-mk:test should be on the top.
+    # TODO(crbug.com/887845): Remove this comment after library ordering issue is fixed.
+    configs += [
+      "//common-mk:test",
+      "//common-mk/common_fuzzer:common_fuzzer",
+      ":vm_host_tools_fuzzer_pkg_deps",
+    ]
+    pkg_deps = [
+      "grpc++",
+      "libchrome-test",  # For FuzzedDataProvider
+    ]
+    deps = [
+      ":libcicerone",
+      ":service_testing_helper_lib",
+    ]
+  }
+
+  executable("vsh_client_fuzzer") {
+    sources = [ "../vsh/vsh_client_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":host_target_defaults",
+      ":vm_host_tools_fuzzer_pkg_deps",
+    ]
+    deps = [ ":libvsh-client" ]
+  }
+}

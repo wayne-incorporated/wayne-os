@@ -1,0 +1,143 @@
+From c6ceceef9a8de3609c2894c30d2df701170e2022 Mon Sep 17 00:00:00 2001
+From: Mattias Nissler <mnissler@chromium.org>
+Date: Mon, 3 Feb 2020 12:18:28 +0100
+Subject: [PATCH] CHROMIUM: compatiblity patches for OpenSSL migration
+
+This adds adjustments to the code to help smoothen migration to
+OpenSSL 1.1.1. Specifically:
+
+ * If OPENSSL_CHROMIUM_SKIP_TRUSTED_PURPOSE_CHECK is set in the
+   environment, don't fail if the certificate chain validation finds
+   an inadequate certificate purpose for a trusted certificate in a
+   chain. This restores previous OpenSSL behavior.
+ * If OPENSSL_CHROMIUM_GENERATE_METRICS is set in the environment, generate
+   metric reports for the condition described above. This will help
+   quantify the situation in the field in preparation to drop the
+   compatibility patches eventually.
+
+BUG=chromium:1041803
+TEST=network_8021xWiredAuthentication passes, metrics get emitted.
+---
+ crypto/x509/x509_vfy.c | 92 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 92 insertions(+)
+
+--- a/crypto/x509/x509_vfy.c
++++ b/crypto/x509/x509_vfy.c
+@@ -11,6 +11,11 @@
+ #include <time.h>
+ #include <errno.h>
+ #include <limits.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <ctype.h>
++#include <sys/types.h>
++#include <sys/wait.h>
+ 
+ #include "internal/ctype.h"
+ #include "internal/cryptlib.h"
+@@ -505,6 +508,88 @@ static STACK_OF(X509) *lookup_certs_sk(X509_STORE_CTX *ctx, X509_NAME *nm)
+     return sk;
+ }
+ 
++/*
++ * Get the process' comm string. Technically this isn't thread safe, but in
++ * practice it is exceedingly unlikely that we run into race conditions here,
++ * and the worst case is that we'll expose a partial comm string, which isn't
++ * the end of the world.
++ */
++static const char* chromium_get_proc_comm() {
++    static char comm[16] = "";  /* TASK_COMM_LEN + null terminator */
++
++    if (!*comm) {
++        char* p = NULL;
++
++        int rlen = 0;
++        BIO* file = BIO_new_file("/proc/self/comm", "r");
++        if (file) {
++            rlen = BIO_read(file, comm, sizeof(comm));
++            BIO_free(file);
++        }
++
++        if (rlen > 0) {
++            /* Last char in comm is '\n', strip it. */
++            comm[rlen - 1] = '\0';
++            for (p = comm; *p; ++p) {
++                if (isalnum(*p)) {
++                    *p = tolower(*p);
++                } else {
++                    *p = '_';
++                }
++            }
++        } else {
++            strncpy(comm, "UNKNOWN", sizeof(comm) - 1);
++        }
++    }
++
++    return comm;
++}
++
++/*
++ * Generate a UMA metric sample. Instead of dealing with the complications of
++ * linking to the Chromium metrics infrastructure, this just spawns
++ * metrics_client in a child process to record the sample.  Note that doing so
++ * requires fork() and exec() to work; specifically, the underlying clone() and
++ * execve() syscalls must not be filtered by seccomp, so only do this if
++ * instructed by an environment variable.
++ */
++static void chromium_maybe_generate_metric_sample(const char* name, int sample,
++                                                  int max)
++{
++    if (getenv("OPENSSL_CHROMIUM_GENERATE_METRICS") == NULL) {
++        return;
++    }
++
++    /* Prepare strings before fork() to avoid potential locking issues. */
++    char metric_name[256] = "";
++    snprintf(metric_name, sizeof(metric_name) - 1, "%s.%s", name,
++             chromium_get_proc_comm());
++    char sample_str[16] = "";
++    snprintf(sample_str, sizeof(sample_str) - 1, "%d", sample);
++    char max_str[16] = "";
++    snprintf(max_str, sizeof(max_str) - 1, "%d", max);
++
++    pid_t child_pid = fork();
++    if (child_pid < 0) {
++        return;
++    }
++
++    if (child_pid > 0) {
++        /* Reap the child to avoid leaving around zombies. */
++        waitpid(child_pid, NULL, 0);
++        return;
++    }
++
++    /* Child process, launch metrics_client. */
++    char* const argv[] = { "metrics_client", metric_name, sample_str, "0",
++        max_str, max_str, NULL };
++    char* const envp[] = { NULL };
++    execve("/usr/bin/metrics_client", argv, envp);
++
++    /* Make sure to always terminate even if execve fails. */
++    abort();
++}
++
+ /*
+  * Check EE or CA certificate purpose.  For trusted certificates explicit local
+  * auxiliary trust can be used to override EKU-restrictions.
+@@ -553,6 +638,13 @@ static int check_purpose(X509_STORE_CTX *ctx, X509 *x, int purpose, int depth,
+         break;
+     }
+ 
++    if (depth >= ctx->num_untrusted &&
++        getenv("OPENSSL_CHROMIUM_SKIP_TRUSTED_PURPOSE_CHECK") != NULL) {
++        chromium_maybe_generate_metric_sample(
++            "Platform.OpenSSL.SkipTrustedPurposeCheck", 1, 2);
++        return 1;
++    }
++
+     return verify_cb_cert(ctx, x, depth, X509_V_ERR_INVALID_PURPOSE);
+ }
+ 
+-- 
+2.24.1
+

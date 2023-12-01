@@ -1,0 +1,39 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+USE=""
+LINUX_FIRMWARE=""
+
+USE="${USE} asuka"
+
+# Allow consumer kiosk.
+# NOTE: Deprecating feature. New board should NOT have it.
+USE="${USE} allow_consumer_kiosk"
+
+# Disable unibuild on this legacy board. This is only for existing (as of Jan 2019)
+# boards as all new boards must be unibuild enabled moving forward. Do not copy this
+# to new boards as it will be rejected. See
+# https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/chromeos-config/README.md
+# for further details about chromeos-config, which is the required entry point for
+# unified builds.
+USE="${USE} -unibuild"
+
+# Uncomment this line to activate the serial port.
+#TTY_CONSOLE="ttyS0"
+
+# Enable background blur.
+USE="${USE} background_blur"
+
+# Use AFDO profiles from big core
+AFDO_PROFILE_SOURCE="bigcore"
+
+# Temporarily disabling as quickfix for b/162500057
+# USE="${USE} drm_atomic"
+
+# Enable VMs
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Set mosys_platform
+USE="${USE} -mosys_platform_generic mosys_platform_asuka"

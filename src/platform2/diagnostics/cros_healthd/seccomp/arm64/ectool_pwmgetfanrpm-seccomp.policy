@@ -1,0 +1,24 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+brk: 1
+exit_group: 1
+exit: 1
+# CROS_EC_DEV_IOCXCMD = 0xc0283a00
+# CROS_EC_DEV_IOCRDMEM_V2 = 0xc108ec01
+# CROS_EC_DEV_IOCXCMD_V2 = 0xc014ec00
+ioctl: arg1 == 0xc0283a00 || arg1 == 0xc108ec01 || arg1 == 0xc014ec00
+openat: 1
+read: 1
+restart_syscall: 1
+rt_sigreturn: 1
+uname: 1
+sched_getattr: 1
+sched_setattr: 1
+clock_getres: 1
+clock_gettime: 1
+gettimeofday: 1

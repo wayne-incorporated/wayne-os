@@ -1,0 +1,25 @@
+// Copyright 2022 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// Note:
+//   1. This file is copied from,
+//      https://cs.chromium.org/chromium/src/mojo/public/mojom/base/file_path.mojom
+//   2. On chromium, we must use the version under mojo folder so we do not need
+//      to and must not sync this file to chromium.
+
+module mojo_base.mojom;
+
+[Stable]
+struct FilePath {
+  [EnableIf=file_path_is_string]
+  string path;
+
+  // This duplicates the contents of mojo_base.mojom.String16. String16 isn't
+  // used here due to typemapping dependency problems. base::FilePath is
+  // used for the typemap for both variants, but std::u16string and WTF::String
+  // are used for mojo_base.mojom.String16 typemapping. This mismatch causes
+  // problems with dependencies.
+  [EnableIf=file_path_is_string16]
+  array<uint16> path;
+};

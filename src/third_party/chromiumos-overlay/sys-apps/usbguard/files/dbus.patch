@@ -1,0 +1,2312 @@
+Move D-Bus support from bridge into usbguard-daemon.
+
+Author: Allen-Webb <allenwebb@google.com>
+
+Upstream pull request: https://github.com/USBGuard/usbguard/pull/319
+
+diff --git a/Makefile.am b/Makefile.am
+index ceb9a33..567af24 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -236,13 +236,14 @@ libusbguard_la_SOURCES=\
+ 	src/Library/IPCClientPrivate.hpp \
+ 	src/Library/IPCPrivate.cpp \
+ 	src/Library/IPCPrivate.hpp \
+-	src/Library/IPCServerPrivate.cpp \
+ 	src/Library/IPCServerPrivate.hpp \
+ 	src/Library/Init.cpp \
+ 	src/Library/KeyValueParserPrivate.cpp \
+ 	src/Library/KeyValueParserPrivate.hpp \
+ 	src/Library/LocaltimeCondition.cpp \
+ 	src/Library/LocaltimeCondition.hpp \
++	src/Library/QBIPCServerPrivate.hpp \
++	src/Library/QBIPCServerPrivate.cpp \
+ 	src/Library/RandomStateCondition.cpp \
+ 	src/Library/RandomStateCondition.hpp \
+ 	src/Library/RuleAppliedCondition.cpp \
+@@ -433,10 +434,20 @@ usbguard_rule_parser_LDADD=\
+ 	$(top_builddir)/libusbguard.la
+ 
+ #
+-# DBus Bridge
++# DBus
+ #
+ if DBUS_ENABLED
+-sbin_PROGRAMS+= usbguard-dbus
++libusbguard_la_SOURCES+= \
++	src/Library/DBusConstants.hpp \
++	src/Library/DBusIPCServerPrivate.hpp \
++	src/Library/DBusIPCServerPrivate.cpp
++
++libusbguard_la_CPPFLAGS+=\
++	-I$(top_builddir)/src/DBus \
++	@dbus_CFLAGS@
++
++libusbguard_la_LIBADD+=\
++	@dbus_LIBS@
+ 
+ if DOCS_ENABLED
+ man8_MANS+=\
+@@ -444,56 +455,32 @@ man8_MANS+=\
+ endif
+ 
+ BUILT_SOURCES+=\
+-	src/DBus/DBusInterface.xml.cstr \
+-	src/DBus/org.usbguard1.service \
+-	src/DBus/usbguard-dbus.service
++	src/DBus/DBusInterface.xml.cstr
+ 
+ EXTRA_DIST+=\
+ 	src/DBus/org.usbguard1.conf \
+-	src/DBus/org.usbguard1.service.in \
+-	src/DBus/usbguard-dbus.service.in \
+ 	src/DBus/org.usbguard1.policy \
+ 	src/DBus/DBusInterface.xml
+ 
+ CLEANFILES+=\
+-	$(top_builddir)/src/DBus/org.usbguard1.service \
+-	$(top_builddir)/src/DBus/usbguard-dbus.service \
+ 	$(top_builddir)/src/DBus/DBusInterface.xml.cstr
+ 
+-usbguard_dbus_SOURCES=\
+-	src/DBus/gdbus-server.cpp \
+-	src/DBus/DBusBridge.cpp \
+-	src/DBus/DBusBridge.hpp
+-
+-usbguard_dbus_CPPFLAGS=\
+-	-fPIE \
+-	$(AM_CPPFLAGS) \
+-	-I$(top_builddir)/src/DBus \
+-	@dbus_CFLAGS@
+-
+-usbguard_dbus_LDADD=\
+-	$(top_builddir)/libusbguard.la \
+-	@dbus_LIBS@
+-
+ %.xml:
+ 	xmllint "$(top_srcdir)/$@" > /dev/null
+ 
+ %.xml.cstr: %.xml
++	$(MKDIR_P) $(dir $@)
+ 	XMLLINT_INDENT="" xmllint --noblanks --format "$<" |\
+ 	  sed -n -e '/<!--/,/-->/ d; s|\"|\\"|g; s|.*|"&"|; p' > "$(top_builddir)/$@"
+ 
+ %.service: %.service.in
+ 	sed -e "s|%{sbindir}%|$(sbindir)|" "$<" > "$(top_builddir)/$@"
+ 
+-install-data-dbus: $(top_builddir)/src/DBus/org.usbguard1.service install-polkit-policy install-systemd-dbus-service
+-	$(MKDIR_P) $(DESTDIR)$(DBUS_SERVICES_DIR) && \
+-	  $(INSTALL_DATA) $(top_builddir)/src/DBus/org.usbguard1.service $(DESTDIR)$(DBUS_SERVICES_DIR)
++install-data-dbus: install-polkit-policy
+ 	$(MKDIR_P) $(DESTDIR)$(DBUS_BUSCONFIG_DIR) && \
+ 	  $(INSTALL_DATA) $(top_srcdir)/src/DBus/org.usbguard1.conf $(DESTDIR)$(DBUS_BUSCONFIG_DIR)
+ 
+-uninstall-data-dbus: uninstall-polkit-policy uninstall-systemd-dbus-service
+-	rm -f $(DESTDIR)$(DBUS_SERVICES_DIR)/org.usbguard1.service
+-	rmdir $(DESTDIR)$(DBUS_SERVICES_DIR)
++uninstall-data-dbus: uninstall-polkit-policy
+ 	rm -f $(DESTDIR)$(DBUS_BUSCONFIG_DIR)/org.usbguard1.conf
+ 	rmdir $(DESTDIR)$(DBUS_BUSCONFIG_DIR)
+ 
+@@ -526,21 +513,7 @@ uninstall-polkit-policy:
+ else
+ install-polkit-policy:
+ uninstall-polkit-policy:
+-endif
+-
+-if SYSTEMD_SUPPORT_ENABLED
+-install-systemd-dbus-service: $(top_builddir)/src/DBus/usbguard-dbus.service
+-	$(MKDIR_P) $(DESTDIR)$(SYSTEMD_UNIT_DIR) && \
+-	  $(INSTALL_DATA) $(top_builddir)/src/DBus/usbguard-dbus.service $(DESTDIR)$(SYSTEMD_UNIT_DIR)
+-
+-uninstall-systemd-dbus-service:
+-	rm -f $(DESTDIR)$(SYSTEMD_UNIT_DIR)/usbguard-dbus.service
+-	rmdir $(DESTDIR)$(SYSTEMD_UNIT_DIR)
+-
+-else
+-install-systemd-dbus-service:
+-uninstall-systemd-dbus-service:
+-endif
++endif #POLICYKIT_ENABLED
+ else
+ install-data-dbus:
+ uninstall-data-dbus:
+diff --git a/configure.ac b/configure.ac
+index 2ccd714..b5b9bac 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -326,7 +326,7 @@ CPPFLAGS=$SAVE_CPPFLAGS
+ #
+ # GLib D-Bus
+ #
+-AC_ARG_WITH([dbus], AC_HELP_STRING([--with-dbus], [Build the DBus Bridge service]), [], [with_dbus=yes])
++AC_ARG_WITH([dbus], AC_HELP_STRING([--with-dbus], [Build with DBus support]), [], [with_dbus=yes])
+ if test "x$with_dbus" = xyes; then
+   #
+   # Check for required D-Bus modules
+diff --git a/src/DBus/DBusBridge.hpp b/src/DBus/DBusBridge.hpp
+deleted file mode 100644
+index cd370ba..0000000
+--- a/src/DBus/DBusBridge.hpp
++++ /dev/null
+@@ -1,92 +0,0 @@
+-//
+-// Copyright (C) 2016 Red Hat, Inc.
+-//
+-// This program is free software; you can redistribute it and/or modify
+-// it under the terms of the GNU General Public License as published by
+-// the Free Software Foundation; either version 2 of the License, or
+-// (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// You should have received a copy of the GNU General Public License
+-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-//
+-// Authors: Daniel Kopecek <dkopecek@redhat.com>
+-//
+-#pragma once
+-#ifdef HAVE_BUILD_CONFIG_H
+-  #include <build-config.h>
+-#endif
+-
+-#include "usbguard/IPCClient.hpp"
+-
+-#pragma clang diagnostic push
+-#pragma clang diagnostic ignored "-Wdeprecated-register"
+-#include <gio/gio.h>
+-#pragma clang diagnostic pop
+-
+-#define DBUS_SERVICE_NAME      "org.usbguard1"
+-#define DBUS_ROOT_INTERFACE    "org.usbguard1"
+-#define DBUS_ROOT_PATH         "/org/usbguard1"
+-#define DBUS_POLICY_INTERFACE  "org.usbguard.Policy1"
+-#define DBUS_POLICY_PATH       "/org/usbguard1/Policy"
+-#define DBUS_DEVICES_INTERFACE "org.usbguard.Devices1"
+-#define DBUS_DEVICES_PATH      "/org/usbguard1/Devices"
+-
+-namespace usbguard
+-{
+-  class DBusBridge : public IPCClient
+-  {
+-  public:
+-    DBusBridge(GDBusConnection* const gdbus_connection,
+-      void(*ipc_callback)(bool) = nullptr);
+-    ~DBusBridge();
+-
+-    void handleMethodCall(const std::string interface, const std::string method_name,
+-      GVariant* parameters, GDBusMethodInvocation* invocation);
+-
+-  private:
+-    void IPCConnected() override;
+-    void IPCDisconnected(bool exception_initiated, const IPCException& exception) override;
+-
+-    void DevicePresenceChanged(uint32_t id,
+-      DeviceManager::EventType event,
+-      Rule::Target target,
+-      const std::string& device_rule) override;
+-
+-    void DevicePolicyChanged(uint32_t id,
+-      Rule::Target target_old,
+-      Rule::Target target_new,
+-      const std::string& device_rule,
+-      uint32_t rule_id) override;
+-
+-    void PropertyParameterChanged(const std::string& name,
+-      const std::string& value_old,
+-      const std::string& value_new) override;
+-
+-    void ExceptionMessage(const std::string& context,
+-      const std::string& object,
+-      const std::string& reason) override;
+-
+-    static GVariantBuilder* deviceRuleToAttributes(const std::string& device_spec);
+-
+-    void handleRootMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation);
+-    void handlePolicyMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation);
+-    void handleDevicesMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation);
+-
+-    void emitDevicePolicyDecision(const char* policy_signal,
+-      uint32_t id,
+-      const std::map<std::string, std::string>& attributes,
+-      bool rule_match,
+-      uint32_t rule_id);
+-
+-
+-    GDBusConnection* const p_gdbus_connection;
+-    void(*p_ipc_callback)(bool);
+-  };
+-} /* namespace usbguard */
+-
+-/* vim: set ts=2 sw=2 et */
+diff --git a/src/DBus/gdbus-server.cpp b/src/DBus/gdbus-server.cpp
+deleted file mode 100644
+index ccdf62a..0000000
+--- a/src/DBus/gdbus-server.cpp
++++ /dev/null
+@@ -1,310 +0,0 @@
+-//
+-// Copyright (C) 2016 Red Hat, Inc.
+-//
+-// This program is free software; you can redistribute it and/or modify
+-// it under the terms of the GNU General Public License as published by
+-// the Free Software Foundation; either version 2 of the License, or
+-// (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// You should have received a copy of the GNU General Public License
+-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-//
+-// Authors: Daniel Kopecek <dkopecek@redhat.com>
+-//
+-#ifdef HAVE_BUILD_CONFIG_H
+-  #include <build-config.h>
+-#endif
+-
+-#include <stdlib.h>
+-#include <iostream>
+-#include <getopt.h>
+-#include "DBusBridge.hpp"
+-
+-static usbguard::DBusBridge* dbus_bridge = nullptr;
+-static GMainLoop* main_loop = nullptr;
+-static GDBusNodeInfo* introspection_data = NULL;
+-
+-static const gchar introspection_xml[] =
+-#include "DBusInterface.xml.cstr"
+-  ;
+-static const unsigned int expected_interface_count = 3;
+-
+-static int global_ret = EXIT_SUCCESS;
+-
+-static void
+-handle_method_call (GDBusConnection*       connection,
+-  const gchar*           sender,
+-  const gchar*           object_path,
+-  const gchar*           interface_name,
+-  const gchar*           method_name,
+-  GVariant*              parameters,
+-  GDBusMethodInvocation* invocation,
+-  gpointer               user_data)
+-{
+-  (void)connection;
+-  (void)sender;
+-  (void)object_path;
+-  (void)user_data;
+-
+-  try {
+-    dbus_bridge->handleMethodCall(interface_name, method_name, parameters, invocation);
+-  }
+-  catch (std::exception& ex) {
+-    g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR,
+-      G_DBUS_ERROR_FAILED, "Exception: %s", ex.what());
+-  }
+-  catch (...) {
+-    g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR,
+-      G_DBUS_ERROR_FAILED, "BUG: Unknown exception; method call failed for unknown reasons.");
+-  }
+-}
+-
+-static gboolean
+-usbguard_ipc_try_connect(gpointer user_data)
+-{
+-  (void)user_data;
+-
+-  if (dbus_bridge == nullptr) {
+-    g_main_loop_quit(main_loop);
+-    global_ret = EXIT_FAILURE;
+-    return FALSE;
+-  }
+-  else if (dbus_bridge->isConnected()) {
+-    /* returning FALSE removes the function call from the main loop */
+-    return FALSE;
+-  }
+-  else {
+-    try {
+-      dbus_bridge->connect();
+-    }
+-    catch (...) {
+-      /* ignore exception */
+-    }
+-
+-    return TRUE;
+-  }
+-}
+-
+-static void
+-handle_usbguard_ipc_state(bool state)
+-{
+-  if (state == false) {
+-    if (g_timeout_add_seconds(1, &usbguard_ipc_try_connect, nullptr) <= 0) {
+-      std::cerr << "Unable to setup the IPC reconnection timer." << std::endl;
+-      g_main_loop_quit(main_loop);
+-      global_ret = EXIT_FAILURE;
+-      return;
+-    }
+-  }
+-}
+-
+-static const GDBusInterfaceVTable devices_interface_vtable = {
+-  handle_method_call,
+-  nullptr,
+-  nullptr,
+-  {}
+-};
+-
+-static const GDBusInterfaceVTable policy_interface_vtable = {
+-  handle_method_call,
+-  nullptr,
+-  nullptr,
+-  {}
+-};
+-
+-static const GDBusInterfaceVTable usbguard_interface_vtable = {
+-  handle_method_call,
+-  nullptr,
+-  nullptr,
+-  {}
+-};
+-
+-static void
+-on_bus_acquired (GDBusConnection* connection,
+-  const gchar*     name,
+-  gpointer         user_data)
+-{
+-  (void)name;
+-  (void)user_data;
+-  auto usbguard_rid = g_dbus_connection_register_object(connection,
+-      DBUS_ROOT_PATH,
+-      introspection_data->interfaces[0],
+-      &usbguard_interface_vtable,
+-      /*user_data=*/dbus_bridge,
+-      /*user_data_free_func=*/nullptr,
+-      /*GError=*/nullptr);
+-  auto policy_rid = g_dbus_connection_register_object(connection,
+-      DBUS_POLICY_PATH,
+-      introspection_data->interfaces[1],
+-      &policy_interface_vtable,
+-      /*user_data=*/dbus_bridge,
+-      /*user_data_free_func=*/nullptr,
+-      /*GError=*/nullptr);
+-  auto devices_rid = g_dbus_connection_register_object(connection,
+-      DBUS_DEVICES_PATH,
+-      introspection_data->interfaces[2],
+-      &devices_interface_vtable,
+-      /*user_data=*/dbus_bridge,
+-      /*user_data_free_func=*/nullptr,
+-      /*GError=*/nullptr);
+-
+-  if (policy_rid <= 0 || devices_rid <= 0 || usbguard_rid <= 0) {
+-    std::cerr << "Unable to register required objects on the bus." << std::endl;
+-    g_main_loop_quit(main_loop);
+-    global_ret = EXIT_FAILURE;
+-  }
+-}
+-
+-static void
+-on_name_acquired (GDBusConnection* connection,
+-  const gchar*     name,
+-  gpointer         user_data)
+-{
+-  (void)name;
+-  (void)user_data;
+-  /* We got the name, reset the global return value */
+-  global_ret = EXIT_SUCCESS;
+-
+-  try {
+-    dbus_bridge = new usbguard::DBusBridge(connection);
+-    handle_usbguard_ipc_state(/*state=*/false);
+-  }
+-  catch (...) {
+-    dbus_bridge = nullptr;
+-    std::cerr << "Unable to create the USBGuard DBus Bridge." << std::endl;
+-    g_main_loop_quit(main_loop);
+-    global_ret = EXIT_FAILURE;
+-  }
+-}
+-
+-static void
+-on_name_lost (GDBusConnection* connection,
+-  const gchar*     name,
+-  gpointer         user_data)
+-{
+-  (void)connection;
+-  (void)name;
+-  (void)user_data;
+-  g_main_loop_quit(main_loop);
+-  auto dbus_bridge_local = dbus_bridge;
+-  dbus_bridge = nullptr;
+-  delete dbus_bridge_local;
+-}
+-
+-static const char* options_short = "sSh";
+-static const char* usbguard_arg0 = nullptr;
+-
+-static const struct ::option options_long[] = {
+-  { "system", no_argument, nullptr, 's' },
+-  { "session", no_argument, nullptr, 'S' },
+-  { "help", no_argument, nullptr, 'h' },
+-  { nullptr, 0, nullptr, 0 }
+-};
+-
+-static void showHelp(std::ostream& stream)
+-{
+-  stream << " Usage: " << ::basename(usbguard_arg0) << " [OPTIONS]" << std::endl;
+-  stream << std::endl;
+-  stream << " Options:" << std::endl;
+-  stream << "  -s, --system   Listen on the system bus." << std::endl;
+-  stream << "  -S, --session  Listen on the session bus." << std::endl;
+-  stream << "  -h, --help     Show this help." << std::endl;
+-  stream << std::endl;
+-}
+-
+-int
+-main (int argc, char* argv[])
+-{
+-  usbguard_arg0 = argv[0];
+-  int opt = 0;
+-  bool use_system_bus = true;
+-
+-  while ((opt = getopt_long(argc, argv, options_short, options_long, nullptr)) != -1) {
+-    switch (opt) {
+-    case 's':
+-      use_system_bus = true;
+-      break;
+-
+-    case 'S':
+-      use_system_bus = false;
+-      break;
+-
+-    case 'h':
+-      showHelp(std::cout);
+-      return EXIT_SUCCESS;
+-
+-    case '?':
+-      showHelp(std::cerr);
+-
+-    default:
+-      return EXIT_FAILURE;
+-    }
+-  }
+-
+-  /* Parse the XML DBus interface definition */
+-  if ((introspection_data = g_dbus_node_info_new_for_xml (introspection_xml, nullptr)) == nullptr) {
+-    std::cerr << "Failed to parse the introspection data." << std::endl;
+-    return EXIT_FAILURE;
+-  }
+-
+-  /* Ensure that the expected number of interfaces is defined */
+-  unsigned int interface_count = 0;
+-
+-  if (introspection_data->interfaces != nullptr) {
+-    while (introspection_data->interfaces[interface_count] != nullptr) {
+-      ++interface_count;
+-    }
+-  }
+-
+-  if (interface_count != expected_interface_count) {
+-    std::cerr << "The introspection data contains an unexpected"
+-      << " number of interfaces: " << interface_count
+-      << ", expected: " << expected_interface_count << std::endl;
+-    return EXIT_FAILURE;
+-  }
+-
+-  /*
+-   * Set the global return value to FAILURE before we start the mainloop.
+-   * When we succesfully own the bus name, this flag will be reset by the
+-   * DBus callbacks back to SUCCESS. Otherwise, the on_name_lost callback
+-   * will be called which will stop the main loop and we'll return the
+-   * FAILURE return code.
+-   */
+-  global_ret = EXIT_FAILURE;
+-  /* Try to take ownership of the bus */
+-  auto owner_id = g_bus_own_name (use_system_bus ?
+-      G_BUS_TYPE_SYSTEM : G_BUS_TYPE_SESSION,
+-      DBUS_SERVICE_NAME,
+-      G_BUS_NAME_OWNER_FLAGS_NONE,
+-      on_bus_acquired,
+-      on_name_acquired,
+-      on_name_lost,
+-      /*user_data=*/nullptr,
+-      /*user_data_free_func=*/nullptr);
+-  int ret;
+-
+-  /* Start the main loop */
+-  if (owner_id > 0) {
+-    if ((main_loop = g_main_loop_new (NULL, FALSE)) != nullptr) {
+-      g_main_loop_run (main_loop);
+-    }
+-
+-    g_bus_unown_name (owner_id);
+-    ret = global_ret;
+-  }
+-  else {
+-    std::cerr << "Failed to take ownership of the " << DBUS_SERVICE_NAME << " bus name." << std::endl;
+-    ret = EXIT_FAILURE;
+-  }
+-
+-  /* Release allocated resources */
+-  g_dbus_node_info_unref (introspection_data);
+-  return ret;
+-}
+-
+-/* vim: set ts=2 sw=2 et */
+diff --git a/src/DBus/org.usbguard1.service.in b/src/DBus/org.usbguard1.service.in
+deleted file mode 100644
+index 232af62..0000000
+--- a/src/DBus/org.usbguard1.service.in
++++ /dev/null
+@@ -1,5 +0,0 @@
+-[D-BUS Service]
+-Name=org.usbguard1
+-Exec=%{sbindir}%/usbguard-dbus --system
+-SystemdService=dbus-org.usbguard.service
+-
+diff --git a/src/DBus/usbguard-dbus.service.in b/src/DBus/usbguard-dbus.service.in
+deleted file mode 100644
+index 6f37dff..0000000
+--- a/src/DBus/usbguard-dbus.service.in
++++ /dev/null
+@@ -1,15 +0,0 @@
+-[Unit]
+-Description=USBGuard D-Bus Service
+-Requires=usbguard.service
+-Documentation=man:usbguard-dbus(8)
+-
+-[Service]
+-Type=dbus
+-BusName=org.usbguard1
+-ExecStart=%{sbindir}%/usbguard-dbus --system
+-Restart=on-failure
+-
+-[Install]
+-WantedBy=multi-user.target
+-Alias=dbus-org.usbguard.service
+-
+diff --git a/src/Library/DBusConstants.hpp b/src/Library/DBusConstants.hpp
+new file mode 100644
+index 0000000..c429778
+--- /dev/null
++++ b/src/Library/DBusConstants.hpp
+@@ -0,0 +1,30 @@
++//
++// Copyright (C) 2019 Red Hat, Inc.
++//
++// This program is free software; you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation; either version 2 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++// Authors: Daniel Kopecek <dkopecek@redhat.com>
++//          Allen Webb <allenwebb@google.com>
++//
++#pragma once
++
++#define DBUS_API_VERSION "1"
++
++#define DBUS_SERVICE_NAME      ("org.usbguard" DBUS_API_VERSION)
++#define DBUS_ROOT_INTERFACE    ("org.usbguard" DBUS_API_VERSION)
++#define DBUS_ROOT_PATH         ("/org/usbguard" DBUS_API_VERSION)
++#define DBUS_POLICY_INTERFACE  ("org.usbguard.Policy" DBUS_API_VERSION)
++#define DBUS_POLICY_PATH       ("/org/usbguard" DBUS_API_VERSION "/Policy")
++#define DBUS_DEVICES_INTERFACE ("org.usbguard.Devices" DBUS_API_VERSION)
++#define DBUS_DEVICES_PATH      ("/org/usbguard" DBUS_API_VERSION "/Devices")
+diff --git a/src/DBus/DBusBridge.cpp b/src/Library/DBusIPCServerPrivate.cpp
+similarity index 50%
+rename from src/DBus/DBusBridge.cpp
+rename to src/Library/DBusIPCServerPrivate.cpp
+index b319326..6cb7392 100644
+--- a/src/DBus/DBusBridge.cpp
++++ b/src/Library/DBusIPCServerPrivate.cpp
+@@ -1,5 +1,5 @@
+ //
+-// Copyright (C) 2016 Red Hat, Inc.
++// Copyright (C) 2019 Red Hat, Inc.
+ //
+ // This program is free software; you can redistribute it and/or modify
+ // it under the terms of the GNU General Public License as published by
+@@ -15,42 +15,181 @@
+ // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ //
+ // Authors: Daniel Kopecek <dkopecek@redhat.com>
++//          Allen Webb <allenwebb@google.com>
+ //
+ #ifdef HAVE_BUILD_CONFIG_H
+   #include <build-config.h>
+ #endif
+ 
+-#include "DBusBridge.hpp"
++#include "DBusIPCServerPrivate.hpp"
++#include "DBusConstants.hpp"
++
++static const gchar introspection_xml[] =
++#include "../../DBus/DBusInterface.xml.cstr"
++  ;
++
+ namespace usbguard
+ {
+-  DBusBridge::DBusBridge(GDBusConnection* const gdbus_connection,
+-    void(*ipc_callback)(bool))
+-    : p_gdbus_connection(gdbus_connection),
+-      p_ipc_callback(ipc_callback)
++  namespace
+   {
++    void BusAcquiredCallback(GDBusConnection* connection, const gchar* name, gpointer user_data)
++    {
++      DBusIPCServerPrivate* p_instance = reinterpret_cast<DBusIPCServerPrivate*>(user_data);
++
++      if (p_instance != nullptr) {
++        p_instance->OnBusAcquired(connection, name);
++      }
++      else {
++        USBGUARD_LOG(Error) << "Failed to register D-Bus bus acquired.";
++      }
++    }
++
++    void NameAcquiredCallback(GDBusConnection* connection, const gchar* name, gpointer user_data)
++    {
++      DBusIPCServerPrivate* p_instance = reinterpret_cast<DBusIPCServerPrivate*>(user_data);
++
++      if (p_instance != nullptr) {
++        p_instance->OnNameAcquired(connection, name);
++      }
++      else {
++        USBGUARD_LOG(Error) << "Failed to register D-Bus name acquired.";
++      }
++    }
++
++    void NameLostCallback(GDBusConnection* connection, const gchar* name, gpointer user_data)
++    {
++      DBusIPCServerPrivate* p_instance = reinterpret_cast<DBusIPCServerPrivate*>(user_data);
++
++      if (p_instance != nullptr) {
++        p_instance->OnNameLost(connection, name);
++      }
++    }
++
++    void MethodCallCallback(GDBusConnection* connection,
++      const gchar* sender,
++      const gchar* object_path,
++      const gchar* interface_name,
++      const gchar* method_name,
++      GVariant* parameters,
++      GDBusMethodInvocation* invocation,
++      gpointer user_data)
++    {
++      DBusIPCServerPrivate* p_instance = reinterpret_cast<DBusIPCServerPrivate*>(user_data);
++
++      if (p_instance != nullptr) {
++        p_instance->HandleMethodCall(connection, sender, object_path, interface_name, method_name, parameters, invocation);
++      }
++    }
++  } /* namespace */
++
++  DBusIPCServerPrivate::DBusIPCServerPrivate(IPCServer& p_instance)
++    : _p_instance(p_instance), _dbus_interface_vtable{
++    MethodCallCallback,
++    nullptr,
++    nullptr,
++    {}
++  },
++  _thread(this, &DBusIPCServerPrivate::thread) {}
++
++  DBusIPCServerPrivate::~DBusIPCServerPrivate()
++  {
++    if (_thread.running()) {
++      stop();
++    }
++
++    if (_dbus_introspection_data != nullptr) {
++      g_dbus_node_info_unref(_dbus_introspection_data);
++    }
++
++    if (_dbus_main_loop != nullptr) {
++      g_main_loop_unref(_dbus_main_loop);
++    }
+   }
+ 
+-  DBusBridge::~DBusBridge()
++  void DBusIPCServerPrivate::start()
+   {
++    if (!_thread.running()) {
++      _thread.start();
++    }
+   }
+ 
+-  void DBusBridge::handleMethodCall(const std::string interface, const std::string method_name, GVariant* parameters,
+-    GDBusMethodInvocation* invocation)
++  void DBusIPCServerPrivate::stopWithoutJoin()
+   {
+-    if (!isConnected()) {
+-      g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR,
+-        G_DBUS_ERROR_NO_SERVER, "USBGuard DBus service is not connected to the daemon.");
++    _thread.stop(/*do_wait=*/false);
++
++    if (_dbus_main_loop != nullptr) {
++      g_main_loop_quit(_dbus_main_loop);
++    }
++  }
++
++  void DBusIPCServerPrivate::stop()
++  {
++    if (_dbus_owner_id > 0) {
++      g_bus_unown_name(_dbus_owner_id);
++      _dbus_owner_id = 0;
++    }
++
++    stopWithoutJoin();
++    _thread.wait();
++  }
++
++  void DBusIPCServerPrivate::thread()
++  {
++    if (_dbus_main_loop != nullptr) {
++      USBGUARD_LOG(Error) << "Tried to start the same thread more than once.";
++      return;
++    }
++
++    if ((_dbus_introspection_data = g_dbus_node_info_new_for_xml (introspection_xml, nullptr)) == nullptr) {
++      USBGUARD_LOG(Error) << ("Failed to parse dbus interface data.");
++      return;
++    }
++
++    _dbus_owner_id = g_bus_own_name (_use_system_bus ?
++        G_BUS_TYPE_SYSTEM : G_BUS_TYPE_SESSION,
++        DBUS_SERVICE_NAME,
++        G_BUS_NAME_OWNER_FLAGS_NONE,
++        BusAcquiredCallback,
++        NameAcquiredCallback,
++        NameLostCallback,
++        /*user_data=*/this,
++        /*user_data_free_func=*/nullptr);
++
++    if (_dbus_owner_id <= 0) {
++      USBGUARD_LOG(Error) << "Failed to request D-Bus name.";
+       return;
+     }
+ 
++    _dbus_main_loop = g_main_loop_new(NULL, FALSE);
++
++    if (_dbus_main_loop == nullptr) {
++      USBGUARD_LOG(Error) << "Failed to allocate glib main loop.";
++      return;
++    }
++
++    g_main_loop_run(_dbus_main_loop);
++  }
++
++  void DBusIPCServerPrivate::HandleMethodCall(GDBusConnection* connection,
++    const gchar*           sender,
++    const gchar*           object_path,
++    const gchar*           interface_name,
++    const gchar*           method_name,
++    GVariant*              parameters,
++    GDBusMethodInvocation* invocation)
++  {
++    (void)connection;
++    (void)sender;
++    (void)object_path;
++
+     try {
+-      if (interface == DBUS_POLICY_INTERFACE) {
++      if (strcmp(interface_name, DBUS_POLICY_INTERFACE) == 0) {
+         handlePolicyMethodCall(method_name, parameters, invocation);
+       }
+-      else if (interface == DBUS_DEVICES_INTERFACE) {
++      else if (strcmp(interface_name, DBUS_DEVICES_INTERFACE) == 0) {
+         handleDevicesMethodCall(method_name, parameters, invocation);
+       }
+-      else if (interface == DBUS_ROOT_INTERFACE) {
++      else if (strcmp(interface_name, DBUS_ROOT_INTERFACE) == 0) {
+         handleRootMethodCall(method_name, parameters, invocation);
+       }
+       else {
+@@ -70,17 +209,17 @@ namespace usbguard
+       g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR,
+         G_DBUS_ERROR_FAILED, "BUG: Unknown exception");
+     }
+-
+-    return;
+   }
+ 
+-  void DBusBridge::handleRootMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation)
++
++  void DBusIPCServerPrivate::handleRootMethodCall(const std::string& method_name, GVariant* parameters,
++    GDBusMethodInvocation* invocation)
+   {
+     if (method_name == "getParameter") {
+       const char* name_cstr = nullptr;
+       g_variant_get(parameters, "(&s)", &name_cstr);
+       std::string name(name_cstr);
+-      auto value = getParameter(name);
++      auto value = _p_instance.getParameter(name);
+       g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", value.c_str()));
+       return;
+     }
+@@ -91,7 +230,7 @@ namespace usbguard
+       g_variant_get(parameters, "(&s&s)", &name_cstr, &value_cstr);
+       const std::string name(name_cstr);
+       const std::string value(value_cstr);
+-      auto previous_value = setParameter(name, value);
++      auto previous_value = _p_instance.setParameter(name, value);
+       g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", previous_value.c_str()));
+       return;
+     }
+@@ -100,14 +239,14 @@ namespace usbguard
+       G_DBUS_ERROR_UNKNOWN_METHOD, "Unknown method interface");
+     return;
+   }
+-
+-  void DBusBridge::handlePolicyMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation)
++  void DBusIPCServerPrivate::handlePolicyMethodCall(const std::string& method_name, GVariant* parameters,
++    GDBusMethodInvocation* invocation)
+   {
+     if (method_name == "listRules") {
+       const char* label_cstr = nullptr;
+       g_variant_get(parameters, "(&s)", &label_cstr);
+       std::string label(label_cstr);
+-      auto rules = listRules(label);
++      auto rules = _p_instance.listRules(label);
+ 
+       if (rules.size() > 0) {
+         auto gvbuilder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
+@@ -141,7 +280,7 @@ namespace usbguard
+       bool temporary = false;
+       g_variant_get(parameters, "(&sub)", &rule_spec_cstr, &parent_id, &temporary);
+       std::string rule_spec(rule_spec_cstr);
+-      const uint32_t rule_id = appendRule(rule_spec, parent_id, !temporary);
++      const uint32_t rule_id = _p_instance.appendRule(rule_spec, parent_id, !temporary);
+       g_dbus_method_invocation_return_value(invocation, g_variant_new("(u)", rule_id));
+       return;
+     }
+@@ -149,7 +288,7 @@ namespace usbguard
+     if (method_name == "removeRule") {
+       uint32_t rule_id = 0;
+       g_variant_get(parameters, "(u)", &rule_id);
+-      removeRule(rule_id);
++      _p_instance.removeRule(rule_id);
+       g_dbus_method_invocation_return_value(invocation, nullptr);
+       return;
+     }
+@@ -158,15 +297,14 @@ namespace usbguard
+       G_DBUS_ERROR_UNKNOWN_METHOD, "Unknown method interface");
+     return;
+   }
+-
+-  void DBusBridge::handleDevicesMethodCall(const std::string& method_name, GVariant* parameters,
++  void DBusIPCServerPrivate::handleDevicesMethodCall(const std::string& method_name, GVariant* parameters,
+     GDBusMethodInvocation* invocation)
+   {
+     if (method_name == "listDevices") {
+       const char* query_cstr = nullptr;
+       g_variant_get(parameters, "(&s)", &query_cstr);
+       std::string query(query_cstr);
+-      auto devices = listDevices(query);
++      auto devices = _p_instance.listDevices(query);
+ 
+       if (devices.size() > 0) {
+         auto gvbuilder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
+@@ -200,7 +338,7 @@ namespace usbguard
+       gboolean permanent = false;
+       g_variant_get(parameters, "(uub)", &device_id, &target_integer, &permanent);
+       const Rule::Target target = Rule::targetFromInteger(target_integer);
+-      const uint32_t rule_id = applyDevicePolicy(device_id, target, permanent);
++      const uint32_t rule_id = _p_instance.applyDevicePolicy(device_id, target, permanent);
+       g_dbus_method_invocation_return_value(invocation, g_variant_new("(u)", rule_id));
+       return;
+     }
+@@ -209,30 +347,65 @@ namespace usbguard
+       G_DBUS_ERROR_UNKNOWN_METHOD, "Unknown method ");
+   }
+ 
+-  void DBusBridge::IPCConnected()
++  void DBusIPCServerPrivate::OnBusAcquired(GDBusConnection* connection, const gchar* name)
+   {
+-    if (p_ipc_callback != nullptr) {
+-      p_ipc_callback(/*connected=*/true);
++    (void)name;
++    USBGUARD_LOG(Info) << "DBusIPCServerPrivate::OnBusAcquired()";
++    auto usbguard_rid = g_dbus_connection_register_object(connection,
++        DBUS_ROOT_PATH,
++        _dbus_introspection_data->interfaces[0],
++        &_dbus_interface_vtable,
++        /*user_data=*/this,
++        /*user_data_free_func=*/nullptr,
++        /*GError=*/nullptr);
++    auto policy_rid = g_dbus_connection_register_object(connection,
++        DBUS_POLICY_PATH,
++        _dbus_introspection_data->interfaces[1],
++        &_dbus_interface_vtable,
++        /*user_data=*/this,
++        /*user_data_free_func=*/nullptr,
++        /*GError=*/nullptr);
++    auto devices_rid = g_dbus_connection_register_object(connection,
++        DBUS_DEVICES_PATH,
++        _dbus_introspection_data->interfaces[2],
++        &_dbus_interface_vtable,
++        /*user_data=*/this,
++        /*user_data_free_func=*/nullptr,
++        /*GError=*/nullptr);
++
++    if (policy_rid <= 0 || devices_rid <= 0 || usbguard_rid <= 0) {
++      USBGUARD_LOG(Error) << "Unable to register required objects on the bus.";
++      stopWithoutJoin();
+     }
+   }
+ 
+-  void DBusBridge::IPCDisconnected(bool exception_initiated, const IPCException& exception)
++  void DBusIPCServerPrivate::OnNameAcquired(GDBusConnection* connection, const gchar* name)
+   {
+-    (void)exception_initiated;
+-    (void)exception;
++    (void)name;
++    USBGUARD_LOG(Info) << "DBusIPCServerPrivate::OnNameAcquired()";
++    _gdbus_connection = connection;
++  }
+ 
+-    if (p_ipc_callback != nullptr) {
+-      p_ipc_callback(/*connected=*/false);
+-    }
++  void DBusIPCServerPrivate::OnNameLost(GDBusConnection* connection, const gchar* name)
++  {
++    (void)connection;
++    (void)name;
++    USBGUARD_LOG(Info) << "DBusIPCServerPrivate::OnNameLost()";
++    _gdbus_connection = nullptr;
++    stopWithoutJoin();
+   }
+ 
+-  void DBusBridge::DevicePresenceChanged(uint32_t id,
++  void DBusIPCServerPrivate::DevicePresenceChanged(uint32_t id,
+     DeviceManager::EventType event,
+     Rule::Target target,
+     const std::string& device_rule)
+   {
++    if (_gdbus_connection == nullptr) {
++      return;
++    }
++
+     GVariantBuilder* gv_builder_attributes = deviceRuleToAttributes(device_rule);
+-    g_dbus_connection_emit_signal(p_gdbus_connection, nullptr,
++    g_dbus_connection_emit_signal(_gdbus_connection, nullptr,
+       DBUS_DEVICES_PATH, DBUS_DEVICES_INTERFACE, "DevicePresenceChanged",
+       g_variant_new("(uuusa{ss})",
+         id,
+@@ -247,14 +420,18 @@ namespace usbguard
+     }
+   }
+ 
+-  void DBusBridge::DevicePolicyChanged(uint32_t id,
++  void DBusIPCServerPrivate::DevicePolicyChanged(uint32_t id,
+     Rule::Target target_old,
+     Rule::Target target_new,
+     const std::string& device_rule,
+     uint32_t rule_id)
+   {
++    if (_gdbus_connection == nullptr) {
++      return;
++    }
++
+     GVariantBuilder* gv_builder_attributes = deviceRuleToAttributes(device_rule);
+-    g_dbus_connection_emit_signal(p_gdbus_connection, nullptr,
++    g_dbus_connection_emit_signal(_gdbus_connection, nullptr,
+       DBUS_DEVICES_PATH, DBUS_DEVICES_INTERFACE, "DevicePolicyChanged",
+       g_variant_new("(uuusua{ss})",
+         id,
+@@ -270,11 +447,15 @@ namespace usbguard
+     }
+   }
+ 
+-  void DBusBridge::PropertyParameterChanged(const std::string& name,
++  void DBusIPCServerPrivate::PropertyParameterChanged(const std::string& name,
+     const std::string& value_old,
+     const std::string& value_new)
+   {
+-    g_dbus_connection_emit_signal(p_gdbus_connection, nullptr,
++    if (_gdbus_connection == nullptr) {
++      return;
++    }
++
++    g_dbus_connection_emit_signal(_gdbus_connection, nullptr,
+       DBUS_ROOT_PATH, DBUS_ROOT_INTERFACE, "PropertyParameterChanged",
+       g_variant_new("(sss)",
+         name.c_str(),
+@@ -283,11 +464,18 @@ namespace usbguard
+       nullptr);
+   }
+ 
+-  void DBusBridge::ExceptionMessage(const std::string& context,
++  void DBusIPCServerPrivate::ExceptionMessage(const std::string& context,
+     const std::string& object,
+-    const std::string& reason)
++    const std::string& reason,
++    uint64_t request_id)
+   {
+-    g_dbus_connection_emit_signal(p_gdbus_connection, nullptr,
++    (void)request_id;
++
++    if (_gdbus_connection == nullptr) {
++      return;
++    }
++
++    g_dbus_connection_emit_signal(_gdbus_connection, nullptr,
+       DBUS_ROOT_PATH, DBUS_ROOT_INTERFACE, "ExceptionMessage",
+       g_variant_new("(sss)",
+         context.c_str(),
+@@ -296,7 +484,7 @@ namespace usbguard
+       nullptr);
+   }
+ 
+-  GVariantBuilder* DBusBridge::deviceRuleToAttributes(const std::string& device_spec)
++  GVariantBuilder* DBusIPCServerPrivate::deviceRuleToAttributes(const std::string& device_spec)
+   {
+     Rule device_rule = Rule::fromString(device_spec);
+     GVariantBuilder* builder = g_variant_builder_new(G_VARIANT_TYPE_DICTIONARY);
+@@ -339,6 +527,30 @@ namespace usbguard
+       with_interface_string.c_str());
+     return builder;
+   }
++
++  void DBusIPCServerPrivate::addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac)
++  {
++    (void)uid;
++    (void)ac;
++  }
++
++  void DBusIPCServerPrivate::addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac)
++  {
++    (void)gid;
++    (void)ac;
++  }
++
++  void DBusIPCServerPrivate::addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac)
++  {
++    (void)username;
++    (void)ac;
++  }
++
++  void DBusIPCServerPrivate::addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac)
++  {
++    (void)groupname;
++    (void)ac;
++  }
+ } /* namespace usbguard */
+ 
+-/* vim: set ts=2 sw=2 et */
++/* vim: set ts=2 sw=2 et */
+\ No newline at end of file
+diff --git a/src/Library/DBusIPCServerPrivate.hpp b/src/Library/DBusIPCServerPrivate.hpp
+new file mode 100644
+index 0000000..23293bf
+--- /dev/null
++++ b/src/Library/DBusIPCServerPrivate.hpp
+@@ -0,0 +1,109 @@
++//
++// Copyright (C) 2019 Red Hat, Inc.
++//
++// This program is free software; you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation; either version 2 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++// Authors: Daniel Kopecek <dkopecek@redhat.com>
++//          Allen Webb <allenwebb@google.com>
++//
++#pragma once
++#ifdef HAVE_BUILD_CONFIG_H
++  #include <build-config.h>
++#endif
++
++#include "IPCPrivate.hpp"
++#include "IPCServerPrivate.hpp"
++#include "Common/Thread.hpp"
++
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-register"
++#include <gio/gio.h>
++#pragma clang diagnostic pop
++
++#include <functional>
++
++namespace usbguard
++{
++  class DBusIPCServerPrivate : public IPCServerPrivate
++  {
++  public:
++    DBusIPCServerPrivate(IPCServer& p_instance);
++    virtual ~DBusIPCServerPrivate() final;
++
++    virtual void start() final;
++    virtual void stop() final;
++
++    virtual void DevicePresenceChanged(uint32_t id,
++      DeviceManager::EventType event,
++      Rule::Target target,
++      const std::string& device_rule) final;
++
++    virtual void DevicePolicyChanged(uint32_t id,
++      Rule::Target target_old,
++      Rule::Target target_new,
++      const std::string& device_rule,
++      uint32_t rule_id) final;
++
++    virtual void PropertyParameterChanged(const std::string& name,
++      const std::string& value_old,
++      const std::string& value_new) final;
++
++    virtual void ExceptionMessage(const std::string& context,
++      const std::string& object,
++      const std::string& reason,
++      uint64_t request_id = 0) final;
++
++    virtual void addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac) final;
++    virtual void addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac) final;
++    virtual void addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac) final;
++    virtual void addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac) final;
++
++    void HandleMethodCall(GDBusConnection* connection,
++      const gchar*           sender,
++      const gchar*           object_path,
++      const gchar*           interface_name,
++      const gchar*           method_name,
++      GVariant*              parameters,
++      GDBusMethodInvocation* invocation);
++
++    void OnBusAcquired(GDBusConnection* connection, const gchar* name);
++    void OnNameAcquired(GDBusConnection* connection, const gchar* name);
++    void OnNameLost(GDBusConnection* connection, const gchar* name);
++  private:
++    static GVariantBuilder* deviceRuleToAttributes(const std::string& device_spec);
++
++    void thread();
++    void wakeup();
++    void stopWithoutJoin();
++
++    void handleRootMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation);
++    void handlePolicyMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation);
++    void handleDevicesMethodCall(const std::string& method_name, GVariant* parameters, GDBusMethodInvocation* invocation);
++
++    bool _use_system_bus = true;
++
++    IPCServer& _p_instance;
++
++    const GDBusInterfaceVTable _dbus_interface_vtable;
++
++    guint _dbus_owner_id = 0;
++    GMainLoop* _dbus_main_loop = nullptr;
++    GDBusNodeInfo* _dbus_introspection_data = nullptr;
++    GDBusConnection* _gdbus_connection = nullptr;
++
++    Thread<DBusIPCServerPrivate> _thread;
++  };
++} /* namespace usbguard */
++
++/* vim: set ts=2 sw=2 et */
+diff --git a/src/Library/IPCServerPrivate.hpp b/src/Library/IPCServerPrivate.hpp
+index 53c9c33..e1d1fb4 100644
+--- a/src/Library/IPCServerPrivate.hpp
++++ b/src/Library/IPCServerPrivate.hpp
+@@ -22,7 +22,6 @@
+ #endif
+ 
+ #include "IPCPrivate.hpp"
+-#include "Common/Thread.hpp"
+ 
+ #include "Devices.pb.h"
+ #include "Policy.pb.h"
+@@ -32,131 +31,40 @@
+ #include "usbguard/Typedefs.hpp"
+ #include "usbguard/IPCServer.hpp"
+ 
+-#include <map>
+-#include <mutex>
+-#include <future>
+-
+-#include <qb/qbipcs.h>
+-#include <qb/qbloop.h>
+-
+ namespace usbguard
+ {
+   class IPCServerPrivate
+   {
+-    using MessageHandler = IPC::MessageHandler<IPCServerPrivate>;
+-
+   public:
+-    IPCServerPrivate(IPCServer& p_instance);
+-    ~IPCServerPrivate();
++    virtual ~IPCServerPrivate() = default;
+ 
+-    void start();
+-    void stop();
++    virtual void start() = 0;
++    virtual void stop() = 0;
+ 
+-    void DevicePresenceChanged(uint32_t id,
++    virtual void DevicePresenceChanged(uint32_t id,
+       DeviceManager::EventType event,
+       Rule::Target target,
+-      const std::string& device_rule);
++      const std::string& device_rule) = 0;
+ 
+-    void DevicePolicyChanged(uint32_t id,
++    virtual void DevicePolicyChanged(uint32_t id,
+       Rule::Target target_old,
+       Rule::Target target_new,
+       const std::string& device_rule,
+-      uint32_t rule_id);
++      uint32_t rule_id) = 0;
+ 
+-    void PropertyParameterChanged(const std::string& name,
++    virtual void PropertyParameterChanged(const std::string& name,
+       const std::string& value_old,
+-      const std::string& value_new);
++      const std::string& value_new) = 0;
+ 
+-    void ExceptionMessage(const std::string& context,
++    virtual void ExceptionMessage(const std::string& context,
+       const std::string& object,
+       const std::string& reason,
+-      uint64_t request_id = 0);
+-
+-    void addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac);
+-    void addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac);
+-    void addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac);
+-    void addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac);
+-
+-  private:
+-    struct ClientContext {
+-      IPCServer::AccessControl access_control;
+-      std::mutex mutex;
+-    };
+-
+-    void initIPC();
+-    void finiIPC();
+-
+-    void thread();
+-    void wakeup();
+-    void destruct();
+-
+-    static int32_t qbPollWakeupFn(int32_t fd, int32_t revents, void* data);
+-    static int32_t qbIPCConnectionAcceptFn(qb_ipcs_connection_t*, uid_t, gid_t);
+-    static void qbIPCConnectionCreatedFn(qb_ipcs_connection_t*);
+-    static void qbIPCConnectionDestroyedFn(qb_ipcs_connection_t*);
+-    static int32_t qbIPCConnectionClosedFn(qb_ipcs_connection_t*);
+-    static int32_t qbIPCMessageProcessFn(qb_ipcs_connection_t*, void*, size_t);
+-
+-    static int32_t qbIPCJobAdd(enum qb_loop_priority p, void* data, qb_loop_job_dispatch_fn fn);
+-    static int32_t qbIPCDispatchAdd(enum qb_loop_priority p, int32_t fd, int32_t evts, void* data, qb_ipcs_dispatch_fn_t fn);
+-    static int32_t qbIPCDispatchMod(enum qb_loop_priority p, int32_t fd, int32_t evts, void* data, qb_ipcs_dispatch_fn_t fn);
+-    static int32_t qbIPCDispatchDel(int32_t fd);
+-    static int32_t qbIPCConnectionClientPID(qb_ipcs_connection_t* connection);
+-
+-    bool hasACLEntries() const;
+-    bool qbIPCConnectionAllowed(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const;
+-    bool authenticateIPCConnectionDAC(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr = nullptr) const;
+-
+-    bool matchACLByUID(uid_t uid, IPCServer::AccessControl* const ac_ptr) const;
+-    bool matchACLByGID(gid_t gid, IPCServer::AccessControl* const ac_ptr) const;
+-    bool matchACLByName(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const;
+-
+-    static std::string getNameFromUID(uid_t uid);
+-    static std::string getNameFromGID(gid_t gid);
+-    static std::vector<std::string> getGroupMemberNames(gid_t gid);
+-    static std::vector<std::string> getGroupMemberNames(const std::string& groupname);
+-
+-    static void qbIPCSendMessage(qb_ipcs_connection_t* qb_conn, const IPC::MessagePointer& message);
+-    static IPCServer::AccessControl::Section messageTypeNameToAccessControlSection(const std::string& name);
+-    void qbIPCBroadcastData(const struct iovec* iov, size_t iov_len, IPCServer::AccessControl::Section section);
+-    void qbIPCBroadcastMessage(const IPC::MessagePointer& message);
+-    void qbIPCBroadcastMessage(const IPC::MessageType* message);
+-
+-    IPC::MessagePointer handleIPCPayload(const uint32_t payload_type, const std::string& payload,
+-      const IPCServer::AccessControl* const access_control);
+-
+-    template<class T>
+-    void registerHandler(MessageHandler::HandlerType method, IPCServer::AccessControl::Section section,
+-      IPCServer::AccessControl::Privilege privilege)
+-    {
+-      const uint32_t type_number = IPC::messageTypeNameToNumber(T::default_instance().GetTypeName());
+-      _handlers.emplace(type_number, MessageHandler::create<T>(*this, method, section, privilege));
+-    }
+-
+-    void handleAppendRule(IPC::MessagePointer& request, IPC::MessagePointer& response);
+-    void handleRemoveRule(IPC::MessagePointer& request, IPC::MessagePointer& response);
+-    void handleListRules(IPC::MessagePointer& request, IPC::MessagePointer& response);
+-
+-    void handleApplyDevicePolicy(IPC::MessagePointer& request, IPC::MessagePointer& response);
+-    void handleListDevices(IPC::MessagePointer& request, IPC::MessagePointer& response);
+-
+-    void handleSetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response);
+-    void handleGetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response);
+-
+-    IPCServer& _p_instance;
+-
+-    qb_loop_t* _qb_loop;
+-    qb_ipcs_service_t* _qb_service;
+-    int _wakeup_fd;
+-
+-    std::unordered_map<uid_t, IPCServer::AccessControl> _allowed_uids;
+-    std::unordered_map<gid_t, IPCServer::AccessControl> _allowed_gids;
+-    std::unordered_map<std::string, IPCServer::AccessControl> _allowed_usernames;
+-    std::unordered_map<std::string, IPCServer::AccessControl> _allowed_groupnames;
+-
+-    Thread<IPCServerPrivate> _thread;
++      uint64_t request_id = 0) = 0;
+ 
+-    std::unordered_map<uint32_t, MessageHandler> _handlers;
++    virtual void addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac) = 0;
++    virtual void addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac) = 0;
++    virtual void addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac) = 0;
++    virtual void addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac) = 0;
+   };
+ } /* namespace usbguard */
+ 
+diff --git a/src/Library/IPCServerPrivate.cpp b/src/Library/QBIPCServerPrivate.cpp
+similarity index 83%
+rename from src/Library/IPCServerPrivate.cpp
+rename to src/Library/QBIPCServerPrivate.cpp
+index 949fc01..60952b7 100644
+--- a/src/Library/IPCServerPrivate.cpp
++++ b/src/Library/QBIPCServerPrivate.cpp
+@@ -20,7 +20,7 @@
+   #include <build-config.h>
+ #endif
+ 
+-#include "IPCServerPrivate.hpp"
++#include "QBIPCServerPrivate.hpp"
+ #include "IPCPrivate.hpp"
+ #include "Common/Utility.hpp"
+ 
+@@ -40,9 +40,9 @@ namespace usbguard
+ {
+   static qb_loop* G_qb_loop = nullptr;
+ 
+-  IPCServerPrivate::IPCServerPrivate(IPCServer& p_instance)
++  QBIPCServerPrivate::QBIPCServerPrivate(IPCServer& p_instance)
+     : _p_instance(p_instance),
+-      _thread(this, &IPCServerPrivate::thread)
++      _thread(this, &QBIPCServerPrivate::thread)
+   {
+     if (G_qb_loop != nullptr) {
+       throw USBGUARD_BUG("Only one instance of IPCServer per process allowed");
+@@ -62,7 +62,7 @@ namespace usbguard
+         (_wakeup_fd = eventfd(0, 0)) < 0);
+       qb_loop_poll_add(_qb_loop, QB_LOOP_HIGH, _wakeup_fd,
+         POLLIN, nullptr,
+-        &IPCServerPrivate::qbPollWakeupFn);
++        &QBIPCServerPrivate::qbPollWakeupFn);
+     }
+     catch (...) {
+       qb_loop_destroy(_qb_loop);
+@@ -70,30 +70,31 @@ namespace usbguard
+       throw;
+     }
+ 
+-    registerHandler<IPC::appendRule>(&IPCServerPrivate::handleAppendRule, IPCServer::AccessControl::Section::POLICY,
++    registerHandler<IPC::appendRule>(&QBIPCServerPrivate::handleAppendRule, IPCServer::AccessControl::Section::POLICY,
+       IPCServer::AccessControl::Privilege::MODIFY);
+-    registerHandler<IPC::removeRule>(&IPCServerPrivate::handleRemoveRule, IPCServer::AccessControl::Section::POLICY,
++    registerHandler<IPC::removeRule>(&QBIPCServerPrivate::handleRemoveRule, IPCServer::AccessControl::Section::POLICY,
+       IPCServer::AccessControl::Privilege::MODIFY);
+-    registerHandler<IPC::listRules>(&IPCServerPrivate::handleListRules, IPCServer::AccessControl::Section::POLICY,
++    registerHandler<IPC::listRules>(&QBIPCServerPrivate::handleListRules, IPCServer::AccessControl::Section::POLICY,
+       IPCServer::AccessControl::Privilege::LIST);
+-    registerHandler<IPC::applyDevicePolicy>(&IPCServerPrivate::handleApplyDevicePolicy, IPCServer::AccessControl::Section::DEVICES,
++    registerHandler<IPC::applyDevicePolicy>(&QBIPCServerPrivate::handleApplyDevicePolicy,
++      IPCServer::AccessControl::Section::DEVICES,
+       IPCServer::AccessControl::Privilege::MODIFY);
+-    registerHandler<IPC::listDevices>(&IPCServerPrivate::handleListDevices, IPCServer::AccessControl::Section::DEVICES,
++    registerHandler<IPC::listDevices>(&QBIPCServerPrivate::handleListDevices, IPCServer::AccessControl::Section::DEVICES,
+       IPCServer::AccessControl::Privilege::LIST);
+-    registerHandler<IPC::setParameter>(&IPCServerPrivate::handleSetParameter, IPCServer::AccessControl::Section::PARAMETERS,
++    registerHandler<IPC::setParameter>(&QBIPCServerPrivate::handleSetParameter, IPCServer::AccessControl::Section::PARAMETERS,
+       IPCServer::AccessControl::Privilege::MODIFY);
+-    registerHandler<IPC::getParameter>(&IPCServerPrivate::handleGetParameter, IPCServer::AccessControl::Section::PARAMETERS,
++    registerHandler<IPC::getParameter>(&QBIPCServerPrivate::handleGetParameter, IPCServer::AccessControl::Section::PARAMETERS,
+       IPCServer::AccessControl::Privilege::LIST);
+   }
+ 
+-  void IPCServerPrivate::initIPC()
++  void QBIPCServerPrivate::initIPC()
+   {
+     static struct qb_ipcs_service_handlers service_handlers = {
+-      IPCServerPrivate::qbIPCConnectionAcceptFn,
+-      IPCServerPrivate::qbIPCConnectionCreatedFn,
+-      IPCServerPrivate::qbIPCMessageProcessFn,
+-      IPCServerPrivate::qbIPCConnectionClosedFn,
+-      IPCServerPrivate::qbIPCConnectionDestroyedFn
++      QBIPCServerPrivate::qbIPCConnectionAcceptFn,
++      QBIPCServerPrivate::qbIPCConnectionCreatedFn,
++      QBIPCServerPrivate::qbIPCMessageProcessFn,
++      QBIPCServerPrivate::qbIPCConnectionClosedFn,
++      QBIPCServerPrivate::qbIPCConnectionDestroyedFn
+     };
+     _qb_service = qb_ipcs_create("usbguard", 0,
+         QB_IPC_NATIVE, &service_handlers);
+@@ -104,10 +105,10 @@ namespace usbguard
+ 
+     qb_ipcs_service_context_set(_qb_service, this);
+     static struct qb_ipcs_poll_handlers poll_handlers = {
+-      IPCServerPrivate::qbIPCJobAdd,
+-      IPCServerPrivate::qbIPCDispatchAdd,
+-      IPCServerPrivate::qbIPCDispatchMod,
+-      IPCServerPrivate::qbIPCDispatchDel
++      QBIPCServerPrivate::qbIPCJobAdd,
++      QBIPCServerPrivate::qbIPCDispatchAdd,
++      QBIPCServerPrivate::qbIPCDispatchMod,
++      QBIPCServerPrivate::qbIPCDispatchDel
+     };
+     qb_ipcs_poll_handlers_set(_qb_service, &poll_handlers);
+     const auto rc = qb_ipcs_run(_qb_service);
+@@ -117,36 +118,36 @@ namespace usbguard
+     }
+   }
+ 
+-  void IPCServerPrivate::finiIPC()
++  void QBIPCServerPrivate::finiIPC()
+   {
+     qb_ipcs_destroy(_qb_service);
+   }
+ 
+-  IPCServerPrivate::~IPCServerPrivate()
++  QBIPCServerPrivate::~QBIPCServerPrivate()
+   {
+     destruct();
+   }
+ 
+-  void IPCServerPrivate::thread()
++  void QBIPCServerPrivate::thread()
+   {
+     qb_loop_run(_qb_loop);
+   }
+ 
+-  void IPCServerPrivate::wakeup()
++  void QBIPCServerPrivate::wakeup()
+   {
+     const uint64_t one = 1;
+     USBGUARD_SYSCALL_THROW("IPC server",
+       write(_wakeup_fd, &one, sizeof one) != sizeof one);
+   }
+ 
+-  void IPCServerPrivate::start()
++  void QBIPCServerPrivate::start()
+   {
+     if (!_thread.running()) {
+       _thread.start();
+     }
+   }
+ 
+-  void IPCServerPrivate::stop()
++  void QBIPCServerPrivate::stop()
+   {
+     _thread.stop(/*do_wait=*/false);
+     qb_loop_stop(_qb_loop);
+@@ -154,7 +155,7 @@ namespace usbguard
+     _thread.wait();
+   }
+ 
+-  void IPCServerPrivate::destruct()
++  void QBIPCServerPrivate::destruct()
+   {
+     if (_thread.running()) {
+       stop();
+@@ -166,7 +167,7 @@ namespace usbguard
+     USBGUARD_SYSCALL_THROW("IPC server", close(_wakeup_fd) != 0);
+   }
+ 
+-  int32_t IPCServerPrivate::qbPollWakeupFn(int32_t fd, int32_t revents, void* data)
++  int32_t QBIPCServerPrivate::qbPollWakeupFn(int32_t fd, int32_t revents, void* data)
+   {
+     USBGUARD_LOG(Trace) << "fd=" << fd
+       << " revents=" << revents
+@@ -184,13 +185,13 @@ namespace usbguard
+     }
+   }
+ 
+-  void IPCServerPrivate::qbIPCConnectionCreatedFn(qb_ipcs_connection_t* conn)
++  void QBIPCServerPrivate::qbIPCConnectionCreatedFn(qb_ipcs_connection_t* conn)
+   {
+     USBGUARD_LOG(Trace) << "conn=" << conn;
+     USBGUARD_LOG(Info) << "New IPC connection from PID " << qbIPCConnectionClientPID(conn);
+   }
+ 
+-  void IPCServerPrivate::qbIPCConnectionDestroyedFn(qb_ipcs_connection_t* conn)
++  void QBIPCServerPrivate::qbIPCConnectionDestroyedFn(qb_ipcs_connection_t* conn)
+   {
+     USBGUARD_LOG(Trace) << "Deleting client context: conn=" << conn;
+     ClientContext* const client_context =      \
+@@ -201,36 +202,36 @@ namespace usbguard
+     }
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCConnectionClosedFn(qb_ipcs_connection_t* conn)
++  int32_t QBIPCServerPrivate::qbIPCConnectionClosedFn(qb_ipcs_connection_t* conn)
+   {
+     USBGUARD_LOG(Trace) << "conn=" << conn;
+     USBGUARD_LOG(Info) << "Closed IPC connection to PID " << qbIPCConnectionClientPID(conn);
+     return 0;
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCJobAdd(enum qb_loop_priority p, void* data, qb_loop_job_dispatch_fn fn)
++  int32_t QBIPCServerPrivate::qbIPCJobAdd(enum qb_loop_priority p, void* data, qb_loop_job_dispatch_fn fn)
+   {
+     return qb_loop_job_add(G_qb_loop, p, data, fn);
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCDispatchAdd(enum qb_loop_priority p, int32_t fd, int32_t evts,
++  int32_t QBIPCServerPrivate::qbIPCDispatchAdd(enum qb_loop_priority p, int32_t fd, int32_t evts,
+     void* data, qb_ipcs_dispatch_fn_t fn)
+   {
+     return qb_loop_poll_add(G_qb_loop, p, fd, evts, data, fn);
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCDispatchMod(enum qb_loop_priority p, int32_t fd, int32_t evts,
++  int32_t QBIPCServerPrivate::qbIPCDispatchMod(enum qb_loop_priority p, int32_t fd, int32_t evts,
+     void* data, qb_ipcs_dispatch_fn_t fn)
+   {
+     return qb_loop_poll_mod(G_qb_loop, p, fd, evts, data, fn);
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCDispatchDel(int32_t fd)
++  int32_t QBIPCServerPrivate::qbIPCDispatchDel(int32_t fd)
+   {
+     return qb_loop_poll_del(G_qb_loop, fd);
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCConnectionClientPID(qb_ipcs_connection_t* connection)
++  int32_t QBIPCServerPrivate::qbIPCConnectionClientPID(qb_ipcs_connection_t* connection)
+   {
+     std::unique_ptr<qb_ipcs_connection_stats_2, FreeDeleter> \
+     stats(qb_ipcs_connection_stats_get_2(connection, /*clear_after_read=*/0));
+@@ -242,11 +243,11 @@ namespace usbguard
+     return stats->client_pid;
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCConnectionAcceptFn(qb_ipcs_connection_t* conn, uid_t uid, gid_t gid)
++  int32_t QBIPCServerPrivate::qbIPCConnectionAcceptFn(qb_ipcs_connection_t* conn, uid_t uid, gid_t gid)
+   {
+     try {
+-      IPCServerPrivate* server = \
+-        static_cast<IPCServerPrivate*>(qb_ipcs_connection_service_context_get(conn));
++      QBIPCServerPrivate* server = \
++        static_cast<QBIPCServerPrivate*>(qb_ipcs_connection_service_context_get(conn));
+       std::unique_ptr<ClientContext> client_context(new ClientContext());
+       const bool auth = server->qbIPCConnectionAllowed(uid, gid, &client_context->access_control);
+       qb_ipcs_context_set(conn, client_context.release());
+@@ -278,7 +279,7 @@ namespace usbguard
+     return -1;
+   }
+ 
+-  bool IPCServerPrivate::hasACLEntries() const
++  bool QBIPCServerPrivate::hasACLEntries() const
+   {
+     return (!_allowed_uids.empty() \
+         || !_allowed_gids.empty() \
+@@ -286,7 +287,7 @@ namespace usbguard
+         || !_allowed_groupnames.empty());
+   }
+ 
+-  bool IPCServerPrivate::qbIPCConnectionAllowed(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const
++  bool QBIPCServerPrivate::qbIPCConnectionAllowed(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const
+   {
+     if (hasACLEntries()) {
+       return authenticateIPCConnectionDAC(uid, gid, ac_ptr);
+@@ -299,7 +300,7 @@ namespace usbguard
+     }
+   }
+ 
+-  void IPCServerPrivate::qbIPCSendMessage(qb_ipcs_connection_t* qb_conn, const IPC::MessagePointer& message)
++  void QBIPCServerPrivate::qbIPCSendMessage(qb_ipcs_connection_t* qb_conn, const IPC::MessagePointer& message)
+   {
+     if (qb_conn == nullptr || message == nullptr) {
+       throw USBGUARD_BUG("NULL argument(s)");
+@@ -352,7 +353,7 @@ namespace usbguard
+     iov[1].iov_base = nullptr;
+   }
+ 
+-  int32_t IPCServerPrivate::qbIPCMessageProcessFn(qb_ipcs_connection_t* conn, void* data, size_t size)
++  int32_t QBIPCServerPrivate::qbIPCMessageProcessFn(qb_ipcs_connection_t* conn, void* data, size_t size)
+   {
+     if (conn == nullptr) {
+       return -1;
+@@ -400,8 +401,8 @@ namespace usbguard
+     }
+ 
+     try {
+-      IPCServerPrivate* const server = \
+-        reinterpret_cast<IPCServerPrivate*>(qb_ipcs_connection_service_context_get(conn));
++      QBIPCServerPrivate* const server = \
++        reinterpret_cast<QBIPCServerPrivate*>(qb_ipcs_connection_service_context_get(conn));
+       const uint32_t payload_type = hdr->id - QB_IPC_MSG_USER_START;
+       const char* const payload_data = reinterpret_cast<const char*>(data) + sizeof(struct qb_ipc_request_header);
+       const size_t payload_size = size - sizeof(struct qb_ipc_request_header);
+@@ -461,7 +462,7 @@ namespace usbguard
+     return 0;
+   }
+ 
+-  void IPCServerPrivate::qbIPCBroadcastData(const struct iovec* const iov, const size_t iov_len,
++  void QBIPCServerPrivate::qbIPCBroadcastData(const struct iovec* const iov, const size_t iov_len,
+     IPCServer::AccessControl::Section section)
+   {
+     auto qb_conn = qb_ipcs_connection_first_get(_qb_service);
+@@ -518,12 +519,12 @@ namespace usbguard
+     }
+   }
+ 
+-  void IPCServerPrivate::qbIPCBroadcastMessage(const IPC::MessagePointer& message)
++  void QBIPCServerPrivate::qbIPCBroadcastMessage(const IPC::MessagePointer& message)
+   {
+     qbIPCBroadcastMessage(message.get());
+   }
+ 
+-  IPCServer::AccessControl::Section IPCServerPrivate::messageTypeNameToAccessControlSection(const std::string& name)
++  IPCServer::AccessControl::Section QBIPCServerPrivate::messageTypeNameToAccessControlSection(const std::string& name)
+   {
+     if (name == "usbguard.IPC.DevicePresenceChangedSignal") {
+       return IPCServer::AccessControl::Section::DEVICES;
+@@ -544,7 +545,7 @@ namespace usbguard
+     throw Exception("IPC Server", name, "Invalid IPC typename to Access Control section translation request");
+   }
+ 
+-  void IPCServerPrivate::qbIPCBroadcastMessage(const IPC::MessageType* const message)
++  void QBIPCServerPrivate::qbIPCBroadcastMessage(const IPC::MessageType* const message)
+   {
+     std::string payload;
+     message->SerializeToString(&payload);
+@@ -562,7 +563,7 @@ namespace usbguard
+     iov[1].iov_base = nullptr;
+   }
+ 
+-  bool IPCServerPrivate::authenticateIPCConnectionDAC(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const
++  bool QBIPCServerPrivate::authenticateIPCConnectionDAC(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const
+   {
+     USBGUARD_LOG(Trace) << "uid=" << uid << " gid=" << gid << " ac_ptr=" << ac_ptr;
+     return \
+@@ -571,7 +572,7 @@ namespace usbguard
+       matchACLByName(uid, gid, ac_ptr);
+   }
+ 
+-  bool IPCServerPrivate::matchACLByUID(uid_t uid, IPCServer::AccessControl* const ac_ptr) const
++  bool QBIPCServerPrivate::matchACLByUID(uid_t uid, IPCServer::AccessControl* const ac_ptr) const
+   {
+     USBGUARD_LOG(Trace) << "uid=" << uid << " ac_ptr=" << ac_ptr;
+     const auto& it = _allowed_uids.find(uid);
+@@ -588,7 +589,7 @@ namespace usbguard
+     return true;
+   }
+ 
+-  bool IPCServerPrivate::matchACLByGID(gid_t gid, IPCServer::AccessControl* const ac_ptr) const
++  bool QBIPCServerPrivate::matchACLByGID(gid_t gid, IPCServer::AccessControl* const ac_ptr) const
+   {
+     USBGUARD_LOG(Trace) << "gid=" << gid << " ac_ptr=" << ac_ptr;
+     const auto& it = _allowed_gids.find(gid);
+@@ -605,7 +606,7 @@ namespace usbguard
+     return true;
+   }
+ 
+-  bool IPCServerPrivate::matchACLByName(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const
++  bool QBIPCServerPrivate::matchACLByName(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const
+   {
+     USBGUARD_LOG(Trace) << "uid=" << uid << " gid=" << gid << " ac_ptr=" << ac_ptr;
+     bool matched = false;
+@@ -691,7 +692,7 @@ namespace usbguard
+     return matched;
+   }
+ 
+-  std::string IPCServerPrivate::getNameFromUID(uid_t uid)
++  std::string QBIPCServerPrivate::getNameFromUID(uid_t uid)
+   {
+     std::string buffer(1024, 0);
+     struct passwd pw = { };
+@@ -710,7 +711,7 @@ namespace usbguard
+     return std::string(pw.pw_name);
+   }
+ 
+-  std::string IPCServerPrivate::getNameFromGID(gid_t gid)
++  std::string QBIPCServerPrivate::getNameFromGID(gid_t gid)
+   {
+     std::string buffer(4096, 0);
+     struct group gr = { };
+@@ -729,7 +730,7 @@ namespace usbguard
+     return std::string(gr.gr_name);
+   }
+ 
+-  std::vector<std::string> IPCServerPrivate::getGroupMemberNames(gid_t gid)
++  std::vector<std::string> QBIPCServerPrivate::getGroupMemberNames(gid_t gid)
+   {
+     std::vector<std::string> names;
+     std::string buffer(4096, 0);
+@@ -753,7 +754,7 @@ namespace usbguard
+     return names;
+   }
+ 
+-  std::vector<std::string> IPCServerPrivate::getGroupMemberNames(const std::string& groupname)
++  std::vector<std::string> QBIPCServerPrivate::getGroupMemberNames(const std::string& groupname)
+   {
+     std::vector<std::string> names;
+     std::string buffer(4096, 0);
+@@ -777,7 +778,7 @@ namespace usbguard
+     return names;
+   }
+ 
+-  IPC::MessagePointer IPCServerPrivate::handleIPCPayload(const uint32_t payload_type, const std::string& payload,
++  IPC::MessagePointer QBIPCServerPrivate::handleIPCPayload(const uint32_t payload_type, const std::string& payload,
+     const IPCServer::AccessControl* const access_control)
+   {
+     const auto& handler_it = _handlers.find(payload_type);
+@@ -840,7 +841,7 @@ namespace usbguard
+     }
+   }
+ 
+-  void IPCServerPrivate::handleAppendRule(IPC::MessagePointer& request, IPC::MessagePointer& response)
++  void QBIPCServerPrivate::handleAppendRule(IPC::MessagePointer& request, IPC::MessagePointer& response)
+   {
+     /*
+      * Get request field values.
+@@ -862,7 +863,7 @@ namespace usbguard
+     response.reset(message_out);
+   }
+ 
+-  void IPCServerPrivate::handleRemoveRule(IPC::MessagePointer& request, IPC::MessagePointer& response)
++  void QBIPCServerPrivate::handleRemoveRule(IPC::MessagePointer& request, IPC::MessagePointer& response)
+   {
+     /*
+      * Get request field values.
+@@ -882,7 +883,7 @@ namespace usbguard
+     response.reset(message_out);
+   }
+ 
+-  void IPCServerPrivate::handleListRules(IPC::MessagePointer& request, IPC::MessagePointer& response)
++  void QBIPCServerPrivate::handleListRules(IPC::MessagePointer& request, IPC::MessagePointer& response)
+   {
+     /*
+      * Get request field values.
+@@ -908,7 +909,7 @@ namespace usbguard
+     response.reset(message_out);
+   }
+ 
+-  void IPCServerPrivate::handleApplyDevicePolicy(IPC::MessagePointer& request, IPC::MessagePointer& response)
++  void QBIPCServerPrivate::handleApplyDevicePolicy(IPC::MessagePointer& request, IPC::MessagePointer& response)
+   {
+     /*
+      * Get request field values.
+@@ -931,7 +932,7 @@ namespace usbguard
+     response = std::move(response_local);
+   }
+ 
+-  void IPCServerPrivate::handleListDevices(IPC::MessagePointer& request, IPC::MessagePointer& response)
++  void QBIPCServerPrivate::handleListDevices(IPC::MessagePointer& request, IPC::MessagePointer& response)
+   {
+     /*
+      * Get request field values.
+@@ -958,7 +959,7 @@ namespace usbguard
+     response.reset(message_out);
+   }
+ 
+-  void IPCServerPrivate::handleSetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response)
++  void QBIPCServerPrivate::handleSetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response)
+   {
+     /*
+      * Get request field values.
+@@ -979,7 +980,7 @@ namespace usbguard
+     response.reset(message_out);
+   }
+ 
+-  void IPCServerPrivate::handleGetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response)
++  void QBIPCServerPrivate::handleGetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response)
+   {
+     const IPC::getParameter* const message_in = static_cast<const IPC::getParameter*>(request.get());
+     const std::string name = message_in->request().name();
+@@ -990,7 +991,7 @@ namespace usbguard
+     response.reset(message_out);
+   }
+ 
+-  void IPCServerPrivate::DevicePresenceChanged(uint32_t id,
++  void QBIPCServerPrivate::DevicePresenceChanged(uint32_t id,
+     DeviceManager::EventType event,
+     Rule::Target target,
+     const std::string& device_rule)
+@@ -1003,7 +1004,7 @@ namespace usbguard
+     qbIPCBroadcastMessage(&signal);
+   }
+ 
+-  void IPCServerPrivate::DevicePolicyChanged(uint32_t id,
++  void QBIPCServerPrivate::DevicePolicyChanged(uint32_t id,
+     Rule::Target target_old,
+     Rule::Target target_new,
+     const std::string& device_rule,
+@@ -1018,7 +1019,7 @@ namespace usbguard
+     qbIPCBroadcastMessage(&signal);
+   }
+ 
+-  void IPCServerPrivate::PropertyParameterChanged(const std::string& name,
++  void QBIPCServerPrivate::PropertyParameterChanged(const std::string& name,
+     const std::string& value_old,
+     const std::string& value_new)
+   {
+@@ -1029,7 +1030,7 @@ namespace usbguard
+     qbIPCBroadcastMessage(&signal);
+   }
+ 
+-  void IPCServerPrivate::ExceptionMessage(const std::string& context,
++  void QBIPCServerPrivate::ExceptionMessage(const std::string& context,
+     const std::string& object,
+     const std::string& reason,
+     uint64_t request_id)
+@@ -1046,22 +1047,22 @@ namespace usbguard
+     qbIPCBroadcastMessage(&exception);
+   }
+ 
+-  void IPCServerPrivate::addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac)
++  void QBIPCServerPrivate::addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac)
+   {
+     _allowed_uids.emplace(uid, ac);
+   }
+ 
+-  void IPCServerPrivate::addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac)
++  void QBIPCServerPrivate::addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac)
+   {
+     _allowed_gids.emplace(gid, ac);
+   }
+ 
+-  void IPCServerPrivate::addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac)
++  void QBIPCServerPrivate::addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac)
+   {
+     _allowed_usernames.emplace(username, ac);
+   }
+ 
+-  void IPCServerPrivate::addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac)
++  void QBIPCServerPrivate::addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac)
+   {
+     _allowed_groupnames.emplace(groupname, ac);
+   }
+diff --git a/src/Library/QBIPCServerPrivate.hpp b/src/Library/QBIPCServerPrivate.hpp
+new file mode 100644
+index 0000000..5dd3955
+--- /dev/null
++++ b/src/Library/QBIPCServerPrivate.hpp
+@@ -0,0 +1,164 @@
++//
++// Copyright (C) 2016 Red Hat, Inc.
++//
++// This program is free software; you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation; either version 2 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program.  If not, see <http://www.gnu.org/licenses/>.
++//
++// Authors: Daniel Kopecek <dkopecek@redhat.com>
++//
++#pragma once
++#ifdef HAVE_BUILD_CONFIG_H
++  #include <build-config.h>
++#endif
++
++#include "IPCPrivate.hpp"
++#include "IPCServerPrivate.hpp"
++#include "Common/Thread.hpp"
++
++#include "Devices.pb.h"
++#include "Policy.pb.h"
++#include "Exception.pb.h"
++#include "Parameter.pb.h"
++
++#include "usbguard/Typedefs.hpp"
++#include "usbguard/IPCServer.hpp"
++
++#include <map>
++#include <mutex>
++#include <future>
++
++#include <qb/qbipcs.h>
++#include <qb/qbloop.h>
++
++namespace usbguard
++{
++  class QBIPCServerPrivate : public IPCServerPrivate
++  {
++    using MessageHandler = IPC::MessageHandler<QBIPCServerPrivate>;
++
++  public:
++    QBIPCServerPrivate(IPCServer& p_instance);
++    virtual ~QBIPCServerPrivate() final;
++
++    virtual void start() final;
++    virtual void stop() final;
++
++    virtual void DevicePresenceChanged(uint32_t id,
++      DeviceManager::EventType event,
++      Rule::Target target,
++      const std::string& device_rule) final;
++
++    virtual void DevicePolicyChanged(uint32_t id,
++      Rule::Target target_old,
++      Rule::Target target_new,
++      const std::string& device_rule,
++      uint32_t rule_id) final;
++
++    virtual void PropertyParameterChanged(const std::string& name,
++      const std::string& value_old,
++      const std::string& value_new) final;
++
++    virtual void ExceptionMessage(const std::string& context,
++      const std::string& object,
++      const std::string& reason,
++      uint64_t request_id = 0) final;
++
++    virtual void addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac) final;
++    virtual void addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac) final;
++    virtual void addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac) final;
++    virtual void addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac) final;
++
++  private:
++    struct ClientContext {
++      IPCServer::AccessControl access_control;
++      std::mutex mutex;
++    };
++
++    void initIPC();
++    void finiIPC();
++
++    void thread();
++    void wakeup();
++    void destruct();
++
++    static int32_t qbPollWakeupFn(int32_t fd, int32_t revents, void* data);
++    static int32_t qbIPCConnectionAcceptFn(qb_ipcs_connection_t*, uid_t, gid_t);
++    static void qbIPCConnectionCreatedFn(qb_ipcs_connection_t*);
++    static void qbIPCConnectionDestroyedFn(qb_ipcs_connection_t*);
++    static int32_t qbIPCConnectionClosedFn(qb_ipcs_connection_t*);
++    static int32_t qbIPCMessageProcessFn(qb_ipcs_connection_t*, void*, size_t);
++
++    static int32_t qbIPCJobAdd(enum qb_loop_priority p, void* data, qb_loop_job_dispatch_fn fn);
++    static int32_t qbIPCDispatchAdd(enum qb_loop_priority p, int32_t fd, int32_t evts, void* data, qb_ipcs_dispatch_fn_t fn);
++    static int32_t qbIPCDispatchMod(enum qb_loop_priority p, int32_t fd, int32_t evts, void* data, qb_ipcs_dispatch_fn_t fn);
++    static int32_t qbIPCDispatchDel(int32_t fd);
++    static int32_t qbIPCConnectionClientPID(qb_ipcs_connection_t* connection);
++
++    bool hasACLEntries() const;
++    bool qbIPCConnectionAllowed(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const;
++    bool authenticateIPCConnectionDAC(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr = nullptr) const;
++
++    bool matchACLByUID(uid_t uid, IPCServer::AccessControl* const ac_ptr) const;
++    bool matchACLByGID(gid_t gid, IPCServer::AccessControl* const ac_ptr) const;
++    bool matchACLByName(uid_t uid, gid_t gid, IPCServer::AccessControl* const ac_ptr) const;
++
++    static std::string getNameFromUID(uid_t uid);
++    static std::string getNameFromGID(gid_t gid);
++    static std::vector<std::string> getGroupMemberNames(gid_t gid);
++    static std::vector<std::string> getGroupMemberNames(const std::string& groupname);
++
++    static void qbIPCSendMessage(qb_ipcs_connection_t* qb_conn, const IPC::MessagePointer& message);
++    static IPCServer::AccessControl::Section messageTypeNameToAccessControlSection(const std::string& name);
++    void qbIPCBroadcastData(const struct iovec* iov, size_t iov_len, IPCServer::AccessControl::Section section);
++    void qbIPCBroadcastMessage(const IPC::MessagePointer& message);
++    void qbIPCBroadcastMessage(const IPC::MessageType* message);
++
++    IPC::MessagePointer handleIPCPayload(const uint32_t payload_type, const std::string& payload,
++      const IPCServer::AccessControl* const access_control);
++
++    template<class T>
++    void registerHandler(MessageHandler::HandlerType method, IPCServer::AccessControl::Section section,
++      IPCServer::AccessControl::Privilege privilege)
++    {
++      const uint32_t type_number = IPC::messageTypeNameToNumber(T::default_instance().GetTypeName());
++      _handlers.emplace(type_number, MessageHandler::create<T>(*this, method, section, privilege));
++    }
++
++    void handleAppendRule(IPC::MessagePointer& request, IPC::MessagePointer& response);
++    void handleRemoveRule(IPC::MessagePointer& request, IPC::MessagePointer& response);
++    void handleListRules(IPC::MessagePointer& request, IPC::MessagePointer& response);
++
++    void handleApplyDevicePolicy(IPC::MessagePointer& request, IPC::MessagePointer& response);
++    void handleListDevices(IPC::MessagePointer& request, IPC::MessagePointer& response);
++
++    void handleSetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response);
++    void handleGetParameter(IPC::MessagePointer& request, IPC::MessagePointer& response);
++
++    IPCServer& _p_instance;
++
++    qb_loop_t* _qb_loop;
++    qb_ipcs_service_t* _qb_service;
++    int _wakeup_fd;
++
++    std::unordered_map<uid_t, IPCServer::AccessControl> _allowed_uids;
++    std::unordered_map<gid_t, IPCServer::AccessControl> _allowed_gids;
++    std::unordered_map<std::string, IPCServer::AccessControl> _allowed_usernames;
++    std::unordered_map<std::string, IPCServer::AccessControl> _allowed_groupnames;
++
++    Thread<QBIPCServerPrivate> _thread;
++
++    std::unordered_map<uint32_t, MessageHandler> _handlers;
++  };
++} /* namespace usbguard */
++
++/* vim: set ts=2 sw=2 et */
+diff --git a/src/Library/public/usbguard/IPCServer.cpp b/src/Library/public/usbguard/IPCServer.cpp
+index 7c33e26..ac7b5be 100644
+--- a/src/Library/public/usbguard/IPCServer.cpp
++++ b/src/Library/public/usbguard/IPCServer.cpp
+@@ -21,6 +21,10 @@
+ #endif
+ 
+ #include "IPCServerPrivate.hpp"
++#ifdef HAVE_DBUS
++  #include "DBusIPCServerPrivate.hpp"
++#endif
++#include "QBIPCServerPrivate.hpp"
+ #include "Common/Utility.hpp"
+ 
+ #include "usbguard/Exception.hpp"
+@@ -251,20 +255,27 @@ namespace usbguard
+   }
+ 
+   IPCServer::IPCServer()
+-    : d_pointer(usbguard::make_unique<IPCServerPrivate>(*this))
+   {
++    d_pointers.push_back(usbguard::make_unique<QBIPCServerPrivate>(*this));
++#ifdef HAVE_DBUS
++    d_pointers.push_back(usbguard::make_unique<DBusIPCServerPrivate>(*this));
++#endif
+   }
+ 
+   IPCServer::~IPCServer() = default;
+ 
+   void IPCServer::start()
+   {
+-    d_pointer->start();
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->start();
++    }
+   }
+ 
+   void IPCServer::stop()
+   {
+-    d_pointer->stop();
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->stop();
++    }
+   }
+ 
+   void IPCServer::DevicePresenceChanged(uint32_t id,
+@@ -272,7 +283,9 @@ namespace usbguard
+     Rule::Target target,
+     const std::string& device_rule)
+   {
+-    d_pointer->DevicePresenceChanged(id, event, target, device_rule);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->DevicePresenceChanged(id, event, target, device_rule);
++    }
+   }
+ 
+   void IPCServer::DevicePolicyChanged(uint32_t id,
+@@ -281,41 +294,55 @@ namespace usbguard
+     const std::string& device_rule,
+     uint32_t rule_id)
+   {
+-    d_pointer->DevicePolicyChanged(id, target_old, target_new, device_rule, rule_id);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->DevicePolicyChanged(id, target_old, target_new, device_rule, rule_id);
++    }
+   }
+ 
+   void IPCServer::PropertyParameterChanged(const std::string& name,
+     const std::string& value_old,
+     const std::string& value_new)
+   {
+-    d_pointer->PropertyParameterChanged(name, value_old, value_new);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->PropertyParameterChanged(name, value_old, value_new);
++    }
+   }
+ 
+   void IPCServer::ExceptionMessage(const std::string& context,
+     const std::string& object,
+     const std::string& reason)
+   {
+-    d_pointer->ExceptionMessage(context, object, reason);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->ExceptionMessage(context, object, reason);
++    }
+   }
+ 
+   void IPCServer::addAllowedUID(uid_t uid, const IPCServer::AccessControl& ac)
+   {
+-    d_pointer->addAllowedUID(uid, ac);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->addAllowedUID(uid, ac);
++    }
+   }
+ 
+   void IPCServer::addAllowedGID(gid_t gid, const IPCServer::AccessControl& ac)
+   {
+-    d_pointer->addAllowedGID(gid, ac);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->addAllowedGID(gid, ac);
++    }
+   }
+ 
+   void IPCServer::addAllowedUsername(const std::string& username, const IPCServer::AccessControl& ac)
+   {
+-    d_pointer->addAllowedUsername(username, ac);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->addAllowedUsername(username, ac);
++    }
+   }
+ 
+   void IPCServer::addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac)
+   {
+-    d_pointer->addAllowedGroupname(groupname, ac);
++    for (const auto& d_pointer : d_pointers) {
++      d_pointer->addAllowedGroupname(groupname, ac);
++    }
+   }
+ } /* namespace usbguard */
+ 
+diff --git a/src/Library/public/usbguard/IPCServer.hpp b/src/Library/public/usbguard/IPCServer.hpp
+index 1364f7c..b590db3 100644
+--- a/src/Library/public/usbguard/IPCServer.hpp
++++ b/src/Library/public/usbguard/IPCServer.hpp
+@@ -28,6 +28,7 @@
+ #include <string>
+ #include <unordered_map>
+ #include <memory>
++#include <vector>
+ 
+ #include <cstddef>
+ #include <cstdint>
+@@ -125,7 +126,7 @@ namespace usbguard
+     void addAllowedGroupname(const std::string& groupname, const IPCServer::AccessControl& ac);
+ 
+   private:
+-    std::unique_ptr<IPCServerPrivate> d_pointer;
++    std::vector<std::unique_ptr<IPCServerPrivate>> d_pointers;
+   };
+ } /* namespace usbguard */
+ 
+diff --git a/src/Tests/LDAP/Sanity/ldap-nsswitch.sh b/src/Tests/LDAP/Sanity/ldap-nsswitch.sh
+index ea5cb75..95d997e 100755
+--- a/src/Tests/LDAP/Sanity/ldap-nsswitch.sh
++++ b/src/Tests/LDAP/Sanity/ldap-nsswitch.sh
+@@ -29,7 +29,6 @@ then
+     NSSWITCH=../nsswitch.sh
+     USBGUARD=../../../../build/usbguard
+     USBGUARD_DAEMON=../../../../build/usbguard-daemon
+-    USBGUARD_DBUS=../../../../build/usbguard-dbus
+ else
+     source "${USBGUARD_TESTLIB_BASH}" || exit 129
+ fi
+diff --git a/src/Tests/LDAP/UseCase/ldap-test-1.sh b/src/Tests/LDAP/UseCase/ldap-test-1.sh
+index ffaa88c..3fb8209 100755
+--- a/src/Tests/LDAP/UseCase/ldap-test-1.sh
++++ b/src/Tests/LDAP/UseCase/ldap-test-1.sh
+@@ -30,7 +30,6 @@ then
+     NSSWITCH=../nsswitch.sh
+     USBGUARD=../../../../build/usbguard
+     USBGUARD_DAEMON=../../../../build/usbguard-daemon
+-    USBGUARD_DBUS=../../../../build/usbguard-dbus
+ else
+     source "${USBGUARD_TESTLIB_BASH}" || exit 129
+ fi
+diff --git a/src/Tests/LDAP/UseCase/ldap-test-2.sh b/src/Tests/LDAP/UseCase/ldap-test-2.sh
+index 04c2e8c..1a7352b 100755
+--- a/src/Tests/LDAP/UseCase/ldap-test-2.sh
++++ b/src/Tests/LDAP/UseCase/ldap-test-2.sh
+@@ -30,7 +30,6 @@ then
+     NSSWITCH=../nsswitch.sh
+     USBGUARD=../../../../build/usbguard
+     USBGUARD_DAEMON=../../../../build/usbguard-daemon
+-    USBGUARD_DBUS=../../../../build/usbguard-dbus
+ else
+     source "${USBGUARD_TESTLIB_BASH}" || exit 129
+ fi
+diff --git a/src/Tests/LDAP/UseCase/ldap-test-3.sh b/src/Tests/LDAP/UseCase/ldap-test-3.sh
+index b6a7131..6ce9d56 100755
+--- a/src/Tests/LDAP/UseCase/ldap-test-3.sh
++++ b/src/Tests/LDAP/UseCase/ldap-test-3.sh
+@@ -30,7 +30,6 @@ then
+     NSSWITCH=../nsswitch.sh
+     USBGUARD=../../../../build/usbguard
+     USBGUARD_DAEMON=../../../../build/usbguard-daemon
+-    USBGUARD_DBUS=../../../../build/usbguard-dbus
+ else
+     source "${USBGUARD_TESTLIB_BASH}" || exit 129
+ fi
+diff --git a/src/Tests/LDAP/UseCase/ldap-test-4.sh b/src/Tests/LDAP/UseCase/ldap-test-4.sh
+index 507ec6a..c63f072 100755
+--- a/src/Tests/LDAP/UseCase/ldap-test-4.sh
++++ b/src/Tests/LDAP/UseCase/ldap-test-4.sh
+@@ -30,7 +30,6 @@ then
+     NSSWITCH=../nsswitch.sh
+     USBGUARD=../../../../build/usbguard
+     USBGUARD_DAEMON=../../../../build/usbguard-daemon
+-    USBGUARD_DBUS=../../../../build/usbguard-dbus
+ else
+     source "${USBGUARD_TESTLIB_BASH}" || exit 129
+ fi
+diff --git a/src/Tests/LDAP/UseCase/ldap-test-5.sh b/src/Tests/LDAP/UseCase/ldap-test-5.sh
+index 80d2eac..0269281 100755
+--- a/src/Tests/LDAP/UseCase/ldap-test-5.sh
++++ b/src/Tests/LDAP/UseCase/ldap-test-5.sh
+@@ -30,7 +30,6 @@ then
+     NSSWITCH=../nsswitch.sh
+     USBGUARD=../../../../build/usbguard
+     USBGUARD_DAEMON=../../../../build/usbguard-daemon
+-    USBGUARD_DBUS=../../../../build/usbguard-dbus
+ else
+     source "${USBGUARD_TESTLIB_BASH}" || exit 129
+ fi
+diff --git a/src/Tests/Makefile.am b/src/Tests/Makefile.am
+index 64fa71f..6002200 100644
+--- a/src/Tests/Makefile.am
++++ b/src/Tests/Makefile.am
+@@ -66,7 +66,6 @@ TESTS_ENVIRONMENT=\
+ 	USBGUARD_TESTLIB_BASH=$(top_srcdir)/src/Tests/bash-testlib.sh \
+ 	USBGUARD=$(top_builddir)/usbguard \
+ 	USBGUARD_DAEMON=$(top_builddir)/usbguard-daemon \
+-	USBGUARD_DBUS=$(top_builddir)/usbguard-dbus \
+ 	LDAP_UTIL=$(top_srcdir)/src/Tests/LDAP/ldap.sh \
+ 	NSSWITCH=$(top_srcdir)/src/Tests/LDAP/nsswitch.sh
+ 
+diff --git a/src/Tests/UseCase/000_executable.sh b/src/Tests/UseCase/000_executable.sh
+index 30ea079..3a87a3b 100755
+--- a/src/Tests/UseCase/000_executable.sh
++++ b/src/Tests/UseCase/000_executable.sh
+@@ -28,7 +28,4 @@ schedule "${USBGUARD}" :valgrind
+ schedule "${USBGUARD_DAEMON} -h"
+ schedule "${USBGUARD_DAEMON} -h" :valgrind
+ 
+-[ -f "${USBGUARD_DBUS}" ] && schedule "${USBGUARD_DBUS} -h"
+-[ -f "${USBGUARD_DBUS}" ] && schedule "${USBGUARD_DBUS} -h" :valgrind
+-
+ execute 10

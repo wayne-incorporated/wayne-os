@@ -1,0 +1,33 @@
+From b6e67174c3968e76b54fe757e2608990d0fdae56 Mon Sep 17 00:00:00 2001
+From: "sy.avinash" <sy.avinash@globaledgesoftware.corp-partner.google.com>
+Date: Thu, 27 May 2021 11:51:16 +0000
+Subject: [PATCH 03/19] Fix dhcpcd running as a regular user.
+
+Update the lease file permission to 0600 to prevent other
+users from reading the lease file.
+
+BUG=chromium-os:28336
+TEST=Build and boot an image, network still works.
+TEST=New lease files are created with 0600 permissions.
+
+Reviewed-on: https://gerrit.chromium.org/gerrit/22644
+---
+ src/dhcp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/dhcp.c b/src/dhcp.c
+index 3591ce1f..1ff59a1a 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -1158,7 +1158,7 @@ write_lease(const struct interface *ifp, const struct bootp *bootp, size_t len)
+ 
+ 	logdebugx("%s: writing lease `%s'", ifp->name, state->leasefile);
+ 
+-	fd = open(state->leasefile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
++	fd = open(state->leasefile, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+ 	if (fd == -1)
+ 		return -1;
+ 
+-- 
+2.33.0.800.g4c38ced690-goog
+

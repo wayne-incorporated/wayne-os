@@ -1,0 +1,41 @@
+[package]
+name = "uwbd"
+version = "0.0.1"
+authors = ["The Chromium OS Authors"]
+edition = "2018"
+
+[lib]
+name = "uwbd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "uwbd"
+path = "src/main.rs"
+
+[[bin]]
+name = "uwbd_client"
+path = "src/bin/uwbd_client.rs"
+
+[build-dependencies]
+chromeos-dbus-bindings = { path = "../chromeos-dbus-bindings"} # provided by ebuild
+protoc-rust = "2.24.1"
+
+[dependencies]
+async-trait = "0.1.32"
+dbus = "0.9.3"
+dbus-crossroads = "0.5.0"
+futures = "0.3.13"
+libchromeos = { path = "../libchromeos-rs" } # provided by ebuild
+log = "0.4.14"
+protobuf = "2.24.1"
+syslog = "6.0.1"
+tokio = { version = "1.14.0", features = ["sync"] }
+uwb_core = { path = "../../aosp/external/uwb/local/src/rust/uwb_core", features=["proto"] } # provided by ebuild
+
+[patch.crates-io] # ignored by ebuild
+audio_streams = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/audio_streams-0.1.0/" } # ignored by ebuild
+base_event_token_derive = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/base_event_token_derive-0.1.0/" } # ignored by ebuild
+crosvm-base = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/crosvm-base-0.1.0/" } # ignored by ebuild
+data_model = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/data_model-0.1.50/" } # ignored by ebuild
+minijail = { path = "../../platform/minijail/rust/minijail/" } # ignored by ebuild
+sync = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/sync-0.1.149/" } # ignored by ebuild

@@ -1,0 +1,23 @@
+commit 21c008d5a5b1e0c2ec3c1659cff961f4b0ccea2c
+Author: Petr Hosek <phosek@google.com>
+Date:   Tue Jun 22 11:55:23 2021 -0700
+
+    Revert "[cmake] [compiler-rt] Call llvm_setup_rpath() when adding shared libraries."
+    
+    This reverts commit 78fd93e0396a19cb89d4b874c7cc42255888df56 as
+    a follow up to D91099.
+
+diff --git a/compiler-rt/cmake/Modules/AddCompilerRT.cmake b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+index 1e9e7c58664b..e72df6f8666d 100644
+--- a/compiler-rt/cmake/Modules/AddCompilerRT.cmake
++++ b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+@@ -359,9 +359,6 @@ function(add_compiler_rt_runtime name type)
+       target_link_libraries(${libname} PRIVATE ${builtins_${libname}})
+     endif()
+     if(${type} STREQUAL "SHARED")
+-      if(COMMAND llvm_setup_rpath)
+-        llvm_setup_rpath(${libname})
+-      endif()
+       if(WIN32 AND NOT CYGWIN AND NOT MINGW)
+         set_target_properties(${libname} PROPERTIES IMPORT_PREFIX "")
+         set_target_properties(${libname} PROPERTIES IMPORT_SUFFIX ".lib")

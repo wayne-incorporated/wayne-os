@@ -1,0 +1,47 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Use LLVM amdgpu target when building LLVM.
+LLVM_TARGETS="AMDGPU"
+
+# Initial value just for style purposes.
+USE=""
+LINUX_FIRMWARE=""
+
+# Google USBPD peripheral firmwares
+# LINUX_FIRMWARE="${LINUX_FIRMWARE} cros-pd"
+
+USE="${USE} majolica"
+
+# Allow Chrome to use Tablet mode
+USE="${USE} touchview"
+
+USE="${USE} unibuild has_chromeos_config_bsp"
+
+USE="${USE} arc"
+
+# Ability to run guest VMs.
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Add EC logging
+USE="${USE} eclog"
+
+# Include the kernel in the base image.
+USE="${USE} include_vmlinuz"
+
+# TODO: Default enable for debug purpose, need to disable later
+# Uncomment these lines to activate the serial port.
+TTY_CONSOLE="ttyS0 ttyS2"
+USE="${USE} pcserial"
+USE="${USE} earlyprintk"
+
+# Majolica does not have a cr50 - Use TPM2 simulator
+USE="${USE} -tpm tpm2 tpm2_simulator tpm2_simulator_manufacturer vtpm_proxy"
+USE="${USE} -cr50_onboard"
+
+# Enable Downloadable Content (DLC) Test
+USE="${USE} dlc_test"
+
+# Enable eMMC tools
+USE="${USE} mmc"

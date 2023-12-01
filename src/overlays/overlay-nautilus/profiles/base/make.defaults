@@ -1,0 +1,70 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+USE=""
+LINUX_FIRMWARE=""
+
+USE="${USE} nautilus"
+USE="${USE} cros_ec"
+
+# Disable ACPI AC device
+USE="${USE} -acpi_ac"
+
+# Google USBPD peripheral firmwares
+LINUX_FIRMWARE="${LINUX_FIRMWARE} cros-pd"
+
+# WiFi driver, BT driver, and USBPD peripheral firmwares
+LINUX_FIRMWARE="${LINUX_FIRMWARE} iwlwifi-7265D ibt-hw"
+
+# Add Intel Camera IMGU ipu3-fw.bin
+LINUX_FIRMWARE="${LINUX_FIRMWARE} ipu3_fw"
+
+# Add EC logging
+USE="${USE} eclog"
+
+USE="${USE} -tpm tpm2 cr50_onboard"
+
+# Add keyboard
+USE="${USE} keyboard_includes_side_buttons"
+
+# Disable touchpad wakeup since it can't be turned off dynamically when the
+# system is converted to tablet mode while it's suspended.
+USE="${USE} -touchpad_wakeup"
+
+# Add Touchview to get chromeos-accelerometer-init.
+USE="${USE} touchview"
+
+# Enable VMs.
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Add modemfwd for updating modem firmware.
+USE="${USE} modemfwd"
+
+# To get wacom_flash
+INPUT_DEVICES="wacom"
+
+# Comment these lines to disable the serial port.
+#TTY_CONSOLE="ttyS0"
+#USE="${USE} pcserial"
+
+# Enable background blur.
+USE="${USE} background_blur"
+
+# Add IME addons for some optional IME features.
+USE="${USE} ime_addons"
+
+# Enable on-device text suggestions
+USE="${USE} ondevice_text_suggestions"
+
+# Enable Downloadable Content (DLC) Test
+USE="${USE} dlc_test"
+
+USE="${USE} uprev-4-to-5"
+
+# Enable eMMC tools
+USE="${USE} mmc"
+
+# Enable unibuild.
+USE="${USE} unibuild has_chromeos_config_bsp"

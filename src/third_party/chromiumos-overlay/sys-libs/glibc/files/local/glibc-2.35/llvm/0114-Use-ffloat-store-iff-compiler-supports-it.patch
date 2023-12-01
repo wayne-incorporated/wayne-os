@@ -1,0 +1,90 @@
+From 02d802bb3a82a0413953685d0e39039320e79425 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 13:12:43 -0300
+Subject: [PATCH 114/163] Use -ffloat-store iff compiler supports it
+
+---
+ configure     | 22 ++++++++++++++++++++++
+ configure.ac  | 10 ++++++++++
+ math/Makefile |  4 ++--
+ 3 files changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/configure b/configure
+index 1f008e861b..e392abc956 100755
+--- a/configure
++++ b/configure
+@@ -6534,6 +6534,28 @@ $as_echo "$libc_cv_cc_rounding_math" >&6; }
+ config_vars="$config_vars
+ config-cflags-frounding-math = $libc_cv_cc_rounding_math"
+ 
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for compiler option that -ffloat-store" >&5
++$as_echo_n "checking for compiler option that -ffloat-store... " >&6; }
++if ${libc_cv_cc_float_store+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  if { ac_try='${CC-cc} -Werror -ffloat-store -xc /dev/null -S -o /dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }; then :
++  libc_cv_cc_float_store=-ffloat-store
++else
++  libc_cv_cc_float_store=
++fi
++
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_cc_float_store" >&5
++$as_echo "$libc_cv_cc_float_store" >&6; }
++config_vars="$config_vars
++config-cflags-float-store = $libc_cv_cc_float_store"
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking if $CC accepts -fno-tree-loop-distribute-patterns with \
+ __attribute__ ((__optimize__))" >&5
+ $as_echo_n "checking if $CC accepts -fno-tree-loop-distribute-patterns with \
+diff --git a/configure.ac b/configure.ac
+index 9a464d4805..3bc1ee3f9e 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1607,6 +1607,16 @@ LIBC_TRY_CC_OPTION([-Werror -frounding-math],
+ LIBC_CONFIG_VAR([config-cflags-frounding-math],
+ 	       	[$libc_cv_cc_rounding_math])
+ 
++dnl Determine if compiler supports -ffloat-store
++AC_CACHE_CHECK([for compiler option that -ffloat-store],
++	       libc_cv_cc_float_store, [dnl
++LIBC_TRY_CC_OPTION([-Werror -ffloat-store],
++		   [libc_cv_cc_float_store=-ffloat-store],
++		   [libc_cv_cc_float_store=])
++])
++LIBC_CONFIG_VAR([config-cflags-float-store],
++		[$libc_cv_cc_float_store])
++
+ AC_CACHE_CHECK(if $CC accepts -fno-tree-loop-distribute-patterns with \
+ __attribute__ ((__optimize__)), libc_cv_cc_loop_to_function, [dnl
+ cat > conftest.c <<EOF
+diff --git a/math/Makefile b/math/Makefile
+index 6e5dcb686d..11af816129 100644
+--- a/math/Makefile
++++ b/math/Makefile
+@@ -407,7 +407,7 @@ $(objpfx)test-tgmath3-macro-list.out: gen-tgmath-tests.py
+ 
+ libm-test-fast-math-cflags = -fno-builtin -D__FAST_MATH__ -DTEST_FAST_MATH
+ libm-test-vec-cflags = $(libm-test-fast-math-cflags) -fno-inline \
+-		       -ffloat-store -D_OPENMP=201307 -Wno-unknown-pragmas
++		       $(libc_cv_cc_float_store) -D_OPENMP=201307 -Wno-unknown-pragmas
+ 
+ CFLAGS-test-double-vlen4-wrappers.c += $(double-vlen4-arch-ext-cflags)
+ 
+@@ -423,7 +423,7 @@ CFLAGS-test-float-vlen16-wrappers.c += $(float-vlen16-arch-ext-cflags)
+ # raise spurious exceptions for sNaNs, but also do not test for
+ # exceptions.  Thus both versions of the classification macros are
+ # validated.
+-libm-test-no-inline-cflags = -fno-inline -ffloat-store -fno-builtin \
++libm-test-no-inline-cflags = -fno-inline $(libc_cv_cc_float_store) -fno-builtin \
+ 			     $(config-cflags-signaling-nans)
+ CFLAGS-test-tgmath.c += -fno-builtin
+ # The following testcase uses very long lines (>3 million), so it may take a
+-- 
+2.37.2
+

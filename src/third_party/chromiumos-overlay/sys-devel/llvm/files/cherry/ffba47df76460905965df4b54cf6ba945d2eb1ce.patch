@@ -1,0 +1,65 @@
+commit ffba47df76460905965df4b54cf6ba945d2eb1ce
+Author: Scott Linder <Scott.Linder@amd.com>
+Date:   Mon Dec 21 17:38:56 2020 +0000
+
+    Revert "[AMDGPU][HIP] Switch default DWARF version to 5"
+    
+    This reverts commit c4d10e7e9bb47b77fad43d8ddcfa328298f36c88.
+    
+    Differential Revision: https://reviews.llvm.org/D93648
+---
+ clang/lib/Driver/ToolChains/AMDGPU.h      | 2 +-
+ clang/lib/Driver/ToolChains/HIP.h         | 2 +-
+ clang/test/Driver/amdgpu-toolchain.c      | 2 +-
+ clang/test/Driver/hip-toolchain-dwarf.hip | 2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/AMDGPU.h b/clang/lib/Driver/ToolChains/AMDGPU.h
+index f5448b76aee5..55ef6e01967e 100644
+--- a/clang/lib/Driver/ToolChains/AMDGPU.h
++++ b/clang/lib/Driver/ToolChains/AMDGPU.h
+@@ -60,7 +60,7 @@ protected:
+ public:
+   AMDGPUToolChain(const Driver &D, const llvm::Triple &Triple,
+                   const llvm::opt::ArgList &Args);
+-  unsigned GetDefaultDwarfVersion() const override { return 5; }
++  unsigned GetDefaultDwarfVersion() const override { return 4; }
+   bool IsIntegratedAssemblerDefault() const override { return true; }
+   bool IsMathErrnoDefault() const override { return false; }
+ 
+diff --git a/clang/lib/Driver/ToolChains/HIP.h b/clang/lib/Driver/ToolChains/HIP.h
+index ff58c5451b0b..5e2be7138579 100644
+--- a/clang/lib/Driver/ToolChains/HIP.h
++++ b/clang/lib/Driver/ToolChains/HIP.h
+@@ -99,7 +99,7 @@ public:
+   computeMSVCVersion(const Driver *D,
+                      const llvm::opt::ArgList &Args) const override;
+ 
+-  unsigned GetDefaultDwarfVersion() const override { return 5; }
++  unsigned GetDefaultDwarfVersion() const override { return 4; }
+ 
+   const ToolChain &HostTC;
+ 
+diff --git a/clang/test/Driver/amdgpu-toolchain.c b/clang/test/Driver/amdgpu-toolchain.c
+index cb92744eee6a..ac558e0e26eb 100644
+--- a/clang/test/Driver/amdgpu-toolchain.c
++++ b/clang/test/Driver/amdgpu-toolchain.c
+@@ -8,7 +8,7 @@
+ // AS_LINK: clang{{.*}} "-cc1as"
+ // AS_LINK: ld.lld{{.*}} "-shared"
+ 
+-// DWARF_VER: "-dwarf-version=5"
++// DWARF_VER: "-dwarf-version=4"
+ 
+ // RUN: %clang -### -target amdgcn-amd-amdhsa -mcpu=gfx906 -nogpulib \
+ // RUN:   -flto %s 2>&1 | FileCheck -check-prefix=LTO %s
+diff --git a/clang/test/Driver/hip-toolchain-dwarf.hip b/clang/test/Driver/hip-toolchain-dwarf.hip
+index c853d5cf07cf..44d66fe52e04 100644
+--- a/clang/test/Driver/hip-toolchain-dwarf.hip
++++ b/clang/test/Driver/hip-toolchain-dwarf.hip
+@@ -6,4 +6,4 @@
+ // RUN:   -x hip --cuda-gpu-arch=gfx803 %s \
+ // RUN:   -Xarch_gfx803 -g 2>&1 | FileCheck %s -check-prefix=DWARF_VER
+ 
+-// DWARF_VER: "-dwarf-version=5"
++// DWARF_VER: "-dwarf-version=4"

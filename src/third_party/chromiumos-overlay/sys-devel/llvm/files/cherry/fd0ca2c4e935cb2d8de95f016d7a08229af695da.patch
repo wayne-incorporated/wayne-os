@@ -1,0 +1,287 @@
+From fd0ca2c4e935cb2d8de95f016d7a08229af695da Mon Sep 17 00:00:00 2001
+From: Hans Wennborg <hans@chromium.org>
+Date: Wed, 21 Dec 2022 15:21:04 +0100
+Subject: [PATCH] Revert "Reland "[pgo] Avoid introducing relocations by using
+ private alias""
+
+This caused lld on mac to assert when building instrumented clang (or
+instrumented code in general). See comment on the code review for
+reproducer.
+
+> In many cases, we can use an alias to avoid a symbolic relocations,
+> instead of using the public, interposable symbol. When the instrumented
+> function is in a COMDAT, we can use a hidden alias, and still avoid
+> references to discarded sections.
+>
+> New compiler-rt tests are Linux only for now.
+>
+> Previous versions of this patch allowed the compiler to name the
+> generated alias, but that would only be valid when the functions were
+> local. Since the alias may be used across TUs we use a more
+> deterministic naming convention, and add a `.local` suffix to the alias
+> name just as we do for relative vtables aliases.
+>
+> Reviewed By: phosek
+>
+> Differential Revision: https://reviews.llvm.org/D137982
+
+This reverts commit c42e50fede53bbcce79095e7c8115f26826c81ae.
+---
+ .../Linux/instrprof-discarded-comdat.cpp      | 50 -----------
+ .../Instrumentation/InstrProfiling.cpp        | 34 +-------
+ llvm/test/Transforms/PGOProfile/comdat.ll     | 31 -------
+ .../PGOProfile/prof_avoid_relocs.ll           | 87 -------------------
+ 4 files changed, 3 insertions(+), 199 deletions(-)
+ delete mode 100644 compiler-rt/test/profile/Linux/instrprof-discarded-comdat.cpp
+ delete mode 100644 llvm/test/Transforms/PGOProfile/prof_avoid_relocs.ll
+
+diff --git a/compiler-rt/test/profile/Linux/instrprof-discarded-comdat.cpp b/compiler-rt/test/profile/Linux/instrprof-discarded-comdat.cpp
+deleted file mode 100644
+index da2707a6856a..000000000000
+--- a/compiler-rt/test/profile/Linux/instrprof-discarded-comdat.cpp
++++ /dev/null
+@@ -1,50 +0,0 @@
+-// Check that instrprof does not introduce references to discarded sections when
+-// using comdats.
+-//
+-// Occasionally, it is possible that the same function can be compiled in
+-// different TUs with slightly different linkages, e.g., due to different
+-// compiler options. However, if these are comdat functions, a single
+-// implementation will be chosen at link time. we want to ensure that the
+-// profiling data does not contain a reference to the discarded section.
+-
+-// REQUIRES: linux
+-// RUN: mkdir -p %t.d
+-// RUN: %clangxx_pgogen -O2 -fPIC -ffunction-sections -fdata-sections -c %s -o %t.d/a1.o -DOBJECT_1 -mllvm -disable-preinline
+-// RUN: %clangxx_pgogen -O2 -fPIC -ffunction-sections -fdata-sections -c %s -o %t.d/a2.o
+-// RUN: %clangxx -fPIC -shared -o %t.d/liba.so %t.d/a1.o %t.d/a2.o 2>&1 | FileCheck %s --allow-empty
+-
+-// Ensure that we don't get an error when linking
+-// CHECK-NOT: relocation refers to a discarded section: .text._ZN1CIiE1fEi
+-
+-template <typename T> struct C {
+-  void f(T x);
+-  int g(T x) {
+-    f(x);
+-    return v;
+-  }
+-  int v;
+-};
+-
+-template <typename T>
+-#ifdef OBJECT_1
+-__attribute__((weak))
+-#else
+-__attribute__((noinline))
+-#endif
+-void C<T>::f(T x) {
+-  v += x;
+-}
+-
+-#ifdef OBJECT_1
+-int foo() {
+-  C<int> c;
+-  c.f(1);
+-  return c.g(2);
+-}
+-#else
+-int bar() {
+-  C<int> c;
+-  c.f(3);
+-  return c.g(4);
+-}
+-#endif
+diff --git a/llvm/lib/Transforms/Instrumentation/InstrProfiling.cpp b/llvm/lib/Transforms/Instrumentation/InstrProfiling.cpp
+index 8f5e8172bf6c..3af3f908ea5b 100644
+--- a/llvm/lib/Transforms/Instrumentation/InstrProfiling.cpp
++++ b/llvm/lib/Transforms/Instrumentation/InstrProfiling.cpp
+@@ -823,36 +823,6 @@ static inline bool shouldRecordFunctionAddr(Function *F) {
+   return F->hasAddressTaken() || F->hasLinkOnceLinkage();
+ }
+ 
+-static inline Constant *getFuncAddrForProfData(Function *Fn) {
+-  auto *Int8PtrTy = Type::getInt8PtrTy(Fn->getContext());
+-  // Store a nullptr in __llvm_profd, if we shouldn't use a real address
+-  if (!shouldRecordFunctionAddr(Fn))
+-    return ConstantPointerNull::get(Int8PtrTy);
+-
+-  // If we can't use an alias, we must use the public symbol, even though this
+-  // may require a symbolic relocation. When the function has local linkage, we
+-  // can use the symbol directly without introducing relocations.
+-  if (Fn->isDeclarationForLinker() || Fn->hasLocalLinkage())
+-    return ConstantExpr::getBitCast(Fn, Int8PtrTy);
+-
+-  // When possible use a private alias to avoid symbolic relocations.
+-  auto *GA = GlobalAlias::create(GlobalValue::LinkageTypes::PrivateLinkage,
+-                                 Fn->getName() + ".local", Fn);
+-
+-  // When the instrumented function is a COMDAT function, we cannot use a
+-  // private alias. If we did, we would create reference to a local label in
+-  // this function's section. If this version of the function isn't selected by
+-  // the linker, then the metadata would introduce a reference to a discarded
+-  // section. So, for COMDAT functions, we need to adjust the linkage of the
+-  // alias. Using hidden visibility avoids a dynamic relocation and an entry in
+-  // the dynamic symbol table.
+-  if (Fn->hasComdat()) {
+-    GA->setLinkage(Fn->getLinkage());
+-    GA->setVisibility(GlobalValue::VisibilityTypes::HiddenVisibility);
+-  }
+-  return ConstantExpr::getBitCast(GA, Int8PtrTy);
+-}
+-
+ static bool needsRuntimeRegistrationOfSectionRange(const Triple &TT) {
+   // Don't do this for Darwin.  compiler-rt uses linker magic.
+   if (TT.isOSDarwin())
+@@ -1044,7 +1014,9 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfInstBase *Inc) {
+   };
+   auto *DataTy = StructType::get(Ctx, makeArrayRef(DataTypes));
+ 
+-  Constant *FunctionAddr = getFuncAddrForProfData(Fn);
++  Constant *FunctionAddr = shouldRecordFunctionAddr(Fn)
++                               ? ConstantExpr::getBitCast(Fn, Int8PtrTy)
++                               : ConstantPointerNull::get(Int8PtrTy);
+ 
+   Constant *Int16ArrayVals[IPVK_Last + 1];
+   for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
+diff --git a/llvm/test/Transforms/PGOProfile/comdat.ll b/llvm/test/Transforms/PGOProfile/comdat.ll
+index 765a77538a9b..9f5c0ee848ca 100644
+--- a/llvm/test/Transforms/PGOProfile/comdat.ll
++++ b/llvm/test/Transforms/PGOProfile/comdat.ll
+@@ -4,8 +4,6 @@
+ 
+ $linkonceodr = comdat any
+ $weakodr = comdat any
+-$weak = comdat any
+-$linkonce = comdat any
+ 
+ ;; profc/profd have hash suffixes. This definition doesn't have value profiling,
+ ;; so definitions with the same name in other modules must have the same CFG and
+@@ -29,32 +27,3 @@ define linkonce_odr void @linkonceodr() comdat {
+ define weak_odr void @weakodr() comdat {
+   ret void
+ }
+-
+-;; weak in a comdat is not renamed. There is no guarantee that definitions in
+-;; other modules don't have value profiling. profd should be conservatively
+-;; non-private to prevent a caller from referencing a non-prevailing profd,
+-;; causing a linker error.
+-; ELF:   @__profc_weak = weak hidden global {{.*}} comdat, align 8
+-; ELF:   @__profd_weak = weak hidden global {{.*}} comdat($__profc_weak), align 8
+-; COFF:  @__profc_weak = weak hidden global {{.*}} comdat, align 8
+-; COFF:  @__profd_weak = weak hidden global {{.*}} comdat, align 8
+-define weak void @weak() comdat {
+-  ret void
+-}
+-
+-;; profc/profd have hash suffixes. This definition doesn't have value profiling,
+-;; so definitions with the same name in other modules must have the same CFG and
+-;; cannot have value profiling, either. profd can be made private for ELF.
+-; ELF:   @__profc_linkonce.[[#]] = linkonce hidden global {{.*}} comdat, align 8
+-; ELF:   @__profd_linkonce.[[#]] = private global {{.*}} comdat($__profc_linkonce.[[#]]), align 8
+-; COFF:  @__profc_linkonce.[[#]] = linkonce hidden global {{.*}} comdat, align 8
+-; COFF:  @__profd_linkonce.[[#]] = linkonce hidden global {{.*}} comdat, align 8
+-define linkonce void @linkonce() comdat {
+-  ret void
+-}
+-
+-; Check that comdat aliases are hidden for all linkage types
+-; ELF:   @linkonceodr.local = linkonce_odr hidden alias void (), ptr @linkonceodr
+-; ELF:   @weakodr.local = weak_odr hidden alias void (), ptr @weakodr
+-; ELF:   @weak.local = weak hidden alias void (), ptr @weak
+-; ELF:   @linkonce.local = linkonce hidden alias void (), ptr @linkonce
+diff --git a/llvm/test/Transforms/PGOProfile/prof_avoid_relocs.ll b/llvm/test/Transforms/PGOProfile/prof_avoid_relocs.ll
+deleted file mode 100644
+index ee32a303a430..000000000000
+--- a/llvm/test/Transforms/PGOProfile/prof_avoid_relocs.ll
++++ /dev/null
+@@ -1,87 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_test_checks.py UTC_ARGS: --check-globals
+-; RUN: opt -S -passes=pgo-instr-gen,instrprof < %s | FileCheck %s
+-
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-unknown-linux-gnu"
+-
+-;; Test that we use private aliases to reference function addresses inside profile data
+-; CHECK: @__profd_foo = private global {{.*}}, ptr @foo.local,
+-; CHECK-NOT: @__profd_foo = private global {{.*}}, ptr @foo,
+-
+-; CHECK: @[[__PROFC_WEAK:[a-zA-Z0-9_$"\\.-]+]] = weak hidden global [1 x i64] zeroinitializer, section "__llvm_prf_cnts", comdat, align 8
+-; CHECK: @[[__PROFD_WEAK:[a-zA-Z0-9_$"\\.-]+]] = private global { i64, i64, i64, ptr, ptr, i32, [2 x i16] } { i64 -5028622335731970946, i64 742261418966908927, i64 sub (i64 ptrtoint (ptr @__profc_weak to i64), i64 ptrtoint (ptr @__profd_weak to i64)), ptr @weak.local, ptr null, i32 1, [2 x i16] zeroinitializer }, section "__llvm_prf_data", comdat($__profc_weak), align 8
+-; CHECK: @[[__PROFC_LINKONCE:[a-zA-Z0-9_$"\\.-]+]] = linkonce hidden global [1 x i64] zeroinitializer, section "__llvm_prf_cnts", comdat, align 8
+-; CHECK: @[[__PROFD_LINKONCE:[a-zA-Z0-9_$"\\.-]+]] = private global { i64, i64, i64, ptr, ptr, i32, [2 x i16] } { i64 -121947654961992603, i64 742261418966908927, i64 sub (i64 ptrtoint (ptr @__profc_linkonce to i64), i64 ptrtoint (ptr @__profd_linkonce to i64)), ptr @linkonce.local, ptr null, i32 1, [2 x i16] zeroinitializer }, section "__llvm_prf_data", comdat($__profc_linkonce), align 8
+-; CHECK: @[[__PROFC_WEAKODR:[a-zA-Z0-9_$"\\.-]+]] = weak_odr hidden global [1 x i64] zeroinitializer, section "__llvm_prf_cnts", comdat, align 8
+-; CHECK: @[[__PROFD_WEAKODR:[a-zA-Z0-9_$"\\.-]+]] = private global { i64, i64, i64, ptr, ptr, i32, [2 x i16] } { i64 -4807837289933096997, i64 742261418966908927, i64 sub (i64 ptrtoint (ptr @__profc_weakodr to i64), i64 ptrtoint (ptr @__profd_weakodr to i64)), ptr @weakodr.local, ptr null, i32 1, [2 x i16] zeroinitializer }, section "__llvm_prf_data", comdat($__profc_weakodr), align 8
+-; CHECK: @[[__PROFC_LINKONCEODR:[a-zA-Z0-9_$"\\.-]+]] = linkonce_odr hidden global [1 x i64] zeroinitializer, section "__llvm_prf_cnts", comdat, align 8
+-; CHECK: @[[__PROFD_LINKONCEODR:[a-zA-Z0-9_$"\\.-]+]] = private global { i64, i64, i64, ptr, ptr, i32, [2 x i16] } { i64 4214081367395809689, i64 742261418966908927, i64 sub (i64 ptrtoint (ptr @__profc_linkonceodr to i64), i64 ptrtoint (ptr @__profd_linkonceodr to i64)), ptr @linkonceodr.local, ptr null, i32 1, [2 x i16] zeroinitializer }, section "__llvm_prf_data", comdat($__profc_linkonceodr), align 8
+-; CHECK: @[[__PROFC_AVAILABLE_EXTERNALLY_742261418966908927:[a-zA-Z0-9_$"\\.-]+]] = linkonce_odr hidden global [1 x i64] zeroinitializer, section "__llvm_prf_cnts", comdat, align 8
+-; CHECK: @[[__PROFD_AVAILABLE_EXTERNALLY_742261418966908927:[a-zA-Z0-9_$"\\.-]+]] = private global { i64, i64, i64, ptr, ptr, i32, [2 x i16] } { i64 -8510055422695886042, i64 742261418966908927, i64 sub (i64 ptrtoint (ptr @__profc_available_externally.742261418966908927 to i64), i64 ptrtoint (ptr @__profd_available_externally.742261418966908927 to i64)), ptr null, ptr null, i32 1, [2 x i16] zeroinitializer }, section "__llvm_prf_data", comdat($__profc_available_externally.742261418966908927), align 8
+-
+-;; Ensure when not instrumenting a non-comdat function, then if we generate an
+-;; alias, then it is private. We check comdat versions in comdat.ll
+-; CHECK: @foo.local = private alias i32 (i32), ptr @foo
+-; CHECK: @[[WEAK_2:[a-zA-Z0-9_$"\\.-]+]].local = private alias void (), ptr @weak
+-; CHECK: @[[LINKONCE_3:[a-zA-Z0-9_$"\\.-]+]].local = private alias void (), ptr @linkonce
+-; CHECK: @[[WEAKODR_4:[a-zA-Z0-9_$"\\.-]+]].local = private alias void (), ptr @weakodr
+-; CHECK: @[[LINKONCEODR_5:[a-zA-Z0-9_$"\\.-]+]].local = private alias void (), ptr @linkonceodr
+-
+-;; We should never generate an alias for available_externally functions
+-; CHECK-NOT: @[[AVAILABLE_EXTERNALLY_6:[a-zA-Z0-9_$"\\.-]+]] = private alias void (), ptr @available_externally
+-
+-define i32 @foo(i32 %0) {
+-; CHECK-LABEL: @foo(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[PGOCOUNT:%.*]] = load i64, ptr @__profc_foo, align 8
+-; CHECK-NEXT:    [[TMP1:%.*]] = add i64 [[PGOCOUNT]], 1
+-; CHECK-NEXT:    store i64 [[TMP1]], ptr @__profc_foo, align 8
+-; CHECK-NEXT:    ret i32 0
+-entry:
+-  ret i32 0
+-}
+-
+-define weak void @weak() {
+-; CHECK-LABEL: @weak(
+-; CHECK-NEXT:    [[PGOCOUNT:%.*]] = load i64, ptr @__profc_weak, align 8
+-; CHECK-NEXT:    [[TMP1:%.*]] = add i64 [[PGOCOUNT]], 1
+-; CHECK-NEXT:    store i64 [[TMP1]], ptr @__profc_weak, align 8
+-; CHECK-NEXT:    ret void
+-  ret void
+-}
+-
+-define linkonce void @linkonce() {
+-; CHECK-LABEL: @linkonce(
+-; CHECK-NEXT:    [[PGOCOUNT:%.*]] = load i64, ptr @__profc_linkonce, align 8
+-; CHECK-NEXT:    [[TMP1:%.*]] = add i64 [[PGOCOUNT]], 1
+-; CHECK-NEXT:    store i64 [[TMP1]], ptr @__profc_linkonce, align 8
+-; CHECK-NEXT:    ret void
+-  ret void
+-}
+-
+-define weak_odr void @weakodr() {
+-; CHECK-LABEL: @weakodr(
+-; CHECK-NEXT:    [[PGOCOUNT:%.*]] = load i64, ptr @__profc_weakodr, align 8
+-; CHECK-NEXT:    [[TMP1:%.*]] = add i64 [[PGOCOUNT]], 1
+-; CHECK-NEXT:    store i64 [[TMP1]], ptr @__profc_weakodr, align 8
+-; CHECK-NEXT:    ret void
+-  ret void
+-}
+-
+-define linkonce_odr void @linkonceodr() {
+-; CHECK-LABEL: @linkonceodr(
+-; CHECK-NEXT:    [[PGOCOUNT:%.*]] = load i64, ptr @__profc_linkonceodr, align 8
+-; CHECK-NEXT:    [[TMP1:%.*]] = add i64 [[PGOCOUNT]], 1
+-; CHECK-NEXT:    store i64 [[TMP1]], ptr @__profc_linkonceodr, align 8
+-; CHECK-NEXT:    ret void
+-  ret void
+-}
+-
+-define available_externally void @available_externally(){
+-; CHECK-LABEL: @available_externally(
+-; CHECK-NEXT:    [[PGOCOUNT:%.*]] = load i64, ptr @__profc_available_externally.742261418966908927, align 8
+-; CHECK-NEXT:    [[TMP1:%.*]] = add i64 [[PGOCOUNT]], 1
+-; CHECK-NEXT:    store i64 [[TMP1]], ptr @__profc_available_externally.742261418966908927, align 8
+-; CHECK-NEXT:    ret void
+-  ret void
+-}
+-- 
+2.40.0.348.gf938b09366-goog
+

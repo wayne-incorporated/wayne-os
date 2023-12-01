@@ -1,0 +1,70 @@
+From: Nathan Muggli <nmuggli@google.com>
+
+Add some checks which attempt to verify the validity of a page header.  This
+will prevent printing a page that is larger than the printer can handle.
+
+--- a/prnt/hpcups/HPCupsFilter.cpp
++++ b/prnt/hpcups/HPCupsFilter.cpp
+@@ -42,6 +42,7 @@
+ #include <sys/wait.h>
+ #include <sys/utsname.h>
+ #include <time.h>
++#include <math.h>
+ #include "utils.h"
+ 
+ #define HP_FILE_VERSION_STR    "03.09.08.0"
+@@ -673,13 +673,54 @@
+ 	    }
+     #endif
+ 
++    // Get the max page size (in points) this printer supports by looking at the
++    // custom size in addition to all supported sizes
++    float max_page_height_points = 842.0f; // max(A4,Letter)
++    float max_page_width_points = 612.0f;  // max(A4,Letter)
++    if (m_ppd) {
++
++        if (m_ppd->variable_sizes == 1) {
++            max_page_width_points = fmax(max_page_width_points,
++                                         m_ppd->custom_max[0]);
++            max_page_height_points = fmax(max_page_height_points,
++                                          m_ppd->custom_max[1]);
++        }
++
++        for (int size_index = 0; size_index < m_ppd->num_sizes; ++size_index) {
++            const ppd_size_t* const size = m_ppd->sizes + size_index;
++            max_page_width_points = fmax(max_page_width_points, size->width);
++            max_page_height_points = fmax(max_page_height_points, size->length);
++        }
++    }
++    // Use an arbitrarily large maximum resolution to find the page limits
++    static const unsigned max_resolution = 40000;
++    // Convert our max size (width and height) to pixels (rounding up).
++    const unsigned max_page_width_pixels = ceilf(
++        max_page_width_points / 72.0f * max_resolution);
++    const unsigned max_page_height_pixels = ceilf(
++        max_page_height_points / 72.0f * max_resolution);
++
+     unsigned buffer_size = 0;
+     unsigned cups_width = 0;
+     while (cupsRasterReadHeader2(cups_raster, &cups_header))
+     {
+         if (buffer_size == 0) {
+             buffer_size = cups_header.cupsWidth * 4 + 32;
+             cups_width = cups_header.cupsWidth;
++        }
++
++        // Don't try and print a page larger than our max width or height.
++        if (cups_header.cupsWidth > max_page_width_pixels) {
++            dbglog("ERROR: cupsWidth %u for page %d is larger than max of %u\n",
++                   cups_header.cupsWidth, current_page_number + 1,
++                   max_page_width_pixels);
++            return SYSTEM_ERROR;
++        }
++        if (cups_header.cupsHeight > max_page_height_pixels) {
++          dbglog("ERROR: cupsHeight %u for page %d is larger than max of %u\n",
++                 cups_header.cupsHeight, current_page_number + 1,
++                 max_page_height_pixels);
++          return SYSTEM_ERROR;
+         }
+ 
+         // cupsBytesPerLine cannot be larger than the buffer size.

@@ -1,0 +1,53 @@
+From 9cccaae4893cf368cfe973c25851329ee468a161 Mon Sep 17 00:00:00 2001
+From: Andrzej Ostruszka <amo@semihalf.com>
+Date: Tue, 21 Dec 2021 11:51:04 +0000
+Subject: [PATCH] Additional ARP packet checks
+
+Normally these checks are performed by the BPF filter, but there is
+a short time interval between opening of socket and installing of the
+filter where we might get some packets so let's revert those checks.
+Those in BPF are kept as they should be more efficient to filter out
+non-ARP packets.
+---
+ src/arp.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/src/arp.c b/src/arp.c
+index a323a9cc..1e9559b7 100644
+--- a/src/arp.c
++++ b/src/arp.c
+@@ -127,24 +127,26 @@ arp_packet(struct interface *ifp, uint8_t *data, size_t len)
+ 		return;
+ 	memcpy(&ar, data, sizeof(ar));
+ 
+-	/* These checks are enforced in the BPF filter. */
+-#if 0
++        /* These checks are normally enforced in the BPF filter, but for the
++         * short period between opening the socket and installing the filter we
++         * might get some packets that does not fit so let's check this again. */
++#if 1
+ 	/* Families must match */
+ 	if (ar.ar_hrd != htons(ifp->family))
+ 		return;
+ 	/* Protocol must be IP. */
+ 	if (ar.ar_pro != htons(ETHERTYPE_IP))
+-		continue;
++		return;
+ 	/* lladdr length matches */
+ 	if (ar.ar_hln != ifp->hwlen)
+-		continue;
++		return;
+ 	/* Protocol length must match in_addr_t */
+ 	if (ar.ar_pln != sizeof(arm.sip.s_addr))
+ 		return;
+ 	/* Only these types are recognised */
+ 	if (ar.ar_op != htons(ARPOP_REPLY) &&
+ 	    ar.ar_op != htons(ARPOP_REQUEST))
+-		continue;
++		return;
+ #endif
+ 
+ 	/* Get pointers to the hardware addresses */
+-- 
+2.34.1.307.g9b7440fafd-goog
+

@@ -1,0 +1,44 @@
+From 69ff2aa3aec2e4bdd8e01fef298b38c828c5cb5e Mon Sep 17 00:00:00 2001
+From: Andrzej Ostruszka <amo@semihalf.com>
+Date: Tue, 2 Nov 2021 15:48:14 +0000
+Subject: [PATCH] Stop only active interfaces via DBus
+
+When stopping interface(s) via DBus we should check if given interface
+has been active before stopping it - otherwise we will end up trying to
+access fields of interface that has not been properly initialized during
+configuration phase.
+---
+ src/dhcpcd.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/dhcpcd.c b/src/dhcpcd.c
+index a0bd69dd..681f5a34 100644
+--- a/src/dhcpcd.c
++++ b/src/dhcpcd.c
+@@ -1196,10 +1196,12 @@ dhcpcd_stop_interface(struct dhcpcd_ctx *ctx, const char *ifname)
+ {
+ 	struct interface *ifp;
+ 	ifp = if_find(ctx->ifaces, ifname);
+-	if (ifp == NULL)
+-	{
++	if (ifp == NULL) {
+ 		logerrx("stop_interface: %s not found", ifname);
+ 		return;
++	} else if (ifp->active == IF_INACTIVE) {
++		logerrx("stop_interface: %s is not active", ifname);
++		return;
+ 	}
+ 	stop_interface(ifp);
+ }
+@@ -1209,6 +1211,8 @@ dhcpcd_stop_interfaces(struct dhcpcd_ctx *ctx)
+ {
+ 	struct interface *ifp, *ifn;
+ 	TAILQ_FOREACH_SAFE(ifp, ctx->ifaces, next, ifn) {
++		if (ifp->active == IF_INACTIVE)
++			continue;
+ 		stop_interface(ifp);
+ 	}
+ }
+-- 
+2.33.1.1089.g2158813163f-goog
+

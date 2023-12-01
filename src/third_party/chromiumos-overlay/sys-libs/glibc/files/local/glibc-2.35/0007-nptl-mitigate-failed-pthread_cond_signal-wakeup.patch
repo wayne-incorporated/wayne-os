@@ -1,0 +1,46 @@
+From fe3784ac10e54af4b50a5a6718c60ade66ac2d9a Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Fri, 9 Jul 2021 11:49:23 +0300
+Subject: [PATCH 7/8] nptl: mitigate failed pthread_cond_signal wakeup
+
+This mitigation is applied until the bug reported at [1]
+gets a proper fix in glibc upstream. Work is on-going and
+the proposed fixes are more complex than this mitigation,
+so for now use it to avoid the deadlock because it safest.
+
+The mitigation is at location [2] in the above bug report
+and was also tested and deployed in Ubuntu starting with
+Bionic onward [3].
+
+[1] https://sourceware.org/bugzilla/show_bug.cgi?id=25847
+[2] https://sourceware.org/bugzilla/attachment.cgi?id=12484
+[3] https://bugs.launchpad.net/ubuntu/+source/glibc/+bug/1899800
+
+Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.com>
+---
+ nptl/pthread_cond_wait.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/nptl/pthread_cond_wait.c b/nptl/pthread_cond_wait.c
+index 20c348a503..6da7712c60 100644
+--- a/nptl/pthread_cond_wait.c
++++ b/nptl/pthread_cond_wait.c
+@@ -588,6 +588,15 @@ __pthread_cond_wait_common (pthread_cond_t *cond, pthread_mutex_t *mutex,
+ 		     the signal from, which cause it to block using the
+ 		     futex).  */
+ 		  futex_wake (cond->__data.__g_signals + g, 1, private);
++
++		  /* We might be wrong about stealing, we got the signal
++		     from the an old g1, but ended up returning it to
++		     a different g1. We can't tell whether it is the case.
++		     If it is, we now caused another issue:
++		     now g_refs[g1] is one less than g_size[g1].
++		     The mitigation step is to broadcast g1 and g2, let every
++		     waiter wake up spuriosly. */
++		  __pthread_cond_broadcast(cond);
+ 		  break;
+ 		}
+ 	      /* TODO Back off.  */
+-- 
+2.36.1
+

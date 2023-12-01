@@ -1,0 +1,1738 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<node name="/org/chromium/debugd"
+      xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+  <interface name="org.chromium.debugd">
+    <method name="PingStart">
+      <tp:docstring>
+        Starts pinging the specified hostname with the specified options, with
+        output directed to the given output file descriptor. The returned opaque
+        string functions as a handle for this particular ping. Multiple pings
+        can be running at once.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send output to.
+        </tp:docstring>
+      </arg>
+      <arg name="destination" type="s" direction="in">
+        <tp:docstring>
+          Destination host to connect to.
+        </tp:docstring>
+      </arg>
+      <arg name="options" type="a{sv}" direction="in">
+        <tp:docstring>
+          Options to pass to the ping command. Accepted keys include:
+            broadcast (bool): Send broadcast pings.
+            count (int default 4): Number of packets to send.
+            interval (int): Time to wait between packets.
+            numeric (bool): Print numeric remote hosts.
+            packetsize (int): Size of each packet sent.
+            v6 (bool): True for ipv6.
+            waittime (int): Time to wait for a response.
+          Unrecognized keys return a DBus error and print no output to the
+          supplied file descriptor.
+        </tp:docstring>
+      </arg>
+      <arg name="handle" type="s" direction="out">
+        <tp:docstring>
+          Opaque handle for this ping.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="PingStop">
+      <tp:docstring>
+        Stops a running ping.
+      </tp:docstring>
+      <arg name="handle" type="s" direction="in">
+        Handle to the ping to stop. If an empty string is passed, stops all
+        running pings.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="SystraceStart">
+      <tp:docstring>
+        Start system/kernel tracing.  If tracing is already enabled it is
+        stopped first and any collected events are discarded.  The kernel
+        must have been configured to support tracing.
+      </tp:docstring>
+      <arg name="categories" type="s" direction="in">
+        <tp:docstring>
+          Trace event categories to enable.  If none are specified then
+          all known events are enabled.  Multiple categories are specified
+          separated by spaces.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SystraceStop">
+      <tp:docstring>
+        Stop system/kernel tracing and write the collected event data.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send event data to.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SystraceStatus">
+      <tp:docstring>
+        Return current status for system/kernel tracing including whether it
+        is enabled, the tracing clock, and the set of events enabled.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        Free-form text reporting status.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="TracePathStart">
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send output to.
+        </tp:docstring>
+      </arg>
+      <arg name="destination" type="s" direction="in">
+        <tp:docstring>
+          Destination host[/port] to trace a path to.
+        </tp:docstring>
+      </arg>
+      <arg name="options" type="a{sv}" direction="in">
+        <tp:docstring>
+          Options to pass to the tracepath command:
+            numeric (bool): Print numeric remote hosts.
+            v6 (bool): True for ipv6.
+          Unrecognized keys return a DBus error and print no output to the
+          supplied file descriptor.
+        </tp:docstring>
+      </arg>
+      <arg name="handle" type="s" direction="out">
+        <tp:docstring>
+          Opaque handle for this ping.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="TracePathStop">
+      <tp:docstring>
+        Stops a running tracepath.
+      </tp:docstring>
+      <arg name="handle" type="s" direction="in">
+        <tp:docstring>
+          Handle to the tracepath to stop. If an empty string is passed, stops
+          all running tracepaths.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="GetIpAddresses">
+      <tp:docstring>
+        Returns the IP addresses.
+      </tp:docstring>
+      <arg name="options" type="a{sv}" direction="in">
+        <tp:docstring>
+          Options:
+            v6 (bool): True for IPv6.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="as" direction="out">
+        <tp:docstring>
+          The list of address output.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetRoutes">
+      <tp:docstring>
+        Returns the routing table.
+      </tp:docstring>
+      <arg name="options" type="a{sv}" direction="in">
+        <tp:docstring>
+          Options:
+            numeric (bool): Deprecated, numeric hosts are always given.
+            v6 (bool): True for ipv6.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="as" direction="out">
+        <tp:docstring>
+          The list of routes.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetNetworkStatus">
+      <tp:docstring>
+        Returns network information as a JSON string. See the design document
+        for a rationale.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        <tp:docstring>
+          Network information as a JSON string.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetPerfOutput">
+      <tp:docstring>
+        Runs system-wide perf profiling. The profile parameters are selected by
+        perf_args.
+      </tp:docstring>
+      <arg name="duration_sec" type="u" direction="in">
+        <tp:docstring>
+          Duration to run perf in seconds.
+        </tp:docstring>
+      </arg>
+      <arg name="perf_args" type="as" direction="in">
+        <tp:docstring>
+          The perf parameters to pass to quipper, which will forward them to
+          perf after checking they are safe.
+        </tp:docstring>
+      </arg>
+      <arg name="status" type="i" direction="out">
+        <tp:docstring>
+          Status code from running perf and serializing the output.
+        </tp:docstring>
+      </arg>
+      <arg name="perf_data" type="ay" direction="out">
+        <tp:docstring>
+          Perf report output data as a protobuf.
+        </tp:docstring>
+      </arg>
+      <arg name="perf_stat" type="ay" direction="out">
+        <tp:docstring>
+          Perf stat output data as a protobuf.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="GetPerfOutputFd">
+      <tp:docstring>
+        Runs system-wide perf profiling. The profile parameters are selected by
+        perf_args.
+        This method runs quipper asynchronously so that debugd isn't blocked for
+        duration_sec. The DBus client reads the perf output using the file
+        descriptor. Only one profiler session is allowed to run using this
+        method. Calling this method while the profiler is running yields a DBus
+        error. The profiler session can optionally be stopped using method
+        StopPerf before duration_sec elapses.
+      </tp:docstring>
+      <arg name="duration_sec" type="u" direction="in">
+        <tp:docstring>
+          Duration to run perf in seconds.
+        </tp:docstring>
+      </arg>
+      <arg name="perf_args" type="as" direction="in">
+        <tp:docstring>
+          The perf parameters to pass to quipper, which will forward them to
+          perf after checking they are safe.
+        </tp:docstring>
+      </arg>
+      <arg name="stdout" type="h" direction="in">
+        <tp:docstring>
+          quipper's stdout will be connected to this file descriptor.
+        </tp:docstring>
+      </arg>
+      <arg name="session_id" type="t" direction="out">
+        <tp:docstring>
+          The identifier of the profiler session. Will be non-zero if the
+          profiler is started successfully. It can be used in method
+          StopPerf to stop the profiler and gather output right away.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="StopPerf">
+      <tp:docstring>
+        Stop the existing profiler session and gather perf output right away. If
+        the collection started by GetPerfOutputFd has finished, calling this
+        method will silently succeed.
+      </tp:docstring>
+      <arg name="session_id" type="t" direction="in">
+        <tp:docstring>
+          The profiler session ID returned from the GetPerfOutputFd method. It
+          is used to stop the existing profiler session.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="GetPerfOutputV2">
+      <tp:docstring>
+        Runs system-wide perf profiling through quipper. The profile parameters
+        are selected by quipper_args.
+        This method runs quipper asynchronously so that debugd isn't blocked for
+        however long perf is recording. The DBus client reads the perf output
+        using the file descriptor. Only one profiler session is allowed to run
+        using this method. Calling this method while the profiler is running
+        yields a DBus error. The profiler session can optionally be stopped
+        early using method StopPerf.
+      </tp:docstring>
+      <arg name="quipper_args" type="as" direction="in">
+        <tp:docstring>
+          Quipper arguments including the recording duration and perf parameters
+          that quipper checks for safety before forwarding them to perf.
+        </tp:docstring>
+      </arg>
+      <arg name="disable_cpu_idle" type="b" direction="in">
+        <tp:docstring>
+          If true, temporarily disable all CPUs from entering the idle states
+          while running the perf command.
+        </tp:docstring>
+      </arg>
+      <arg name="stdout" type="h" direction="in">
+        <tp:docstring>
+          quipper's stdout will be connected to this file descriptor.
+        </tp:docstring>
+      </arg>
+      <arg name="session_id" type="t" direction="out">
+        <tp:docstring>
+          The identifier of the profiler session. Will be non-zero if the
+          profiler is started successfully. It can be used in method
+          StopPerf to stop the profiler and gather output right away.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="DumpDebugLogs">
+      <tp:docstring>
+        Packages up system logs into a .tar(.gz) and returns it over the
+        supplied file descriptor.
+      </tp:docstring>
+      <arg name="is_compressed" type="b" direction="in">
+        <tp:docstring>
+          If true, output content should be compressed (.tar.gz), otherwise
+          output content is uncompressed (.tar).
+        </tp:docstring>
+      </arg>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to emit the .tar.gz file over.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SetDebugMode">
+      <tp:docstring>
+        Enables or disables debug mode for a specified subsystem.
+      </tp:docstring>
+      <arg name="subsystem" type="s" direction="in">
+        <tp:docstring>
+          Subsystem to change the debug mode of. One of "cellular", "wifi",
+          "ethernet" or "none".
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetLog">
+      <tp:docstring>
+        Fetches the contents of a single system log, identified by name. See
+        /src/log_tool.cc for a list of valid names.
+      </tp:docstring>
+      <arg name="log" type="s" direction="in" />
+      <arg name="contents" type="s" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetAllLogs">
+      <tp:docstring>
+        Returns all the system logs.
+      </tp:docstring>
+      <arg name="logs" type="a{ss}" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <!-- GetBigFeedbackLogs has been replaced by GetFeedbackLogsV2 -->
+    <method name="GetFeedbackLogsV2">
+      <tp:docstring>
+        Fills the system logs for feedback reports in the file whose file
+        descriptor is given. This is used for logs that are so big that they
+        exceed the limits of D-Bus returning them. Provides options to change
+        the scope of the collected logs.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to emit the logs to.
+        </tp:docstring>
+      </arg>
+      <arg name="username" type="s" direction="in">
+        <tp:docstring>
+          Username of the user for which the logs are requested.
+        </tp:docstring>
+      </arg>
+      <arg name="requested_logs" type="ai" direction="in">
+        <tp:docstring>
+          The list of log types that will be returned to the caller. The array
+          will contain debugd::FeedbackLogTypes enums. An empty array means
+          all available log types will be included.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <!-- GetFeedbackLogsV3 is the same as GetFeedbackLogsV2 except that it
+    collects logs in parallel whenever possible. The indention is to reduce the
+    client wait time. A feature flag will be used in client side to control
+    which method to call. When this new method proves to be better and stable,
+    the v2 method will be removed. -->
+    <method name="GetFeedbackLogsV3">
+      <tp:docstring>
+        Fills the system logs for feedback reports in the file whose file
+        descriptor is given. This is used for logs that are so big that they
+        exceed the limits of D-Bus returning them. Provides options to change
+        the scope of the collected logs.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to emit the logs to.
+        </tp:docstring>
+      </arg>
+      <arg name="username" type="s" direction="in">
+        <tp:docstring>
+          Username of the user for which the logs are requested.
+        </tp:docstring>
+      </arg>
+      <arg name="requested_logs" type="ai" direction="in">
+        <tp:docstring>
+          The list of log types that will be returned to the caller. The array
+          will contain debugd::FeedbackLogTypes enums. An empty array means
+          all available log types will be included.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="BackupArcBugReport">
+      <tp:docstring>
+        Retrieves the ARC bug report and saves it in debugd daemon store.
+        If a backup already exists, it is over-written.
+        If backup operation fails, an error is logged.
+      </tp:docstring>
+      <arg name="username" type="s" direction="in">
+        <tp:docstring>
+          Username or hash of the user for which the report is backed up.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="DeleteArcBugReportBackup">
+      <tp:docstring>
+        Deletes the backed up ARC bug report saved in daemon store.
+        If delete operation fails, an error is logged.
+      </tp:docstring>
+      <arg name="username" type="s" direction="in">
+        <tp:docstring>
+          Username or hash of the user for which the report is backed up.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetExample">
+      <tp:docstring>
+        Example method. See /doc/hacking.md.
+      </tp:docstring>
+      <arg name="result" type="s" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CupsAddAutoConfiguredPrinter">
+      <tp:docstring>
+        Add a printer that can be auto-configured to CUPS.  Immediately attempt
+        to connect.  Returns true if setup was successful.
+      </tp:docstring>
+      <arg name="result" type="i" direction="out" />
+      <arg name="name" type="s" direction="in" />
+      <arg name="uri" type="s" direction="in" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CupsAddAutoConfiguredPrinterV2">
+      <tp:docstring>
+        Add a printer that can be auto-configured to CUPS.  Immediately attempt
+        to connect.  Returns true if setup was successful.
+      </tp:docstring>
+      <arg name="result" type="i" direction="out" />
+      <arg name="name" type="s" direction="in" />
+      <arg name="uri" type="s" direction="in" />
+      <arg name="language" type="s" direction="in">
+        <tp:docstring>
+          The user's language, expressed in "ll", "ll-CC", or "ll_CC" format.
+          UTF-8 will always be used as the text encoding for printing-related
+          strings.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CupsAddManuallyConfiguredPrinter">
+      <tp:docstring>
+        Add a printer to CUPS using the passed PPD contents.  Immediately
+        attempt to connect.  Returns true if setup was successful.
+      </tp:docstring>
+      <arg name="result" type="i" direction="out" />
+      <arg name="name" type="s" direction="in" />
+      <arg name="uri" type="s" direction="in" />
+      <arg name="ppd_contents" type="ay" direction="in">
+        <tp:docstring>
+          The contents of the CUPS Postscript Printer Driver for this printer.
+          This data may optionally be gzip compressed.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CupsAddManuallyConfiguredPrinterV2">
+      <tp:docstring>
+        Add a printer to CUPS using the passed PPD contents.  Immediately
+        attempt to connect.  Returns true if setup was successful.
+      </tp:docstring>
+      <arg name="result" type="i" direction="out" />
+      <arg name="name" type="s" direction="in" />
+      <arg name="uri" type="s" direction="in" />
+      <arg name="language" type="s" direction="in">
+        <tp:docstring>
+          The user's language, expressed in "ll", "ll-CC", or "ll_CC" format.
+          UTF-8 will always be used as the text encoding for printing-related
+          strings.
+        </tp:docstring>
+      </arg>
+      <arg name="ppd_contents" type="ay" direction="in">
+        <tp:docstring>
+          The contents of the CUPS Postscript Printer Driver for this printer.
+          This data may optionally be gzip compressed.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CupsRemovePrinter">
+      <tp:docstring>
+        Remove a printer from CUPS.  Returns true if the printer was removed
+        successfully.
+      </tp:docstring>
+      <arg name="result" type="b" direction="out" />
+      <arg name="name" type="s" direction="in">
+        <tp:docstring>
+          The name of the printer to remove.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CupsRetrievePpd">
+      <tp:docstring>
+        Retrieve the PPD from CUPS for a given printer.  On success, returns the
+        PPD as a vector of bytes.  On error, returns an empty vector.
+      </tp:docstring>
+      <arg name="ppd" type="ay" direction="out" />
+      <arg name="name" type="s" direction="in">
+        <tp:docstring>
+          The name of the printer to retrieve the PPD.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetInterfaces">
+      <tp:docstring>
+        Returns information about network interfaces as a JSON string.
+      </tp:docstring>
+      <arg name="result" type="s" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="TestICMP">
+      <tp:docstring>
+        Tests ICMP connectivity to a specified host.
+      </tp:docstring>
+      <arg name="host" type="s" direction="in" />
+      <arg name="result" type="s" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="TestICMPWithOptions">
+      <tp:docstring>
+        Tests ICMP connectivity to a specified host (with options).
+      </tp:docstring>
+      <arg name="host" type="s" direction="in" />
+      <arg name="options" type="a{ss}" direction="in" />
+      <arg name="result" type="s" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="BatteryFirmware">
+      <tp:docstring>
+        Runs BatteryFirmware utility.
+      </tp:docstring>
+      <arg name="option" type="s" direction="in">
+        <tp:docstring>
+          Option to pass to the BatteryFirmware command:
+            info: Get Battery Firmware Info.
+            check: Check if AC Adapter is connected.
+            update: Trigger Battery Firmware Update.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="s" direction="out">
+        <tp:docstring>
+          Battery command output.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="Smartctl">
+      <tp:docstring>
+        Runs Smartctl utility.
+      </tp:docstring>
+      <arg name="option" type="s" direction="in">
+        <tp:docstring>
+          Option to pass to the Smartctl command:
+            abort_test: aborts the offline test.
+            attributes: prints device attributes.
+            capabilities: prints generic smart capabilities.
+            error: prints device error messages.
+            health: prints device health status.
+            selftest: prints offline test results.
+            short_test: starts a short offline test.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="s" direction="out">
+        <tp:docstring>
+          Smartctl command output.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="Mmc">
+      <tp:docstring>
+        Runs mmc utility.
+      </tp:docstring>
+      <arg name="option" type="s" direction="in">
+        <tp:docstring>
+          Option to pass to the mmc command:
+            extcsd_read: print extcsd data from root device.
+            extcsd_dump: print raw extcsd data from root device.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="s" direction="out">
+        <tp:docstring>
+          `mmc` command output.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="Ufs">
+      <tp:docstring>
+        Runs ufs-related operations over various utilities.
+      </tp:docstring>
+      <arg name="option" type="s" direction="in">
+        <tp:docstring>
+          Possible options:
+            info: uses smartctl to query device info
+            short_self_test: SCSI SEND DIAGNOSTICS for default self-test.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="s" direction="out">
+        <tp:docstring>
+          Output of an operation performed over a ufs device.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="Nvme">
+      <tp:docstring>
+        Runs nvme utility.
+      </tp:docstring>
+      <arg name="option" type="s" direction="in">
+        <tp:docstring>
+          Option to pass to the nvme command:
+            identify_controller: prints nvme device identity data.
+            short_self_test: launches short-time nvme self-test.
+            long_self_test: launches long-time nvme self-test.
+            stop_self_test: stops nvme self-test.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="s" direction="out">
+        <tp:docstring>
+          `nvme` command output.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="NvmeLog">
+      <tp:docstring>
+        Runs nvme utility to fetch log message.
+      </tp:docstring>
+      <arg name="page_id" type="u" direction="in">
+        <tp:docstring>
+          ID of desired log page in NVMe controller.
+        </tp:docstring>
+      </arg>
+      <arg name="length" type="u" direction="in">
+        <tp:docstring>
+          Required length of byte-data.
+        </tp:docstring>
+      </arg>
+      <arg name="raw_binary" type="b" direction="in">
+        <tp:docstring>
+          Flag to NVMe controller for raw binary output.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="s" direction="out">
+        <tp:docstring>
+          `nvme` command output.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="MemtesterStart">
+      <tp:docstring>
+        Starts running memtester.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send output to.
+        </tp:docstring>
+      </arg>
+      <arg name="memory" type="u" direction="in">
+        <tp:docstring>
+          The amount of memory to allocate and test in megabytes.
+        </tp:docstring>
+      </arg>
+      <arg name="status" type="s" direction="out">
+        <tp:docstring>
+          Opaque handle to the memtester.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="MemtesterStop">
+      <tp:docstring>
+        Stops running memtester.
+      </tp:docstring>
+      <arg name="handle" type="s" direction="in">
+        <tp:docstring>
+          Handle to the memtester to stop. If an empty string is passed, stops
+          all running memtests.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="BadblocksStart">
+      <tp:docstring>
+        Starts running badblocks test.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send output to.
+        </tp:docstring>
+      </arg>
+      <arg name="status" type="s" direction="out">
+        <tp:docstring>
+          Opaque handle to the badblocks.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="BadblocksStop">
+      <tp:docstring>
+        Stops running badblocks.
+      </tp:docstring>
+      <arg name="handle" type="s" direction="in">
+        <tp:docstring>
+          Handle to the badblocks to stop. If an empty string is passed, stops
+          all running badblocks.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="PacketCaptureStart">
+      <tp:docstring>
+        Starts a packet capture with the specified options, with diagnostic
+        status directed to the "statfd" file descriptor and packet capture
+        data sent to the "outfd" file descriptor.  The returned opaque string
+        functions as a handle for this particular packet capture.  Multiple
+        captures can be running at once.  Captures can be initiated on
+        Ethernet-like devices or WiFi devices in "client mode" (showing only
+        Ethernet frames) by specifying the "device" parameter (see below).
+        By specifying a channel, the script will find or create a "monitor
+        mode" interface if one is available and produce an "over the air"
+        packet capture.  The name of the output packet capture file is sent
+        to the output file descriptor.
+      </tp:docstring>
+      <arg name="statfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send status information to.
+        </tp:docstring>
+      </arg>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send packet capture output to.
+        </tp:docstring>
+      </arg>
+      <arg name="options" type="a{sv}" direction="in">
+        <tp:docstring>
+          Options to pass to the packet capture command. Accepted keys include:
+            device (string): An existing device to perform a packet capture on.
+            frequency (int): Radio frequency (in MHz) to perform capture on.
+            ht_location (string): The string "above" or "below", representing
+                the offset of any secondary channel used in a 40 MHz HT
+                (high throughput) caputre.
+            monitor_connection_on (string): Instead of providing the "frequency"
+                and "ht_location" parameters above, this paramter specifies the
+                name of a currently connected 802.11 interface.  A packet
+                capture is initated on the same channel as this connection.
+          Frequency-based capture options are only available in developer mode.
+          Unrecognized keys return a DBus error and print no output to the
+          supplied file descriptor.
+        </tp:docstring>
+      </arg>
+      <arg name="handle" type="s" direction="out">
+        <tp:docstring>
+          Opaque handle for this packet capture.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="PacketCaptureStop">
+      <tp:docstring>
+        Stops a running packet capture.
+      </tp:docstring>
+      <arg name="handle" type="s" direction="in">
+        Handle to the packet capture to stop. If an empty string is passed,
+        stops all running packet captures.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="LogKernelTaskStates">
+      <tp:docstring>
+        Triggers show-task-states(T) SysRq.
+        See https://www.kernel.org/doc/Documentation/sysrq.txt.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="UploadCrashes">
+      <tp:docstring>
+        Triggers uploading of system crashes (the crash_sender program).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="UploadSingleCrash">
+      <tp:docstring>
+        Uploads a single crash report immediately. Crash report data is
+        contained in the message.
+      </tp:docstring>
+      <arg name="files" type="a(sh)" direction="in">
+        <tp:docstring>
+          Array of files to include in the crash report. String is the base
+          file name.
+        </tp:docstring>
+      </arg>
+      <arg name="consent_already_checked_by_crash_reporter" type="b" direction="in">
+        <tp:docstring>
+          If true, the caller is asserting that it is crash_reporter and that it
+           has already checked for consent, so crash_sender does not need to do
+           an additional consent check.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="SetCrashSenderTestMode">
+      <tp:docstring>
+        If set to true, any UploadSingleCrash call will invoke crash_sender
+        with --test_mode. Avaialble only on dev mode devices.
+      </tp:docstring>
+      <arg name="mode" type="b" direction="in">
+        <tp:docstring>
+          New mode to be set.
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="RemoveRootfsVerification">
+      <tp:docstring>
+        Removes rootfs verification. Requires a system reboot before it will
+        take effect. Restricted to pre-owner dev mode.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EnableBootFromUsb">
+      <tp:docstring>
+        Enables OS booting from a USB image. Restricted to pre-owner dev mode.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="ConfigureSshServer">
+      <tp:docstring>
+        Sets up sshd to provide an SSH server immediately and on future reboots.
+        Also installs the test SSH keys to allow access by cros tools. Requires
+        that rootfs verification has been removed. Restricted to pre-owner dev
+        mode.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="SetUserPassword">
+      <tp:docstring>
+        Sets both the system and dev mode password for the indicated account.
+        Restricted to pre-owner dev mode.
+      </tp:docstring>
+      <arg name="username" type="s" direction="in">
+        <tp:docstring>
+          Username to set the new password for.
+        </tp:docstring>
+      </arg>
+      <arg name="password" type="s" direction="in">
+        <tp:docstring>
+          Password to assign.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EnableChromeRemoteDebugging">
+      <tp:docstring>
+        Sets up Chrome for remote debugging. It will take effect after a reboot
+        and using port 9222.
+        Requires that rootfs verification has been removed. Restricted to
+        pre-owner dev mode.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EnableChromeDevFeatures">
+      <tp:docstring>
+        Convenience function to enable a predefined set of tools from the Chrome
+        UI. Equivalent to calling these functions in order:
+          1. EnableBootFromUsb()
+          2. ConfigureSshServer()
+          3. SetUserPassword("root", root_password)
+        Requires that rootfs verification has been removed. If any sub-function
+        fails, this function will exit with an error without attempting any
+        further configuration or rollback. Restricted to pre-owner dev mode.
+      </tp:docstring>
+      <arg name="root_password" type="s" direction="in">
+        <tp:docstring>
+          Password to assign to the root user. If the string is empty, it will
+          default to "test0000".
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="QueryDevFeatures">
+      <tp:docstring>
+        Queries which dev features have been enabled. Each dev feature will be
+        indicated by a bit flag in the return value. Flags are defined in the
+        DevFeatureFlag enumeration. If the dev tools are unavailable (system is
+        not in dev mode/pre-login state), the DEV_FEATURES_DISABLED flag will be
+        set and the rest of the bits will always be set to 0.
+      </tp:docstring>
+      <arg name="features" type="i" direction="out">
+        <tp:docstring>
+          Feature enabled flags or DEV_FEATURES_DISABLED flag.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <tp:enum name="DevFeatureFlag" type="i">
+      <tp:docstring>
+        Bit flags representing individual development features. Currently
+        dbusxx-xml2cpp does not extract enum values, so any changes here should
+        be manually flushed to platform/system_api/dbus/service_constants.h.
+      </tp:docstring>
+      <tp:enumvalue suffix="DEV_FEATURES_DISABLED" value="0x0001">
+        <tp:docstring>
+          Dev features query is unavailable due to access restrictions.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="DEV_FEATURE_ROOTFS_VERIFICATION_REMOVED"
+                    value="0x0002">
+        <tp:docstring>
+          Rootfs verification has been removed, including the required system
+          reset.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="DEV_FEATURE_BOOT_FROM_USB_ENABLED" value="0x0004">
+        <tp:docstring>
+          Booting from USB has been enabled.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="DEV_FEATURE_SSH_SERVER_CONFIGURED" value="0x0008">
+        <tp:docstring>
+          The SSH server has been configured to auto-start on boot and the test
+          SSH keys have been installed. Both of these conditions must be met
+          for this flag to be signaled.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="DEV_FEATURE_DEV_MODE_ROOT_PASSWORD_SET"
+                    value="0x0010">
+        <tp:docstring>
+          The devmode root account password has been set.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="DEV_FEATURE_SYSTEM_ROOT_PASSWORD_SET"
+                    value="0x0020">
+        <tp:docstring>
+          The system root account password has been set.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="DEV_FEATURE_CHROME_REMOTE_DEBUGGING_ENABLED"
+                    value="0x0040">
+        <tp:docstring>
+          The Chrome remote debugging feature has been enabled. Chrome will
+          be listening on port 9222. The port is not publicly accessible. User
+          needs to use SSH port forwarding to be able to access it.
+        </tp:docstring>
+      </tp:enumvalue>
+    </tp:enum>
+    <method name="EnableDevCoredumpUpload">
+      <tp:docstring>
+        Allow uploading of device coredump files.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="DisableDevCoredumpUpload">
+      <tp:docstring>
+        Disallow uploading of device coredump files.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="SetOomScoreAdj">
+      <tp:docstring>
+        Set OOM score by writing scores to procfs /proc/pid/oom_score_adj.
+        It is an operation which needs root privilege so needs to be handled
+        carefully:
+        1. Only user chronos can request the operation.
+        2. It can only modify processes owned by chronos or run in Android
+        container.
+      </tp:docstring>
+      <arg name="scores" type="a{ii}" direction="in">
+        <tp:docstring>
+          Arrays of (pid, score) pairs.
+        </tp:docstring>
+      </arg>
+      <arg name="out" type="s" direction="out">
+        <tp:docstring>
+          Output from the helper of the operation. Empty on success.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapEnable">
+      <tp:docstring>
+        Enable swap file usage via config files.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        Free-form text reporting status.
+      </arg>
+      <arg name="size" type="i" direction="in">
+        <tp:docstring>
+          Size (in MB) for the swap file.
+        </tp:docstring>
+      </arg>
+      <arg name="change_now" type="b" direction="in">
+        <tp:docstring>
+          Whether to enable immediately, or wait until next reboot.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapDisable">
+      <tp:docstring>
+        Disable swap file usage via config files.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        Free-form text reporting status.
+      </arg>
+      <arg name="change_now" type="b" direction="in">
+        <tp:docstring>
+          Whether to disable immediately, or wait until next reboot.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="KstaledSetRatio">
+      <tp:docstring>
+       Sets the ratio to use for kstaled, 0 will disable the feature.
+       The kstaled ratio is a control of how aggressively kstaled will
+       attempt to swap, higher values are more aggressive and consume
+       more CPU.
+      </tp:docstring>
+      <arg name="result" type="b" direction="out" />
+      <arg name="ratio" type="y" direction="in">
+        <tp:docstring>
+          The kstaled ratio to use.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="SwapStartStop">
+      <tp:docstring>
+        Turn swap usage on/off (leaves config files alone).
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        Free-form text reporting status.
+      </arg>
+      <arg name="on" type="b" direction="in">
+        <tp:docstring>
+          Whether to turn it on or off.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapStatus">
+      <tp:docstring>
+        Show current swap status.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        Free-form text reporting status.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapSetParameter">
+      <tp:docstring>
+        Persistently change the value of various parameters.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        Free-form text reporting status.
+      </arg>
+      <arg name="command_name" type="s" direction="in">
+        <tp:docstring>
+          The name of the swap subcommand, usually set_something.
+        </tp:docstring>
+      </arg>
+      <arg name="value" type="i" direction="in">
+        <tp:docstring>
+          The unsigned integer value that some parameter is set to.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapZramEnableWriteback">
+      <tp:docstring>
+        Enable writeback of zram swapped pages.
+      </tp:docstring>
+      <arg name="result" type="s" direction="out" />
+      <arg name="size_mb" type="u" direction="in">
+        <tp:docstring>
+          The size in MB of the zram writeback device to use. Valid values
+          are (0mb, 32000mb].
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapZramMarkIdle">
+      <tp:docstring>
+        Mark pages as idle which have been in zram for |age| in seconds.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out" />
+      <arg name="age" type="u" direction="in">
+        <tp:docstring>
+          The |age| in seconds of pages to mark as idle. Valid values
+          are [0s, 259200s (30 days)].
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapZramSetWritebackLimit">
+      <tp:docstring>
+        Set the zram writeback page limit to |limit| pages.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out" />
+      <arg name="limit" type="u" direction="in">
+        <tp:docstring>
+          The number of pages which zram can writeback in a single writeback.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="InitiateSwapZramWriteback">
+      <tp:docstring>
+        Initiate a zram writeback using the provided |mode|.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out" />
+      <arg name="mode" type="u" direction="in">
+        <tp:docstring>
+          The type of writeback to issue the legal values are provided by the
+          enumeration ZramWritebackMode.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SwapSetSwappiness">
+      <tp:docstring>
+        Set the /proc/sys/vm/swappiness to the provided |swappiness_value|.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out" />
+      <arg name="swappiness_value" type="u" direction="in">
+        <tp:docstring>
+          The swappiness value with valid range: [0, 100].
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <tp:enum name="ZramWritebackMode" type="u">
+      <tp:docstring>
+        The valid modes available to use for zram writeback.
+      </tp:docstring>
+      <tp:enumvalue suffix="ZRAM_WRITEBACK_IDLE" value="0x0001">
+        <tp:docstring>
+          Writeback only pages which have already been marked as idle.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="ZRAM_WRITEBACK_HUGE" value="0x0002">
+        <tp:docstring>
+          Writeback pages which are huge, these are incompressible.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="ZRAM_WRITEBACK_HUGE_IDLE" value="0x0004">
+        <tp:docstring>
+          Writeback pages which are both idle and huge.
+        </tp:docstring>
+      </tp:enumvalue>
+    </tp:enum>
+    <method name="SetU2fFlags">
+      <tp:docstring>
+        Modify u2fd daemon debugging/override flags.
+      </tp:docstring>
+      <arg name="flags" type="s" direction="in">
+        <tp:docstring>
+          Flags (comma separated) to force debugging features.
+          See debugd::u2f_flags in system_api for supported flags.
+        </tp:docstring>
+      </arg>
+      <arg name="status" type="s" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetU2fFlags">
+      <tp:docstring>
+        Get u2fd daemon debugging/override flags.
+      </tp:docstring>
+      <arg name="flags" type="s" direction="out">
+        <tp:docstring>
+          Flags (comma separated) that are currently set.
+          See debugd::u2f_flags in system_api for supported flags.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="ContainerStarted">
+      <tp:docstring>
+        Notify debugd that a container is starting up.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="ContainerStopped">
+      <tp:docstring>
+        Notify debugd that a container has stopped.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SetWifiPowerSave">
+      <tp:docstring>
+        Enable/disable WiFi power save mode.
+      </tp:docstring>
+      <arg name="enable" type="b" direction="in">
+        <tp:docstring>
+          Whether to enable or disable.
+        </tp:docstring>
+      </arg>
+      <arg name="status" type="s" direction="out">
+        New power save mode, or error.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="GetWifiPowerSave">
+      <tp:docstring>
+        Show current WiFi power save mode.
+      </tp:docstring>
+      <arg name="status" type="s" direction="out">
+        Current power save mode.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="RunShillScriptStart">
+      <tp:docstring>
+        Run a shill debug script in a sandboxed environment.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to send output to.
+        </tp:docstring>
+      </arg>
+      <arg name="script" type="s" direction="in">
+        <tp:docstring>
+          The script to run.
+        </tp:docstring>
+      </arg>
+      <arg name="script_args" type="as" direction="in">
+        <tp:docstring>
+          The command line flags to pass to the script.
+        </tp:docstring>
+      </arg>
+      <arg name="handle" type="s" direction="out">
+        <tp:docstring>
+          Opaque handle for this run.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="RunShillScriptStop">
+      <tp:docstring>
+        Stops a running script.
+      </tp:docstring>
+      <arg name="handle" type="s" direction="in">
+        Handle to the script to stop.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="StartVmPluginDispatcher">
+      <tp:docstring>
+        Starts the VM Plugin Dispatcher service.  Returns true if the service was
+        successfully started and is available over dbus, false otherwise.
+      </tp:docstring>
+      <arg name="user_id_hash" type="s" direction="in">
+        Cryptohome ID of the user owning the session that will own this
+        dispatcher instance.
+      </arg>
+      <arg name="lang" type="s" direction="in">
+        Language that user owning the session has selected for the UI to be
+        passed to the dispatcher instance.
+      </arg>
+      <arg name="status" type="b" direction="out">
+        Whether the VM Plugin dispatcher service is ready to handle requests.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async"/>
+    </method>
+    <method name="StopVmPluginDispatcher">
+      <tp:docstring>
+        Stops the VM Plugin dispatcher service.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="SetRlzPingSent">
+      <tp:docstring>
+        Sets should_send_rlz_ping in RW_VPD to 0. Upon success, proceeds to
+        remove rlz_embargo_end_date in RW_VPD.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="UpdateAndVerifyFWOnUsbStart">
+      <tp:docstring>
+        Start updating the GSC FW of the USB-connected device (only if the
+        device's FW is not up-to-date) and verifying AP and EC RO FW integrity
+        of the device.
+      </tp:docstring>
+      <arg name="outfd" type="h" direction="in">
+        <tp:docstring>
+          File descriptor to forward process output to.
+        </tp:docstring>
+      </arg>
+      <arg name="image_file" type="s" direction="in">
+        <tp:docstring>
+          Path to the local Cr50 image file.
+        </tp:docstring>
+      </arg>
+      <arg name="ro_db_dir" type="s" direction="in">
+        <tp:docstring>
+          Path to the local RO descriptor files folder.
+        </tp:docstring>
+      </arg>
+      <arg name="handle" type="s" direction="out">
+        <tp:docstring>
+          Opaque handle for the VerifyRo process.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="UpdateAndVerifyFWOnUsbStop">
+      <tp:docstring>
+        Stops a running VerifyRo.
+      </tp:docstring>
+      <arg name="handle" type="s" direction="in">
+        Handle to the VerifyRo process to stop.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="SetSchedulerConfiguration">
+      <tp:docstring>
+        Set the scheduler configuration policy.
+      </tp:docstring>
+      <arg name="policy" type="s" direction="in">
+        Either "conservative" or "performance".
+      </arg>
+      <arg name="result" type="b" direction="out">
+        <tp:docstring>
+          Whether setting the policy was successful.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EvaluateProbeFunction">
+      <tp:docstring>
+        Evaluates a probe statement by the runtime_probe helper with pre-defined
+        sandbox options in rootfs.
+      </tp:docstring>
+      <arg name="probe_statement" type="s" direction="in">
+        <tp:docstring>
+          A JSON string representing a probe function which will be executed by
+          the runtime_probe helper.
+        </tp:docstring>
+      </arg>
+      <arg name="log_level" type="i" direction="in">
+        <tp:docstring>
+          The argument of runtime_probe to control the log level.
+        </tp:docstring>
+      </arg>
+      <arg name="result_fd" type="h" direction="out">
+        <tp:docstring>
+          File descriptor to send the result to.
+        </tp:docstring>
+      </arg>
+      <arg name="error_fd" type="h" direction="out">
+        <tp:docstring>
+          File descriptor to send the error logs to.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="SetSchedulerConfigurationV2">
+      <tp:docstring>
+        Set the scheduler configuration policy.
+      </tp:docstring>
+      <arg name="policy" type="s" direction="in">
+        Either "conservative" or "performance".
+      </arg>
+      <arg name="lock_policy" type="b" direction="in">
+        Argument to lock the policy till the device is rebooted. Only takes
+        effect if set to true and policy is "conservative". Results in error if
+        set to true and the policy is "performance". Has no effect if set to
+        false.
+      </arg>
+      <arg name="result" type="b" direction="out">
+        <tp:docstring>
+          Whether setting the policy, and optionally locking it, was successful.
+          Returns false if locked to "consevative" and the policy argument is
+          "performance". Returns true if policy was locked to "conservative" and
+          the policy argument is "conservative".
+        </tp:docstring>
+      </arg>
+      <arg name="num_cores_disabled" type="u" direction="out">
+        <tp:docstring>
+          The number of logical CPU cores disabled after the D-Bus call is done.
+          This is always populated regardless of whether the |result| argument
+          is true.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="WifiFWDump">
+      <tp:docstring>
+        Trigger wifi firmware dump.
+      </tp:docstring>
+      <arg name="output" type="s" direction="out">
+        <tp:docstring>
+          Output message. Indicates success/failure of the command to the user.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CollectSmartBatteryMetric">
+      <tp:docstring>
+        Runs the ectool i2cread command with pre-defined
+        sandbox options in rootfs and retrieves the
+        requested smart battery metric used by cros_healthd.
+      </tp:docstring>
+      <arg name="metric_name" type="s" direction="in">
+        <tp:docstring>
+          The name of the smart battery cros_healthd wants to collect.
+          Examples include manufacture_date_smart and temperature_smart.
+        </tp:docstring>
+      </arg>
+      <arg name="output" type="s" direction="out">
+        <tp:docstring>
+          Output of the ectool i2cread command.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EcGetInventory">
+      <tp:docstring>
+        Runs the 'ectool inventory' command with pre-defined
+        sandbox options in rootfs and returns the output.
+      </tp:docstring>
+      <arg name="output" type="s" direction="out">
+        Returns the output of the 'ectool inventory' command.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="CallDmesg">
+      <tp:docstring>
+        Runs the command 'dmesg' with the given inputs.
+      </tp:docstring>
+      <arg name="options" type="a{sv}" direction="in">
+        <tp:docstring>
+          Options to pass to the dmesg command:
+          show-delta (bool): Display the timestamp and the time delta
+            spent between messages.
+          human (bool): Enable human-readable output.
+          kernel (bool): Print kernel messages.
+          force-prefix (bool): Add facility, level or timestamp
+            information to each line of a multi-line message.
+          raw (bool): Print the raw message buffer.
+          ctime (bool): Print human-readable timestamps.
+          notime (bool): Do not print kernel's timestamps.
+          userspace (bool): Print userspace messages.
+          decode (bool): Decode facility and level (priority) numbers
+            to human-readable prefixes.
+          tail (uint32): Only return the last # lines.
+        </tp:docstring>
+      </arg>
+      <arg name="output" type="s" direction="out">
+        Returns the output of the 'dmesg' command.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EcTypeCEnterMode">
+      <tp:docstring>
+        Runs the 'ectool typeccontrol' command with pre-defined
+        sandbox options in rootfs to enter a USB Type-C mode on the
+        specified port.
+      </tp:docstring>
+      <arg name="port_num" type="u" direction="in">
+        <tp:docstring>
+          The index number of the port for which the enter mode
+          command will be run. This wil be used in the ectool command
+          without changes.
+        </tp:docstring>
+      </arg>
+      <arg name="mode" type="u" direction="in">
+        <tp:docstring>
+          The mode number argument specifying the mode to be entered.
+          This will be used in the ectool command directly without changes.
+        </tp:docstring>
+      </arg>
+      <arg name="output" type="s" direction="out">
+        Returns the output of the 'ectool typeccontrol' command.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EcTypeCExitMode">
+      <tp:docstring>
+        Runs the 'ectool typeccontrol' command with pre-defined
+        sandbox options in rootfs to exit a USB Type-C mode on the
+        specified port.
+      </tp:docstring>
+      <arg name="port_num" type="u" direction="in">
+        <tp:docstring>
+          The index number of the port for which the exit mode
+          command will be run. This wil be used in the ectool command
+          without changes.
+        </tp:docstring>
+      </arg>
+      <arg name="output" type="s" direction="out">
+        Returns the output of the 'ectool typeccontrol' command.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EcTypeCDpState">
+      <tp:docstring>
+        Runs the 'ectool usbpdmuxinfo' command with pre-defined
+        sandbox options in rootfs to determine the DisplayPort(DP) state
+        for a specified port.
+      </tp:docstring>
+      <arg name="port_num" type="u" direction="in">
+        <tp:docstring>
+          The index number of the port for which the usbpdmuxinfo
+          command will be run. This wil be used in the ectool command
+          without changes.
+        </tp:docstring>
+      </arg>
+      <arg name="output" type="b" direction="out">
+        Returns whether the Type-C port is in DP mode or not.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="EcTypeCHpdState">
+      <tp:docstring>
+        Runs the 'ectool gpioget' command with pre-defined
+        sandbox options in rootfs to determine the DisplayPort
+        Hot Plug Detect (HPD) GPIO state for a specified port.
+      </tp:docstring>
+      <arg name="port_num" type="u" direction="in">
+        <tp:docstring>
+          The index number of the port for which the gpioget
+          command will be run. This wil be used in the ectool command
+          without changes.
+        </tp:docstring>
+      </arg>
+      <arg name="output" type="b" direction="out">
+        Returns whether the Type-C port has the HPD GPIO set or not.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="KernelFeatureEnable">
+      <tp:docstring>
+        Execute a sequence of commands to enable a kernel feature.
+      </tp:docstring>
+      <arg name="name" type="s" direction="in">
+        <tp:docstring>
+          The name of the feature to enable.
+        </tp:docstring>
+      </arg>
+      <arg name="result" type="b" direction="out">
+        <tp:docstring>
+          The result of the method call (success or fail).
+        </tp:docstring>
+      </arg>
+      <arg name="err_str" type="s" direction="out">
+        <tp:docstring>
+          An err_str that describing the reasons for failure.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="KernelFeatureList">
+      <tp:docstring>
+        Get a CSV list of kernel features that are available to be enabled.
+      </tp:docstring>
+      <arg name="result" type="b" direction="out">
+        <tp:docstring>
+          The result of the method call (success or fail).
+        </tp:docstring>
+      </arg>
+      <arg name="csv" type="s" direction="out">
+        <tp:docstring>
+          The CSV result or an error string that describing the reasons for failure.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="DRMTraceSetCategories">
+      <tp:docstring>
+        Set the log categories to enable for drm_trace.
+      </tp:docstring>
+      <arg name="categories" type="u" direction="in">
+        <tp:docstring>
+          A bitwise OR of categories to enable. Acceptable values are defined
+          in the DRMTraceCategories flags.
+          Setting |categories| to '0' will reset to the default categories.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="DRMTraceSetSize">
+      <tp:docstring>
+        Modify the size of the drm_trace buffer.
+      </tp:docstring>
+      <arg name="size" type="u" direction="in">
+        <tp:docstring>
+          The size as defined in the DRMTraceSize enum.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="DRMTraceAnnotateLog">
+      <tp:docstring>
+        Append a string to the drm_trace log by writing |log| to
+        /sys/kernel/debug/trace/instances/drm/trace_marker
+        Characters that are not human-readable will be filtered out and
+        replaced with '_'.
+      </tp:docstring>
+      <arg name="log" type="s" direction="in">
+        <tp:docstring>
+          Log contents to append.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="DRMTraceSnapshot">
+      <tp:docstring>
+        Copy the current contents of the specified log type to a new file
+        /var/log/display_debug/$logtype.$datetimestamp
+      </tp:docstring>
+      <arg name="type" type="u" direction="in">
+        <tp:docstring>
+          Which log to snapshot as defined in the DRMSnapshotType enum.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <method name="PrintscanDebugSetCategories">
+      <tp:docstring>
+        Collect printscan debug logs for the specified categories.
+        If no categories are specified, disable log collection
+        for all categories.
+      </tp:docstring>
+      <arg name="categories" type="u" direction="in">
+        <tp:docstring>
+          A bitwise OR of categories to enable. Acceptable values are defined
+          in the PrintscanDebugCategories flags.
+          Setting |categories| to '0' will disable additional logging.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal"/>
+    </method>
+    <tp:flags name="DRMTraceCategories">
+      <tp:docstring>
+        Bit flags representing debug logging categories. Definitions of
+        categories correspond to those in
+        https://elixir.bootlin.com/linux/v5.14.12/source/include/drm/drm_print.h#L277
+        Currently dbusxx-xml2cpp does not extract flags values, so any changes
+        here should be manually flushed to
+        platform2/system_api/dbus/debugd/dbus-constants.h.
+      </tp:docstring>
+      <tp:flag suffix="CORE"    value="0x001"/>
+      <tp:flag suffix="DRIVER"  value="0x002"/>
+      <tp:flag suffix="KMS"     value="0x004"/>
+      <tp:flag suffix="PRIME"   value="0x008"/>
+      <tp:flag suffix="ATOMIC"  value="0x010"/>
+      <tp:flag suffix="VBL"     value="0x020"/>
+      <tp:flag suffix="STATE"   value="0x040"/>
+      <tp:flag suffix="LEASE"   value="0x080"/>
+      <tp:flag suffix="DP"      value="0x100"/>
+      <tp:flag suffix="DRMRES"  value="0x200"/>
+    </tp:flags>
+    <tp:enum name="DRMTraceSize">
+      <tp:docstring>
+        Enum values for drm_trace log size.
+        Currently dbusxx-xml2cpp does not extract flags values, so any changes
+        here should be manually flushed to
+        platform2/system_api/dbus/debugd/dbus-constants.h.
+      </tp:docstring>
+      <tp:enumvalue suffix="DEFAULT" value='0'>
+        <tp:docstring>
+          Set the size of the drm_trace buffer to its default value.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="DEBUG" value='1'>
+        <tp:docstring>
+          Increase the size of the drm_trace buffer to allow for collecting
+          more verbose logs and a longer history of logs.
+        </tp:docstring>
+      </tp:enumvalue>
+    </tp:enum>
+    <tp:enum name="DRMSnapshotType">
+      <tp:docstring>
+        Enum values for different logs to snapshot in the context of DRMTrace.
+        Currently dbusxx-xml2cpp does not extract flags values, so any changes
+        here should be manually flushed to
+        platform2/system_api/dbus/debugd/dbus-constants.h.
+      </tp:docstring>
+      <tp:enumvalue suffix="TRACE" value='0'>
+        <tp:docstring>
+          Snapshot /sys/kernel/tracing/instances/drm/trace.
+        </tp:docstring>
+      </tp:enumvalue>
+      <tp:enumvalue suffix="MODETEST" value='1'>
+        <tp:docstring>
+          Snapshot the output of `modetest`.
+        </tp:docstring>
+      </tp:enumvalue>
+    </tp:enum>
+    <tp:flags name="PrintscanDebugCategories">
+      <tp:docstring>
+        Bit flags representing debug logging categories.
+        Currently dbusxx-xml2cpp does not extract flags values, so any changes
+        here should be manually flushed to
+        system_api/dbus/debugd/dbus-constants.h
+      </tp:docstring>
+      <tp:flag suffix="PRINTING"  value="0x1"/>
+      <tp:flag suffix="SCANNING"  value="0x2"/>
+    </tp:flags>
+    <signal name="PacketCaptureStart">
+      <tp:docstring>
+        The signal is emitted when a packet capture process starts in debugd.
+        The signal is expected to be received by Chrome to send a notification
+        to the user to indicate the ongoing packet capture.
+      </tp:docstring>
+    </signal>
+    <signal name="PacketCaptureStop">
+      <tp:docstring>
+        The signal is emitted when the packet capture process is stopped in
+        debugd. The signal is expected to be received by Chrome to close the
+        notification about packet capture.
+      </tp:docstring>
+    </signal>
+  </interface>
+</node>

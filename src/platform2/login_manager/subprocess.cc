@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,10 +25,20 @@
 #include <libminijail.h>
 #include <scoped_minijail.h>
 
+#include "login_manager/landlock_policy.h"
 #include "login_manager/session_manager_service.h"
 #include "login_manager/system_utils.h"
 
 namespace login_manager {
+
+namespace {
+
+// Checks if Landlock sandboxing should be applied.
+bool ShouldApplyLandlockPolicy() {
+  return !!USE_APPLY_LANDLOCK_POLICY;
+}
+
+}  // anonymous namespace
 
 Subprocess::Subprocess(uid_t uid, SystemUtils* system)
     : pid_(-1),
@@ -67,6 +77,13 @@ bool Subprocess::ForkAndExec(const std::vector<std::string>& args,
     minijail_create_session(j.get());
   }
   minijail_preserve_fd(j.get(), STDIN_FILENO, STDIN_FILENO);
+
+  // Landlock is currently supported on kernels 5.10+.
+  if (ShouldApplyLandlockPolicy() && minijail_is_fs_restriction_available()) {
+    LandlockPolicy fs_policy;
+    fs_policy.SetupPolicy(j.get());
+  }
+
   minijail_preserve_fd(j.get(), STDOUT_FILENO, STDOUT_FILENO);
   minijail_preserve_fd(j.get(), STDERR_FILENO, STDERR_FILENO);
   minijail_close_open_fds(j.get());

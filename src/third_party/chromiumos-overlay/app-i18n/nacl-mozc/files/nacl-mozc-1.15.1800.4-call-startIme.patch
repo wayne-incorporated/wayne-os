@@ -1,0 +1,26 @@
+diff -urN nacl-mozc-1.15.1800.4/manifest.json nacl-mozc-1.15.1800.4_1/manifest.json
+--- nacl-mozc-1.15.1800.4/manifest.json	2013-10-28 16:33:55.287353000 +0900
++++ nacl-mozc-1.15.1800.4_1/manifest.json	2013-10-28 16:34:10.341590000 +0900
+@@ -6,7 +6,8 @@
+     "https://clients4.google.com/",
+     "https://dl.google.com/",
+     "input",
+-    "unlimitedStorage"
++    "unlimitedStorage",
++    "inputMethodPrivate"
+   ],
+   "manifest_version": 2,
+   "minimum_chrome_version": "22",
+diff -urN nacl-mozc-1.15.1800.4/nacl_mozc_init.js nacl-mozc-1.15.1800.4_1/nacl_mozc_init.js
+--- nacl-mozc-1.15.1800.4/nacl_mozc_init.js	2013-10-24 16:45:38.000000000 +0900
++++ nacl-mozc-1.15.1800.4_1/nacl_mozc_init.js	2013-10-28 16:35:20.027684000 +0900
+@@ -31,5 +31,9 @@
+     window['newOptionPage'] = naclMozc.newOptionPage.bind(naclMozc);
+     var body = document.getElementsByTagName('body').item(0);
+     body.appendChild(naclModule);
++    // To notify to the browser the end of initialization, otherwise some
++    // important event(onActivate or onFocus) will be missed.
++    // TODO(nona): Provide same/similar feature for public.
++    chrome.inputMethodPrivate.startIme();
+   }
+ }, true);

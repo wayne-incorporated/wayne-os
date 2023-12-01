@@ -1,0 +1,24 @@
+#!/bin/sh
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Gets the slot B root partition name for update engine.
+# Used for recovery while booted from MiniOs.
+
+. /usr/bin/write_gpt.sh
+. /usr/share/misc/chromeos-common.sh
+load_base_vars
+
+DST="$(get_fixed_dst_drive)"
+if [ -z "${DST}" ]; then
+  return 1
+fi
+
+if [ "${DST%[0-9]}" = "${DST}" ]; then
+  # e.g. sda => sda1
+  printf '%s' "${DST}5"
+else
+  # e.g. mmcblk0 => mmcblk0p1
+  printf '%s' "${DST}p5"
+fi

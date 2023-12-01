@@ -1,0 +1,40 @@
+From 3b683f161bbf4531e9cb3788adab175a6ad6561e Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@gentoo.org>
+Date: Tue, 26 Oct 2021 02:51:46 -0400
+Subject: [PATCH] Revert "libsandbox: drop old *.py[co] hack #775416"
+
+This reverts commit 60cff8d682fe7816ca0656d4da27e630855287e7.
+
+Still breaks with CrOS builds.
+---
+ libsandbox/libsandbox.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/libsandbox/libsandbox.c b/libsandbox/libsandbox.c
+index 4e92cbe19aa1..beaf30526d0f 100644
+--- a/libsandbox/libsandbox.c
++++ b/libsandbox/libsandbox.c
+@@ -868,6 +868,20 @@ static int check_access(sbcontext_t *sbcontext, int sb_nr, const char *func,
+ 			goto out;
+ 		}
+ 
++		/* A very common bug (apparently) is for .py[co] files to fall out
++		 * of sync with their .py source files.  Rather than trigger a hard
++		 * failure, let's just whine about it.  Once python itself gets
++		 * sorted out, we can drop this #256953.
++		 */
++		size_t len = strlen(resolv_path);
++		if (len > 4) {
++			const char *py = resolv_path + len - 4;
++			if (!strcmp(py, ".pyc") || !strcmp(py, ".pyo")) {
++				sbcontext->show_access_violation = false;
++				goto out;
++			}
++		}
++
+ 		/* If we are here, and still no joy, and its the access() call,
+ 		 * do not log it, but just return -1 */
+ 		if (sb_nr == SB_NR_ACCESS_WR) {
+-- 
+2.33.0.1079.g6e70778dc9-goog
+

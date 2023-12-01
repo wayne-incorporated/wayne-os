@@ -1,0 +1,603 @@
+From c778f6e6f6523efbcb38acb6ed6616069fc996e9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?St=C3=A9phane=20Graber?= <stgraber@ubuntu.com>
+Date: Mon, 17 Dec 2012 10:25:15 +0000
+Subject: [PATCH] * nih-dbus-tool/type.c, nih-dbus-tool/marshal.c: Update dbus
+ code generator to allow for empty lists for type 'as'.  This drops the !=
+ NULL check for NULL terminated arrays and moves the iteration loop inside an
+ 'if' statement.
+
+---
+ ChangeLog                                     |   7 +
+ nih-dbus-tool/marshal.c                       |  40 ++-
+ .../test_method_object_function_no_input.c    |  24 +-
+ .../test_method_object_function_standard.c    |  24 +-
+ .../test_method_reply_function_deprecated.c   |  19 +-
+ .../test_method_reply_function_standard.c     |  19 +-
+ nih-dbus-tool/tests/test_marshal.c            | 242 +++++++++---------
+ nih-dbus-tool/type.c                          |   2 +-
+ 8 files changed, 218 insertions(+), 159 deletions(-)
+
+diff --git a/ChangeLog b/ChangeLog
+index 9fe7cbc..bef3886 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -1,3 +1,10 @@
++2012-12-13  Stéphane Graber  <stgraber@ubuntu.com>
++
++	* nih-dbus-tool/type.c, nih-dbus-tool/marshal.c: Update dbus code
++	generator to allow for empty lists for type 'as'.  This drops the
++	!= NULL check for NULL terminated arrays and moves the iteration
++	loop inside an 'if' statement.
++
+ 2011-08-31  James Hunt  <james.hunt@ubuntu.com>
+ 
+ 	* nih-dbus-tool/tests/test_com.netsplit.Nih.Test_object.c
+diff --git a/nih-dbus-tool/marshal.c b/nih-dbus-tool/marshal.c
+index f0a5abc..c9b3ac3 100644
+--- a/nih-dbus-tool/marshal.c
++++ b/nih-dbus-tool/marshal.c
+@@ -364,6 +364,7 @@ marshal_array (const void *       parent,
+ 	nih_local TypeVar *element_len_var = NULL;
+ 	nih_local char *   block = NULL;
+ 	nih_local char *   vars_block = NULL;
++	nih_local char *   loop_block = NULL;
+ 
+ 	nih_assert (iter != NULL);
+ 	nih_assert (iter_name != NULL);
+@@ -448,7 +449,7 @@ marshal_array (const void *       parent,
+ 	nih_list_add (locals, &array_iter_var->entry);
+ 
+ 	if (dbus_type_is_fixed (element_type)) {
+-		if (! nih_strcat_sprintf (&code, parent,
++		if (! nih_strcat_sprintf (&loop_block, parent,
+ 					  "for (size_t %s = 0; %s < %s; %s++) {\n",
+ 					  loop_name, loop_name, len_name, loop_name)) {
+ 			nih_free (code);
+@@ -456,6 +457,12 @@ marshal_array (const void *       parent,
+ 		}
+ 	} else {
+ 		if (! nih_strcat_sprintf (&code, parent,
++					  "if (%s) {\n",
++					  name)) {
++			nih_free (code);
++			return NULL;
++		}
++		if (! nih_strcat_sprintf (&loop_block, parent,
+ 					  "for (size_t %s = 0; %s[%s]; %s++) {\n",
+ 					  loop_name, name, loop_name, loop_name)) {
+ 			nih_free (code);
+@@ -576,7 +583,7 @@ marshal_array (const void *       parent,
+ 	}
+ 
+ 
+-	if (! nih_strcat_sprintf (&code, parent,
++	if (! nih_strcat_sprintf (&loop_block, parent,
+ 			   "%s"
+ 			   "\n"
+ 			   "%s"
+@@ -590,9 +597,34 @@ marshal_array (const void *       parent,
+ 	}
+ 
+ 	/* Close the container again */
++	if (! nih_strcat_sprintf (&loop_block, parent,
++				  "}\n")) {
++		nih_free (code);
++		return NULL;
++	}
++
++	if (dbus_type_is_fixed (element_type)) {
++		if (! nih_strcat_sprintf (&code, parent,
++				 "%s\n", loop_block)) {
++			nih_free (code);
++			return NULL;
++		}
++	}
++	else {
++		if (! indent (&loop_block, NULL, 1)) {
++			nih_free (code);
++			return NULL;
++		}
++
++		if (! nih_strcat_sprintf (&code, parent,
++				 "%s"
++				 "}\n\n", loop_block)) {
++			nih_free (code);
++			return NULL;
++		}
++	}
++
+ 	if (! nih_strcat_sprintf (&code, parent,
+-				  "}\n"
+-				  "\n"
+ 				  "if (! dbus_message_iter_close_container (&%s, &%s)) {\n"
+ 				  "%s"
+ 				  "}\n",
+diff --git a/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c b/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c
+index d873702..857470a 100644
+--- a/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c
++++ b/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c
+@@ -88,17 +88,19 @@ my_com_netsplit_Nih_Test_Method_method (NihDBusObject * object,
+ 			goto enomem;
+ 		}
+ 
+-		for (size_t output_i = 0; output[output_i]; output_i++) {
+-			const char *output_element;
+-
+-			output_element = output[output_i];
+-
+-			/* Marshal a char * onto the message */
+-			if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
+-				dbus_message_iter_abandon_container (&iter, &output_iter);
+-				dbus_message_unref (reply);
+-				reply = NULL;
+-				goto enomem;
++		if (output) {
++			for (size_t output_i = 0; output[output_i]; output_i++) {
++				const char *output_element;
++
++				output_element = output[output_i];
++
++				/* Marshal a char * onto the message */
++				if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
++					dbus_message_iter_abandon_container (&iter, &output_iter);
++					dbus_message_unref (reply);
++					reply = NULL;
++					goto enomem;
++				}
+ 			}
+ 		}
+ 
+diff --git a/nih-dbus-tool/tests/expected/test_method_object_function_standard.c b/nih-dbus-tool/tests/expected/test_method_object_function_standard.c
+index d7f982d..9a1a0be 100644
+--- a/nih-dbus-tool/tests/expected/test_method_object_function_standard.c
++++ b/nih-dbus-tool/tests/expected/test_method_object_function_standard.c
+@@ -136,17 +136,19 @@ my_com_netsplit_Nih_Test_Method_method (NihDBusObject * object,
+ 			goto enomem;
+ 		}
+ 
+-		for (size_t output_i = 0; output[output_i]; output_i++) {
+-			const char *output_element;
+-
+-			output_element = output[output_i];
+-
+-			/* Marshal a char * onto the message */
+-			if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
+-				dbus_message_iter_abandon_container (&iter, &output_iter);
+-				dbus_message_unref (reply);
+-				reply = NULL;
+-				goto enomem;
++		if (output) {
++			for (size_t output_i = 0; output[output_i]; output_i++) {
++				const char *output_element;
++
++				output_element = output[output_i];
++
++				/* Marshal a char * onto the message */
++				if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
++					dbus_message_iter_abandon_container (&iter, &output_iter);
++					dbus_message_unref (reply);
++					reply = NULL;
++					goto enomem;
++				}
+ 			}
+ 		}
+ 
+diff --git a/nih-dbus-tool/tests/expected/test_method_reply_function_deprecated.c b/nih-dbus-tool/tests/expected/test_method_reply_function_deprecated.c
+index 4fcb87e..24c7ccb 100644
+--- a/nih-dbus-tool/tests/expected/test_method_reply_function_deprecated.c
++++ b/nih-dbus-tool/tests/expected/test_method_reply_function_deprecated.c
+@@ -7,7 +7,6 @@ my_async_method_reply (NihDBusMessage *message,
+ 	DBusMessageIter output_iter;
+ 
+ 	nih_assert (message != NULL);
+-	nih_assert (output != NULL);
+ 
+ 	/* If the sender doesn't care about a reply, don't bother wasting
+ 	 * effort constructing and sending one.
+@@ -28,16 +27,18 @@ my_async_method_reply (NihDBusMessage *message,
+ 		return -1;
+ 	}
+ 
+-	for (size_t output_i = 0; output[output_i]; output_i++) {
+-		const char *output_element;
++	if (output) {
++		for (size_t output_i = 0; output[output_i]; output_i++) {
++			const char *output_element;
+ 
+-		output_element = output[output_i];
++			output_element = output[output_i];
+ 
+-		/* Marshal a char * onto the message */
+-		if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
+-			dbus_message_iter_abandon_container (&iter, &output_iter);
+-			dbus_message_unref (reply);
+-			return -1;
++			/* Marshal a char * onto the message */
++			if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
++				dbus_message_iter_abandon_container (&iter, &output_iter);
++				dbus_message_unref (reply);
++				return -1;
++			}
+ 		}
+ 	}
+ 
+diff --git a/nih-dbus-tool/tests/expected/test_method_reply_function_standard.c b/nih-dbus-tool/tests/expected/test_method_reply_function_standard.c
+index 4fcb87e..24c7ccb 100644
+--- a/nih-dbus-tool/tests/expected/test_method_reply_function_standard.c
++++ b/nih-dbus-tool/tests/expected/test_method_reply_function_standard.c
+@@ -7,7 +7,6 @@ my_async_method_reply (NihDBusMessage *message,
+ 	DBusMessageIter output_iter;
+ 
+ 	nih_assert (message != NULL);
+-	nih_assert (output != NULL);
+ 
+ 	/* If the sender doesn't care about a reply, don't bother wasting
+ 	 * effort constructing and sending one.
+@@ -28,16 +27,18 @@ my_async_method_reply (NihDBusMessage *message,
+ 		return -1;
+ 	}
+ 
+-	for (size_t output_i = 0; output[output_i]; output_i++) {
+-		const char *output_element;
++	if (output) {
++		for (size_t output_i = 0; output[output_i]; output_i++) {
++			const char *output_element;
+ 
+-		output_element = output[output_i];
++			output_element = output[output_i];
+ 
+-		/* Marshal a char * onto the message */
+-		if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
+-			dbus_message_iter_abandon_container (&iter, &output_iter);
+-			dbus_message_unref (reply);
+-			return -1;
++			/* Marshal a char * onto the message */
++			if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
++				dbus_message_iter_abandon_container (&iter, &output_iter);
++				dbus_message_unref (reply);
++				return -1;
++			}
+ 		}
+ 	}
+ 
+diff --git a/nih-dbus-tool/tests/test_marshal.c b/nih-dbus-tool/tests/test_marshal.c
+index 10cdd16..064371e 100644
+--- a/nih-dbus-tool/tests/test_marshal.c
++++ b/nih-dbus-tool/tests/test_marshal.c
+@@ -1479,39 +1479,41 @@ test_marshal (void)
+ 				   "\treturn -1;\n"
+ 				   "}\n"
+ 				   "\n"
+-				   "for (size_t value_i = 0; value[value_i]; value_i++) {\n"
+-				   "\tDBusMessageIter value_element_iter;\n"
+-				   "\tconst int16_t * value_element;\n"
+-				   "\tsize_t          value_element_len;\n"
++				   "if (value) {\n"
++				   "\tfor (size_t value_i = 0; value[value_i]; value_i++) {\n"
++				   "\t\tDBusMessageIter value_element_iter;\n"
++				   "\t\tconst int16_t * value_element;\n"
++				   "\t\tsize_t          value_element_len;\n"
+ 				   "\n"
+-				   "\tvalue_element = value[value_i];\n"
+-				   "\tvalue_element_len = value_len[value_i];\n"
++				   "\t\tvalue_element = value[value_i];\n"
++				   "\t\tvalue_element_len = value_len[value_i];\n"
+ 				   "\n"
+ 
+-				   "\t/* Marshal an array onto the message */\n"
+-				   "\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_ARRAY, \"n\", &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal an array onto the message */\n"
++				   "\t\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_ARRAY, \"n\", &value_element_iter)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tfor (size_t value_element_i = 0; value_element_i < value_element_len; value_element_i++) {\n"
+-				   "\t\tint16_t value_element_element;\n"
++				   "\t\tfor (size_t value_element_i = 0; value_element_i < value_element_len; value_element_i++) {\n"
++				   "\t\t\tint16_t value_element_element;\n"
+ 				   "\n"
+-				   "\t\tvalue_element_element = value_element[value_element_i];\n"
++				   "\t\t\tvalue_element_element = value_element[value_element_i];\n"
+ 				   "\n"
+-				   "\t\t/* Marshal a int16_t onto the message */\n"
+-				   "\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_INT16, &value_element_element)) {\n"
+-				   "\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\t/* Marshal a int16_t onto the message */\n"
++				   "\t\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_INT16, &value_element_element)) {\n"
++				   "\t\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\t\treturn -1;\n"
++				   "\t\t\t}\n"
++				   "\t\t}\n"
++				   "\n"
++				   "\t\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
+ 				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+ 				   "\t\t\treturn -1;\n"
+ 				   "\t\t}\n"
+-				   "\t}\n"
+-				   "\n"
+-				   "\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
+ 
++				   "\t}\n"
+ 				   "}\n"
+ 				   "\n"
+ 				   "if (! dbus_message_iter_close_container (&iter, &value_iter)) {\n"
+@@ -1766,15 +1768,17 @@ test_marshal (void)
+ 				   "\treturn -1;\n"
+ 				   "}\n"
+ 				   "\n"
+-				   "for (size_t value_i = 0; value[value_i]; value_i++) {\n"
+-				   "\tconst char *value_element;\n"
++				   "if (value) {\n"
++				   "\tfor (size_t value_i = 0; value[value_i]; value_i++) {\n"
++				   "\t\tconst char *value_element;\n"
+ 				   "\n"
+-				   "\tvalue_element = value[value_i];\n"
++				   "\t\tvalue_element = value[value_i];\n"
+ 				   "\n"
+-				   "\t/* Marshal a char * onto the message */\n"
+-				   "\tif (! dbus_message_iter_append_basic (&value_iter, DBUS_TYPE_STRING, &value_element)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
++				   "\t\t/* Marshal a char * onto the message */\n"
++				   "\t\tif (! dbus_message_iter_append_basic (&value_iter, DBUS_TYPE_STRING, &value_element)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\t}\n"
+ 				   "}\n"
+ 				   "\n"
+@@ -1933,35 +1937,39 @@ test_marshal (void)
+ 				   "\treturn -1;\n"
+ 				   "}\n"
+ 				   "\n"
+-				   "for (size_t value_i = 0; value[value_i]; value_i++) {\n"
+-				   "\tDBusMessageIter value_element_iter;\n"
+-				   "\tchar * const *  value_element;\n"
++				   "if (value) {\n"
++				   "\tfor (size_t value_i = 0; value[value_i]; value_i++) {\n"
++				   "\t\tDBusMessageIter value_element_iter;\n"
++				   "\t\tchar * const *  value_element;\n"
+ 				   "\n"
+-				   "\tvalue_element = value[value_i];\n"
++				   "\t\tvalue_element = value[value_i];\n"
+ 				   "\n"
+-				   "\t/* Marshal an array onto the message */\n"
+-				   "\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_ARRAY, \"s\", &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal an array onto the message */\n"
++				   "\t\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_ARRAY, \"s\", &value_element_iter)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tfor (size_t value_element_i = 0; value_element[value_element_i]; value_element_i++) {\n"
+-				   "\t\tconst char *value_element_element;\n"
++				   "\t\tif (value_element) {\n"
++				   "\t\t\tfor (size_t value_element_i = 0; value_element[value_element_i]; value_element_i++) {\n"
++				   "\t\t\t\tconst char *value_element_element;\n"
+ 				   "\n"
+-				   "\t\tvalue_element_element = value_element[value_element_i];\n"
++				   "\t\t\t\tvalue_element_element = value_element[value_element_i];\n"
+ 				   "\n"
+-				   "\t\t/* Marshal a char * onto the message */\n"
+-				   "\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_STRING, &value_element_element)) {\n"
+-				   "\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\t\t/* Marshal a char * onto the message */\n"
++				   "\t\t\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_STRING, &value_element_element)) {\n"
++				   "\t\t\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\t\t\treturn -1;\n"
++				   "\t\t\t\t}\n"
++				   "\t\t\t}\n"
++				   "\t\t}\n"
++				   "\n"
++				   "\t\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
+ 				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+ 				   "\t\t\treturn -1;\n"
+ 				   "\t\t}\n"
+ 				   "\t}\n"
+-				   "\n"
+-				   "\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
+ 				   "}\n"
+ 				   "\n"
+ 				   "if (! dbus_message_iter_close_container (&iter, &value_iter)) {\n"
+@@ -2194,16 +2202,18 @@ test_marshal (void)
+ 				   "\treturn -1;\n"
+ 				   "}\n"
+ 				   "\n"
+-				   "for (size_t value_item2_i = 0; value_item2[value_item2_i]; value_item2_i++) {\n"
+-				   "\tconst char *value_item2_element;\n"
++				   "if (value_item2) {\n"
++				   "\tfor (size_t value_item2_i = 0; value_item2[value_item2_i]; value_item2_i++) {\n"
++				   "\t\tconst char *value_item2_element;\n"
+ 				   "\n"
+-				   "\tvalue_item2_element = value_item2[value_item2_i];\n"
++				   "\t\tvalue_item2_element = value_item2[value_item2_i];\n"
+ 				   "\n"
+-				   "\t/* Marshal a char * onto the message */\n"
+-				   "\tif (! dbus_message_iter_append_basic (&value_item2_iter, DBUS_TYPE_STRING, &value_item2_element)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&value_iter, &value_item2_iter);\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
++				   "\t\t/* Marshal a char * onto the message */\n"
++				   "\t\tif (! dbus_message_iter_append_basic (&value_item2_iter, DBUS_TYPE_STRING, &value_item2_element)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_item2_iter);\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\t}\n"
+ 				   "}\n"
+ 				   "\n"
+@@ -2642,41 +2652,43 @@ test_marshal (void)
+ 				   "\treturn -1;\n"
+ 				   "}\n"
+ 				   "\n"
+-				   "for (size_t value_i = 0; value[value_i]; value_i++) {\n"
+-				   "\tDBusMessageIter                  value_element_iter;\n"
+-				   "\tconst char *                     value_element_item0;\n"
+-				   "\tuint32_t                         value_element_item1;\n"
+-				   "\tconst MyStructArrayValueElement *value_element;\n"
++				   "if (value) {\n"
++				   "\tfor (size_t value_i = 0; value[value_i]; value_i++) {\n"
++				   "\t\tDBusMessageIter                  value_element_iter;\n"
++				   "\t\tconst char *                     value_element_item0;\n"
++				   "\t\tuint32_t                         value_element_item1;\n"
++				   "\t\tconst MyStructArrayValueElement *value_element;\n"
+ 				   "\n"
+-				   "\tvalue_element = value[value_i];\n"
++				   "\t\tvalue_element = value[value_i];\n"
+ 				   "\n"
+-				   "\t/* Marshal a structure onto the message */\n"
+-				   "\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_STRUCT, NULL, &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal a structure onto the message */\n"
++				   "\t\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_STRUCT, NULL, &value_element_iter)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tvalue_element_item0 = value_element->item0;\n"
++				   "\t\tvalue_element_item0 = value_element->item0;\n"
+ 				   "\n"
+-				   "\t/* Marshal a char * onto the message */\n"
+-				   "\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_STRING, &value_element_item0)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal a char * onto the message */\n"
++				   "\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_STRING, &value_element_item0)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tvalue_element_item1 = value_element->item1;\n"
++				   "\t\tvalue_element_item1 = value_element->item1;\n"
+ 				   "\n"
+-				   "\t/* Marshal a uint32_t onto the message */\n"
+-				   "\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_UINT32, &value_element_item1)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal a uint32_t onto the message */\n"
++				   "\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_UINT32, &value_element_item1)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
++				   "\t\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\t}\n"
+ 				   "}\n"
+ 				   "\n"
+@@ -2912,41 +2924,43 @@ test_marshal (void)
+ 				   "\treturn -1;\n"
+ 				   "}\n"
+ 				   "\n"
+-				   "for (size_t value_i = 0; value[value_i]; value_i++) {\n"
+-				   "\tDBusMessageIter                     value_element_iter;\n"
+-				   "\tconst char *                        value_element_item0;\n"
+-				   "\tuint32_t                            value_element_item1;\n"
+-				   "\tconst MyDictEntryArrayValueElement *value_element;\n"
++				   "if (value) {\n"
++				   "\tfor (size_t value_i = 0; value[value_i]; value_i++) {\n"
++				   "\t\tDBusMessageIter                     value_element_iter;\n"
++				   "\t\tconst char *                        value_element_item0;\n"
++				   "\t\tuint32_t                            value_element_item1;\n"
++				   "\t\tconst MyDictEntryArrayValueElement *value_element;\n"
+ 				   "\n"
+-				   "\tvalue_element = value[value_i];\n"
++				   "\t\tvalue_element = value[value_i];\n"
+ 				   "\n"
+-				   "\t/* Marshal a structure onto the message */\n"
+-				   "\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_DICT_ENTRY, NULL, &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal a structure onto the message */\n"
++				   "\t\tif (! dbus_message_iter_open_container (&value_iter, DBUS_TYPE_DICT_ENTRY, NULL, &value_element_iter)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tvalue_element_item0 = value_element->item0;\n"
++				   "\t\tvalue_element_item0 = value_element->item0;\n"
+ 				   "\n"
+-				   "\t/* Marshal a char * onto the message */\n"
+-				   "\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_STRING, &value_element_item0)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal a char * onto the message */\n"
++				   "\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_STRING, &value_element_item0)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tvalue_element_item1 = value_element->item1;\n"
++				   "\t\tvalue_element_item1 = value_element->item1;\n"
+ 				   "\n"
+-				   "\t/* Marshal a uint32_t onto the message */\n"
+-				   "\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_UINT32, &value_element_item1)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
+-				   "\t}\n"
++				   "\t\t/* Marshal a uint32_t onto the message */\n"
++				   "\t\tif (! dbus_message_iter_append_basic (&value_element_iter, DBUS_TYPE_UINT32, &value_element_item1)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&value_iter, &value_element_iter);\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\n"
+-				   "\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
+-				   "\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
+-				   "\t\treturn -1;\n"
++				   "\t\tif (! dbus_message_iter_close_container (&value_iter, &value_element_iter)) {\n"
++				   "\t\t\tdbus_message_iter_abandon_container (&iter, &value_iter);\n"
++				   "\t\t\treturn -1;\n"
++				   "\t\t}\n"
+ 				   "\t}\n"
+ 				   "}\n"
+ 				   "\n"
+diff --git a/nih-dbus-tool/type.c b/nih-dbus-tool/type.c
+index 392635a..f54fb25 100644
+--- a/nih-dbus-tool/type.c
++++ b/nih-dbus-tool/type.c
+@@ -1101,7 +1101,7 @@ type_strcat_assert (char **     block,
+ 	nih_assert (block != NULL);
+ 	nih_assert (var != NULL);
+ 
+-	if (! strchr (var->type, '*'))
++	if (! strchr (var->type, '*') || ! strcmp (var->type, "char * const *"))
+ 		return *block;
+ 
+ 	if (next && (! strcmp (next->type, "size_t"))) {
+-- 
+2.37.0.144.g8ac04bfd2-goog
+

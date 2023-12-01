@@ -1,0 +1,36 @@
+From 587dd959fc82bc20c944c05caa7bc606046a7e34 Mon Sep 17 00:00:00 2001
+From: Marc Jones <marc.jones@scarletltd.com>
+Date: Wed, 6 Jun 2018 12:05:58 -0600
+Subject: [PATCH] PcAtChipsetPkg: Maintain the RTC VRT bit
+
+AMD SCO RTC VRT bit is updated every 256ms. The RTC logic
+clears the bit when writing RegD. It then checks the bit to see if
+the RTC is OK after a 10ms timeout and fails when it isn't set. We could
+change the timeout, but that would delay the boot unnecessarily. Maintain
+the VRT bit as it is updated regularly and carry on.
+
+Signed-off-by: Marc Jones <marc.jones@scarletltd.com>
+---
+ PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcRtc.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcRtc.c b/PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcRtc.c
+index 857918d..08c644a 100644
+--- a/PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcRtc.c
++++ b/PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcRtc.c
+@@ -143,8 +143,11 @@ PcRtcInit (
+ 
+   //
+   // Clear RTC register D
++  // AMD workaround - Don't clear the VRT bit
+   //
+-  RegisterD.Data = RTC_INIT_REGISTER_D;
++  RegisterD.Data = RtcRead (RTC_ADDRESS_REGISTER_D);
++  RegisterD.Bits.Reserved = 0;		// Maintain RegisterD.Bits.Vrt
++  RegisterD.Data |= RTC_INIT_REGISTER_D;
+   RtcWrite (RTC_ADDRESS_REGISTER_D, RegisterD.Data);
+ 
+   //
+-- 
+2.7.4
+

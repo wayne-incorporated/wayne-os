@@ -1,0 +1,140 @@
+From 47294d1b8a341bf96a016d872faa639e83958dd0 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 9 Jun 2022 09:51:46 -0300
+Subject: [PATCH 118/163] x86_64: Disable libmvec tests if compiler does not
+ issue them with openmp
+
+---
+ sysdeps/x86_64/fpu/Makeconfig   |  2 ++
+ sysdeps/x86_64/fpu/configure    | 61 +++++++++++++++++++++++++++++++++
+ sysdeps/x86_64/fpu/configure.ac | 30 ++++++++++++++++
+ 3 files changed, 93 insertions(+)
+ create mode 100644 sysdeps/x86_64/fpu/configure
+ create mode 100644 sysdeps/x86_64/fpu/configure.ac
+
+diff --git a/sysdeps/x86_64/fpu/Makeconfig b/sysdeps/x86_64/fpu/Makeconfig
+index 9d7ae05c03..45d2c25f0a 100644
+--- a/sysdeps/x86_64/fpu/Makeconfig
++++ b/sysdeps/x86_64/fpu/Makeconfig
+@@ -72,6 +72,7 @@ bench-libmvec-float = \
+   $(addsuffix f, $(addprefix float-vlen8-avx2-, $(libmvec-bench-funcs))) \
+   $(addsuffix f, $(addprefix float-vlen16-, $(libmvec-bench-funcs))) \
+ 
++ifeq ($(build-mathvec-pragma-simd-omp),yes)
+ # The base libmvec ABI tests.
+ libmvec-abi-func-tests = \
+   $(addprefix test-double-libmvec-,$(libmvec-funcs)) \
+@@ -88,6 +89,7 @@ libmvec-abi-func-avx2-tests = \
+ # The AVX512F libmvec ABI tests.
+ libmvec-abi-func-avx512f-tests = \
+   $(addsuffix -avx512f,$(libmvec-abi-func-tests))
++endif
+ 
+ $(common-objpfx)libmvec.mk: $(common-objpfx)config.make
+ 	(echo "ifeq (\$$(subdir)\$$(build-mathvec),mathyes)"; \
+diff --git a/sysdeps/x86_64/fpu/configure b/sysdeps/x86_64/fpu/configure
+new file mode 100644
+index 0000000000..b7ba29c4b2
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/configure
+@@ -0,0 +1,61 @@
++# This file is generated from configure.ac by Autoconf.  DO NOT EDIT!
++
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether compiler supports libmvec calls through fopenmp" >&5
++$as_echo_n "checking whether compiler supports libmvec calls through fopenmp... " >&6; }
++if ${libc_cv_libmvec_pragma_omp_simd_support+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++
++cat > conftest.c <<EOF
++__attribute__ ((__simd__)) float sinf (float);
++void
++foo (float *x)
++{
++  #pragma omp simd
++  for (int i = 0; i < 256; i++)
++    x[i] = sinf (x[i]);
++}
++EOF
++libc_cv_libmvec_pragma_omp_simd_support=no
++# Check regardless of the ABI used
++if { ac_try='${CC-cc} $CFLAGS -fno-inline -fopenmp -Wno-unknown-pragmas -S conftest.c -o conftest.s 1>&5'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }
++  then
++  if { ac_try='grep '_ZGVbN4v_sinf' conftest.s >/dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; } \
++     || { ac_try='grep '_ZGVcN8v_sinf' conftest.s >/dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; } \
++     || { ac_try='grep '_ZGVdN8v_sinf' conftest.s >/dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; } \
++     || { ac_try='grep '_ZGVeN16v_sinf' conftest.s >/dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }
++  then
++    libc_cv_libmvec_pragma_omp_simd_support=yes
++  fi
++fi
++rm -f conftest*
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_libmvec_pragma_omp_simd_support" >&5
++$as_echo "$libc_cv_libmvec_pragma_omp_simd_support" >&6; }
++config_vars="$config_vars
++build-mathvec-pragma-simd-omp = $libc_cv_libmvec_pragma_omp_simd_support"
+diff --git a/sysdeps/x86_64/fpu/configure.ac b/sysdeps/x86_64/fpu/configure.ac
+new file mode 100644
+index 0000000000..1bc5af4ebe
+--- /dev/null
++++ b/sysdeps/x86_64/fpu/configure.ac
+@@ -0,0 +1,30 @@
++GLIBC_PROVIDES dnl See aclocal.m4 in the top level source directory.
++
++AC_CACHE_CHECK([whether compiler supports libmvec calls through fopenmp],
++	       libc_cv_libmvec_pragma_omp_simd_support, [
++dnl
++cat > conftest.c <<EOF
++__attribute__ ((__simd__)) float sinf (float);
++void
++foo (float *x)
++{
++  #pragma omp simd
++  for (int i = 0; i < 256; i++)
++    x[[i]] = sinf (x[[i]]);
++}
++EOF
++libc_cv_libmvec_pragma_omp_simd_support=no
++# Check regardless of the ABI used
++if AC_TRY_COMMAND([${CC-cc} $CFLAGS -fno-inline -fopenmp -Wno-unknown-pragmas -S conftest.c -o conftest.s 1>&AS_MESSAGE_LOG_FD])
++  then
++  if AC_TRY_COMMAND([grep '_ZGVbN4v_sinf' conftest.s >/dev/null]) \
++     || AC_TRY_COMMAND([grep '_ZGVcN8v_sinf' conftest.s >/dev/null]) \
++     || AC_TRY_COMMAND([grep '_ZGVdN8v_sinf' conftest.s >/dev/null]) \
++     || AC_TRY_COMMAND([grep '_ZGVeN16v_sinf' conftest.s >/dev/null])
++  then
++    libc_cv_libmvec_pragma_omp_simd_support=yes
++  fi
++fi
++rm -f conftest*])
++LIBC_CONFIG_VAR([build-mathvec-pragma-simd-omp],
++		[$libc_cv_libmvec_pragma_omp_simd_support])
+-- 
+2.37.2
+

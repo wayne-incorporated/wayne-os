@@ -1,0 +1,1 @@
+chromeos-bsp-majolica-0.0.1.ebuild

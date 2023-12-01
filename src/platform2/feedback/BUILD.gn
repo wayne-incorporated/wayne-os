@@ -1,0 +1,127 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":feedback_client",
+    ":feedback_daemon",
+    ":feedback_proto",
+    ":install_headers",
+    ":install_init_conf",
+    ":install_systemd_conf",
+  ]
+  if (use.test) {
+    deps += [ ":feedback_daemon_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+pkg_config("libfeedback_daemon_config") {
+  pkg_deps = [ "protobuf-lite" ]
+}
+
+static_library("libfeedback_daemon") {
+  sources = [
+    "components/feedback/feedback_report.cc",
+    "components/feedback/feedback_uploader.cc",
+    "feedback_service.cc",
+    "feedback_uploader_http.cc",
+    "feedback_util.cc",
+  ]
+  all_dependent_configs = [ ":libfeedback_daemon_config" ]
+  configs += [ ":target_defaults" ]
+  include_dirs = [ "." ]
+  deps = [ ":feedback_proto" ]
+}
+
+executable("feedback_daemon") {
+  sources = [ "feedback_daemon.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libfeedback_daemon" ]
+}
+
+pkg_config("libfeedback_client_config") {
+  pkg_deps = [ "protobuf-lite" ]
+}
+
+static_library("libfeedback_client") {
+  sources = [
+    "components/feedback/feedback_common.cc",
+    "feedback_service_interface.cc",
+    "feedback_util.cc",
+  ]
+  all_dependent_configs = [ ":libfeedback_client_config" ]
+  configs += [ ":target_defaults" ]
+  include_dirs = [ "." ]
+  deps = [ ":feedback_proto" ]
+}
+
+executable("feedback_client") {
+  sources = [ "feedback_client.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [
+    ":libfeedback_client",
+    ":libfeedback_daemon",
+  ]
+}
+
+proto_library("feedback_proto") {
+  proto_in_dir = "components/feedback/proto"
+  proto_out_dir = "include/components/feedback/proto"
+  sources = [
+    "${proto_in_dir}/annotations.proto",
+    "${proto_in_dir}/chrome.proto",
+    "${proto_in_dir}/common.proto",
+    "${proto_in_dir}/config.proto",
+    "${proto_in_dir}/dom.proto",
+    "${proto_in_dir}/extension.proto",
+    "${proto_in_dir}/math.proto",
+    "${proto_in_dir}/web.proto",
+  ]
+}
+
+install_config("install_headers") {
+  sources = [
+    "components/feedback/feedback_common.h",
+    "feedback_service_interface.h",
+  ]
+  install_path = "/usr/include/feedback"
+}
+
+install_config("install_init_conf") {
+  sources = [ "init/feedback_daemon.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_systemd_conf") {
+  sources = [ "org.chromium.feedback.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+if (use.test) {
+  executable("feedback_daemon_test") {
+    sources = [ "feedback_service_test.cc" ]
+    run_test = true
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libfeedback_client",
+      ":libfeedback_daemon",
+      "//common-mk/testrunner",
+    ]
+  }
+}

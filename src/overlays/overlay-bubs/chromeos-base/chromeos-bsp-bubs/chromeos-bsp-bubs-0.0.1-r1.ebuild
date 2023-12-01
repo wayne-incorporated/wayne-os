@@ -1,0 +1,1 @@
+chromeos-bsp-bubs-0.0.1.ebuild

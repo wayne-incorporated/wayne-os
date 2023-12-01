@@ -1,0 +1,76 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":g2ftool",
+    ":webauthntool",
+  ]
+  if (use.test) {
+    deps += [ ":g2f_client_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+
+    # This dep is needed because the included u2fhid.h header depends on it.
+    "libsession_manager-client",
+  ]
+  cflags = [ "-Wconsumed" ]
+}
+
+executable("g2ftool") {
+  sources = [ "g2ftool.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libg2fclient" ]
+}
+
+pkg_config("webauthntool_config") {
+  pkg_deps = [
+    "protobuf-lite",
+    "system_api",
+  ]
+}
+
+executable("webauthntool") {
+  sources = [ "webauthntool.cc" ]
+  configs += [
+    ":target_defaults",
+    ":webauthntool_config",
+  ]
+  install_path = "bin"
+}
+
+static_library("libg2fclient") {
+  sources = [ "g2f_client.cc" ]
+  configs += [ ":target_defaults" ]
+  libs = [ "hidapi-hidraw" ]
+}
+
+if (use.test) {
+  pkg_config("g2f_client_test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("g2f_client_test") {
+    sources = [
+      "g2f_client.cc",
+      "g2f_client_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":g2f_client_test_config",
+    ]
+    run_test = true
+    deps = [ "//common-mk/testrunner" ]
+  }
+}

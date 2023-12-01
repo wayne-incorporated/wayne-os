@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include <crypto/signature_verifier.h>
 #include <gmock/gmock.h>
 
 namespace base {
@@ -37,7 +38,9 @@ class MockPolicyKey : public PolicyKey {
   MOCK_METHOD(bool, Persist, (), (override));
   MOCK_METHOD(bool,
               Rotate,
-              (const std::vector<uint8_t>&, const std::vector<uint8_t>&),
+              (const std::vector<uint8_t>&,
+               const std::vector<uint8_t>&,
+               const crypto::SignatureVerifier::SignatureAlgorithm algorithm),
               (override));
   MOCK_METHOD(bool,
               ClobberCompromisedKey,
@@ -45,7 +48,9 @@ class MockPolicyKey : public PolicyKey {
               (override));
   MOCK_METHOD(bool,
               Verify,
-              (const std::vector<uint8_t>&, const std::vector<uint8_t>&),
+              (const std::vector<uint8_t>&,
+               const std::vector<uint8_t>&,
+               const crypto::SignatureVerifier::SignatureAlgorithm algorithm),
               (override));
   MOCK_METHOD(const std::vector<uint8_t>&,
               public_key_der,

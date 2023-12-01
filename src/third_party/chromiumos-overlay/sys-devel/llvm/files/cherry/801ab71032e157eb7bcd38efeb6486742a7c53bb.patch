@@ -1,0 +1,499 @@
+commit 801ab71032e157eb7bcd38efeb6486742a7c53bb
+Author: Daniel Kiss <daniel.kiss@arm.com>
+Date:   Thu May 20 17:06:43 2021 +0200
+
+    [ARM][AArch64] SLSHardening: make non-comdat thunks possible
+    
+    Linker scripts might not handle COMDAT sections. SLSHardeing adds
+    new section for each __llvm_slsblr_thunk_xN. This new option allows
+    the generation of the thunks into the normal text section to handle these
+    exceptional cases.
+    ,comdat or ,noncomdat can be added to harden-sls to control the codegen.
+    -mharden-sls=[all|retbr|blr],nocomdat.
+    
+    Reviewed By: kristof.beyls
+    
+    Differential Revision: https://reviews.llvm.org/D100546
+
+diff --git a/clang/lib/Driver/ToolChains/Arch/AArch64.cpp b/clang/lib/Driver/ToolChains/Arch/AArch64.cpp
+index 4ce797f9bc73..503685ab533a 100644
+--- a/clang/lib/Driver/ToolChains/Arch/AArch64.cpp
++++ b/clang/lib/Driver/ToolChains/Arch/AArch64.cpp
+@@ -235,11 +235,17 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
+     StringRef Scope = A->getValue();
+     bool EnableRetBr = false;
+     bool EnableBlr = false;
+-    if (Scope != "none" && Scope != "all") {
++    bool DisableComdat = false;
++    if (Scope != "none") {
+       SmallVector<StringRef, 4> Opts;
+       Scope.split(Opts, ",");
+       for (auto Opt : Opts) {
+         Opt = Opt.trim();
++        if (Opt == "all") {
++          EnableBlr = true;
++          EnableRetBr = true;
++          continue;
++        }
+         if (Opt == "retbr") {
+           EnableRetBr = true;
+           continue;
+@@ -248,19 +254,27 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
+           EnableBlr = true;
+           continue;
+         }
++        if (Opt == "comdat") {
++          DisableComdat = false;
++          continue;
++        }
++        if (Opt == "nocomdat") {
++          DisableComdat = true;
++          continue;
++        }
+         D.Diag(diag::err_invalid_sls_hardening)
+             << Scope << A->getAsString(Args);
+         break;
+       }
+-    } else if (Scope == "all") {
+-      EnableRetBr = true;
+-      EnableBlr = true;
+     }
+ 
+     if (EnableRetBr)
+       Features.push_back("+harden-sls-retbr");
+     if (EnableBlr)
+       Features.push_back("+harden-sls-blr");
++    if (DisableComdat) {
++      Features.push_back("+harden-sls-nocomdat");
++    }
+   }
+ 
+   // En/disable crc
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.cpp b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+index 16d72e5367f5..4ab547fabe43 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.cpp
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+@@ -796,11 +796,17 @@ fp16_fml_fallthrough:
+     StringRef Scope = A->getValue();
+     bool EnableRetBr = false;
+     bool EnableBlr = false;
+-    if (Scope != "none" && Scope != "all") {
++    bool DisableComdat = false;
++    if (Scope != "none") {
+       SmallVector<StringRef, 4> Opts;
+       Scope.split(Opts, ",");
+       for (auto Opt : Opts) {
+         Opt = Opt.trim();
++        if (Opt == "all") {
++          EnableBlr = true;
++          EnableRetBr = true;
++          continue;
++        }
+         if (Opt == "retbr") {
+           EnableRetBr = true;
+           continue;
+@@ -809,13 +815,18 @@ fp16_fml_fallthrough:
+           EnableBlr = true;
+           continue;
+         }
++        if (Opt == "comdat") {
++          DisableComdat = false;
++          continue;
++        }
++        if (Opt == "nocomdat") {
++          DisableComdat = true;
++          continue;
++        }
+         D.Diag(diag::err_invalid_sls_hardening)
+             << Scope << A->getAsString(Args);
+         break;
+       }
+-    } else if (Scope == "all") {
+-      EnableRetBr = true;
+-      EnableBlr = true;
+     }
+ 
+     if (EnableRetBr || EnableBlr)
+@@ -827,6 +838,9 @@ fp16_fml_fallthrough:
+       Features.push_back("+harden-sls-retbr");
+     if (EnableBlr)
+       Features.push_back("+harden-sls-blr");
++    if (DisableComdat) {
++      Features.push_back("+harden-sls-nocomdat");
++    }
+   }
+ 
+ }
+diff --git a/clang/test/Driver/sls-hardening-options.c b/clang/test/Driver/sls-hardening-options.c
+index c48b694bc8b7..cb35d8b5f99d 100644
+--- a/clang/test/Driver/sls-hardening-options.c
++++ b/clang/test/Driver/sls-hardening-options.c
+@@ -1,49 +1,49 @@
+ // Check the -mharden-sls= option, which has a required argument to select
+ // scope.
+ // RUN: %clang -target aarch64--none-eabi -c %s -### 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=none 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=none 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=none 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=none 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,blr,retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT-OFF
+ 
+ // RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,r 2>&1 | \
+ // RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
+@@ -60,12 +60,45 @@
+ // RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=all,-blr 2>&1 | \
+ // RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
+ 
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,nocomdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,blr,nocomdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=all,nocomdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=all,nocomdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,retbr,nocomdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,blr,retbr,nocomdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON --check-prefix=NOCOMDAT
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,comdat,r 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,comdat,r 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=none,comdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=none,comdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=all,-comdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=all,-comdat 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++
+ // RETBR-OFF-NOT: "harden-sls-retbr"
+ // RETBR-ON:  "+harden-sls-retbr"
+ 
+ // BLR-OFF-NOT: "harden-sls-blr"
+ // BLR-ON:  "+harden-sls-blr"
+ 
++// NOCOMDAT-OFF-NOT: "harden-sls-nocomdat"
++// NOCOMDAT: "+harden-sls-nocomdat"
++
+ // BAD-SLS-SPEC: invalid sls hardening option '{{[^']+}}' in '-mharden-sls=
+ 
+ // RUN: %clang -target armv6a--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
+diff --git a/llvm/include/llvm/CodeGen/IndirectThunks.h b/llvm/include/llvm/CodeGen/IndirectThunks.h
+index 3b40055da7a4..74973f38bc79 100644
+--- a/llvm/include/llvm/CodeGen/IndirectThunks.h
++++ b/llvm/include/llvm/CodeGen/IndirectThunks.h
+@@ -27,7 +27,8 @@ template <typename Derived> class ThunkInserter {
+ protected:
+   bool InsertedThunks;
+   void doInitialization(Module &M) {}
+-  void createThunkFunction(MachineModuleInfo &MMI, StringRef Name);
++  void createThunkFunction(MachineModuleInfo &MMI, StringRef Name,
++                           bool Comdat = true);
+ 
+ public:
+   void init(Module &M) {
+@@ -40,17 +41,21 @@ public:
+ 
+ template <typename Derived>
+ void ThunkInserter<Derived>::createThunkFunction(MachineModuleInfo &MMI,
+-                                                 StringRef Name) {
++                                                 StringRef Name, bool Comdat) {
+   assert(Name.startswith(getDerived().getThunkPrefix()) &&
+          "Created a thunk with an unexpected prefix!");
+ 
+   Module &M = const_cast<Module &>(*MMI.getModule());
+   LLVMContext &Ctx = M.getContext();
+   auto Type = FunctionType::get(Type::getVoidTy(Ctx), false);
+-  Function *F =
+-      Function::Create(Type, GlobalValue::LinkOnceODRLinkage, Name, &M);
+-  F->setVisibility(GlobalValue::HiddenVisibility);
+-  F->setComdat(M.getOrInsertComdat(Name));
++  Function *F = Function::Create(Type,
++                                 Comdat ? GlobalValue::LinkOnceODRLinkage
++                                        : GlobalValue::InternalLinkage,
++                                 Name, &M);
++  if (Comdat) {
++    F->setVisibility(GlobalValue::HiddenVisibility);
++    F->setComdat(M.getOrInsertComdat(Name));
++  }
+ 
+   // Add Attributes so that we don't create a frame, unwind information, or
+   // inline.
+diff --git a/llvm/lib/Target/AArch64/AArch64.td b/llvm/lib/Target/AArch64/AArch64.td
+index a2eeaa4ee2d0..dab6dbe2352c 100644
+--- a/llvm/lib/Target/AArch64/AArch64.td
++++ b/llvm/lib/Target/AArch64/AArch64.td
+@@ -523,6 +523,9 @@ def FeatureHardenSlsRetBr : SubtargetFeature<"harden-sls-retbr",
+ def FeatureHardenSlsBlr : SubtargetFeature<"harden-sls-blr",
+   "HardenSlsBlr", "true",
+   "Harden against straight line speculation across BLR instructions">;
++def FeatureHardenSlsNoComdat : SubtargetFeature<"harden-sls-nocomdat",
++  "HardenSlsNoComdat", "true",
++  "Generate thunk code for SLS mitigation in the normal text section">;
+ 
+ //===----------------------------------------------------------------------===//
+ // AArch64 Processors supported.
+diff --git a/llvm/lib/Target/AArch64/AArch64SLSHardening.cpp b/llvm/lib/Target/AArch64/AArch64SLSHardening.cpp
+index cb4dc8462f68..c4965e7146ff 100644
+--- a/llvm/lib/Target/AArch64/AArch64SLSHardening.cpp
++++ b/llvm/lib/Target/AArch64/AArch64SLSHardening.cpp
+@@ -186,12 +186,16 @@ namespace {
+ struct SLSBLRThunkInserter : ThunkInserter<SLSBLRThunkInserter> {
+   const char *getThunkPrefix() { return SLSBLRNamePrefix; }
+   bool mayUseThunk(const MachineFunction &MF) {
++    ComdatThunks &= !MF.getSubtarget<AArch64Subtarget>().hardenSlsNoComdat();
+     // FIXME: This could also check if there are any BLRs in the function
+     // to more accurately reflect if a thunk will be needed.
+     return MF.getSubtarget<AArch64Subtarget>().hardenSlsBlr();
+   }
+   void insertThunks(MachineModuleInfo &MMI);
+   void populateThunk(MachineFunction &MF);
++
++private:
++  bool ComdatThunks = true;
+ };
+ } // namespace
+ 
+@@ -200,7 +204,7 @@ void SLSBLRThunkInserter::insertThunks(MachineModuleInfo &MMI) {
+   // based on which registers are actually used in BLR instructions in this
+   // function. But would that be a worthwhile optimization?
+   for (auto T : SLSBLRThunks)
+-    createThunkFunction(MMI, T.Name);
++    createThunkFunction(MMI, T.Name, ComdatThunks);
+ }
+ 
+ void SLSBLRThunkInserter::populateThunk(MachineFunction &MF) {
+diff --git a/llvm/lib/Target/AArch64/AArch64Subtarget.h b/llvm/lib/Target/AArch64/AArch64Subtarget.h
+index 086934c0148a..8345e9c5861d 100644
+--- a/llvm/lib/Target/AArch64/AArch64Subtarget.h
++++ b/llvm/lib/Target/AArch64/AArch64Subtarget.h
+@@ -241,6 +241,7 @@ protected:
+   bool AllowTaggedGlobals = false;
+   bool HardenSlsRetBr = false;
+   bool HardenSlsBlr = false;
++  bool HardenSlsNoComdat = false;
+   uint8_t MaxInterleaveFactor = 2;
+   uint8_t VectorInsertExtractBaseCost = 3;
+   uint16_t CacheLineSize = 0;
+@@ -399,6 +400,7 @@ public:
+ 
+   bool hardenSlsRetBr() const { return HardenSlsRetBr; }
+   bool hardenSlsBlr() const { return HardenSlsBlr; }
++  bool hardenSlsNoComdat() const { return HardenSlsNoComdat; }
+ 
+   bool useEL1ForTP() const { return UseEL1ForTP; }
+   bool useEL2ForTP() const { return UseEL2ForTP; }
+diff --git a/llvm/lib/Target/ARM/ARM.td b/llvm/lib/Target/ARM/ARM.td
+index 9da2bdbbb103..0afcae293938 100644
+--- a/llvm/lib/Target/ARM/ARM.td
++++ b/llvm/lib/Target/ARM/ARM.td
+@@ -573,8 +573,9 @@ def FeatureHardenSlsRetBr : SubtargetFeature<"harden-sls-retbr",
+ def FeatureHardenSlsBlr : SubtargetFeature<"harden-sls-blr",
+   "HardenSlsBlr", "true",
+   "Harden against straight line speculation across indirect calls">;
+-
+-
++def FeatureHardenSlsNoComdat : SubtargetFeature<"harden-sls-nocomdat",
++  "HardenSlsNoComdat", "true",
++  "Generate thunk code for SLS mitigation in the normal text section">;
+ 
+ //===----------------------------------------------------------------------===//
+ // ARM Processor subtarget features.
+diff --git a/llvm/lib/Target/ARM/ARMSLSHardening.cpp b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+index cfcc7d5a0408..332acb453124 100644
+--- a/llvm/lib/Target/ARM/ARMSLSHardening.cpp
++++ b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+@@ -165,12 +165,16 @@ namespace {
+ struct SLSBLRThunkInserter : ThunkInserter<SLSBLRThunkInserter> {
+   const char *getThunkPrefix() { return SLSBLRNamePrefix; }
+   bool mayUseThunk(const MachineFunction &MF) {
++    ComdatThunks &= !MF.getSubtarget<ARMSubtarget>().hardenSlsNoComdat();
+     // FIXME: This could also check if there are any indirect calls in the
+     // function to more accurately reflect if a thunk will be needed.
+     return MF.getSubtarget<ARMSubtarget>().hardenSlsBlr();
+   }
+   void insertThunks(MachineModuleInfo &MMI);
+   void populateThunk(MachineFunction &MF);
++
++private:
++  bool ComdatThunks = true;
+ };
+ } // namespace
+ 
+@@ -179,7 +183,7 @@ void SLSBLRThunkInserter::insertThunks(MachineModuleInfo &MMI) {
+   // based on which registers are actually used in indirect calls in this
+   // function. But would that be a worthwhile optimization?
+   for (auto T : SLSBLRThunks)
+-    createThunkFunction(MMI, T.Name);
++    createThunkFunction(MMI, T.Name, ComdatThunks);
+ }
+ 
+ void SLSBLRThunkInserter::populateThunk(MachineFunction &MF) {
+diff --git a/llvm/lib/Target/ARM/ARMSubtarget.h b/llvm/lib/Target/ARM/ARMSubtarget.h
+index 5d5fe7199db3..4740af87d497 100644
+--- a/llvm/lib/Target/ARM/ARMSubtarget.h
++++ b/llvm/lib/Target/ARM/ARMSubtarget.h
+@@ -475,6 +475,9 @@ protected:
+   /// Harden against Straight Line Speculation for indirect calls.
+   bool HardenSlsBlr = false;
+ 
++  /// Generate thunk code for SLS mitigation in the normal text section.
++  bool HardenSlsNoComdat = false;
++
+   /// stackAlignment - The minimum alignment known to hold of the stack frame on
+   /// entry to the function and which must be maintained by every function.
+   Align stackAlignment = Align(4);
+@@ -931,6 +934,7 @@ public:
+ 
+   bool hardenSlsRetBr() const { return HardenSlsRetBr; }
+   bool hardenSlsBlr() const { return HardenSlsBlr; }
++  bool hardenSlsNoComdat() const { return HardenSlsNoComdat; }
+ };
+ 
+ } // end namespace llvm
+diff --git a/llvm/test/CodeGen/AArch64/speculation-hardening-sls.ll b/llvm/test/CodeGen/AArch64/speculation-hardening-sls.ll
+index 90d27830134a..89f2fba022b7 100644
+--- a/llvm/test/CodeGen/AArch64/speculation-hardening-sls.ll
++++ b/llvm/test/CodeGen/AArch64/speculation-hardening-sls.ll
+@@ -1,7 +1,9 @@
+-; RUN: llc -mattr=harden-sls-retbr,harden-sls-blr -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,ISBDSB,ISBDSBDAGISEL
++; RUN: llc -mattr=harden-sls-retbr,harden-sls-blr -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,HARDEN-COMDAT,ISBDSB,ISBDSBDAGISEL
++; RUN: llc -mattr=harden-sls-retbr,harden-sls-blr,harden-sls-nocomdat -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,HARDEN-COMDAT-OFF,ISBDSB,ISBDSBDAGISEL
+ ; RUN: llc -mattr=harden-sls-retbr,harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,SB,SBDAGISEL
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr,harden-sls-blr -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,HARDEN-COMDAT,ISBDSB
+ ; RUN: llc -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,NOHARDEN
+-; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr,harden-sls-blr -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr,harden-sls-blr,harden-sls-nocomdat -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,HARDEN-COMDAT-OFF,ISBDSB
+ ; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr,harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=aarch64-none-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,HARDEN,SB
+ 
+ ; Function Attrs: norecurse nounwind readnone
+@@ -210,6 +212,14 @@ entry:
+ ; SB-NEXT:     dsb sy
+ ; SB-NEXT:     isb
+ ; HARDEN-NEXT: .Lfunc_end
++; HARDEN-COMDAT:  .section .text.__llvm_slsblr_thunk_x19
++; HARDEN-COMDAT:  .hidden __llvm_slsblr_thunk_x19
++; HARDEN-COMDAT:  .weak __llvm_slsblr_thunk_x19
++; HARDEN-COMDAT: .type  __llvm_slsblr_thunk_x19,@function
++; HARDEN-COMDAT-OFF-NOT:  .section .text.__llvm_slsblr_thunk_x19
++; HARDEN-COMDAT-OFF-NOT:  .hidden __llvm_slsblr_thunk_x19
++; HARDEN-COMDAT-OFF-NOT:  .weak __llvm_slsblr_thunk_x19
++; HARDEN-COMDAT-OFF:      .type __llvm_slsblr_thunk_x19,@function
+ ; HARDEN-label: __llvm_slsblr_thunk_x19:
+ ; HARDEN:    mov x16, x19
+ ; HARDEN:    br x16
+diff --git a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+index 7fe5a9ba2eb0..2731cef93003 100644
+--- a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
++++ b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+@@ -1,15 +1,23 @@
+-; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB -dump-input-context=100
+-; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB -dump-input-context=100
+-; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB -dump-input-context=100
+-; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT,ISBDSB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT,ISBDSB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT,SB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT,SB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=harden-sls-nocomdat -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT-OFF,ISBDSB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=harden-sls-nocomdat -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT-OFF,ISBDSB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=harden-sls-nocomdat -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT-OFF,SB -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=harden-sls-nocomdat -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT-OFF,SB -dump-input-context=100
+ ; RUN: llc -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,NOHARDENARM -dump-input-context=100
+ ; RUN: llc -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,NOHARDENTHUMB
+-; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB
+-; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-nocomdat -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT-OFF,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-nocomdat -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT-OFF,ISBDSB
+ ; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB
+ ; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB
+-; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB
+-; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT,ISBDSB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT,ISBDSB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=harden-sls-nocomdat -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,HARDEN-COMDAT-OFF,ISBDSB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=harden-sls-nocomdat -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,HARDEN-COMDAT-OFF,ISBDSB
+ ; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB
+ ; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB
+ 
+@@ -235,6 +243,14 @@ entry:
+ ; CHECK: .Lfunc_end
+ }
+ 
++; HARDEN-COMDAT:  .section {{.text.__llvm_slsblr_thunk_(arm|thumb)_r5}}
++; HARDEN-COMDAT:  .hidden {{__llvm_slsblr_thunk_(arm|thumb)_r5}}
++; HARDEN-COMDAT:  .weak {{__llvm_slsblr_thunk_(arm|thumb)_r5}}
++; HARDEN-COMDAT:  .type {{__llvm_slsblr_thunk_(arm|thumb)_r5}},%function
++; HARDEN-COMDAT-OFF-NOT:  .section {{.text.__llvm_slsblr_thunk_(arm|thumb)_r5}}
++; HARDEN-COMDAT-OFF-NOT:  .hidden {{__llvm_slsblr_thunk_(arm|thumb)_r5}}
++; HARDEN-COMDAT-OFF-NOT:  .weak {{__llvm_slsblr_thunk_(arm|thumb)_r5}}
++; HARDEN-COMDAT-OFF:      .type {{__llvm_slsblr_thunk_(arm|thumb)_r5}},%function
+ ; HARDEN-label: {{__llvm_slsblr_thunk_(arm|thumb)_r5}}:
+ ; HARDEN:    bx r5
+ ; ISBDSB-NEXT: dsb sy

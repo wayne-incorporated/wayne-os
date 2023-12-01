@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include <base/bind.h>
 #include <base/check_op.h>
+#include <base/functional/bind.h>
 #include <base/logging.h>
 #include <brillo/asynchronous_signal_handler.h>
 
@@ -25,8 +25,8 @@ ChildExitDispatcher::ChildExitDispatcher(
     const std::vector<ChildExitHandler*>& handlers)
     : signal_handler_(signal_handler), handlers_(handlers) {
   signal_handler_->RegisterHandler(
-      SIGCHLD,
-      base::Bind(&ChildExitDispatcher::OnSigChld, base::Unretained(this)));
+      SIGCHLD, base::BindRepeating(&ChildExitDispatcher::OnSigChld,
+                                   base::Unretained(this)));
 }
 
 ChildExitDispatcher::~ChildExitDispatcher() {

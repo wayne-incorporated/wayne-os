@@ -1,0 +1,48 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+LINUX_FIRMWARE=""
+
+VIDEO_CARDS="-* llvmpipe virgl"
+
+CHROMEOS_KERNEL_FAMILY="termina"
+
+# Empty USE to allow the same form below in real assignments.
+USE=""
+
+USE="${USE} chromeless_tty chromeless_tests"
+USE="${USE} pam seccomp"
+
+# TODO(crbug.com/1040245): -crypto can be added below once termina doesn't
+# depend on libmetrics.
+USE="${USE} -cros_disks -cros_host -cros_p2p -mojo"
+USE="${USE} -bluetooth -cellular -cras -cups -debugd -encrypted_stateful -kmod"
+USE="${USE} -power_management -shill -systemd -timers -tpm -vaapi -vtconsole -udev"
+
+# Use kernel v5.15 for termina
+USE="${USE} -kernel-4_19 -kernel-5_10 kernel-5_15"
+
+# This overlay is meant to be run as a VM guest.
+USE="${USE} kvm_guest"
+
+# Nested VM.
+USE="${USE} kvm_nested"
+
+# Include the kernel in the base image.
+USE="${USE} include_vmlinuz"
+
+# Mesa's gbm (instead of minigbm) is required for Xwayland to support
+# virtio-gpu.
+USE="${USE} gbm"
+
+# Don't run v3 camera stack since it does not use minigbm.
+USE="${USE} -arc-camera3"
+
+# Disable unibuild on this VM board. All baremetal Chrome OS boards must be
+# unibuild enabled moving forward. Do not copy this to new boards as it will be
+# rejected. See
+# https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/chromeos-config/README.md
+# for further details about chromeos-config, which is the required entry point for
+# unified builds.
+USE="${USE} -unibuild"

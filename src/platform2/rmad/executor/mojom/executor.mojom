@@ -1,0 +1,63 @@
+// Copyright 2022 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// API exposed by rmad's root-level executor. This is used by the sandboxed
+// rmad daemon when it needs to perform a high-privilege operation.
+
+module chromeos.rmad.mojom;
+
+// Root-level executor interface exposed to the rmad daemon. In production,
+// this is implemented by the Executor daemon.
+interface Executor {
+  // Mount a device path and write the logs to a file.
+  //
+  // Input:
+  // * |device_id| - a char between 'a' and 'z' indicating the device path is
+  //                 "/dev/sd${device_id}1".
+  // * |text_log| - a string containing the formatted logs to save.
+  // * |json_log| - a string containing the JSON formatted logs.
+  // * |system_log| - a string containing the raw system logs.
+  // * |diagnostics_log| - a string containing the Diagnostics app logs.
+  //
+  // Response:
+  // * |file_name| - the file name of the saved log if successfully writes the
+  //                 log, or null if failed to save the log.
+  MountAndWriteLog(uint8 device_id, string text_log, string json_log,
+      string system_log, string diagnostics_log) => (string? file_name);
+
+  // Mount a ChromeOS rootfs partition and copy the firmware updater to a
+  // fixed path /usr/lib/rmad/chromeos-firmwareupdate.
+  //
+  // Input:
+  // * |device_id| - a char between 'a' and 'z' indicating the device path of
+  //                 the rootfs partition is "/dev/sd${device_id}3".
+  //
+  // Response:
+  // * |success| - true if successfully copies the firmware updater.
+  MountAndCopyFirmwareUpdater(uint8 device_id) => (bool success);
+
+  // Perform an EC reboot.
+  //
+  // Input: None
+  //
+  // Response:
+  // * |success| - true if successfully triggers an EC reboot.
+  RebootEc() => (bool success);
+
+  // Request an RMA mode powerwash.
+  //
+  // Input: None
+  //
+  // Response:
+  // * |success| - true if successfully requested an RMA mode powerwash
+  RequestRmaPowerwash() => (bool success);
+
+  // Request a battery cutoff.
+  //
+  // Input: None
+  //
+  // Response:
+  // * |success| - true if successfully requested a battery cutoff
+  RequestBatteryCutoff() => (bool success);
+};

@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Copyright 2022 The ChromiumOS Authors
+  Use of this source code is governed by a BSD-style license that can be
+  found in the LICENSE file.
+-->
+<node name="/org/chromium/Lvmd"
+  xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+<interface name="org.chromium.Lvmd">
+  <method name="GetPhysicalVolume">
+    <tp:docstring>
+      Returns the physical volume on device, if it exists.
+    </tp:docstring>
+    <arg name="device_path" type="s" direction="in">
+      <tp:docstring>
+        Path to a device.
+      </tp:docstring>
+    </arg>
+    <arg name="physical_volume" type="ay" direction="out">
+      <tp:docstring>
+        A serialized protobuf (PhysicalVolume,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::PhysicalVolume"/>
+    </arg>
+  </method>
+  <method name="GetVolumeGroup">
+    <tp:docstring>
+      Returns the volume group on a physical volume, if it exists.
+    </tp:docstring>
+    <arg name="physical_volume" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (PhysicalVolume,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::PhysicalVolume"/>
+    </arg>
+    <arg name="volume_group" type="ay" direction="out">
+      <tp:docstring>
+        A serialized protobuf (VolumeGroup,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::VolumeGroup"/>
+    </arg>
+  </method>
+  <method name="GetThinpool">
+    <tp:docstring>
+      Returns the thinpool on a volume group, if it exists.
+    </tp:docstring>
+    <arg name="volume_group" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (VolumeGroup,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::VolumeGroup"/>
+    </arg>
+    <arg name="thinpool_name" type="s" direction="in">
+      <tp:docstring>
+        Name of thinpool.
+      </tp:docstring>
+    </arg>
+    <arg name="thinpool" type="ay" direction="out">
+      <tp:docstring>
+        A serialized protobuf (VolumeGroupList,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::Thinpool"/>
+    </arg>
+  </method>
+  <method name="ListLogicalVolumes">
+    <tp:docstring>
+      Returns the list of logical volumes, if any exists.
+    </tp:docstring>
+    <arg name="volume_group" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (VolumeGroup,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::VolumeGroup"/>
+    </arg>
+    <arg name="logical_volume_list" type="ay" direction="out">
+      <tp:docstring>
+        A serialized protobuf (LogicalVolumeList,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::LogicalVolumeList"/>
+    </arg>
+  </method>
+  <method name="GetLogicalVolume">
+    <tp:docstring>
+      Returns the logical volume, if it exists.
+    </tp:docstring>
+    <arg name="volume_group" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (VolumeGroup,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::VolumeGroup"/>
+    </arg>
+    <arg name="logical_volume_name" type="s" direction="in">
+      <tp:docstring>
+        Name of logical volume.
+      </tp:docstring>
+    </arg>
+    <arg name="logical_volume" type="ay" direction="out">
+      <tp:docstring>
+        A serialized protobuf (LogicalVolume,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::LogicalVolume"/>
+    </arg>
+  </method>
+  <method name="CreateLogicalVolume">
+    <tp:docstring>
+      Returns the logical volume created.
+    </tp:docstring>
+    <arg name="thinpool" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (Thinpool,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::Thinpool"/>
+    </arg>
+    <arg name="logical_volume_configuration" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (LogicalVolumeConfiguration,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::LogicalVolumeConfiguration"/>
+    </arg>
+    <arg name="logical_volume" type="ay" direction="out">
+      <tp:docstring>
+        A serialized protobuf (LogicalVolume,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::LogicalVolume"/>
+    </arg>
+  </method>
+  <method name="RemoveLogicalVolume">
+    <tp:docstring>
+      Removes the specified logical volume.
+    </tp:docstring>
+    <arg name="logical_volume" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (LogicalVolume,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::LogicalVolume"/>
+    </arg>
+  </method>
+  <method name="ToggleLogicalVolumeActivation">
+    <tp:docstring>
+      Toggles activation of the specified logical volume.
+    </tp:docstring>
+    <arg name="logical_volume" type="ay" direction="in">
+      <tp:docstring>
+        A serialized protobuf (LogicalVolume,
+        platform2/system_api/dbus/lvmd/lvmd.proto).
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                  value="lvmd::LogicalVolume"/>
+    </arg>
+    <arg name="activate" type="b" direction="in">
+      <tp:docstring>
+        True to activate, false to deactivate.
+      </tp:docstring>
+    </arg>
+  </method>
+</interface>
+</node>

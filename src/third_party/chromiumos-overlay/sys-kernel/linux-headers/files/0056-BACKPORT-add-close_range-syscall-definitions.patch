@@ -1,0 +1,97 @@
+From a96a82094e3993e09a3c98f9f689a70c178655b0 Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Wed, 17 Aug 2022 17:38:12 +0300
+Subject: [PATCH] BACKPORT: add close_range syscall definitions
+
+This is a squash + backport of the following upstream
+commit which added definitons for the new close_range
+syscall introduced in v5.9:
+
+commit 9b4feb630e8e ("arch: wire-up close_range()")
+
+This backport is required because a new version of
+glibc will start probing for this syscall existence
+on kernels which support it. Minijail will need to be
+rebuilt against the new headers to allow glibc calls.
+---
+ arch/arm/tools/syscall.tbl             | 1 +
+ arch/arm64/include/asm/unistd32.h      | 2 ++
+ arch/x86/entry/syscalls/syscall_32.tbl | 1 +
+ arch/x86/entry/syscalls/syscall_64.tbl | 1 +
+ include/linux/syscalls.h               | 2 ++
+ include/uapi/asm-generic/unistd.h      | 4 +++-
+ 6 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm/tools/syscall.tbl b/arch/arm/tools/syscall.tbl
+index fbc74b5fa3ed..738acd5c28cd 100644
+--- a/arch/arm/tools/syscall.tbl
++++ b/arch/arm/tools/syscall.tbl
+@@ -413,4 +413,5 @@
+ 423	common	sched_rr_get_interval_time64	sys_sched_rr_get_interval
+ 425	common	io_uring_setup		sys_io_uring_setup
+ 426	common	io_uring_enter		sys_io_uring_enter
++436	common	close_range		sys_close_range
+ 439	common	faccessat2			sys_faccessat2
+diff --git a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+index 0fdc7ef8a776..bbdee4e3f8b4 100644
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -819,5 +819,7 @@ __SYSCALL(__NR_pkey_free, sys_pkey_free)
+ __SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
+ #define __NR_io_uring_enter 426
+ __SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
++#define __NR_close_range 436
++__SYSCALL(__NR_close_range, sys_close_range)
+ #define __NR_faccessat2 439
+ __SYSCALL(__NR_faccessat2, sys_faccessat2)
+diff --git a/arch/x86/entry/syscalls/syscall_32.tbl b/arch/x86/entry/syscalls/syscall_32.tbl
+index 0b9256526c4e..b53f967349dd 100644
+--- a/arch/x86/entry/syscalls/syscall_32.tbl
++++ b/arch/x86/entry/syscalls/syscall_32.tbl
+@@ -392,4 +392,5 @@
+ 423	i386	sched_rr_get_interval_time64	sys_sched_rr_get_interval	__ia32_sys_sched_rr_get_interval
+ 425	i386	io_uring_setup		sys_io_uring_setup		__ia32_sys_io_uring_setup
+ 426	i386	io_uring_enter		sys_io_uring_enter		__ia32_sys_io_uring_enter
++436	i386	close_range		sys_close_range
+ 439	i386	faccessat2		sys_faccessat2
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index 92472653bcd3..2198c0e7167f 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -340,6 +340,7 @@
+ 334	common	rseq			sys_rseq
+ 425	common	io_uring_setup		__x64_sys_io_uring_setup
+ 426	common	io_uring_enter		__x64_sys_io_uring_enter
++436	common	close_range		sys_close_range
+ 439	common	faccessat2		sys_faccessat2
+ #
+ # x32-specific system call numbers start at 512 to avoid cache impact
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index 2336c0985c41..8c0bc21c2df2 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -554,6 +554,8 @@ asmlinkage long sys_creat(const char __user *pathname, umode_t mode);
+ asmlinkage long sys_open(const char __user *filename,
+ 				int flags, umode_t mode);
+ asmlinkage long sys_close(unsigned int fd);
++asmlinkage long sys_close_range(unsigned int fd, unsigned int max_fd,
++				unsigned int flags);
+ asmlinkage long sys_access(const char __user *filename, int mode);
+ asmlinkage long sys_vhangup(void);
+ asmlinkage long sys_chown(const char __user *filename,
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index 96ef821fb044..dd0d637aea62 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -734,6 +734,7 @@ __SYSCALL(__NR_pkey_free,     sys_pkey_free)
+ __SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
+ #define __NR_io_uring_enter 426
+ __SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
+-
++#define __NR_close_range 436
++__SYSCALL(__NR_close_range, sys_close_range)
+ #define __NR_faccessat2 439
+ __SYSCALL(__NR_faccessat2, sys_faccessat2)
+-- 
+2.37.1
+

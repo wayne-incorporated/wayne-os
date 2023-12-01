@@ -1,0 +1,135 @@
+Ensure that context functions overridden in ARC Keymaster do not change
+underneath us by upstream. If they do this patch will fail.
+
+This is not meant to be actually applied, it's just used to make upstream
+changes obvious.
+
+diff --git a/contexts/pure_soft_keymaster_context.cpp b/contexts/pure_soft_keymaster_context.cpp
+index b4d1fb7..ed5fdca 100644
+--- a/contexts/pure_soft_keymaster_context.cpp
++++ b/contexts/pure_soft_keymaster_context.cpp
+@@ -105,24 +105,6 @@ OperationFactory* PureSoftKeymasterContext::GetOperationFactory(keymaster_algori
+     return key_factory->GetOperationFactory(purpose);
+ }
+ 
+-keymaster_error_t PureSoftKeymasterContext::CreateKeyBlob(const AuthorizationSet& key_description,
+-                                                      const keymaster_key_origin_t origin,
+-                                                      const KeymasterKeyBlob& key_material,
+-                                                      KeymasterKeyBlob* blob,
+-                                                      AuthorizationSet* hw_enforced,
+-                                                      AuthorizationSet* sw_enforced) const {
+-    keymaster_error_t error = SetKeyBlobAuthorizations(key_description, origin, os_version_,
+-                                                       os_patchlevel_, hw_enforced, sw_enforced);
+-    if (error != KM_ERROR_OK)
+-        return error;
+-
+-    AuthorizationSet hidden;
+-    error = BuildHiddenAuthorizations(key_description, &hidden, softwareRootOfTrust);
+-    if (error != KM_ERROR_OK)
+-        return error;
+-
+-    return SerializeIntegrityAssuredBlob(key_material, hidden, *hw_enforced, *sw_enforced, blob);
+-}
+ 
+ keymaster_error_t PureSoftKeymasterContext::UpgradeKeyBlob(const KeymasterKeyBlob& key_to_upgrade,
+                                                        const AuthorizationSet& upgrade_params,
+@@ -135,74 +117,6 @@ keymaster_error_t PureSoftKeymasterContext::UpgradeKeyBlob(const KeymasterKeyBlo
+     return UpgradeSoftKeyBlob(key, os_version_, os_patchlevel_, upgrade_params, upgraded_key);
+ }
+ 
+-keymaster_error_t PureSoftKeymasterContext::ParseKeyBlob(const KeymasterKeyBlob& blob,
+-                                                         const AuthorizationSet& additional_params,
+-                                                         UniquePtr<Key>* key) const {
+-    // This is a little bit complicated.
+-    //
+-    // The SoftKeymasterContext has to handle a lot of different kinds of key blobs.
+-    //
+-    // 1.  New keymaster1 software key blobs.  These are integrity-assured but not encrypted.  The
+-    //     raw key material and auth sets should be extracted and returned.  This is the kind
+-    //     produced by this context when the KeyFactory doesn't use keymaster0 to back the keys.
+-    //
+-    // 2.  Old keymaster1 software key blobs.  These are OCB-encrypted with an all-zero master key.
+-    //     They should be decrypted and the key material and auth sets extracted and returned.
+-    //
+-    // 3.  Old keymaster0 software key blobs.  These are raw key material with a small header tacked
+-    //     on the front.  They don't have auth sets, so reasonable defaults are generated and
+-    //     returned along with the raw key material.
+-    //
+-    // Determining what kind of blob has arrived is somewhat tricky.  What helps is that
+-    // integrity-assured and OCB-encrypted blobs are self-consistent and effectively impossible to
+-    // parse as anything else.  Old keymaster0 software key blobs have a header.  It's reasonably
+-    // unlikely that hardware keys would have the same header.  So anything that is neither
+-    // integrity-assured nor OCB-encrypted and lacks the old software key header is assumed to be
+-    // keymaster0 hardware.
+-
+-    AuthorizationSet hw_enforced;
+-    AuthorizationSet sw_enforced;
+-    KeymasterKeyBlob key_material;
+-    keymaster_error_t error;
+-
+-    auto constructKey = [&, this] () mutable -> keymaster_error_t {
+-        // GetKeyFactory
+-        if (error != KM_ERROR_OK) return error;
+-        keymaster_algorithm_t algorithm;
+-        if (!hw_enforced.GetTagValue(TAG_ALGORITHM, &algorithm) &&
+-            !sw_enforced.GetTagValue(TAG_ALGORITHM, &algorithm)) {
+-            return KM_ERROR_INVALID_ARGUMENT;
+-        }
+-        auto factory = GetKeyFactory(algorithm);
+-        return factory->LoadKey(move(key_material), additional_params, move(hw_enforced),
+-                                move(sw_enforced), key);
+-    };
+-
+-    AuthorizationSet hidden;
+-    error = BuildHiddenAuthorizations(additional_params, &hidden, softwareRootOfTrust);
+-    if (error != KM_ERROR_OK)
+-        return error;
+-
+-    // Assume it's an integrity-assured blob (new software-only blob, or new keymaster0-backed
+-    // blob).
+-    error = DeserializeIntegrityAssuredBlob(blob, hidden, &key_material, &hw_enforced, &sw_enforced);
+-    if (error != KM_ERROR_INVALID_KEY_BLOB)
+-        return constructKey();
+-
+-    // Wasn't an integrity-assured blob.  Maybe it's an OCB-encrypted blob.
+-    error = ParseOcbAuthEncryptedBlob(blob, hidden, &key_material, &hw_enforced, &sw_enforced);
+-    if (error == KM_ERROR_OK)
+-        LOG_D("Parsed an old keymaster1 software key", 0);
+-    if (error != KM_ERROR_INVALID_KEY_BLOB)
+-        return constructKey();
+-
+-    // Wasn't an OCB-encrypted blob.  Maybe it's an old softkeymaster blob.
+-    error = ParseOldSoftkeymasterBlob(blob, &key_material, &hw_enforced, &sw_enforced);
+-    if (error == KM_ERROR_OK)
+-        LOG_D("Parsed an old sofkeymaster key", 0);
+-
+-    return constructKey();
+-}
+ 
+ keymaster_error_t PureSoftKeymasterContext::DeleteKey(const KeymasterKeyBlob& /* blob */) const {
+     // Nothing to do for software-only contexts.
+diff --git a/include/keymaster/contexts/pure_soft_keymaster_context.h b/include/keymaster/contexts/pure_soft_keymaster_context.h
+index 3a1156d..ed2f92b 100644
+--- a/include/keymaster/contexts/pure_soft_keymaster_context.h
++++ b/include/keymaster/contexts/pure_soft_keymaster_context.h
+@@ -59,9 +59,6 @@ class PureSoftKeymasterContext: public KeymasterContext,
+     keymaster_error_t UpgradeKeyBlob(const KeymasterKeyBlob& key_to_upgrade,
+                                      const AuthorizationSet& upgrade_params,
+                                      KeymasterKeyBlob* upgraded_key) const override;
+-    keymaster_error_t ParseKeyBlob(const KeymasterKeyBlob& blob,
+-                                   const AuthorizationSet& additional_params,
+-                                   UniquePtr<Key>* key) const override;
+     keymaster_error_t DeleteKey(const KeymasterKeyBlob& blob) const override;
+     keymaster_error_t DeleteAllKeys() const override;
+     keymaster_error_t AddRngEntropy(const uint8_t* buf, size_t length) const override;
+@@ -79,10 +76,6 @@ class PureSoftKeymasterContext: public KeymasterContext,
+     /*********************************************************************************************
+      * Implement SoftwareKeyBlobMaker
+      */
+-    keymaster_error_t CreateKeyBlob(const AuthorizationSet& auths, keymaster_key_origin_t origin,
+-                                    const KeymasterKeyBlob& key_material, KeymasterKeyBlob* blob,
+-                                    AuthorizationSet* hw_enforced,
+-                                    AuthorizationSet* sw_enforced) const override;
+ 
+     keymaster_error_t
+     UnwrapKey(const KeymasterKeyBlob& wrapped_key_blob, const KeymasterKeyBlob& wrapping_key_blob,

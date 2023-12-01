@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,8 @@
 #include <string>
 #include <vector>
 
-#include <base/callback.h>
 #include <base/files/file_path.h>
-#include <base/macros.h>
+#include <base/functional/callback.h>
 
 namespace login_manager {
 
@@ -29,11 +28,11 @@ class SystemUtils;
 class DeviceIdentifierGenerator {
  public:
   // Callback type for state key generation requests.
-  typedef base::Callback<void(const std::vector<std::vector<uint8_t>>&)>
+  typedef base::OnceCallback<void(const std::vector<std::vector<uint8_t>>&)>
       StateKeyCallback;
 
   // Callback type for PSM derived device active secret generation request.
-  typedef base::Callback<void(const std::string&)>
+  typedef base::OnceCallback<void(const std::string&)>
       PsmDeviceActiveSecretCallback;
 
   // The power of two determining the size of the time quanta for device state
@@ -88,12 +87,12 @@ class DeviceIdentifierGenerator {
   // waiting for machine info to become available. If the state keys can't be
   // computed due to missing machine identifiers, |callback| will be invoked
   // with an empty vector.
-  virtual void RequestStateKeys(const StateKeyCallback& callback);
+  virtual void RequestStateKeys(StateKeyCallback callback);
 
   // Request the derived device secret. Using hmac to hash the device
   // stable secret and the derived device secret is returned via |callback|.
   virtual void RequestPsmDeviceActiveSecret(
-      const PsmDeviceActiveSecretCallback& callback);
+      PsmDeviceActiveSecretCallback callback);
 
  private:
   // Computes the keys and stores them in |state_keys|. In case of error,

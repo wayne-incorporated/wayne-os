@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+from __future__ import print_function
+
+import sys
+
+import dbus
+import flimflam
+
+if len(sys.argv) < 2:
+    print('Usage: %s <device | interface>' % (sys.argv[0]))
+    sys.exit(1)
+
+(_, name) = sys.argv
+
+flim = flimflam.FlimFlam(dbus.SystemBus())
+
+device = flim.FindElementByNameSubstring('Device', name)
+if device is None:
+    device = flim.FindElementByPropertySubstring('Device', 'Interface', name)
+if device is None:
+    print('No such device or interface %s' % name)
+    sys.exit(1)
+
+properties = device.GetProperties()
+for path in properties['IPConfigs']:
+    ipconfig = flim.GetObjectInterface('IPConfig', path)
+    ipconfig_properties = ipconfig.GetProperties()
+
+    print('[ %s ]' % (ipconfig.object_path))
+
+    for key in ipconfig_properties.keys():
+        print('        %s = %s' %
+              (key, flimflam.convert_dbus_value(ipconfig_properties[key], 8)))
+
+print('')

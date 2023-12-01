@@ -1,0 +1,18 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# udev rules to start firmware update for NVME SSD: Liteon
+SUBSYSTEM=="nvme", \
+ATTRS{vendor}=="0x14a4|0x1e95", \
+ATTR{firmware_rev}!="25301112", \
+ATTR{model}=="CL4-3D256-Q11*", \
+ACTION=="add", \
+RUN+="/sbin/initctl emit fwupdtool-update PLUGIN=nvme GUID=690e40e2-2141-4710-93a6-8a2ba6890c99"
+
+SUBSYSTEM=="nvme", \
+ATTRS{vendor}=="0x14a4|0x1e95", \
+ATTR{firmware_rev}!="25301111", \
+ATTR{model}=="CL4-3D512-Q11*", \
+ACTION=="add", \
+RUN+="/sbin/initctl emit fwupdtool-update PLUGIN=nvme GUID=690e40e2-2141-4710-93a6-8a2ba6890c99"

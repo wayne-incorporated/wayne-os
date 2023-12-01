@@ -1,0 +1,18 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# We give at least a little bit of trust to the SD driver and
+# the USB driver by allowing them to run in non-strict IOMMU
+# mode. This gives a nice performance boost. Option is only there
+# on kernels v5.15+
+# For history: b/162549949, crrev.com/c/2986602, crrev.com/c/2991743
+ACTION=="add", SUBSYSTEM=="platform", \
+  DEVPATH=="/devices/platform/soc@0/7c4000.sdhci", \
+  ATTR{iommu_group/type}="DMA-FQ"
+ACTION=="add", SUBSYSTEM=="platform", \
+  DEVPATH=="/devices/platform/soc@0/8804000.sdhci", \
+  ATTR{iommu_group/type}="DMA-FQ"
+ACTION=="add", SUBSYSTEM=="platform", \
+  DEVPATH=="/devices/platform/soc@0/a6f8800.usb/a600000.dwc3", \
+  ATTR{iommu_group/type}="DMA-FQ"

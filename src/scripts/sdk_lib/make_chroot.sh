@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 # One can enter the chrooted environment for work by running enter_chroot.sh.
 
 SCRIPT_ROOT=$(readlink -f $(dirname "$0")/..)
+# shellcheck source=../common.sh
 . "${SCRIPT_ROOT}/common.sh" || exit 1
 
 ENTER_CHROOT=$(readlink -f $(dirname "$0")/enter_chroot.sh)
@@ -35,6 +36,8 @@ assert_root_user
 
 DEFINE_string chroot "$DEFAULT_CHROOT_DIR" \
   "Destination dir for the chroot environment."
+DEFINE_boolean skip_chroot_upgrade "${FLAGS_FALSE}" \
+  "Skip automatic SDK/toolchain upgrade. Will eventually break as ToT moves on."
 DEFINE_boolean usepkg $FLAGS_TRUE "Use binary packages to bootstrap."
 DEFINE_integer jobs -1 "How many packages to build in parallel at maximum."
 DEFINE_string cache_dir "" "Directory to store caches within."
@@ -57,6 +60,7 @@ switch_to_strict_mode
 
 [[ -z "${FLAGS_cache_dir}" ]] && die "--cache_dir is required"
 
+# shellcheck source=make_conf_util.sh
 . "${SCRIPT_ROOT}"/sdk_lib/make_conf_util.sh
 
 USEPKG=""
@@ -81,8 +85,8 @@ ENTER_CHROOT_ARGS=(
 # Invoke enter_chroot.  This can only be used after sudo has been installed.
 enter_chroot() {
   echo "$(date +%H:%M:%S) [enter_chroot] $*"
-  "$ENTER_CHROOT" --cache_dir "${FLAGS_cache_dir}" --chroot "$FLAGS_chroot" \
-    -- "${ENTER_CHROOT_ARGS[@]}" "$@"
+  "${ENTER_CHROOT}" --cache_dir "${FLAGS_cache_dir}" --chroot \
+    "${FLAGS_chroot}" --nopivot_root -- "${ENTER_CHROOT_ARGS[@]}" "$@"
 }
 
 # Invoke enter_chroot running the command as root, and w/out sudo.
@@ -90,8 +94,8 @@ enter_chroot() {
 early_env=()
 early_enter_chroot() {
   echo "$(date +%H:%M:%S) [early_enter_chroot] $*"
-  "$ENTER_CHROOT" --chroot "$FLAGS_chroot" --early_make_chroot \
-    --cache_dir "${FLAGS_cache_dir}" \
+  "${ENTER_CHROOT}" --chroot "${FLAGS_chroot}" --early_make_chroot \
+    --cache_dir "${FLAGS_cache_dir}" --nopivot_root \
     -- "${ENTER_CHROOT_ARGS[@]}" "${early_env[@]}" "$@"
 }
 
@@ -117,7 +121,6 @@ user_append() {
 init_setup () {
    info "Running init_setup()..."
    mkdir -p -m 755 "${FLAGS_chroot}/usr" \
-     "${FLAGS_chroot}${OVERLAYS_ROOT}" \
      "${FLAGS_chroot}"/"${CROSSDEV_OVERLAY}/metadata"
    # Newer portage complains about bare overlays.  Create the file that crossdev
    # will also create later on.
@@ -129,12 +132,6 @@ repo-name = crossdev
 use-manifests = true
 thin-manifests = true
 EOF
-   ln -sf "${CHROOT_TRUNK_DIR}/src/third_party/eclass-overlay" \
-     "${FLAGS_chroot}"/"${ECLASS_OVERLAY}"
-   ln -sf "${CHROOT_TRUNK_DIR}/src/third_party/chromiumos-overlay" \
-     "${FLAGS_chroot}"/"${CHROOT_OVERLAY}"
-   ln -sf "${CHROOT_TRUNK_DIR}/src/third_party/portage-stable" \
-     "${FLAGS_chroot}"/"${PORTAGE_STABLE_OVERLAY}"
 
    # Use the standardized upgrade script to setup proxied vars.
    load_environment_whitelist
@@ -145,11 +142,6 @@ EOF
    # Fix bad group for some.
    chown -R root:root "${FLAGS_chroot}/etc/"sudoers*
 
-   info "Setting up hosts/resolv..."
-   # Copy config from outside chroot into chroot.
-   cp /etc/{hosts,resolv.conf} "$FLAGS_chroot/etc/"
-   chmod 0644 "$FLAGS_chroot"/etc/{hosts,resolv.conf}
-
    # Setup host make.conf. This includes any overlay that we may be using
    # and a pointer to pre-built packages.
    # TODO: This should really be part of a profile in the portage.
@@ -158,7 +150,9 @@ EOF
    mkdir -p "${FLAGS_chroot}/etc/portage"
    ln -sf "${CHROOT_CONFIG}/make.conf.amd64-host" \
      "${FLAGS_chroot}/etc/make.conf"
-   ln -sf "${CHROOT_OVERLAY}/profiles/default/linux/amd64/10.0/sdk" \
+   local cros_overlay="${CHROOT_TRUNK_DIR}/src/third_party/chromiumos-overlay"
+   ln -sf \
+     "${cros_overlay}/profiles/default/linux/amd64/10.0/sdk" \
      "${FLAGS_chroot}/etc/portage/make.profile"
 
    # Create make.conf.user .
@@ -193,47 +187,10 @@ EOF
    # these are defined as w/in the chroot.
    bare_chroot chown "${SUDO_USER}:portage" /var/cache/chromeos-chrome
 
-   # Add chromite/bin and depot_tools into the path globally; note that the
-   # chromite wrapper itself might also be found in depot_tools.
-   # We rely on 'env-update' getting called below.
-   target="${FLAGS_chroot}/etc/env.d/99chromiumos"
-   cat <<EOF > "${target}"
-PATH="${CHROOT_TRUNK_DIR}/chromite/bin:${DEPOT_TOOLS_DIR}"
-CROS_WORKON_SRCROOT="${CHROOT_TRUNK_DIR}"
-PORTAGE_USERNAME="${SUDO_USER}"
-EOF
-
    # TODO(zbehan): Configure stuff that is usually configured in postinst's,
    # but wasn't. Fix the postinst's.
    info "Running post-inst configuration hacks"
    early_enter_chroot env-update
-
-   # This is basically a sanity check of our chroot.  If any of these
-   # don't exist, then either bind mounts have failed, an invocation
-   # from above is broke, or some assumption about the stage3 is no longer
-   # true.
-   early_enter_chroot ls -l /etc/make.conf /etc/portage/make.profile \
-     /usr/local/portage/chromiumos/profiles/default/linux/amd64/10.0
-
-   target="${FLAGS_chroot}/etc/profile.d"
-   mkdir -p "${target}"
-   ln -sfT \
-     "/mnt/host/source/chromite/sdk/etc/profile.d/50-chromiumos-niceties.sh" \
-     "${target}/50-chromiumos-niceties.sh"
-
-   # Select a small set of locales for the user if they haven't done so
-   # already.  This makes glibc upgrades cheap by only generating a small
-   # set of locales.  The ones listed here are basically for the buildbots
-   # which always assume these are available.  This works in conjunction
-   # with `cros_sdk --enter`.
-   # http://crosbug.com/20378
-   local localegen="$FLAGS_chroot/etc/locale.gen"
-   if ! grep -q -v -e '^#' -e '^$' "${localegen}" ; then
-     cat <<EOF >> "${localegen}"
-en_US ISO-8859-1
-en_US.UTF-8 UTF-8
-EOF
-   fi
 }
 
 CHROOT_TRUNK="${CHROOT_TRUNK_DIR}"
@@ -242,10 +199,7 @@ OVERLAY="${SRC_ROOT}/third_party/chromiumos-overlay"
 CONFIG_DIR="${OVERLAY}/chromeos/config"
 CHROOT_CONFIG="${CHROOT_TRUNK_DIR}/src/third_party/chromiumos-overlay/chromeos/config"
 OVERLAYS_ROOT="/usr/local/portage"
-ECLASS_OVERLAY="${OVERLAYS_ROOT}/eclass-overlay"
-PORTAGE_STABLE_OVERLAY="${OVERLAYS_ROOT}/stable"
 CROSSDEV_OVERLAY="${OVERLAYS_ROOT}/crossdev"
-CHROOT_OVERLAY="${OVERLAYS_ROOT}/chromiumos"
 
 # Pass proxy variables into the environment.
 for type in http ftp all; do
@@ -273,9 +227,10 @@ if [[ "${FLAGS_eclean}" -eq "${FLAGS_TRUE}" ]]; then
     eclean -e <(get_eclean_exclusions) packages'
 fi
 
-info "Updating portage"
-early_enter_chroot emerge -uNv --quiet --ignore-world portage
-
+if [[ "${FLAGS_skip_chroot_upgrade}" -eq "${FLAGS_FALSE}" ]]; then
+  info "Updating portage"
+  early_enter_chroot emerge -uNv --quiet --ignore-world portage
+fi
 # Add chromite into python path.
 for python_path in "${FLAGS_chroot}/usr/lib/"python*.*; do
   python_path+="/site-packages"
@@ -283,50 +238,54 @@ for python_path in "${FLAGS_chroot}/usr/lib/"python*.*; do
   sudo ln -s -fT "${CHROOT_TRUNK_DIR}"/chromite "${python_path}"/chromite
 done
 
-# Now that many of the fundamental packages should be in a good state, update
-# the host toolchain.  We have to do this step by step ourselves to avoid races
-# when building tools that are actively used (e.g. updating the assembler while
-# also compiling other packages that use the assembler).
-# https://crbug.com/715788
-info "Updating host toolchain"
-TOOLCHAIN_ARGS=( --deleteold )
-if [[ "${FLAGS_usepkg}" == "${FLAGS_FALSE}" ]]; then
-  TOOLCHAIN_ARGS+=( --nousepkg )
-fi
-# First the low level compiler tools.  These should be fairly independent of
-# the C library, so we can do it first.
-early_enter_chroot ${EMERGE_CMD} -uNv ${USEPKG} ${USEPKGONLY} ${EMERGE_JOBS} \
-  sys-devel/binutils
-# Next the C library.  The compilers often use newer features, but the C library
-# is often designed to work with older compilers.
-early_enter_chroot ${EMERGE_CMD} -uNv ${USEPKG} ${USEPKGONLY} ${EMERGE_JOBS} \
-  sys-kernel/linux-headers sys-libs/glibc
-# Now we can let the rest of the compiler packages build in parallel as they
-# don't generally rely on each other.
-# Note: early_enter_chroot executes as root.
-early_enter_chroot "${CHROOT_TRUNK_DIR}/chromite/bin/cros_setup_toolchains" \
-    --hostonly "${TOOLCHAIN_ARGS[@]}"
+if [[ "${FLAGS_skip_chroot_upgrade}" -eq "${FLAGS_FALSE}" ]]; then
+  # Now that many of the fundamental packages should be in a good state, update
+  # the host toolchain. We have to do this step by step ourselves to avoid
+  # races when building tools that are actively used (e.g. updating the
+  # assembler while also compiling other packages that use the assembler).
+  # https://crbug.com/715788
+  info "Updating host toolchain"
+  TOOLCHAIN_ARGS=( --deleteold )
+  if [[ "${FLAGS_usepkg}" == "${FLAGS_FALSE}" ]]; then
+    TOOLCHAIN_ARGS+=( --nousepkg )
+  fi
+  # First the low level compiler tools. These should be fairly independent of
+  # the C library, so we can do it first.
+  early_enter_chroot ${EMERGE_CMD} -uNv ${USEPKG} ${USEPKGONLY} ${EMERGE_JOBS} \
+    sys-devel/binutils
+  # Next the C library. The compilers often use newer features,
+  # but the C library is often designed to work with older compilers.
+  early_enter_chroot ${EMERGE_CMD} -uNv ${USEPKG} ${USEPKGONLY} ${EMERGE_JOBS} \
+    sys-kernel/linux-headers sys-libs/glibc
 
-info "Updating Perl modules"
-early_enter_chroot \
-  "${CHROOT_TRUNK_DIR}/src/scripts/build_library/perl_rebuild.sh"
+  # Next libcxx and libunwind. This is required due to the migration to LLVM
+  # runtime builds.
+  early_enter_chroot ${EMERGE_CMD} -uN --nodeps ${USEPKG} \
+    sys-libs/llvm-libunwind sys-libs/libcxx
 
-# If we're creating a new chroot, we also want to set it to the latest version.
-enter_chroot run_chroot_version_hooks --init-latest
+  # Now we can let the rest of the compiler packages build in parallel as they
+  # don't generally rely on each other.
+  # Note: early_enter_chroot executes as root.
+  early_enter_chroot "${CHROOT_TRUNK_DIR}/chromite/bin/cros_setup_toolchains" \
+      --hostonly "${TOOLCHAIN_ARGS[@]}"
 
-# Update chroot.
-# Skip toolchain update because it already happened above, and the chroot is
-# not ready to emerge all cross toolchains.
-UPDATE_ARGS=( --skip_toolchain_update --noeclean )
-if [[ "${FLAGS_usepkg}" == "${FLAGS_TRUE}" ]]; then
-  UPDATE_ARGS+=( --usepkg )
+  # Update chroot.
+  # Skip toolchain update because it already happened above, and the chroot is
+  # not ready to emerge all cross toolchains.
+  UPDATE_ARGS=( --skip_toolchain_update --noeclean )
+  if [[ "${FLAGS_usepkg}" == "${FLAGS_TRUE}" ]]; then
+    UPDATE_ARGS+=( --usepkg )
+  else
+    UPDATE_ARGS+=( --nousepkg )
+  fi
+  if [[ "${FLAGS_jobs}" -ne -1 ]]; then
+    UPDATE_ARGS+=( --jobs="${FLAGS_jobs}" )
+  fi
+  enter_chroot "${CHROOT_TRUNK_DIR}/src/scripts/update_chroot" \
+    "${UPDATE_ARGS[@]}"
 else
-  UPDATE_ARGS+=( --nousepkg )
+  warn "SDK and toolchain update were skipped. It will eventually stop working."
 fi
-if [[ "${FLAGS_jobs}" -ne -1 ]]; then
-  UPDATE_ARGS+=( --jobs="${FLAGS_jobs}" )
-fi
-enter_chroot "${CHROOT_TRUNK_DIR}/src/scripts/update_chroot" "${UPDATE_ARGS[@]}"
 
 # The java-config package atm does not support $ROOT.  Select a default
 # VM ourselves until that gets fixed upstream.

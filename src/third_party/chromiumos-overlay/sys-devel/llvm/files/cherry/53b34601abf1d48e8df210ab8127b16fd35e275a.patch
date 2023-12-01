@@ -1,0 +1,81 @@
+commit 53b34601abf1d48e8df210ab8127b16fd35e275a
+Author: Fangrui Song <i@maskray.me>
+Date:   Wed Jan 13 21:01:53 2021 -0800
+
+    [Driver] -gsplit-dwarf: Produce .dwo regardless of -gN for -fthinlto-index=
+    
+    -g is an IR generation option while -gsplit-dwarf is an object file generation option.
+    For -gsplit-dwarf in the backend phase of a distributed ThinLTO (-fthinlto-index=) which does object file generation and no IR generation, -g should not be needed.
+    
+    This patch makes `-fthinlto-index= -gsplit-dwarf` emit .dwo even in the absence of -g.
+    This should fix https://crbug.com/1158215 after D80391.
+    
+    ```
+    // Distributed ThinLTO usage
+    clang -g -O2 -c -flto=thin -fthin-link-bitcode=a.indexing.o a.c
+    clang -g -O2 -c -flto=thin -fthin-link-bitcode=b.indexing.o b.c
+    clang -fuse-ld=lld -Wl,--thinlto-index-only=a.rsp -Wl,--thinlto-prefix-replace=';lto/' -Wl,--thinlto-object-suffix-replace='.indexing.o;.o' a.indexing.o b.indexing.o
+    clang -gsplit-dwarf -O2 -c -fthinlto-index=lto/a.o.thinlto.bc a.o -o lto/a.o
+    clang -gsplit-dwarf -O2 -c -fthinlto-index=lto/b.o.thinlto.bc b.o -o lto/b.o
+    clang -fuse-ld=lld @a.rsp -o exe
+    ```
+    
+    Note: for implicit regular/Thin LTO, .dwo emission works without this patch:
+    `clang -flto=thin -gsplit-dwarf a.o b.o` passes `-plugin-opt=dwo_dir=` to the linker.
+    The linker forwards the option to LTO. LTOBackend.cpp emits `$dwo_dir/[01234].dwo`.
+    
+    Reviewed By: dblaikie
+    
+    Differential Revision: https://reviews.llvm.org/D94647
+---
+ clang/lib/Driver/ToolChains/Clang.cpp | 10 ++++++++--
+ clang/test/Driver/split-debug.c       |  8 ++++++++
+ 2 files changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index d83835a0f7b8..0c821b85c229 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -3754,7 +3754,12 @@ static void RenderDebugOptions(const ToolChain &TC, const Driver &D,
+       Args.hasFlag(options::OPT_fsplit_dwarf_inlining,
+                    options::OPT_fno_split_dwarf_inlining, false);
+ 
+-  if (const Arg *A = Args.getLastArg(options::OPT_g_Group)) {
++  // Normally -gsplit-dwarf is only useful with -gN. For -gsplit-dwarf in the
++  // backend phase of a distributed ThinLTO which does object file generation
++  // and no IR generation, -gN should not be needed. So allow -gsplit-dwarf with
++  // either -gN or -fthinlto-index=.
++  if (Args.hasArg(options::OPT_g_Group) ||
++      Args.hasArg(options::OPT_fthinlto_index_EQ)) {
+     Arg *SplitDWARFArg;
+     DwarfFission = getDebugFissionKind(D, Args, SplitDWARFArg);
+     if (DwarfFission != DwarfFissionKind::None &&
+@@ -3762,7 +3767,8 @@ static void RenderDebugOptions(const ToolChain &TC, const Driver &D,
+       DwarfFission = DwarfFissionKind::None;
+       SplitDWARFInlining = false;
+     }
+-
++  }
++  if (const Arg *A = Args.getLastArg(options::OPT_g_Group)) {
+     DebugInfoKind = codegenoptions::LimitedDebugInfo;
+ 
+     // If the last option explicitly specified a debug-info level, use it.
+diff --git a/clang/test/Driver/split-debug.c b/clang/test/Driver/split-debug.c
+index de1258dcb13c..2ce4ca980c3f 100644
+--- a/clang/test/Driver/split-debug.c
++++ b/clang/test/Driver/split-debug.c
+@@ -24,6 +24,14 @@
+ /// -gsplit-dwarf is a no-op if no -g is specified.
+ // RUN: %clang -### -c -target x86_64 -gsplit-dwarf %s 2>&1 | FileCheck %s --check-prefix=G0
+ 
++/// ... unless -fthinlto-index= is specified.
++// RUN: echo > %t.bc
++// RUN: %clang -### -c -target x86_64 -fthinlto-index=dummy -gsplit-dwarf %t.bc 2>&1 | FileCheck %s --check-prefix=THINLTO
++
++// THINLTO-NOT:  "-debug-info-kind=
++// THINLTO:      "-ggnu-pubnames"
++// THINLTO-SAME: "-split-dwarf-file" "{{.*}}.dwo" "-split-dwarf-output" "{{.*}}.dwo"
++
+ /// -gno-split-dwarf disables debug fission.
+ // RUN: %clang -### -c -target x86_64 -gsplit-dwarf -g -gno-split-dwarf %s 2>&1 | FileCheck %s --check-prefix=NOSPLIT
+ // RUN: %clang -### -c -target x86_64 -gsplit-dwarf=single -g -gno-split-dwarf %s 2>&1 | FileCheck %s --check-prefix=NOSPLIT

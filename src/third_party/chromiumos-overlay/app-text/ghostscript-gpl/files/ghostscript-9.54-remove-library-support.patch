@@ -1,0 +1,72 @@
+From aac3e38bfc48987a242ee8ff21aa1487260ed618 Mon Sep 17 00:00:00 2001
+From: Sean Kau <skau@chromium.org>
+Date: Wed, 4 Aug 2021 10:09:54 -0700
+Subject: [PATCH 09/10] Disallow loading of Postscript libraries
+
+This removes handling of the GS_LIB environment variable and the
+-I command line flag for loading libararies.
+---
+ psi/imainarg.c | 38 +-------------------------------------
+ 1 file changed, 1 insertion(+), 37 deletions(-)
+
+diff --git a/psi/imainarg.c b/psi/imainarg.c
+index 69e274402..75ec6ffa1 100644
+--- a/psi/imainarg.c
++++ b/psi/imainarg.c
+@@ -148,25 +148,6 @@ gs_main_init_with_args01(gs_main_instance * minst, int argc, char *argv[])
+     code = gs_main_init0(minst, 0, 0, 0, GS_MAX_LIB_DIRS);
+     if (code < 0)
+         return code;
+-/* This first check is not needed on VMS since GS_LIB evaluates to the same
+-   value as that returned by gs_lib_default_path.  Also, since GS_LIB is
+-   defined as a searchlist logical and getenv only returns the first entry
+-   in the searchlist, it really doesn't make sense to search that particular
+-   directory twice.
+-*/
+-#ifndef __VMS
+-    {
+-        int len = 0;
+-        int code = gp_getenv(GS_LIB, (char *)0, &len);
+-
+-        if (code < 0) {         /* key present, value doesn't fit */
+-            char *path = (char *)gs_alloc_bytes(minst->heap, len, "GS_LIB");
+-
+-            gp_getenv(GS_LIB, path, &len);      /* can't fail */
+-            minst->lib_path.env = path;
+-        }
+-    }
+-#endif /* __VMS */
+     minst->lib_path.final = gs_lib_default_path;
+     code = gs_main_set_lib_paths(minst);
+     if (code < 0)
+@@ -655,26 +636,9 @@ run_stdin:
+             }
+         case 'h':               /* print help */
+         case '?':               /* ditto */
++        case 'I':               /* -I is not supported */ 
+             print_help(minst);
+             return gs_error_Info;      /* show usage info on exit */
+-        case 'I':               /* specify search path */
+-            {
+-                const char *path;
+-
+-                if (arg[0] == 0) {
+-                    code = arg_next(pal, (const char **)&path, minst->heap);
+-                    if (code < 0)
+-                        return code;
+-                    code = gs_lib_ctx_stash_sanitized_arg(minst->heap->gs_lib_ctx, "?");
+-                    if (code < 0)
+-                        return code;
+-                } else
+-                    path = arg;
+-                if (path == NULL)
+-                    return gs_error_Fatal;
+-                gs_main_add_lib_path(minst, path);
+-            }
+-            break;
+         case 'K':               /* set malloc limit */
+             {
+                 long msize = 0;
+-- 
+2.39.1
+

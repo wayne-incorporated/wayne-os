@@ -1,0 +1,194 @@
+commit 004be4037e1e9c6092323c5c9268acb3ecf9176c
+Author: Fangrui Song <maskray@google.com>
+Date:   Thu Aug 6 12:34:16 2020 -0700
+
+    [ELF] Change tombstone values to (.debug_ranges/.debug_loc) 1 and (other .debug_*) 0
+    
+    tl;dr See D81784 for the 'tombstone value' concept. This patch changes our behavior to be almost the same as GNU ld (except that we also use 1 for .debug_loc):
+    
+    * .debug_ranges & .debug_loc: 1 (LLD<11: 0+addend; GNU ld uses 1 for .debug_ranges)
+    * .debug_*: 0 (LLD<11: 0+addend; GNU ld uses 0; future LLD: -1)
+    
+    We make the tweaks because:
+    
+    1) The new tombstone is novel and needs more time to be adopted by consumers before it's the default.
+    2) The old (gold) strategy had problems with zero-length functions - so rather than going back that, we're going to the GNU ld strategy which doesn't have that problem.
+    3) One slight tweak to (2) is to apply the .debug_ranges workaround to .debug_loc for the same reasons it applies to debug_ranges - to avoid terminating lists early.
+    
+    -----
+    
+    http://lists.llvm.org/pipermail/llvm-dev/2020-July/143482.html
+    
+    The tombstone value -1 in .debug_line caused problems to lldb (fixed by D83957;
+    will be included in 11.0.0) and breakpad (fixed by
+    https://crrev.com/c/2321300). It may potentially affects other DWARF consumers.
+    
+    For .debug_ranges & .debug_loc: 1, an argument preferring 1 (GNU ld for .debug_ranges) over -2 is that:
+    ```
+    {-1, -2}    <<< base address selection entry
+    {0, length} <<< address range
+    ```
+    may create a situation where low_pc is greater than high_pc. So we use
+    1, the GNU ld behavior for .debug_ranges
+    
+    For other .debug_* sections, there haven't been many reports. One issue is that
+    bloaty (src/dwarf.cc) can incorrectly count address ranges in .debug_ranges . To
+    reduce similar disruption, this patch changes the tombstone values to be similar to GNU ld.
+    
+    This does mean another behavior change to the default trunk behavior. Sorry
+    about it. The default trunk behavior will be similar to release/11.x while we work on a transition plan for LLD users.
+    
+    Reviewed By: dblaikie, echristo
+    
+    Differential Revision: https://reviews.llvm.org/D84825
+
+diff --git a/lld/ELF/InputSection.cpp b/lld/ELF/InputSection.cpp
+index b5b3522bd3a..17c77f66d08 100644
+--- a/lld/ELF/InputSection.cpp
++++ b/lld/ELF/InputSection.cpp
+@@ -945,14 +945,17 @@ void InputSection::relocateNonAlloc(uint8_t *buf, ArrayRef<RelTy> rels) {
+       // the folded-in function, so exclude .debug_line.
+       //
+       // For pre-DWARF-v5 .debug_loc and .debug_ranges, -1 is a reserved value
+-      // (base address selection entry), so -2 is used.
++      // (base address selection entry), use 1 (which is used by GNU ld for
++      // .debug_ranges).
++      //
++      // TODO To reduce disruption, we use 0 instead of -1 as the tombstone
++      // value. Enable -1 in a future release.
+       auto *ds = dyn_cast<Defined>(&sym);
+       if (!sym.getOutputSection() ||
+           (ds && ds->section->repl != ds->section && !isDebugLine)) {
+         // If -z dead-reloc-in-nonalloc= is specified, respect it.
+-        const uint64_t value =
+-            tombstone ? SignExtend64<bits>(*tombstone)
+-                      : (isDebugLocOrRanges ? UINT64_MAX - 1 : UINT64_MAX);
++        const uint64_t value = tombstone ? SignExtend64<bits>(*tombstone)
++                                         : (isDebugLocOrRanges ? 1 : 0);
+         target->relocateNoSym(bufLoc, type, value);
+         continue;
+       }
+diff --git a/lld/test/ELF/dead-reloc-in-nonalloc.s b/lld/test/ELF/dead-reloc-in-nonalloc.s
+index 00d3d2cbc4a..9e93a0cf32a 100644
+--- a/lld/test/ELF/dead-reloc-in-nonalloc.s
++++ b/lld/test/ELF/dead-reloc-in-nonalloc.s
+@@ -11,7 +11,7 @@
+ # RUN:   -z dead-reloc-in-nonalloc=.not_debug=0xbbbbbbbb %t.o -o - | cmp %t -
+ 
+ # COMMON:      Contents of section .debug_addr:
+-# COMMON-NEXT:  0000 [[ADDR:[0-9a-f]+]] 00000000 ffffffff ffffffff
++# COMMON-NEXT:  0000 [[ADDR:[0-9a-f]+]] 00000000 00000000 00000000
+ 
+ # AA:          Contents of section .debug_info:
+ # AA-NEXT:      0000 [[ADDR]] 00000000 aaaaaaaa 00000000
+diff --git a/lld/test/ELF/debug-dead-reloc-32.s b/lld/test/ELF/debug-dead-reloc-32.s
+index a7496798c58..b2708a744f2 100644
+--- a/lld/test/ELF/debug-dead-reloc-32.s
++++ b/lld/test/ELF/debug-dead-reloc-32.s
+@@ -8,11 +8,11 @@
+ # RUN: llvm-objdump -s %t | FileCheck %s
+ 
+ # CHECK:      Contents of section .debug_loc:
+-# CHECK-NEXT:  0000 feffffff
++# CHECK-NEXT:  0000 01000000
+ # CHECK-NEXT: Contents of section .debug_ranges:
+-# CHECK-NEXT:  0000 feffffff
++# CHECK-NEXT:  0000 01000000
+ # CHECK-NEXT: Contents of section .debug_addr:
+-# CHECK-NEXT:  0000 ffffffff
++# CHECK-NEXT:  0000 00000000
+ 
+ .section .text.1,"axe"
+   .byte 0
+@@ -24,6 +24,6 @@
+ .section .debug_ranges
+   .long .text.1+16
+ 
+-## Resolved to UINT32_C(-1), with the addend ignored.
++## Resolved to UINT32_C(0), with the addend ignored.
+ .section .debug_addr
+   .long .text.1+8
+diff --git a/lld/test/ELF/debug-dead-reloc-icf.s b/lld/test/ELF/debug-dead-reloc-icf.s
+index 716e245c12c..282838e3f21 100644
+--- a/lld/test/ELF/debug-dead-reloc-icf.s
++++ b/lld/test/ELF/debug-dead-reloc-icf.s
+@@ -9,7 +9,7 @@
+ # RUN: llvm-objdump -s %t | FileCheck %s
+ 
+ # CHECK:      Contents of section .debug_info:
+-# CHECK-NEXT:  0000 {{[0-9a-f]+}}000 00000000 ffffffff ffffffff
++# CHECK-NEXT:  0000 {{[0-9a-f]+}}000 00000000 00000000 00000000
+ # CHECK:      Contents of section .debug_line:
+ # CHECK-NEXT:  0000 [[ADDR:[0-9a-f]+]] 00000000
+ # CHECK-SAME:                                   [[ADDR]] 00000000
+diff --git a/lld/test/ELF/debug-dead-reloc-tls-arm.s b/lld/test/ELF/debug-dead-reloc-tls-arm.s
+index 7fa5bcaae19..3fad5306fac 100644
+--- a/lld/test/ELF/debug-dead-reloc-tls-arm.s
++++ b/lld/test/ELF/debug-dead-reloc-tls-arm.s
+@@ -7,7 +7,7 @@
+ # RUN: llvm-objdump -s %t | FileCheck %s
+ 
+ # CHECK:      Contents of section .debug_info:
+-# CHECK-NEXT:  0000 ffffffff
++# CHECK-NEXT:  0000 00000000
+ 
+ .globl _start
+ _start:
+diff --git a/lld/test/ELF/debug-dead-reloc-tls.s b/lld/test/ELF/debug-dead-reloc-tls.s
+index 1b26a920d3d..06662773854 100644
+--- a/lld/test/ELF/debug-dead-reloc-tls.s
++++ b/lld/test/ELF/debug-dead-reloc-tls.s
+@@ -7,8 +7,8 @@
+ # RUN: llvm-objdump -s %t | FileCheck %s
+ 
+ # CHECK:      Contents of section .debug_info:
+-# CHECK-NEXT:  0000 ffffffff ffffffff ffffffff ffffffff
+-# CHECK-NEXT:  0010 ffffffff ffffffff
++# CHECK-NEXT:  0000 00000000 00000000 00000000 00000000
++# CHECK-NEXT:  0010 00000000 ffffffff
+ 
+ .globl _start
+ _start:
+diff --git a/lld/test/ELF/debug-dead-reloc.s b/lld/test/ELF/debug-dead-reloc.s
+index d784519e9af..e1adf4e2a25 100644
+--- a/lld/test/ELF/debug-dead-reloc.s
++++ b/lld/test/ELF/debug-dead-reloc.s
+@@ -9,15 +9,15 @@
+ # RUN: llvm-objdump -s %t | FileCheck %s
+ 
+ # CHECK:      Contents of section .debug_loc:
+-# CHECK-NEXT:  0000 feffffff ffffffff feffffff ffffffff
++# CHECK-NEXT:  0000 01000000 00000000 01000000 00000000
+ # CHECK-NEXT: Contents of section .debug_ranges:
+-# CHECK-NEXT:  0000 feffffff ffffffff feffffff ffffffff
++# CHECK-NEXT:  0000 01000000 00000000 01000000 00000000
+ # CHECK-NEXT: Contents of section .debug_addr:
+ # CHECK-NEXT:  0000 {{.*}}000 00000000 {{.*}}000 00000000
+-# CHECK-NEXT:  0010 ffffffff  ffffffff {{.*}}000 00000000
++# CHECK-NEXT:  0010 00000000  00000000 {{.*}}000 00000000
+ # CHECK-NEXT: Contents of section .debug_foo:
+-# CHECK-NEXT:  0000 ffffffff ffffffff 08000000 00000000
+-# CHECK-NEXT:  0010 ffffffff ffffffff 08000000 00000000
++# CHECK-NEXT:  0000 00000000 00000000 08000000 00000000
++# CHECK-NEXT:  0010 00000000 00000000 08000000 00000000
+ 
+ ## -z dead-reloc-in-nonalloc= can override the tombstone value.
+ # RUN: ld.lld --gc-sections -z dead-reloc-in-nonalloc=.debug_loc=42 %t.o %t1.o %t1.o -o %t42
+@@ -35,7 +35,7 @@
+ group:
+   .byte 0
+ 
+-## Resolved to UINT64_C(-2), with the addend ignored.
++## Resolved to UINT64_C(1), with the addend ignored.
+ ## UINT64_C(-1) is a reserved value (base address selection entry) which can't be used.
+ .section .debug_loc
+   .quad .text.1+8
+@@ -44,7 +44,7 @@ group:
+ 
+ .section .debug_addr
+ ## .text.3 is a local symbol. The symbol defined in a non-prevailing group is
+-## discarded. Resolved to UINT64_C(-1).
++## discarded. Resolved to UINT64_C(0).
+   .quad .text.3+24
+ ## group is a non-local symbol. The relocation from the second %t1.o gets
+ ## resolved to the prevailing copy.

@@ -1,0 +1,32 @@
+From 328f5845d5145184258d5155226b2647c1291e25 Mon Sep 17 00:00:00 2001
+From: Ted Brandston <tbrandston@google.com>
+Date: Wed, 2 Nov 2022 11:01:30 -0400
+Subject: [PATCH] Allow overriding PKG_CONFIG
+
+In my ChromiumOS build calling pkg-config without an appropriate
+cross-compilation prefix is considered an error. The current method of
+detecting PKG_CONFIG in efivar _always_ calls pkg-config, even if
+PKG_CONFIG has already been set in the environment.
+
+Allow overriding PKG_CONFIG, rather than always checking for the
+cross-compiled version. This is more in-line with how the other tools
+are chosen.
+
+Signed-off-by: Ted Brandston <tbrandston@google.com>
+---
+ src/include/defaults.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/include/defaults.mk b/src/include/defaults.mk
+index bb9c997f..630da237 100644
+--- a/src/include/defaults.mk
++++ b/src/include/defaults.mk
+@@ -107,7 +107,7 @@ override HOST_LDFLAGS = $(HOST_CFLAGS) -L. \
+ 			$(call pkg-config-ccldflags)
+ override HOST_CCLDFLAGS = $(HOST_LDFLAGS)
+ 
+-PKG_CONFIG = $(shell if [ -e "$$(env $(CROSS_COMPILE)pkg-config 2>&1)" ]; then echo $(CROSS_COMPILE)pkg-config ; else echo pkg-config ; fi)
++PKG_CONFIG ?= $(shell if [ -e "$$(env $(CROSS_COMPILE)pkg-config 2>&1)" ]; then echo $(CROSS_COMPILE)pkg-config ; else echo pkg-config ; fi)
+ INSTALL ?= install
+ AR	:= $(CROSS_COMPILE)$(COMPILER)-ar
+ NM	:= $(CROSS_COMPILE)$(COMPILER)-nm

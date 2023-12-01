@@ -1,0 +1,25 @@
+From afe690deba49e649b5e5dc13f310574f594eb158 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 14:21:43 -0300
+Subject: [PATCH 086/163] math: use fabs on __ieee754_lgamma_r
+
+---
+ sysdeps/ieee754/dbl-64/e_lgamma_r.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sysdeps/ieee754/dbl-64/e_lgamma_r.c b/sysdeps/ieee754/dbl-64/e_lgamma_r.c
+index f612174577..8b9b9c6ae2 100644
+--- a/sysdeps/ieee754/dbl-64/e_lgamma_r.c
++++ b/sysdeps/ieee754/dbl-64/e_lgamma_r.c
+@@ -231,7 +231,7 @@ __ieee754_lgamma_r(double x, int *signgamp)
+ 	    if (x < -2.0 && x > -28.0)
+ 		return __lgamma_neg (x, signgamp);
+ 	    t = sin_pi(x);
+-	    if(t==zero) return one/fabsf(t); /* -integer */
++	    if(t==zero) return one/fabs(t); /* -integer */
+ 	    nadj = __ieee754_log(pi/fabs(t*x));
+ 	    if(t<zero) *signgamp = -1;
+ 	    x = -x;
+-- 
+2.37.2
+

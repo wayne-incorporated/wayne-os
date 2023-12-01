@@ -1,0 +1,30 @@
+Apply BUILD_CODEGEN state to grpc_plugin_support
+
+grpc_plugin_support was being included unconditionally, but it depends on
+libprotoc which is not being installed outside of the SDK so only include it
+whenever BUILD_CODEGEN is enabled, to fix cross compilation.
+
+Author: Allen Webb <allenwebb@google.com>
+https://github.com/grpc/grpc/issues/29370
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f632f26fd2..a5cd5822c1 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3784,7 +3784,7 @@ if(gRPC_INSTALL)
+   )
+ endif()
+ 
+-
++if (gRPC_BUILD_CODEGEN)
+ add_library(grpc_plugin_support
+   src/compiler/cpp_generator.cc
+   src/compiler/csharp_generator.cc
+@@ -3850,6 +3850,7 @@ if(gRPC_INSTALL)
+     ARCHIVE DESTINATION ${gRPC_INSTALL_LIBDIR}
+   )
+ endif()
++endif() # if (gRPC_BUILD_CODEGEN)
+ 
+ 
+ # grpcpp_channelz doesn't build with protobuf-lite

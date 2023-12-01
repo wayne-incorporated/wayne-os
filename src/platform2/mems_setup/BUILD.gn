@@ -1,0 +1,103 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":mems_remove",
+    ":mems_setup",
+  ]
+  if (use.test) {
+    deps += [ ":mems_setup_testrunner" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":mems_setup_vpd_loader_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+    "libsar",
+    "re2",
+  ]
+}
+
+config("target_defaults") {
+  configs = [ ":target_defaults_pkg_deps" ]
+}
+
+static_library("libmems_setup") {
+  sources = [
+    "configuration.cc",
+    "delegate_impl.cc",
+    "sensor_kind.cc",
+  ]
+  public_pkg_deps = [ "libmems" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("mems_setup") {
+  sources = [ "setup.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":libmems_setup" ]
+}
+
+executable("mems_remove") {
+  sources = [ "remove.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":libmems_setup" ]
+}
+
+if (use.test) {
+  pkg_config("mems_setup_testrunner_pkg_deps") {
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+    ]
+  }
+
+  executable("mems_setup_testrunner") {
+    sources = [
+      "accel_3d_test.cc",
+      "accelerometer_test.cc",
+      "als_test.cc",
+      "gyroscope_test.cc",
+      "light_test.cc",
+      "proximity_test.cc",
+      "test_fakes.cc",
+      "test_helper.cc",
+      "vpd_loader_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":mems_setup_testrunner_pkg_deps",
+      ":target_defaults",
+    ]
+    run_test = true
+    deps = [
+      ":libmems_setup",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [
+      "libmems_test_support",
+      "libsar_test_support",
+    ]
+  }
+}
+if (use.fuzzer) {
+  executable("mems_setup_vpd_loader_fuzzer") {
+    sources = [ "vpd_loader_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libmems_setup" ]
+  }
+}

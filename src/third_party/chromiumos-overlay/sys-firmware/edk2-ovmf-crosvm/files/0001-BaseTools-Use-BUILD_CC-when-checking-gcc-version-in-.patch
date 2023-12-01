@@ -1,0 +1,33 @@
+From b2fc15e4ecb2cefd6b4dcce13c9fc651444c9136 Mon Sep 17 00:00:00 2001
+From: Jake Garver <jake@nvidia.com>
+Date: Tue, 20 Dec 2022 21:14:12 +0800
+Subject: [PATCH 1/8] BaseTools: Use BUILD_CC when checking gcc version in
+ DevicePath
+
+When checking the version in DevicePath's Makefile, use BUILD_CC instead
+of assuming "gcc".  BUILD_CC is set in header.makefile and is the
+compiler that will actually be used to build DevicePath.  It defaults to
+"gcc", but may be overridden.
+
+Signed-off-by: Jake Garver <jake@nvidia.com>
+Reviewed-by: Bob Feng <bob.c.feng@intel.com>
+---
+ BaseTools/Source/C/DevicePath/GNUmakefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/BaseTools/Source/C/DevicePath/GNUmakefile b/BaseTools/Source/C/DevicePath/GNUmakefile
+index 17f213879e..f3d29beeb5 100644
+--- a/BaseTools/Source/C/DevicePath/GNUmakefile
++++ b/BaseTools/Source/C/DevicePath/GNUmakefile
+@@ -13,7 +13,7 @@ OBJECTS = DevicePath.o UefiDevicePathLib.o DevicePathFromText.o  DevicePathUtili
+ 
+ include $(MAKEROOT)/Makefiles/app.makefile
+ 
+-GCCVERSION = $(shell gcc -dumpversion | awk -F'.' '{print $$1}')
++GCCVERSION = $(shell $(BUILD_CC) -dumpversion | awk -F'.' '{print $$1}')
+ ifneq ("$(GCCVERSION)", "5")
+ ifneq ($(CXX), llvm)
+ ifneq ($(DARWIN),Darwin)
+-- 
+2.39.1.456.gfc5497dd1b-goog
+

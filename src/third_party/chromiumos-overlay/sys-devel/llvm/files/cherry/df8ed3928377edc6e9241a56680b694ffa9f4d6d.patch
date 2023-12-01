@@ -1,0 +1,517 @@
+commit df8ed3928377edc6e9241a56680b694ffa9f4d6d
+Author: Kristof Beyls <kristof.beyls@arm.com>
+Date:   Thu Nov 26 13:45:37 2020 +0000
+
+    [ARM] harden-sls-blr: avoid r12 and lr in indirect calls.
+    
+    As a linker is allowed to clobber r12 on function calls, the code
+    transformation that hardens indirect calls is not correct in case a
+    linker does so.  Similarly, the transformation is not correct when
+    register lr is used.
+    
+    This patch makes sure that r12 or lr are not used for indirect calls
+    when harden-sls-blr is enabled.
+    
+    Differential Revision: https://reviews.llvm.org/D92469
+
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+index 9a71b9264fcd..e77ed2c34bd3 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+@@ -5803,7 +5803,9 @@ outliner::OutlinedFunction ARMBaseInstrInfo::getOutliningCandidateInfo(
+     NumBytesToCreateFrame = Costs.FrameTailCall;
+     SetCandidateCallInfo(MachineOutlinerTailCall, Costs.CallTailCall);
+   } else if (LastInstrOpcode == ARM::BL || LastInstrOpcode == ARM::BLX ||
+-             LastInstrOpcode == ARM::tBL || LastInstrOpcode == ARM::tBLXr ||
++             LastInstrOpcode == ARM::BLX_noip || LastInstrOpcode == ARM::tBL ||
++             LastInstrOpcode == ARM::tBLXr ||
++             LastInstrOpcode == ARM::tBLXr_noip ||
+              LastInstrOpcode == ARM::tBLXi) {
+     FrameID = MachineOutlinerThunk;
+     NumBytesToCreateFrame = Costs.FrameThunk;
+@@ -6051,7 +6053,8 @@ ARMBaseInstrInfo::getOutliningType(MachineBasicBlock::iterator &MIT,
+     // we don't get unexpected results with call pseudo-instructions.
+     auto UnknownCallOutlineType = outliner::InstrType::Illegal;
+     if (Opc == ARM::BL || Opc == ARM::tBL || Opc == ARM::BLX ||
+-        Opc == ARM::tBLXr || Opc == ARM::tBLXi)
++        Opc == ARM::BLX_noip || Opc == ARM::tBLXr || Opc == ARM::tBLXr_noip ||
++        Opc == ARM::tBLXi)
+       UnknownCallOutlineType = outliner::InstrType::LegalTerminator;
+ 
+     if (!Callee)
+@@ -6343,3 +6346,19 @@ bool ARMBaseInstrInfo::isReallyTriviallyReMaterializable(const MachineInstr &MI,
+   // spill/restore and VPT predication.
+   return isVCTP(&MI) && !isPredicated(MI);
+ }
++
++unsigned llvm::getBLXOpcode(const MachineFunction &MF) {
++  return (MF.getSubtarget<ARMSubtarget>().hardenSlsBlr()) ? ARM::BLX_noip
++                                                          : ARM::BLX;
++}
++
++unsigned llvm::gettBLXrOpcode(const MachineFunction &MF) {
++  return (MF.getSubtarget<ARMSubtarget>().hardenSlsBlr()) ? ARM::tBLXr_noip
++                                                          : ARM::tBLXr;
++}
++
++unsigned llvm::getBLXpredOpcode(const MachineFunction &MF) {
++  return (MF.getSubtarget<ARMSubtarget>().hardenSlsBlr()) ? ARM::BLX_pred_noip
++                                                          : ARM::BLX_pred;
++}
++
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+index 47a2cf44f3a9..9b6572848ebe 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+@@ -640,13 +640,16 @@ static inline bool isIndirectCall(const MachineInstr &MI) {
+   switch (Opc) {
+     // indirect calls:
+   case ARM::BLX:
++  case ARM::BLX_noip:
+   case ARM::BLX_pred:
++  case ARM::BLX_pred_noip:
+   case ARM::BX_CALL:
+   case ARM::BMOVPCRX_CALL:
+   case ARM::TCRETURNri:
+   case ARM::TAILJMPr:
+   case ARM::TAILJMPr4:
+   case ARM::tBLXr:
++  case ARM::tBLXr_noip:
+   case ARM::tBLXNSr:
+   case ARM::tBLXNS_CALL:
+   case ARM::tBX_CALL:
+@@ -908,6 +911,10 @@ inline bool isGatherScatter(IntrinsicInst *IntInst) {
+   return isGather(IntInst) || isScatter(IntInst);
+ }
+ 
++unsigned getBLXOpcode(const MachineFunction &MF);
++unsigned gettBLXrOpcode(const MachineFunction &MF);
++unsigned getBLXpredOpcode(const MachineFunction &MF);
++
+ } // end namespace llvm
+ 
+ #endif // LLVM_LIB_TARGET_ARM_ARMBASEINSTRINFO_H
+diff --git a/llvm/lib/Target/ARM/ARMCallLowering.cpp b/llvm/lib/Target/ARM/ARMCallLowering.cpp
+index 2efc26203f58..0a38f737cb4b 100644
+--- a/llvm/lib/Target/ARM/ARMCallLowering.cpp
++++ b/llvm/lib/Target/ARM/ARMCallLowering.cpp
+@@ -480,15 +480,16 @@ struct CallReturnHandler : public ARMIncomingValueHandler {
+ };
+ 
+ // FIXME: This should move to the ARMSubtarget when it supports all the opcodes.
+-unsigned getCallOpcode(const ARMSubtarget &STI, bool isDirect) {
++unsigned getCallOpcode(const MachineFunction &MF, const ARMSubtarget &STI,
++                       bool isDirect) {
+   if (isDirect)
+     return STI.isThumb() ? ARM::tBL : ARM::BL;
+ 
+   if (STI.isThumb())
+-    return ARM::tBLXr;
++    return gettBLXrOpcode(MF);
+ 
+   if (STI.hasV5TOps())
+-    return ARM::BLX;
++    return getBLXOpcode(MF);
+ 
+   if (STI.hasV4TOps())
+     return ARM::BX_CALL;
+@@ -516,7 +517,7 @@ bool ARMCallLowering::lowerCall(MachineIRBuilder &MIRBuilder, CallLoweringInfo &
+   // Create the call instruction so we can add the implicit uses of arg
+   // registers, but don't insert it yet.
+   bool IsDirect = !Info.Callee.isReg();
+-  auto CallOpcode = getCallOpcode(STI, IsDirect);
++  auto CallOpcode = getCallOpcode(MF, STI, IsDirect);
+   auto MIB = MIRBuilder.buildInstrNoInsert(CallOpcode);
+ 
+   bool IsThumb = STI.isThumb();
+diff --git a/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp b/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp
+index 9be0b6fa33e9..a7f1765a9311 100644
+--- a/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp
++++ b/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp
+@@ -2304,8 +2304,9 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
+           MIB.addImm(0);
+         MIB.add(predOps(ARMCC::AL));
+ 
+-        MIB = BuildMI(MBB, MBBI, MI.getDebugLoc(),
+-                      TII->get(Thumb ? ARM::tBLXr : ARM::BLX));
++        MIB =
++            BuildMI(MBB, MBBI, MI.getDebugLoc(),
++                    TII->get(Thumb ? gettBLXrOpcode(*MF) : getBLXOpcode(*MF)));
+         if (Thumb)
+           MIB.add(predOps(ARMCC::AL));
+         MIB.addReg(Reg, RegState::Kill);
+diff --git a/llvm/lib/Target/ARM/ARMFastISel.cpp b/llvm/lib/Target/ARM/ARMFastISel.cpp
+index 4bfca8a803ca..3a7c2eed2249 100644
+--- a/llvm/lib/Target/ARM/ARMFastISel.cpp
++++ b/llvm/lib/Target/ARM/ARMFastISel.cpp
+@@ -2173,7 +2173,7 @@ bool ARMFastISel::SelectRet(const Instruction *I) {
+ 
+ unsigned ARMFastISel::ARMSelectCallOp(bool UseReg) {
+   if (UseReg)
+-    return isThumb2 ? ARM::tBLXr : ARM::BLX;
++    return isThumb2 ? gettBLXrOpcode(*MF) : getBLXOpcode(*MF);
+   else
+     return isThumb2 ? ARM::tBL : ARM::BL;
+ }
+@@ -2264,9 +2264,11 @@ bool ARMFastISel::ARMEmitLibcall(const Instruction *I, RTLIB::Libcall Call) {
+   // BL / BLX don't take a predicate, but tBL / tBLX do.
+   if (isThumb2)
+     MIB.add(predOps(ARMCC::AL));
+-  if (Subtarget->genLongCalls())
++  if (Subtarget->genLongCalls()) {
++    CalleeReg =
++        constrainOperandRegClass(TII.get(CallOpc), CalleeReg, isThumb2 ? 2 : 0);
+     MIB.addReg(CalleeReg);
+-  else
++  } else
+     MIB.addExternalSymbol(TLI.getLibcallName(Call));
+ 
+   // Add implicit physical register uses to the call.
+@@ -2404,9 +2406,11 @@ bool ARMFastISel::SelectCall(const Instruction *I,
+   // ARM calls don't take a predicate, but tBL / tBLX do.
+   if(isThumb2)
+     MIB.add(predOps(ARMCC::AL));
+-  if (UseReg)
++  if (UseReg) {
++    CalleeReg =
++        constrainOperandRegClass(TII.get(CallOpc), CalleeReg, isThumb2 ? 2 : 0);
+     MIB.addReg(CalleeReg);
+-  else if (!IntrMemName)
++  } else if (!IntrMemName)
+     MIB.addGlobalAddress(GV, 0, 0);
+   else
+     MIB.addExternalSymbol(IntrMemName, 0);
+diff --git a/llvm/lib/Target/ARM/ARMFeatures.h b/llvm/lib/Target/ARM/ARMFeatures.h
+index 5cd7006c22fc..99e0ef05b5e2 100644
+--- a/llvm/lib/Target/ARM/ARMFeatures.h
++++ b/llvm/lib/Target/ARM/ARMFeatures.h
+@@ -75,6 +75,7 @@ inline bool isV8EligibleForIT(const InstrType *Instr) {
+ // there are some "conditionally deprecated" opcodes
+   case ARM::tADDspr:
+   case ARM::tBLXr:
++  case ARM::tBLXr_noip:
+     return Instr->getOperand(2).getReg() != ARM::PC;
+   // ADD PC, SP and BLX PC were always unpredictable,
+   // now on top of it they're deprecated
+diff --git a/llvm/lib/Target/ARM/ARMISelLowering.cpp b/llvm/lib/Target/ARM/ARMISelLowering.cpp
+index 1c6acbcf1a88..a50bb623092a 100644
+--- a/llvm/lib/Target/ARM/ARMISelLowering.cpp
++++ b/llvm/lib/Target/ARM/ARMISelLowering.cpp
+@@ -10886,7 +10886,7 @@ ARMTargetLowering::EmitLowered__chkstk(MachineInstr &MI,
+ 
+     BuildMI(*MBB, MI, DL, TII.get(ARM::t2MOVi32imm), Reg)
+       .addExternalSymbol("__chkstk");
+-    BuildMI(*MBB, MI, DL, TII.get(ARM::tBLXr))
++    BuildMI(*MBB, MI, DL, TII.get(gettBLXrOpcode(*MBB->getParent())))
+         .add(predOps(ARMCC::AL))
+         .addReg(Reg, RegState::Kill)
+         .addReg(ARM::R4, RegState::Implicit | RegState::Kill)
+diff --git a/llvm/lib/Target/ARM/ARMInstrInfo.td b/llvm/lib/Target/ARM/ARMInstrInfo.td
+index 840af9052376..8dcb319923ae 100644
+--- a/llvm/lib/Target/ARM/ARMInstrInfo.td
++++ b/llvm/lib/Target/ARM/ARMInstrInfo.td
+@@ -2492,23 +2492,29 @@ let isCall = 1,
+   }
+ 
+   // ARMv5T and above
+-  def BLX : AXI<(outs), (ins GPR:$func), BrMiscFrm,
+-                IIC_Br, "blx\t$func",
+-                [(ARMcall GPR:$func)]>,
++  def BLX : AXI<(outs), (ins GPR:$func), BrMiscFrm, IIC_Br, "blx\t$func", []>,
+             Requires<[IsARM, HasV5T]>, Sched<[WriteBrL]> {
+     bits<4> func;
+     let Inst{31-4} = 0b1110000100101111111111110011;
+     let Inst{3-0}  = func;
+   }
++  def BLX_noip :  ARMPseudoExpand<(outs), (ins GPRnoip:$func),
++                   4, IIC_Br, [], (BLX GPR:$func)>,
++                  Requires<[IsARM, HasV5T]>, Sched<[WriteBrL]>;
++
+ 
+   def BLX_pred : AI<(outs), (ins GPR:$func), BrMiscFrm,
+-                    IIC_Br, "blx", "\t$func",
+-                    [(ARMcall_pred GPR:$func)]>,
++                    IIC_Br, "blx", "\t$func", []>,
+                  Requires<[IsARM, HasV5T]>, Sched<[WriteBrL]> {
+     bits<4> func;
+     let Inst{27-4} = 0b000100101111111111110011;
+     let Inst{3-0}  = func;
+   }
++  def BLX_pred_noip :  ARMPseudoExpand<(outs), (ins GPRnoip:$func),
++                   4, IIC_Br, [],
++                   (BLX_pred GPR:$func, (ops 14, zero_reg))>,
++                   Requires<[IsARM, HasV5T]>, Sched<[WriteBrL]>;
++
+ 
+   // ARMv4T
+   // Note: Restrict $func to the tGPR regclass to prevent it being in LR.
+@@ -2534,6 +2540,16 @@ let isCall = 1,
+              Requires<[IsARM]>, Sched<[WriteBr]>;
+ }
+ 
++def : ARMPat<(ARMcall GPR:$func), (BLX $func)>,
++      Requires<[IsARM, HasV5T, NoSLSBLRMitigation]>;
++def : ARMPat<(ARMcall GPRnoip:$func), (BLX_noip $func)>,
++      Requires<[IsARM, HasV5T, SLSBLRMitigation]>;
++def : ARMPat<(ARMcall_pred GPR:$func), (BLX_pred $func)>,
++      Requires<[IsARM, HasV5T, NoSLSBLRMitigation]>;
++def : ARMPat<(ARMcall_pred GPRnoip:$func), (BLX_pred_noip $func)>,
++      Requires<[IsARM, HasV5T, SLSBLRMitigation]>;
++
++
+ let isBranch = 1, isTerminator = 1 in {
+   // FIXME: should be able to write a pattern for ARMBrcond, but can't use
+   // a two-value operand where a dag node expects two operands. :(
+diff --git a/llvm/lib/Target/ARM/ARMInstrThumb.td b/llvm/lib/Target/ARM/ARMInstrThumb.td
+index 7fae32117243..3a33dfeecdc9 100644
+--- a/llvm/lib/Target/ARM/ARMInstrThumb.td
++++ b/llvm/lib/Target/ARM/ARMInstrThumb.td
+@@ -548,14 +548,18 @@ let isCall = 1,
+ 
+   // Also used for Thumb2
+   def tBLXr : TI<(outs), (ins pred:$p, GPR:$func), IIC_Br,
+-                  "blx${p}\t$func",
+-                  [(ARMcall GPR:$func)]>,
++                  "blx${p}\t$func", []>,
+               Requires<[IsThumb, HasV5T]>,
+               T1Special<{1,1,1,?}>, Sched<[WriteBrL]> { // A6.2.3 & A8.6.24;
+     bits<4> func;
+     let Inst{6-3} = func;
+     let Inst{2-0} = 0b000;
+   }
++  def tBLXr_noip :  ARMPseudoExpand<(outs), (ins pred:$p, GPRnoip:$func),
++                   2, IIC_Br, [], (tBLXr pred:$p, GPR:$func)>,
++                   Requires<[IsThumb, HasV5T]>,
++                   Sched<[WriteBrL]>;
++
+ 
+   // ARMv8-M Security Extensions
+   def tBLXNSr : TI<(outs), (ins pred:$p, GPRnopc:$func), IIC_Br,
+@@ -586,6 +590,11 @@ let isCall = 1,
+              Requires<[IsThumb]>, Sched<[WriteBr]>;
+ }
+ 
++def : ARMPat<(ARMcall GPR:$func), (tBLXr $func)>,
++      Requires<[IsThumb, HasV5T, NoSLSBLRMitigation]>;
++def : ARMPat<(ARMcall GPRnoip:$func), (tBLXr_noip $func)>,
++      Requires<[IsThumb, HasV5T, SLSBLRMitigation]>;
++
+ let isBranch = 1, isTerminator = 1, isBarrier = 1 in {
+   let isPredicable = 1 in
+   def tB   : T1pI<(outs), (ins t_brtarget:$target), IIC_Br,
+diff --git a/llvm/lib/Target/ARM/ARMPredicates.td b/llvm/lib/Target/ARM/ARMPredicates.td
+index 240cdb08acd8..2dc097566d14 100644
+--- a/llvm/lib/Target/ARM/ARMPredicates.td
++++ b/llvm/lib/Target/ARM/ARMPredicates.td
+@@ -189,6 +189,9 @@ let RecomputePerFunction = 1 in {
+   def UseFPVMLx: Predicate<"((Subtarget->useFPVMLx() &&"
+                            "  TM.Options.AllowFPOpFusion != FPOpFusion::Fast) ||"
+                            "Subtarget->hasMinSize())">;
++  def SLSBLRMitigation : Predicate<[{ MF->getSubtarget<ARMSubtarget>().hardenSlsBlr() }]>;
++  def NoSLSBLRMitigation : Predicate<[{ !MF->getSubtarget<ARMSubtarget>().hardenSlsBlr() }]>;
++
+ }
+ def UseMulOps        : Predicate<"Subtarget->useMulOps()">;
+ 
+diff --git a/llvm/lib/Target/ARM/ARMRegisterBankInfo.cpp b/llvm/lib/Target/ARM/ARMRegisterBankInfo.cpp
+index f9dbfef4c113..1a7f10a13ed3 100644
+--- a/llvm/lib/Target/ARM/ARMRegisterBankInfo.cpp
++++ b/llvm/lib/Target/ARM/ARMRegisterBankInfo.cpp
+@@ -156,10 +156,10 @@ ARMRegisterBankInfo::ARMRegisterBankInfo(const TargetRegisterInfo &TRI)
+            "Subclass not added?");
+     assert(RBGPR.covers(*TRI.getRegClass(ARM::tcGPRRegClassID)) &&
+            "Subclass not added?");
+-    assert(RBGPR.covers(*TRI.getRegClass(ARM::tGPR_and_tcGPRRegClassID)) &&
++    assert(RBGPR.covers(*TRI.getRegClass(ARM::GPRnoip_and_tcGPRRegClassID)) &&
+            "Subclass not added?");
+-    assert(RBGPR.covers(
+-               *TRI.getRegClass(ARM::tGPREven_and_tGPR_and_tcGPRRegClassID)) &&
++    assert(RBGPR.covers(*TRI.getRegClass(
++               ARM::tGPREven_and_GPRnoip_and_tcGPRRegClassID)) &&
+            "Subclass not added?");
+     assert(RBGPR.covers(*TRI.getRegClass(ARM::tGPROdd_and_tcGPRRegClassID)) &&
+            "Subclass not added?");
+@@ -182,10 +182,12 @@ ARMRegisterBankInfo::getRegBankFromRegClass(const TargetRegisterClass &RC,
+   switch (RC.getID()) {
+   case GPRRegClassID:
+   case GPRwithAPSRRegClassID:
++  case GPRnoipRegClassID:
+   case GPRnopcRegClassID:
++  case GPRnoip_and_GPRnopcRegClassID:
+   case rGPRRegClassID:
+   case GPRspRegClassID:
+-  case tGPR_and_tcGPRRegClassID:
++  case GPRnoip_and_tcGPRRegClassID:
+   case tcGPRRegClassID:
+   case tGPRRegClassID:
+   case tGPREvenRegClassID:
+@@ -193,7 +195,7 @@ ARMRegisterBankInfo::getRegBankFromRegClass(const TargetRegisterClass &RC,
+   case tGPR_and_tGPREvenRegClassID:
+   case tGPR_and_tGPROddRegClassID:
+   case tGPREven_and_tcGPRRegClassID:
+-  case tGPREven_and_tGPR_and_tcGPRRegClassID:
++  case tGPREven_and_GPRnoip_and_tcGPRRegClassID:
+   case tGPROdd_and_tcGPRRegClassID:
+     return getRegBank(ARM::GPRRegBankID);
+   case HPRRegClassID:
+diff --git a/llvm/lib/Target/ARM/ARMRegisterInfo.td b/llvm/lib/Target/ARM/ARMRegisterInfo.td
+index a384b0dc757c..fe3243315d68 100644
+--- a/llvm/lib/Target/ARM/ARMRegisterInfo.td
++++ b/llvm/lib/Target/ARM/ARMRegisterInfo.td
+@@ -235,6 +235,23 @@ def GPR : RegisterClass<"ARM", [i32], 32, (add (sequence "R%u", 0, 12),
+   let DiagnosticString = "operand must be a register in range [r0, r15]";
+ }
+ 
++// Register set that excludes registers that are reserved for procedure calls.
++// This is used for pseudo-instructions that are actually implemented using a
++// procedure call.
++def GPRnoip : RegisterClass<"ARM", [i32], 32, (sub GPR, R12, LR)> {
++  // Allocate LR as the first CSR since it is always saved anyway.
++  // For Thumb1 mode, we don't want to allocate hi regs at all, as we don't
++  // know how to spill them. If we make our prologue/epilogue code smarter at
++  // some point, we can go back to using the above allocation orders for the
++  // Thumb1 instructions that know how to use hi regs.
++  let AltOrders = [(add GPRnoip, GPRnoip), (trunc GPRnoip, 8),
++                   (add (trunc GPRnoip, 8), (shl GPRnoip, 8))];
++  let AltOrderSelect = [{
++      return MF.getSubtarget<ARMSubtarget>().getGPRAllocationOrder(MF);
++  }];
++  let DiagnosticString = "operand must be a register in range [r0, r14]";
++}
++
+ // GPRs without the PC.  Some ARM instructions do not allow the PC in
+ // certain operand slots, particularly as the destination.  Primarily
+ // useful for disassembly.
+diff --git a/llvm/lib/Target/ARM/ARMSLSHardening.cpp b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+index e6d40d41653a..cfcc7d5a0408 100644
+--- a/llvm/lib/Target/ARM/ARMSLSHardening.cpp
++++ b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+@@ -143,9 +143,7 @@ static const struct ThunkNameRegMode {
+     {"__llvm_slsblr_thunk_arm_r9", ARM::R9, false},
+     {"__llvm_slsblr_thunk_arm_r10", ARM::R10, false},
+     {"__llvm_slsblr_thunk_arm_r11", ARM::R11, false},
+-    {"__llvm_slsblr_thunk_arm_r12", ARM::R12, false},
+     {"__llvm_slsblr_thunk_arm_sp", ARM::SP, false},
+-    {"__llvm_slsblr_thunk_arm_lr", ARM::LR, false},
+     {"__llvm_slsblr_thunk_arm_pc", ARM::PC, false},
+     {"__llvm_slsblr_thunk_thumb_r0", ARM::R0, true},
+     {"__llvm_slsblr_thunk_thumb_r1", ARM::R1, true},
+@@ -159,9 +157,7 @@ static const struct ThunkNameRegMode {
+     {"__llvm_slsblr_thunk_thumb_r9", ARM::R9, true},
+     {"__llvm_slsblr_thunk_thumb_r10", ARM::R10, true},
+     {"__llvm_slsblr_thunk_thumb_r11", ARM::R11, true},
+-    {"__llvm_slsblr_thunk_thumb_r12", ARM::R12, true},
+     {"__llvm_slsblr_thunk_thumb_sp", ARM::SP, true},
+-    {"__llvm_slsblr_thunk_thumb_lr", ARM::LR, true},
+     {"__llvm_slsblr_thunk_thumb_pc", ARM::PC, true},
+ };
+ 
+@@ -252,25 +248,18 @@ MachineBasicBlock &ARMSLSHardening::ConvertIndirectCallToIndirectJump(
+   // SLSBLRThunkInserter.
+   // This function merely needs to transform an indirect call to a direct call
+   // to __llvm_slsblr_thunk_xN.
+-  //
+-  // Since linkers are allowed to clobber R12 on function calls, the above
+-  // mitigation only works if the original indirect call instruction was not
+-  // using R12. Code generation before must make sure that no indirect call
+-  // using R12 was produced if the mitigation is enabled.
+-  // Also, the transformation is incorrect if the indirect call uses LR, so
+-  // also have to avoid that.
+-  // FIXME: that will be done in a follow-on patch.
+-
+   MachineInstr &IndirectCall = *MBBI;
+   assert(isIndirectCall(IndirectCall) && !IndirectCall.isReturn());
+   int RegOpIdxOnIndirectCall = -1;
+   bool isThumb;
+   switch (IndirectCall.getOpcode()) {
+-  case ARM::BLX:      // !isThumb2
++  case ARM::BLX:   // !isThumb2
++  case ARM::BLX_noip:   // !isThumb2
+     isThumb = false;
+     RegOpIdxOnIndirectCall = 0;
+     break;
+   case ARM::tBLXr:      // isThumb2
++  case ARM::tBLXr_noip: // isThumb2
+     isThumb = true;
+     RegOpIdxOnIndirectCall = 2;
+     break;
+@@ -279,6 +268,12 @@ MachineBasicBlock &ARMSLSHardening::ConvertIndirectCallToIndirectJump(
+   }
+ 
+   Register Reg = IndirectCall.getOperand(RegOpIdxOnIndirectCall).getReg();
++  // Since linkers are allowed to clobber R12 on function calls, the above
++  // mitigation only works if the original indirect call instruction was not
++  // using R12. Code generation before must make sure that no indirect call
++  // using R12 was produced if the mitigation is enabled.
++  // Also, the transformation is incorrect if the indirect call uses LR, so
++  // also have to avoid that.
+   assert(Reg != ARM::R12 && Reg != ARM::LR);
+   bool RegIsKilled = IndirectCall.getOperand(RegOpIdxOnIndirectCall).isKill();
+ 
+diff --git a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+index a2166e4520cb..e62012faed88 100644
+--- a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
++++ b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+@@ -186,10 +186,61 @@ entry:
+ ; CHECK: .Lfunc_end
+ }
+ 
+-; HARDEN-label: __llvm_slsblr_thunk_(arm|thumb)_r5:
++; Verify that neither r12 nor lr are used as registers in indirect call
++; instructions when the sls-hardening-blr mitigation is enabled, as
++; (a) a linker is allowed to clobber r12 on calls, and
++; (b) the hardening transformation isn't correct if lr is the register holding
++;     the address of the function called.
++define i32 @check_r12(i32 ()** %fp) {
++entry:
++; CHECK-LABEL: check_r12:
++  %f = load i32 ()*, i32 ()** %fp, align 4
++  ; Force f to be moved into r12
++  %r12_f = tail call i32 ()* asm "add $0, $1, #0", "={r12},{r12}"(i32 ()* %f) nounwind
++  %call = call i32 %r12_f()
++; NOHARDENARM:     blx r12
++; NOHARDENTHUMB:   blx r12
++; HARDEN-NOT: bl {{__llvm_slsblr_thunk_(arm|thumb)_r12}}
++  ret i32 %call
++; CHECK: .Lfunc_end
++}
++
++define i32 @check_lr(i32 ()** %fp) {
++entry:
++; CHECK-LABEL: check_lr:
++  %f = load i32 ()*, i32 ()** %fp, align 4
++  ; Force f to be moved into lr
++  %lr_f = tail call i32 ()* asm "add $0, $1, #0", "={lr},{lr}"(i32 ()* %f) nounwind
++  %call = call i32 %lr_f()
++; NOHARDENARM:     blx lr
++; NOHARDENTHUMB:   blx lr
++; HARDEN-NOT: bl {{__llvm_slsblr_thunk_(arm|thumb)_lr}}
++  ret i32 %call
++; CHECK: .Lfunc_end
++}
++
++; Verify that even when sls-harden-blr is enabled, "blx r12" is still an
++; instruction that is accepted by the inline assembler
++define void @verify_inline_asm_blx_r12(void ()* %g) {
++entry:
++; CHECK-LABEL: verify_inline_asm_blx_r12:
++  %0 = bitcast void ()* %g to i8*
++  tail call void asm sideeffect "blx $0", "{r12}"(i8* %0) nounwind
++; CHECK: blx r12
++  ret void
++; CHECK:       {{bx lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++; CHECK: .Lfunc_end
++}
++
++; HARDEN-label: {{__llvm_slsblr_thunk_(arm|thumb)_r5}}:
+ ; HARDEN:    bx r5
+ ; ISBDSB-NEXT: dsb sy
+ ; ISBDSB-NEXT: isb
+ ; SB-NEXT:     dsb sy
+ ; SB-NEXT:     isb
+ ; HARDEN-NEXT: .Lfunc_end
++
++

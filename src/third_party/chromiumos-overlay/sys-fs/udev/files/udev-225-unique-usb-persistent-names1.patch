@@ -1,0 +1,108 @@
+From 7d047c917c0ef59f0f7e943a4a49bb78a224963b Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Thu, 11 May 2023 16:20:57 +0900
+Subject: [PATCH 1/2] udev-builtin-path_id: split out add_id_tag()
+
+No functional change, just refactoring.
+---
+ src/udev/udev-builtin-path_id.c | 72 ++++++++++++++++++---------------
+ 1 file changed, 40 insertions(+), 32 deletions(-)
+
+diff --git a/src/udev/udev-builtin-path_id.c b/src/udev/udev-builtin-path_id.c
+index f529ffcf25..aac0fcbd72 100644
+--- a/src/udev/udev-builtin-path_id.c
++++ b/src/udev/udev-builtin-path_id.c
+@@ -597,11 +597,47 @@ out:
+         return parent;
+ }
+ 
++static void add_id_tag(struct udev_device *dev, bool test, const char *path) {
++        char tag[UTIL_NAME_SIZE];
++        size_t i = 0;
++        int r;
++
++        /* compose valid udev tag name */
++        for (const char *p = path; *p; p++) {
++                if ((*p >= '0' && *p <= '9') ||
++                    (*p >= 'A' && *p <= 'Z') ||
++                    (*p >= 'a' && *p <= 'z') ||
++                    *p == '-') {
++                        tag[i++] = *p;
++                        continue;
++                }
++
++                /* skip all leading '_' */
++                if (i == 0)
++                        continue;
++
++                /* avoid second '_' */
++                if (tag[i-1] == '_')
++                        continue;
++
++                tag[i++] = '_';
++        }
++        /* strip trailing '_' */
++        while (i > 0 && tag[i-1] == '_')
++                i--;
++        tag[i] = '\0';
++
++        r = udev_builtin_add_property(dev, test, "ID_PATH_TAG", tag);
++        if (r < 0)
++                log_debug_errno(r, "Failed to add ID_PATH_TAG property, ignoring: %m");
++}
++
+ static int builtin_path_id(struct udev_device *dev, int argc, char *argv[], bool test) {
+         struct udev_device *parent;
+         char *path = NULL;
+         bool supported_transport = false;
+         bool supported_parent = false;
++        int r;
+ 
+         assert(dev);
+ 
+@@ -683,38 +719,10 @@ static int builtin_path_id(struct udev_device *dev, int argc, char *argv[], bool
+ 
+ out:
+         if (path != NULL) {
+-                char tag[UTIL_NAME_SIZE];
+-                size_t i;
+-                const char *p;
+-
+-                /* compose valid udev tag name */
+-                for (p = path, i = 0; *p; p++) {
+-                        if ((*p >= '0' && *p <= '9') ||
+-                            (*p >= 'A' && *p <= 'Z') ||
+-                            (*p >= 'a' && *p <= 'z') ||
+-                            *p == '-') {
+-                                tag[i++] = *p;
+-                                continue;
+-                        }
+-
+-                        /* skip all leading '_' */
+-                        if (i == 0)
+-                                continue;
+-
+-                        /* avoid second '_' */
+-                        if (tag[i-1] == '_')
+-                                continue;
+-
+-                        tag[i++] = '_';
+-                }
+-                /* strip trailing '_' */
+-                while (i > 0 && tag[i-1] == '_')
+-                        i--;
+-                tag[i] = '\0';
+-
+-                udev_builtin_add_property(dev, test, "ID_PATH", path);
+-                udev_builtin_add_property(dev, test, "ID_PATH_TAG", tag);
+-                free(path);
++                r = udev_builtin_add_property(dev, test, "ID_PATH", path);
++                if (r < 0)
++                        log_debug_errno(r, "Failed to add ID_PATH property, ignoring: %m");
++                add_id_tag(dev, test, path);
+                 return EXIT_SUCCESS;
+         }
+         return EXIT_FAILURE;
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

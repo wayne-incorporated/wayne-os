@@ -1,0 +1,121 @@
+Revert d437fba8ef626b6d8b7928540f630163a9b04021 locally
+    
+    Revert d437fba8ef626b6d8b7928540f630163a9b04021 locally
+    to fix a potential clang miscompile when building linux kernel 4.4.
+    https://bugs.chromium.org/p/chromium/issues/detail?id=1066638
+    and https://buganizer.corp.google.com/issues/151583374
+
+diff --git a/clang/include/clang/AST/Decl.h b/clang/include/clang/AST/Decl.h
+index 841e24e527e..061a606b375 100644
+--- a/clang/include/clang/AST/Decl.h
++++ b/clang/include/clang/AST/Decl.h
+@@ -2314,9 +2314,6 @@ public:
+       Optional<unsigned> *AlignmentParam = nullptr,
+       bool *IsNothrow = nullptr) const;
+ 
+-  /// Determine if this function provides an inline implementation of a builtin.
+-  bool isInlineBuiltinDeclaration() const;
+-
+   /// Determine whether this is a destroying operator delete.
+   bool isDestroyingOperatorDelete() const;
+ 
+diff --git a/clang/lib/AST/Decl.cpp b/clang/lib/AST/Decl.cpp
+index 1eb85472e3c..c816e3b6023 100644
+--- a/clang/lib/AST/Decl.cpp
++++ b/clang/lib/AST/Decl.cpp
+@@ -3021,14 +3021,6 @@ bool FunctionDecl::isReplaceableGlobalAllocationFunction(
+   return Params == FPT->getNumParams();
+ }
+ 
+-bool FunctionDecl::isInlineBuiltinDeclaration() const {
+-  if (!getBuiltinID())
+-    return false;
+-
+-  const FunctionDecl *Definition;
+-  return hasBody(Definition) && Definition->isInlineSpecified();
+-}
+-
+ bool FunctionDecl::isDestroyingOperatorDelete() const {
+   // C++ P0722:
+   //   Within a class C, a single object deallocation function with signature
+diff --git a/clang/lib/CodeGen/CGExpr.cpp b/clang/lib/CodeGen/CGExpr.cpp
+index 671ada019ce..8f31e39dbd6 100644
+--- a/clang/lib/CodeGen/CGExpr.cpp
++++ b/clang/lib/CodeGen/CGExpr.cpp
+@@ -4660,13 +4660,7 @@ static CGCallee EmitDirectCallee(CodeGenFunction &CGF, GlobalDecl GD) {
+   const FunctionDecl *FD = cast<FunctionDecl>(GD.getDecl());
+ 
+   if (auto builtinID = FD->getBuiltinID()) {
+-    // Replaceable builtin provide their own implementation of a builtin. Unless
+-    // we are in the builtin implementation itself, don't call the actual
+-    // builtin. If we are in the builtin implementation, avoid trivial infinite
+-    // recursion.
+-    if (!FD->isInlineBuiltinDeclaration() ||
+-        CGF.CurFn->getName() == FD->getName())
+-      return CGCallee::forBuiltin(builtinID, FD);
++    return CGCallee::forBuiltin(builtinID, FD);
+   }
+ 
+   llvm::Constant *calleePtr = EmitFunctionDeclPointer(CGF.CGM, GD);
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 963638cacb1..c0bd02d7998 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -1908,11 +1908,6 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
+   else if (const auto *SA = FD->getAttr<SectionAttr>())
+      F->setSection(SA->getName());
+ 
+-  if (FD->isInlineBuiltinDeclaration()) {
+-    F->addAttribute(llvm::AttributeList::FunctionIndex,
+-                    llvm::Attribute::NoBuiltin);
+-  }
+-
+   if (FD->isReplaceableGlobalAllocationFunction()) {
+     // A replaceable global allocation function does not act like a builtin by
+     // default, only if it is invoked by a new-expression or delete-expression.
+diff --git a/clang/test/CodeGen/memcpy-nobuiltin.c b/clang/test/CodeGen/memcpy-nobuiltin.c
+deleted file mode 100644
+index fb51d87413a..00000000000
+--- a/clang/test/CodeGen/memcpy-nobuiltin.c
++++ /dev/null
+@@ -1,15 +0,0 @@
+-// RUN: %clang_cc1 -verify -S -emit-llvm -o- %s -isystem %S -DWITH_DECL | FileCheck --check-prefix=CHECK-WITH-DECL %s
+-// RUN: %clang_cc1 -verify -S -emit-llvm -o- %s -isystem %S -UWITH_DECL | FileCheck --check-prefix=CHECK-NO-DECL %s
+-// RUN: %clang_cc1 -verify -S -emit-llvm -o- %s -isystem %S -DWITH_SELF_REFERENCE_DECL | FileCheck --check-prefix=CHECK-SELF-REF-DECL %s
+-//
+-// CHECK-WITH-DECL-NOT: @llvm.memcpy
+-// CHECK-NO-DECL: @llvm.memcpy
+-// CHECK-SELF-REF-DECL: @llvm.memcpy
+-//
+-#include <memcpy-nobuiltin.inc>
+-void test(void *dest, void const *from, size_t n) {
+-  memcpy(dest, from, n);
+-
+-  static char buffer[1];
+-  memcpy(buffer, from, 2); // expected-warning {{'memcpy' will always overflow; destination buffer has size 1, but size argument is 2}}
+-}
+diff --git a/clang/test/CodeGen/memcpy-nobuiltin.inc b/clang/test/CodeGen/memcpy-nobuiltin.inc
+deleted file mode 100644
+index 25eab0a9ffd..00000000000
+--- a/clang/test/CodeGen/memcpy-nobuiltin.inc
++++ /dev/null
+@@ -1,19 +0,0 @@
+-#include <stddef.h>
+-extern void *memcpy(void *dest, void const *from, size_t n);
+-
+-#ifdef WITH_DECL
+-inline void *memcpy(void *dest, void const *from, size_t n) {
+-  char const *ifrom = from;
+-  char *idest = dest;
+-  while (n--)
+-    *idest++ = *ifrom++;
+-  return dest;
+-}
+-#endif
+-#ifdef WITH_SELF_REFERENCE_DECL
+-inline void *memcpy(void *dest, void const *from, size_t n) {
+-  if (n != 0)
+-    memcpy(dest, from, n);
+-  return dest;
+-}
+-#endif

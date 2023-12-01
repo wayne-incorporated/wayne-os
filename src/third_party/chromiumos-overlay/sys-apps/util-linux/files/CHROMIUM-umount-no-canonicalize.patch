@@ -1,0 +1,14 @@
+diff --git a/umount.c b/umount.c
+index 8b7e1dd..532c20d 100644
+--- a/sys-utils/umount.c
++++ b/sys-utils/umount.c
+@@ -592,6 +592,9 @@ int main(int argc, char **argv)
+ 	argc -= optind;
+ 	argv += optind;
+
++	/* Set this option unconditionally to frustrate symlink attacks. */
++	mnt_context_disable_canonicalize(cxt, TRUE);
++
+ 	if (all) {
+ 		if (argc) {
+ 			warnx(_("unexpected number of arguments"));

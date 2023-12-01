@@ -1,0 +1,101 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":kmsvnc",
+    ":screenshot",
+  ]
+  if (use.test) {
+    deps += [ ":run_kmsvnc_test" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":screen-capture_png_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "egl",
+    "gbm",
+    "glesv2",
+    "libchrome",
+    "libdrm",
+    "libpng",
+  ]
+}
+
+static_library("libscreen-capture") {
+  sources = [
+    "crtc.cc",
+    "egl_capture.cc",
+    "kmsvnc_utils.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+pkg_config("libvncserver") {
+  pkg_deps = [ "libvncserver" ]
+}
+
+executable("screenshot") {
+  sources = [
+    "png.cc",
+    "screenshot.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":libscreen-capture" ]
+}
+
+executable("kmsvnc") {
+  sources = [
+    "kmsvnc.cc",
+    "uinput.cc",
+  ]
+  configs += [
+    ":target_defaults",
+    ":libvncserver",
+  ]
+  install_path = "sbin"
+  deps = [ ":libscreen-capture" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "gtest_main" ]
+  }
+  executable("run_kmsvnc_test") {
+    sources = [
+      "kmsvnc_utils_test.cc",
+      "uinput.cc",
+      "uinput_test.cc",
+    ]
+    run_test = true
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    deps = [
+      ":libscreen-capture",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("screen-capture_png_fuzzer") {
+    sources = [
+      "png.cc",
+      "png_fuzzer.cc",
+    ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+  }
+}

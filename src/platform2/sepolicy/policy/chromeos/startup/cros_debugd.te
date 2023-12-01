@@ -1,0 +1,41 @@
+type cros_debugd, cros_miscdomain, chromeos_domain, domain;
+type cros_debugd_minijail, cros_miscdomain, chromeos_domain, domain;
+
+permissive cros_debugd;
+permissive cros_debugd_minijail;
+
+domain_auto_trans(cros_init, cros_debugd_exec, cros_debugd)
+domain_auto_trans(cros_debugd, cros_minijail_exec, cros_debugd_minijail)
+
+log_writer(cros_debugd)
+cros_dbus_client(cros_debugd)
+
+filetrans_pattern(cros_debugd, cros_run, cros_run_shill, dir, "shill")
+filetrans_pattern(cros_debugd, cros_run, cros_run_avahi_daemon, dir, "avahi-daemon")
+
+allow cros_debugd_minijail cros_debugd:fd use;
+
+# debugd needs pretty wide access to generate logs.
+# TODO(b/242717537): Turn these into 'allow' rules after ARC++ P is deprecated.
+dontaudit cros_debugd_minijail domain:dir r_dir_perms;
+dontaudit cros_debugd_minijail domain:file r_file_perms;
+dontaudit cros_debugd_minijail domain:lnk_file read;
+dontaudit cros_debugd_minijail domain:process getattr;
+
+dontaudit cros_debugd_minijail file_type:dir r_dir_perms;
+dontaudit cros_debugd_minijail file_type:file r_file_perms;
+dontaudit cros_debugd_minijail file_type:lnk_file { getattr read };
+dontaudit cros_debugd_minijail file_type:sock_file { getattr read write };
+dontaudit cros_debugd_minijail file_type:process getattr;
+
+dontaudit cros_debugd_minijail exec_type:file { execute execute_no_trans map };
+
+dontaudit cros_debugd_minijail self:cap_userns { setgid setuid sys_admin sys_chroot sys_ptrace };
+dontaudit cros_debugd_minijail self:capability { chown dac_read_search mknod net_admin setgid setuid sys_admin sys_chroot sys_nice sys_ptrace sys_rawio };
+dontaudit cros_debugd_minijail self:capability2 syslog;
+dontaudit cros_debugd_minijail self:netlink_generic_socket { bind create getattr read setopt write };
+dontaudit cros_debugd_minijail self:netlink_kobject_uevent_socket { bind create getattr read setopt };
+dontaudit cros_debugd_minijail self:netlink_tcpdiag_socket { bind create getattr nlmsg_read read setopt write };
+dontaudit cros_debugd_minijail self:process setexec;
+dontaudit cros_debugd_minijail self:udp_socket { create ioctl };
+dontaudit cros_debugd_minijail self:unix_dgram_socket ioctl;

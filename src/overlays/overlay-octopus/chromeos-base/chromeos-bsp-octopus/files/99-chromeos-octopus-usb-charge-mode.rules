@@ -1,0 +1,47 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+# Detect the usb type-a port add/remove event and use the ectool
+# to inform ec to enable/disable the charging in suspend mode.
+# If the type-a port isn't used before the system enters suspend,
+# we can turn the usb charging off after the system enters suspend.
+# Once the system resume, the usb charging will be turned on by default.
+# This feature can reduce the power consumption of suspend mode by
+# turning off the type-a redriver.
+
+# USB3 in the port 0
+ACTION=="add", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb2/2-2", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 0"
+
+ACTION=="remove", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb2/2-2", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 0 -i"
+
+# USB2 in the port 0
+ACTION=="add", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb1/1-2", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 0"
+
+ACTION=="remove", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb1/1-2", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 0 -i"
+
+# USB3 in the port 1
+ACTION=="add", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb2/2-4", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 1"
+
+ACTION=="remove", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb2/2-4", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 1 -i"
+
+# USB2 in the port 1
+ACTION=="add", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb1/1-4", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 1"
+
+ACTION=="remove", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:15.0/usb1/1-4", \
+  RUN+="/usr/sbin/control_usb_charge_mode.sh -p 1 -i"
+

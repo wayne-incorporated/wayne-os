@@ -1,0 +1,1633 @@
+From d0d8ff2f5e33bfd840d0644e66982f5c67738058 Mon Sep 17 00:00:00 2001
+From: Dumpeti Sathish Kumar <sdumpeti@codeaurora.org>
+Date: Mon, 28 Jun 2021 15:58:06 +0530
+Subject: [PATCH] ODL support on Open-Source Diag-Router
+
+---
+ Makefile                   |  16 +-
+ router/diag.c              |   2 +
+ router/diag.h              |  24 ++
+ router/diag_cntl.c         | 229 +++++++++++++---
+ router/diag_cntl.h         |   7 +
+ router/dm.c                | 198 ++++++++++++--
+ router/dm.h                |   1 +
+ router/peripheral-qrtr.c   |  10 +-
+ router/peripheral.c        |   2 +-
+ router/peripheral.h        |  20 ++
+ router/socket.c            |   7 +-
+ router/unix.c              |   2 +-
+ tools/diag-log_on_device.c | 656 +++++++++++++++++++++++++++++++++++++++++++++
+ tools/send_data.c          |  52 +++-
+ 14 files changed, 1156 insertions(+), 70 deletions(-)
+ create mode 100644 tools/diag-log_on_device.c
+
+diff --git a/Makefile b/Makefile
+index 3565102..dc22396 100644
+--- a/Makefile
++++ b/Makefile
+@@ -5,13 +5,14 @@ HAVE_LIBQRTR=1
+ 
+ DIAG := diag-router
+ SEND_DATA := send_data
++LOG_ON_DEVICE:= diag-log_on_device
+ 
+-all: $(DIAG) $(SEND_DATA)
++all: $(DIAG) $(SEND_DATA) $(LOG_ON_DEVICE)
+ 
+ CFLAGS ?= -Wall -g -O2
+ ifeq ($(HAVE_LIBUDEV),1)
+ CFLAGS += -DHAS_LIBUDEV=1
+-LDFLAGS += -ludev
++LDFLAGS += -ludev -lpthread
+ endif
+ ifeq ($(HAVE_LIBQRTR),1)
+ CFLAGS += -DHAS_LIBQRTR=1
+@@ -55,9 +56,16 @@ SEND_DATA_OBJS := $(SEND_DATA_SRCS:.c=.o)
+ $(SEND_DATA): $(SEND_DATA_OBJS)
+ 	$(CC) -o $@ $^ $(LDFLAGS)
+ 
+-install: $(DIAG) $(SEND_DATA)
++LOG_ON_DEVICE_SRCS  := tools/diag-log_on_device.c
++LOG_ON_DEVICE_OBJS  := $(LOG_ON_DEVICE_SRCS:.c=.o)
++
++$(LOG_ON_DEVICE): $(LOG_ON_DEVICE_OBJS)
++	$(CC) -o $@ $^ $(LDFLAGS)
++
++install: $(DIAG) $(SEND_DATA) $(LOG_ON_DEVICE)
+ 	install -D -m 755 $(DIAG) $(DESTDIR)$(prefix)/bin/$(DIAG)
+ 	install -D -m 755 $(SEND_DATA) $(DESTDIR)$(prefix)/bin/$(SEND_DATA)
++	install -D -m 755 $(LOG_ON_DEVICE) $(DESTDIR)$(prefix)/bin/$(LOG_ON_DEVICE)
+ 
+ clean:
+-	rm -f $(DIAG) $(OBJS) $(SEND_DATA) $(SEND_DATA_OBJS)
++	rm -f $(DIAG) $(OBJS) $(SEND_DATA) $(SEND_DATA_OBJS) $(LOG_ON_DEVICE) $(LOG_ON_DEVICE_OBJS)
+diff --git a/router/diag.c b/router/diag.c
+index b5e443d..5978dc1 100644
+--- a/router/diag.c
++++ b/router/diag.c
+@@ -131,6 +131,8 @@ int main(int argc, char **argv)
+ 
+ 	diag_usb_open("/dev/ffs-diag");
+ 
++	diag_mux_init();
++
+ 	ret = diag_unix_open();
+ 	if (ret < 0)
+ 		errx(1, "failed to create unix socket dm\n");
+diff --git a/router/diag.h b/router/diag.h
+index da502bf..bf255d1 100644
+--- a/router/diag.h
++++ b/router/diag.h
+@@ -59,10 +59,16 @@
+ #define DIAG_FEATURE_DCI_EXTENDED_HEADER			BIT(14)
+ #define DIAG_FEATURE_DIAG_ID					BIT(15)
+ #define DIAG_FEATURE_PKT_HEADER_UNTAG				BIT(16)
++#define DIAG_FEATURE_DIAG_ID_FEATURE_MASK			BIT(19)
+ 
+ #define DIAG_CMD_SUBSYS_DISPATCH       75
+ #define DIAG_CMD_SUBSYS_DISPATCH_V2	128
+ 
++void diag_mux_init(void);
++int dm_del(int );
++
++
++
+ struct diag_client;
+ 
+ struct peripheral {
+@@ -76,6 +82,8 @@ struct peripheral {
+ 	struct list_head cntlq;
+ 	struct list_head dataq;
+ 
++	int periph_id;
++
+ 	int cntl_fd;
+ 	bool cntl_open;
+ 	int data_fd;
+@@ -96,6 +104,22 @@ struct peripheral {
+ 	void (*close)(struct peripheral *perif);
+ };
+ 
++extern struct diag_client *socket_dm;
++
++struct diag_logger_ops {
++	int (*write)(unsigned char *buf, int len, struct watch_flow *flow);
++	int (*open)(void);
++	int (*close)(void);
++	int (*open_device)(int id);
++	int (*close_device)(int id);
++};
++
++struct diag_logger_t {
++	int mode;
++	struct diag_logger_ops *log_ops;
++};
++
++
+ extern struct list_head peripherals;
+ 
+ struct diag_cmd {
+diff --git a/router/diag_cntl.c b/router/diag_cntl.c
+index 0e35c8d..f1a391a 100644
+--- a/router/diag_cntl.c
++++ b/router/diag_cntl.c
+@@ -43,30 +43,30 @@
+ #include "peripheral.h"
+ #include "util.h"
+ 
+-#define DIAG_CTRL_MSG_DTR               2
+-#define DIAG_CTRL_MSG_DIAGMODE          3
+-#define DIAG_CTRL_MSG_DIAGDATA          4
+-#define DIAG_CTRL_MSG_FEATURE           8
+-#define DIAG_CTRL_MSG_EQUIP_LOG_MASK    9
+-#define DIAG_CTRL_MSG_EVENT_MASK_V2     10
+-#define DIAG_CTRL_MSG_F3_MASK_V2        11
+-#define DIAG_CTRL_MSG_NUM_PRESETS       12
+-#define DIAG_CTRL_MSG_SET_PRESET_ID     13
+-#define DIAG_CTRL_MSG_LOG_MASK_WITH_PRESET_ID   14
+-#define DIAG_CTRL_MSG_EVENT_MASK_WITH_PRESET_ID 15
+-#define DIAG_CTRL_MSG_F3_MASK_WITH_PRESET_ID    16
+-#define DIAG_CTRL_MSG_CONFIG_PERIPHERAL_TX_MODE 17
+-#define DIAG_CTRL_MSG_PERIPHERAL_BUF_DRAIN_IMM  18
+-#define DIAG_CTRL_MSG_CONFIG_PERIPHERAL_WMQ_VAL 19
+-#define DIAG_CTRL_MSG_DCI_CONNECTION_STATUS     20
+-#define DIAG_CTRL_MSG_LAST_EVENT_REPORT         22
+-#define DIAG_CTRL_MSG_LOG_RANGE_REPORT          23
+-#define DIAG_CTRL_MSG_SSID_RANGE_REPORT         24
+-#define DIAG_CTRL_MSG_BUILD_MASK_REPORT         25
+-#define DIAG_CTRL_MSG_DEREG             27
+-#define DIAG_CTRL_MSG_DCI_HANDSHAKE_PKT         29
+-#define DIAG_CTRL_MSG_PD_STATUS                 30
+-#define DIAG_CTRL_MSG_TIME_SYNC_PKT             31
++#define DIAG_CTRL_MSG_DTR		2
++#define DIAG_CTRL_MSG_DIAGMODE		3
++#define DIAG_CTRL_MSG_DIAGDATA		4
++#define DIAG_CTRL_MSG_FEATURE		8
++#define DIAG_CTRL_MSG_EQUIP_LOG_MASK	9
++#define DIAG_CTRL_MSG_EVENT_MASK_V2	10
++#define DIAG_CTRL_MSG_F3_MASK_V2	11
++#define DIAG_CTRL_MSG_NUM_PRESETS	12
++#define DIAG_CTRL_MSG_SET_PRESET_ID	13
++#define DIAG_CTRL_MSG_LOG_MASK_WITH_PRESET_ID	14
++#define DIAG_CTRL_MSG_EVENT_MASK_WITH_PRESET_ID	15
++#define DIAG_CTRL_MSG_F3_MASK_WITH_PRESET_ID	16
++#define DIAG_CTRL_MSG_CONFIG_PERIPHERAL_TX_MODE	17
++#define DIAG_CTRL_MSG_PERIPHERAL_BUF_DRAIN_IMM	18
++#define DIAG_CTRL_MSG_CONFIG_PERIPHERAL_WMQ_VAL	19
++#define DIAG_CTRL_MSG_DCI_CONNECTION_STATUS	20
++#define DIAG_CTRL_MSG_LAST_EVENT_REPORT		22
++#define DIAG_CTRL_MSG_LOG_RANGE_REPORT		23
++#define DIAG_CTRL_MSG_SSID_RANGE_REPORT		24
++#define DIAG_CTRL_MSG_BUILD_MASK_REPORT		25
++#define DIAG_CTRL_MSG_DEREG			27
++#define DIAG_CTRL_MSG_DCI_HANDSHAKE_PKT		29
++#define DIAG_CTRL_MSG_PD_STATUS			30
++#define DIAG_CTRL_MSG_TIME_SYNC_PKT		31
+ 
+ struct diag_cntl_hdr {
+ 	uint32_t cmd;
+@@ -190,9 +190,9 @@ struct diag_cntl_cmd_buffering_tx_mode_v2
+ 	uint8_t tx_mode;
+ } __packed;
+ 
+-#define DIAG_BUFFERING_MODE_STREAMING   0
+-#define DIAG_BUFFERING_MODE_THRESHOLD   1
+-#define DIAG_BUFFERING_MODE_CIRCULAR    2
++#define DIAG_BUFFERING_MODE_STREAMING	0
++#define DIAG_BUFFERING_MODE_THRESHOLD	1
++#define DIAG_BUFFERING_MODE_CIRCULAR	2
+ 
+ #define DIAG_CNTL_CMD_DEREGISTER	27
+ struct diag_cntl_cmd_dereg {
+@@ -205,10 +205,36 @@ struct diag_cntl_cmd_dereg {
+ } __packed;
+ #define to_cmd_dereg(h) container_of(h, struct diag_cntl_cmd_dereg, hdr)
+ 
++#define DIAG_CNTL_CMD_DIAG_ID 33
++
++struct diag_cntl_cmd_diag_id {
++	 struct diag_cntl_hdr hdr;
++	uint32_t version;
++	uint32_t diag_id;
++	char process_name[MAX_DIAGID_STR_LEN];
++} __packed;
++#define to_cmd_diag_id(h) container_of(h, struct diag_cntl_cmd_diag_id, hdr)
++
++struct diag_id_tbl_t {
++	struct list_head link;
++	uint8_t diag_id;
++	uint8_t pd_val;
++	int periph_id;
++	uint8_t pd_feature_mask;
++	char *process_name;
++}; //__packed;
++
++struct diag_id_t {
++	uint8_t diag_id;
++	uint8_t len;
++	char *process_name;
++} __packed;
++
++
+ static void diag_cntl_send_feature_mask(struct peripheral *peripheral, uint32_t mask);
+ 
+ static int diag_cntl_register(struct peripheral *peripheral,
+-			      struct diag_cntl_hdr *hdr, size_t len)
++				struct diag_cntl_hdr *hdr, size_t len)
+ {
+ 	struct diag_cntl_cmd_reg *pkt = to_cmd_reg(hdr);
+ 	struct diag_cmd *dc;
+@@ -229,7 +255,7 @@ static int diag_cntl_register(struct peripheral *peripheral,
+ 		last = cmd << 24 | subsys << 16 | pkt->ranges[i].last;
+ 
+ 		// printf("[%s] register 0x%x - 0x%x\n",
+-		//	  peripheral->name, first, last);
++			//peripheral->name, first, last);
+ 
+ 		dc = malloc(sizeof(*dc));
+ 		if (!dc) {
+@@ -249,7 +275,7 @@ static int diag_cntl_register(struct peripheral *peripheral,
+ }
+ 
+ static int diag_cntl_feature_mask(struct peripheral *peripheral,
+-				  struct diag_cntl_hdr *hdr, size_t len)
++					struct diag_cntl_hdr *hdr, size_t len)
+ {
+ 	struct diag_cntl_cmd_feature *pkt = to_cmd_feature(hdr);
+ 	uint32_t local_mask = 0;
+@@ -263,6 +289,10 @@ static int diag_cntl_feature_mask(struct peripheral *peripheral,
+ 	if (peripheral->sockets)
+ 		local_mask |= DIAG_FEATURE_SOCKETS_ENABLED;
+ 
++	local_mask |= DIAG_FEATURE_DIAG_ID;
++	local_mask |= DIAG_FEATURE_DIAG_ID_FEATURE_MASK;
++
++
+ 	printf("[%s] mask:", peripheral->name);
+ 
+ 	if (mask & DIAG_FEATURE_FEATURE_MASK_SUPPORT)
+@@ -288,6 +318,10 @@ static int diag_cntl_feature_mask(struct peripheral *peripheral,
+ 	if (mask & DIAG_FEATURE_DIAG_ID)
+ 		printf(" DIAG-ID");
+ 
++	if (mask & DIAG_FEATURE_DIAG_ID_FEATURE_MASK)
++		printf("DIAG-ID-FEATURE-MASK");
++
++
+ 	printf(" (0x%x)\n", mask);
+ 
+ 	peripheral->features = mask & local_mask;
+@@ -395,6 +429,7 @@ void diag_cntl_send_masks(struct peripheral *peripheral)
+ 
+ 		diag_cntl_send_msg_mask(peripheral, &range);
+ 	}
++	diag_cntl_send_event_mask(peripheral);
+ }
+ 
+ void diag_cntl_send_event_mask(struct peripheral *peripheral)
+@@ -437,7 +472,7 @@ void diag_cntl_send_event_mask(struct peripheral *peripheral)
+ }
+ 
+ static int diag_cntl_deregister(struct peripheral *peripheral,
+-			      struct diag_cntl_hdr *hdr, size_t len)
++				struct diag_cntl_hdr *hdr, size_t len)
+ {
+ 	struct diag_cntl_cmd_dereg *pkt = to_cmd_dereg(hdr);
+ 	struct diag_cmd *dc;
+@@ -494,6 +529,133 @@ static void diag_cntl_send_feature_mask(struct peripheral *peripheral, uint32_t
+ 	diag_cntl_set_buffering_mode(peripheral, 0);
+ }
+ 
++#define DIAG_ID_APPS 1
++#define DIAG_ID_ROOT_STRING "root"
++
++struct list_head diag_id_list = LIST_INIT(diag_id_list);
++
++
++int diag_add_diag_id_to_list(uint8_t diag_id, char *process_name,
++				uint8_t pd_val, struct peripheral *perif)
++{
++	struct diag_id_tbl_t *new_item = NULL;
++	int process_len = 0;
++
++	if (!process_name || diag_id == 0)
++		return -EINVAL;
++
++	new_item = (struct diag_id_tbl_t *)malloc(sizeof(struct diag_id_tbl_t));
++	if (!new_item)
++		return -ENOMEM;
++
++	process_len = strlen(process_name);
++	new_item->process_name = malloc(process_len + 1);
++
++	if (!new_item->process_name) {
++		free(new_item);
++		new_item = NULL;
++		return -ENOMEM;
++	}
++	new_item->diag_id = diag_id;
++	new_item->pd_val = pd_val;
++	new_item->periph_id = perif->periph_id;
++	strncpy(new_item->process_name, process_name, process_len + 1);
++	list_add(&diag_id_list, &new_item->link);
++
++	return 0;
++}
++
++static int diag_query_pd_name(char *process_name, char *search_str)
++{
++	if (!process_name)
++		return -EINVAL;
++
++	if (strstr(process_name, search_str))
++		return 1;
++
++	return 0;
++}
++
++
++int diag_query_diag_id(char *process_name, uint8_t *diag_id)
++{
++	struct list_head *start;
++	struct diag_id_tbl_t *item = NULL;
++
++	if (!process_name || !diag_id)
++		return -EINVAL;
++
++	list_for_each(start, &diag_id_list) {
++		item = list_entry(start, struct diag_id_tbl_t, link);
++		if (strcmp(item->process_name, process_name) == 0) {
++			*diag_id = item->diag_id;
++			return 1;
++		}
++	}
++
++	return 0;
++}
++
++int diag_query_pd(char *process_name)
++{
++	if (!process_name)
++		return -EINVAL;
++
++	if (diag_query_pd_name(process_name, "modem/root_pd"))
++		return PERIPHERAL_MODEM;
++	if (diag_query_pd_name(process_name, "wpss/root_pd"))
++		return PERIPHERAL_WCNSS;
++	if (diag_query_pd_name(process_name, "wlan_pd"))
++		return UPD_WLAN;
++
++	return PD_UNKNOWN;
++}
++
++
++static int diag_cntl_process_diag_id(struct peripheral *peripheral,
++					struct diag_cntl_hdr *hdr, size_t len)
++{
++	struct diag_cntl_cmd_diag_id *pkt = to_cmd_diag_id(hdr);
++	struct diag_cntl_cmd_diag_id *ctrl_pkt;
++	char *process_name = NULL;
++	char *root_str = NULL;
++	uint8_t local_diag_id = 0;
++	static uint8_t diag_id = DIAG_ID_APPS;
++	uint32_t version = 0, feature_len = 0;
++	uint8_t new_request = 0;
++	int pd_val, ret;
++	process_name = (char*)&pkt->process_name;
++
++	ret = diag_query_diag_id(process_name, &local_diag_id);
++	if (!ret) {
++		diag_id++;
++		new_request = 1;
++		pd_val = diag_query_pd(process_name);
++		diag_add_diag_id_to_list(diag_id, process_name,
++		pd_val, peripheral);
++		local_diag_id = diag_id;
++	}
++
++	root_str = strstr(process_name, DIAG_ID_ROOT_STRING);
++	ctrl_pkt = malloc(sizeof(*ctrl_pkt));
++
++	if (!ctrl_pkt)
++		return -ENOMEM;
++
++	ctrl_pkt->diag_id = local_diag_id;
++	ctrl_pkt->hdr.cmd = DIAG_CNTL_CMD_DIAG_ID;
++	ctrl_pkt->version = DIAGID_VERSION_1;
++	strncpy((char *)&ctrl_pkt->process_name, process_name,
++		sizeof(ctrl_pkt->process_name));
++	ctrl_pkt->hdr.len = sizeof(ctrl_pkt->diag_id) + sizeof(ctrl_pkt->version) +
++		strlen(process_name) + 1;
++	len = ctrl_pkt->hdr.len+ sizeof(ctrl_pkt->hdr);
++
++	queue_push(&peripheral->cntlq, ctrl_pkt, len);
++
++	return 0;
++}
++
+ void diag_cntl_set_diag_mode(struct peripheral *perif, bool real_time)
+ {
+ 	struct diag_cntl_cmd_diag_mode_v2 pkt_v2;
+@@ -583,9 +745,12 @@ int diag_cntl_recv(struct peripheral *peripheral, const void *buf, size_t n)
+ 		case DIAG_CNTL_CMD_DEREGISTER:
+ 			diag_cntl_deregister(peripheral, hdr, n);
+ 			break;
++		case DIAG_CNTL_CMD_DIAG_ID:
++			diag_cntl_process_diag_id(peripheral, hdr, n);
++			break;
+ 		default:
+ 			warnx("[%s] unsupported control packet: %d",
+-			      peripheral->name, hdr->cmd);
++				peripheral->name, hdr->cmd);
+ 			print_hex_dump("CNTL", buf, n);
+ 			break;
+ 		}
+diff --git a/router/diag_cntl.h b/router/diag_cntl.h
+index f73f0d2..42a3e4b 100644
+--- a/router/diag_cntl.h
++++ b/router/diag_cntl.h
+@@ -35,6 +35,13 @@
+ #include "peripheral.h"
+ #include "masks.h"
+ 
++#define DIAG_ID_ROOT_STRING	"root"
++#define DIAGID_VERSION_1	1
++#define DIAGID_VERSION_2	2
++#define MAX_DIAGID_STR_LEN	30
++#define MIN_DIAGID_STR_LEN	5
++
++
+ int diag_cntl_recv(struct peripheral *perif, const void *buf, size_t len);
+ void diag_cntl_send_log_mask(struct peripheral *peripheral, uint32_t equip_id);
+ void diag_cntl_send_msg_mask(struct peripheral *peripheral, struct diag_ssid_range_t *range);
+diff --git a/router/dm.c b/router/dm.c
+index b669bef..ede519a 100644
+--- a/router/dm.c
++++ b/router/dm.c
+@@ -35,6 +35,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <error.h>
+ 
+ #include "diag.h"
+ #include "dm.h"
+@@ -59,9 +60,100 @@ struct diag_client {
+ 
+ 	struct list_head outq;
+ 	struct list_head node;
++	struct watch_flow *flow;
+ };
+ 
+ struct list_head diag_clients = LIST_INIT(diag_clients);
++struct list_head diag_sock_clients = LIST_INIT(diag_sock_clients);
++
++
++int diag_socket_write(unsigned char *buf, int len, struct watch_flow *flow)
++{
++	if(socket_dm)
++		dm_send_flow(socket_dm, buf, len, flow);
++	return 0;
++}
++
++int diag_md_write(unsigned char *buf, int len, struct watch_flow *flow)
++//int diag_md_write(const void *buf, int len, struct watch_flow *flow)
++{
++	//printf("ODL Write Call\n");
++	struct diag_client *dm;
++	struct list_head *item;
++	size_t outlen;
++	void *outbuf;
++	int user_space_data_type = 32;
++	int remote_proc, data_len;
++	unsigned char *ptr;
++	int num_data_fields = 1, offset = 0;
++
++	outbuf = hdlc_encode(buf, len, &outlen);
++	if (!outbuf) {
++		warn("failed to allocate hdlc destination buffer\n");
++		return -1;
++	}
++
++	data_len = (outlen + sizeof(int)*3);
++	ptr = alloca(data_len);
++	if (!ptr) {
++		warn("diag: In %s failed to allocate memory\n", __func__);
++		return -1;
++	}
++	memcpy(ptr,&user_space_data_type, sizeof(user_space_data_type));
++	offset = offset + sizeof(user_space_data_type);
++	memcpy(ptr + offset, &num_data_fields, sizeof(num_data_fields));
++	offset = offset + sizeof(num_data_fields);
++	memcpy(ptr + offset, &outlen, sizeof(int));
++	offset = offset + sizeof(int);
++	memcpy(ptr + offset, outbuf, outlen);
++
++	list_for_each(item, &diag_sock_clients) {
++		dm = container_of(item, struct diag_client, node);
++
++		dm_send_flow(dm, ptr, data_len, flow);
++	}
++
++	return 0;
++}
++
++static struct diag_logger_ops socket_log_ops = {
++	.write = diag_socket_write,
++	.open = NULL,
++	.close = NULL,
++	.open_device = NULL,
++	.close_device = NULL,
++};
++
++static struct diag_logger_ops md_log_ops = {
++	.write = diag_md_write,
++	.open = NULL,
++	.close = NULL,
++	.open_device = NULL,
++	.close_device = NULL,
++};
++
++
++struct diag_logger_t *logger = NULL;
++
++void diag_mux_init()
++{
++	logger = (struct diag_logger_t *) malloc(sizeof(struct diag_logger_t *));
++	if(logger == NULL)
++		warn("Failed to allocate Memory.\n");
++
++	if(socket_dm)
++		logger->log_ops = &socket_log_ops;
++	else
++	logger->log_ops = &md_log_ops;
++}
++
++void diag_close_logging_process()
++{
++        if(socket_dm)
++                logger->log_ops = &socket_log_ops;
++        else
++                logger->log_ops = &md_log_ops;
++}
+ 
+ /**
+  * dm_add() - register new DM
+@@ -78,14 +170,32 @@ struct diag_client *dm_add(const char *name, int in_fd, int out_fd, bool hdlc_en
+ 	dm->name = strdup(name);
+ 	dm->in_fd = in_fd;
+ 	dm->out_fd = out_fd;
++	dm->flow = NULL;
+ 	dm->hdlc_encoded = hdlc_encoded;
+ 	list_init(&dm->outq);
+ 
+-	if (dm->in_fd >= 0)
++	if ((dm->in_fd >= 0) && (dm->name != NULL)) {
++		if (!strcmp(dm->name, "UNIX")) {
++			dm->flow = watch_flow_new();
++			watch_add_readfd(dm->in_fd, dm_recv, dm, dm->flow);
++		} else {
+ 		watch_add_readfd(dm->in_fd, dm_recv, dm, NULL);
++		}
++	}
+ 	watch_add_writeq(dm->out_fd, &dm->outq);
+ 
+-	list_add(&diag_clients, &dm->node);
++
++	if (dm->name != NULL) {
++		if (!strcmp(dm->name,"UNIX"))
++			list_add(&diag_sock_clients, &dm->node);
++		else
++			list_add(&diag_clients, &dm->node);
++	} else {
++		free(dm);
++		return NULL;
++	}
++
++//	list_add(&diag_clients, &dm->node);
+ 
+ 	/* Disable DM by default, so that  */
+ 	dm->enabled = false;
+@@ -123,31 +233,88 @@ static int dm_recv_hdlc(struct diag_client *dm)
+ 	return ret;
+ }
+ 
++#define USER_SPACE_DATA_TYPE 0x00000020
++#define USER_SPACE_RAW_DATA_TYPE 0x00000080
++#define USER_SPACE_LOG_EVENT  0x00000010
++
+ static int dm_recv_raw(struct diag_client *dm)
+ {
+-	int saved_errno;
++	int saved_errno,fd;
+ 	unsigned char buf[4096];
+ 	ssize_t n;
++	struct hdlc_decoder recv_decoder;
++	struct circ_buf recv_buf;
++	size_t msglen;
++	void *msg;
++	struct dm_pkt{
++		int type;
++		unsigned char pkt;
++	};
++	struct dm_pkt *dmpkt;
+ 
+ 	for (;;) {
+ 		n = read(dm->in_fd, buf, sizeof(buf));
+ 		if (!n) {
++			fd = dm->in_fd;
+ 			watch_remove_fd(dm->in_fd);
++			dm_del(dm->in_fd);
++			diag_close_logging_process();
++			close(fd);
+ 			break;
+ 		} else if (n < 0 && errno == EAGAIN) {
+ 			break;
+ 		} else if (n < 0) {
+-			saved_errno = -errno;
+ 			warn("Failed to read from %s\n", dm->name);
+-			return saved_errno;
++			fd = dm->in_fd;
++			watch_remove_fd(dm->in_fd);
++ 	                dm_del(dm->in_fd);
++			diag_close_logging_process();
++			close(fd);
++			break;
++		}
++		dmpkt = (struct dm_pkt *)buf;
++		switch (dmpkt->type) {
++		case USER_SPACE_DATA_TYPE:
++			memset(&recv_decoder, 0, sizeof(recv_decoder));
++			memcpy(recv_buf.buf, buf+4, n-4);
++			recv_buf.tail = 0;
++			recv_buf.head = n-4;
++			msg = hdlc_decode_one(&recv_decoder, &recv_buf, &msglen);
++			diag_client_handle_command(dm, msg, msglen);
++		break;
++		case USER_SPACE_RAW_DATA_TYPE:
++			diag_client_handle_command(dm, buf + 4, n - 4);
++		break;
++		case USER_SPACE_LOG_EVENT:
++			logger->log_ops = &md_log_ops;
++		break;	
++	
++		default:
++			break;
+ 		}
+-
+-		diag_client_handle_command(dm, buf, n);
+ 	}
+-
+ 	return 0;
+ }
+ 
++int dm_del(int fd)
++{
++        struct diag_client *dm;
++        struct list_head *item;
++
++        list_for_each(item, &diag_sock_clients) {
++                dm = container_of(item, struct diag_client, node);
++                if (dm->in_fd == fd) {
++                        if (dm->flow)
++                                free(dm->flow);
++                        list_del(&dm->node);
++                        free(dm);
++                }
++        }
++
++        return 0;
++}
++
++
+ /**
+  * dm_recv() - read and handle data from a DM
+  * @fd:		the file descriptor associated with the DM
+@@ -163,7 +330,7 @@ int dm_recv(int fd, void* data)
+ 		return dm_recv_raw(dm);
+ }
+ 
+-static ssize_t dm_send_flow(struct diag_client *dm, const void *ptr, size_t len,
++ssize_t dm_send_flow(struct diag_client *dm, const void *ptr, size_t len,
+ 			    struct watch_flow *flow)
+ {
+ 	if (!dm->enabled)
+@@ -194,16 +361,11 @@ ssize_t dm_send(struct diag_client *dm, const void *ptr, size_t len)
+  * @len:	length of message
+  * @flow:	flow control context for the peripheral
+  */
+-void dm_broadcast(const void *ptr, size_t len, struct watch_flow *flow)
++void dm_broadcast(const void *buf, size_t len, struct watch_flow *flow)
+ {
+-	struct diag_client *dm;
+-	struct list_head *item;
+-
+-	list_for_each(item, &diag_clients) {
+-		dm = container_of(item, struct diag_client, node);
+-
+-		dm_send_flow(dm, ptr, len, flow);
+-	}
++	unsigned char *tmp;
++	tmp = (unsigned char *)buf;
++	logger->log_ops->write(tmp, len, flow);
+ }
+ 
+ void dm_enable(struct diag_client *dm)
+diff --git a/router/dm.h b/router/dm.h
+index 9c2195c..985a929 100644
+--- a/router/dm.h
++++ b/router/dm.h
+@@ -39,6 +39,7 @@ struct diag_client;
+ struct diag_client *dm_add(const char *name, int in_fd, int out_fd, bool hdlc_encoded);
+ int dm_recv(int fd, void* data);
+ ssize_t dm_send(struct diag_client *dm, const void *ptr, size_t len);
++ssize_t dm_send_flow(struct diag_client *dm, const void *ptr, size_t len, struct watch_flow *flow);
+ void dm_broadcast(const void *ptr, size_t len, struct watch_flow *flow);
+ void dm_enable(struct diag_client *dm);
+ void dm_disable(struct diag_client *dm);
+diff --git a/router/peripheral-qrtr.c b/router/peripheral-qrtr.c
+index f3c1537..465b0da 100644
+--- a/router/peripheral-qrtr.c
++++ b/router/peripheral-qrtr.c
+@@ -272,7 +272,7 @@ void qrtr_perif_close(struct peripheral *perif)
+ {
+ }
+ 
+-static int qrtr_perif_init_subsystem(const char *name, int instance_base)
++static int qrtr_perif_init_subsystem(const char *name, int instance_base, int id)
+ {
+ 	struct peripheral *perif;
+ 	struct watch_flow *flow;
+@@ -280,12 +280,12 @@ static int qrtr_perif_init_subsystem(const char *name, int instance_base)
+ 	perif = calloc(1, sizeof(*perif));
+ 
+ 	flow = watch_flow_new();
+-
+ 	perif->name = strdup(name);
+ 	perif->send = qrtr_perif_send;
+ 	perif->close = qrtr_perif_close;
+ 	perif->sockets = true;
+ 	perif->flow = flow;
++	perif->periph_id = id;
+ 
+ 	list_init(&perif->cmdq);
+ 	list_init(&perif->cntlq);
+@@ -327,12 +327,12 @@ static int qrtr_perif_init_subsystem(const char *name, int instance_base)
+ 
+ int peripheral_qrtr_init(void)
+ {
+-	qrtr_perif_init_subsystem("modem", DIAG_INSTANCE_BASE_MODEM);
+-	qrtr_perif_init_subsystem("lpass", DIAG_INSTANCE_BASE_LPASS);
++	qrtr_perif_init_subsystem("modem", DIAG_INSTANCE_BASE_MODEM, PERIPHERAL_MODEM);
++/*	qrtr_perif_init_subsystem("lpass", DIAG_INSTANCE_BASE_LPASS);
+ 	qrtr_perif_init_subsystem("wcnss", DIAG_INSTANCE_BASE_WCNSS);
+ 	qrtr_perif_init_subsystem("sensors", DIAG_INSTANCE_BASE_SENSORS);
+ 	qrtr_perif_init_subsystem("cdsp", DIAG_INSTANCE_BASE_CDSP);
+ 	qrtr_perif_init_subsystem("wdsp", DIAG_INSTANCE_BASE_WDSP);
+-
++*/
+ 	return 0;
+ }
+diff --git a/router/peripheral.c b/router/peripheral.c
+index 1b63a58..9de656c 100644
+--- a/router/peripheral.c
++++ b/router/peripheral.c
+@@ -63,7 +63,7 @@ void peripheral_close(struct peripheral *peripheral)
+ 
+ int peripheral_init(void)
+ {
+-	peripheral_rpmsg_init();
++//	peripheral_rpmsg_init();
+ 	peripheral_qrtr_init();
+ 
+ 	return 0;
+diff --git a/router/peripheral.h b/router/peripheral.h
+index d04c8f8..f4cb46e 100644
+--- a/router/peripheral.h
++++ b/router/peripheral.h
+@@ -33,6 +33,26 @@
+ 
+ struct diag_ssid_range_t;
+ 
++#define PERIPHERAL_APPS		0
++#define PERIPHERAL_MODEM	1
++
++#define PERIPHERAL_LPASS	2
++#define PERIPHERAL_WCNSS	3
++#define PERIPHERAL_SENSORS	4
++#define PERIPHERAL_WDSP		5
++#define PERIPHERAL_CDSP		6
++#define PERIPHERAL_NPU		7
++#define NUM_PERIPHERALS		8
++
++#define UPD_WLAN		8
++#define UPD_AUDIO		9
++#define UPD_SENSORS		10
++#define UPD_CHARGER		11
++#define NUM_UPD			4
++#define PD_UNKNOWN		255
++
++
++
+ int peripheral_init(void);
+ void peripheral_close(struct peripheral *peripheral);
+ 
+diff --git a/router/socket.c b/router/socket.c
+index f8f5b0f..f71b344 100644
+--- a/router/socket.c
++++ b/router/socket.c
+@@ -49,11 +49,12 @@
+ #include "watch.h"
+ 
+ #define APPS_BUF_SIZE 16384
++struct diag_client *socket_dm = NULL;
+ 
+ int diag_sock_connect(const char *hostname, unsigned short port)
+ {
+ 	struct sockaddr_in addr;
+-	struct diag_client *dm;
++//	struct diag_client *dm;
+ 	struct hostent *host;
+ 	int ret;
+ 	int fd;
+@@ -81,8 +82,8 @@ int diag_sock_connect(const char *hostname, unsigned short port)
+ 
+ 	printf("Connected to %s:%d\n", hostname, port);
+ 
+-	dm = dm_add("DIAG CLIENT", fd, fd, true);
+-	dm_enable(dm);
++	socket_dm = dm_add("Socket Client", fd, fd, true);
++	dm_enable(socket_dm);
+ 
+ 	return fd;
+ }
+diff --git a/router/unix.c b/router/unix.c
+index ead9fe0..5b3e41d 100644
+--- a/router/unix.c
++++ b/router/unix.c
+@@ -85,7 +85,7 @@ int diag_unix_open(void)
+ 		return -1;
+ 	}
+ 
+-	ret = listen(fd, 2);
++	ret = listen(fd, 50);
+ 	if (ret < 0) {
+ 		fprintf(stderr, "failed to listen on diag socket\n");
+ 		return -1;
+diff --git a/tools/diag-log_on_device.c b/tools/diag-log_on_device.c
+new file mode 100644
+index 0000000..0be46af
+--- /dev/null
++++ b/tools/diag-log_on_device.c
+@@ -0,0 +1,656 @@
++/*
++ * Copyright (c) 2021 The Linux Foundation. All rights reserved.
++
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are met:
++    * Redistributions of source code must retain the above copyright
++      notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above
++      copyright notice, this list of conditions and the following
++      disclaimer in the documentation and/or other materials provided
++      with the distribution.
++    * Neither the name of The Linux Foundation nor the names of its
++      contributors may be used to endorse or promote products derived
++      from this software without specific prior written permission.
++
++ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
++ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
++ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
++ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
++ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <sys/time.h>
++#include <pthread.h>
++#include <err.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <netdb.h>
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <time.h>
++#include <pthread.h>
++#include <stdint.h>
++#include <signal.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <dirent.h>
++#include <sys/types.h>
++#include <sys/syscall.h>
++#include <sys/select.h>
++#include <ctype.h>
++#include <limits.h>
++#include <stdlib.h>
++
++#define FILE_LIST_NAME_SIZE 100
++#define MAX_FILES_IN_FILE_LIST 100
++#define std_strlprintf snprintf
++#define LOG_FILENAME_PREFIX_LEN 9
++#define READ_BUF_SIZE 100000
++#define DISK_BUF_SIZE 8192
++#define CONTROL_CHAR 0x7E
++#define USER_SPACE_DATA_TYPE 0x00000020
++#define USER_SPACE_RAW_DATA_TYPE 0x00000080
++#define USER_SPACE_LOG_EVENT     0x00000010
++#define FILE_NAME_LEN 500
++#define MASK_FILE_BUF_SIZE 8192
++
++
++
++struct buffer_pool {
++	unsigned int bytes_in_buff;
++	unsigned char buffer_ptr[DISK_BUF_SIZE];
++};
++
++/*Static declaration of buffer. */
++struct buffer_pool pools[] = {
++	[0] = {
++		.bytes_in_buff = 0,
++	},
++	[1] = {
++		.bytes_in_buff = 0,
++	},
++
++};
++
++typedef uint32_t	uint32;
++typedef uint8_t		uint8;
++
++pthread_cond_t cond1 = PTHREAD_COND_INITIALIZER;
++pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
++
++/* Thread Handlers */
++pthread_t read_thread_hdl;	/* Diag Read thread handle */
++pthread_t write_thread_hdl;	/* Diag disk write thread handle */
++
++/* Global Declarations */
++int curr_read = 0;
++int curr_write = 0;
++unsigned char read_buffer[READ_BUF_SIZE];
++char output_dir[FILE_NAME_LEN] = {"/tmp"};
++char mask_clear_file[] = "/tmp/diag_mask.cfg";
++int fd_dev = -1; // Socket Descriptor
++int fd_device = -1; //FIle Descriptor
++char timestamp_buf[30];
++char file_name_curr[FILE_NAME_LEN];
++static char *open_mask_file= NULL;
++static int diag_mask_file = 0;
++static int diag_timeout;
++int num_bytes_read;
++unsigned int max_file_num = 10;
++static unsigned int file_count = 0;
++int file_list_size;
++unsigned long max_file_size = 100000000;
++unsigned long min_file_size = 80000000;
++unsigned static long count_written_bytes;
++char* file_list = NULL;
++int file_list_index = -1;
++char file_name_del[FILE_NAME_LEN];
++int overflow_flag = 0;
++int cleanup_mask;
++
++int delete_log(void);
++
++/* Function to get timestamp */
++void get_time_string(char *buffer, int len)
++{
++	struct timeval tv;
++	struct tm *tm;
++	unsigned long long milliseconds = 0;
++	char timestamp_buf[30];
++
++	if (!buffer || len <= 0)
++		return;
++
++	gettimeofday(&tv, NULL);
++	tm = localtime(&tv.tv_sec);
++	if (!tm)
++		return;
++
++	milliseconds = (tv.tv_sec * 1000LL) + (tv.tv_usec / 1000);
++	strftime(timestamp_buf, 30, "%Y%m%d_%H%M%S", tm);
++	(void)snprintf(buffer, len, "%s%lld",
++		timestamp_buf, milliseconds);
++}
++
++static void usage(void)
++{
++	fprintf(stderr,
++		"User space application for diag interface\n"
++		"\n"
++		"usage: diag [-of]\n"
++		"\n"
++		"options:\n"
++		"-o	<output directory>\n"
++		"-f	<Diag Configuration file>\n"
++		"-t	<Log Timeout>\n"
++		"-n	<number of log files>\n"
++		"-s	<Size in MB>\n"
++		"-c	<Cleanup Modem Mask>\n"
++	);
++	exit(1);
++}
++
++
++int send_empty_mask(int type)
++{
++	int fd_mask, ch, ret;
++	const uint8 size = 40;
++	unsigned char mask_buf[size];
++	int count_mask_bytes = 4;
++	*(int *)mask_buf = USER_SPACE_RAW_DATA_TYPE;
++	FILE *mask_fp = NULL;
++
++	if ((mask_fp = fopen(mask_clear_file, "rb")) == NULL) {
++		printf("can't open mask clear file: %s, errno: %d\n", mask_clear_file,errno);
++		return -1;
++	}
++	while(1)
++	{
++		ch = fgetc(mask_fp);
++		if(ch == EOF)
++			break;
++
++		mask_buf[count_mask_bytes] = ch;
++		if (mask_buf[count_mask_bytes] == CONTROL_CHAR) {
++			ret = write(fd_dev, mask_buf, count_mask_bytes-1);
++			if(ret < 0) {
++				printf("Write Error on the Socket: errno = %d\n", errno);
++				return -1;
++			}
++		*(int *)mask_buf = USER_SPACE_DATA_TYPE;
++		count_mask_bytes = 4;
++		} else {
++			count_mask_bytes++;
++		}
++	}
++	fclose(mask_fp);
++
++	return 0;	
++}
++
++
++static void log_timeout(int sig, siginfo_t *siginfo, void *context)
++{
++	int ret;
++	printf ("Sending PID: %ld, UID: %ld\n",
++			(long)siginfo->si_pid, (long)siginfo->si_uid);
++	ret = send_empty_mask(0);
++	if(ret < 0)
++		printf("Couldn't open Mask clear file.\n");
++
++	close(fd_device);
++	close(fd_dev);
++	pthread_cancel(read_thread_hdl);
++	pthread_cancel(write_thread_hdl);
++}
++int close_logging_file()
++{
++	int status;
++	char timestamp_buf[30];
++	char new_filename[FILE_NAME_LEN];
++
++	close(fd_device);
++	/* check whether number of files in /tmp. Delete if we exceed the limit */
++	if(file_count > max_file_num) {
++		printf("Delete Oldest File.\n");
++		if (!delete_log()) {
++			file_count--;
++		}
++	}
++	get_time_string(timestamp_buf, sizeof(timestamp_buf));
++	snprintf(new_filename,
++			FILE_NAME_LEN, "%s%s%s%s",
++			output_dir,"/diag_log_",
++			timestamp_buf, ".qmdl");
++
++	fd_device = open(new_filename,
++			O_CREAT | O_RDWR | O_SYNC | O_TRUNC,
++			0644);
++	if(fd_device < 0) {
++		printf(" File open error: %d\n", errno);
++		return -1;
++	}
++	else {
++		file_count++; 
++	}
++	strncpy(file_name_curr, new_filename, FILE_NAME_LEN);
++	return 0;
++}
++
++static void *WriteThread(void *data)
++{
++	unsigned int chunks, last_chunk;
++	struct stat finfo;
++	int ret;
++	while(1) {
++		pthread_mutex_lock(&lock);
++		pthread_cond_wait(&cond1, &lock);
++		ret = write(fd_device,pools[curr_write].buffer_ptr,DISK_BUF_SIZE);
++		if(ret > 0) {
++			pools[curr_write].bytes_in_buff = 0;
++		} else if (ret < 0) {
++			goto fail;
++		}
++		/* Check whether we reached to MAX size of the File */
++		if(fstat(fd_device, &finfo) == 0) {
++			if(finfo.st_size > min_file_size) {
++				ret = close_logging_file();
++				if(ret < 0)
++					goto fail;
++				count_written_bytes = 0;
++			}
++		} 
++		else {
++			goto fail;
++		}
++		pthread_mutex_unlock(&lock);
++		curr_write =! curr_write;
++	}
++fail: 
++	pthread_cancel(read_thread_hdl);
++	close(fd_dev);
++	close(fd_device);
++	return (void *)0;
++}
++/* Read Thread */
++static void *CreateWaitThread(void* data) 
++{
++	int read_bytes = 0,type,num_data_fields;
++	uint32 count_received_bytes;
++	unsigned char* ptr;
++
++	while(1) {
++		num_bytes_read = 0;
++		memset(read_buffer, 0, READ_BUF_SIZE);
++		num_bytes_read = read(fd_dev, (void*)read_buffer,READ_BUF_SIZE);
++		if(!num_bytes_read || (num_bytes_read < 0))
++			goto read_failure;
++
++		type = *(int *)read_buffer;
++		ptr = read_buffer+4;
++		num_data_fields = *(int *)ptr;
++		ptr += 4;
++		count_received_bytes = *(uint32*)ptr;
++		ptr += sizeof(uint32);
++		count_written_bytes += num_bytes_read;
++		if(count_received_bytes >= (DISK_BUF_SIZE - pools[curr_read].bytes_in_buff)) {
++		/* Trigger Write Thread */
++			curr_read =! curr_read;
++			pthread_cond_signal(&cond1);
++		}
++
++		if(count_received_bytes > 0) {/* Buffer space is available */
++			memcpy(pools[curr_read].buffer_ptr + pools[curr_read].bytes_in_buff, ptr, count_received_bytes);
++			pools[curr_read].bytes_in_buff += count_received_bytes;
++		}
++	}
++
++read_failure:
++	close(fd_dev);
++	close(fd_device);
++	pthread_cancel(write_thread_hdl);
++	return (void *)0;	
++}
++
++static int create_oldest_file_list(char *oldest_dir)
++{
++
++	int status = 1;
++	struct dirent **dirent_list;
++	int i,n,type=0;
++	int num_entries = 0;
++	int num_entries_capped = 0;
++	char *name_ptr;
++	int num_bytes = 0;
++
++	num_entries = scandir(oldest_dir, &dirent_list, 0,(int(*)(const struct dirent **, const struct dirent **))alphasort);
++	if(!dirent_list) {
++		printf("In %s, couldn't get the dirent_list, errno: %d, directory: %s\n",
++		__func__, errno, oldest_dir);
++		return 0;
++	} else if (num_entries < 0) {
++		printf("In %s, error determining directory entries, errno: %d, directory: %s\n",
++			__func__, errno, oldest_dir);
++		return 0;
++	}
++
++	/* Limit the size of the list so we aren't working with too many files */
++	num_entries_capped = (num_entries > MAX_FILES_IN_FILE_LIST) ?
++				MAX_FILES_IN_FILE_LIST : num_entries;
++		
++	if (num_entries_capped - 2 > 0) {
++		file_list_size = num_entries_capped - 2;
++		num_bytes = FILE_LIST_NAME_SIZE * file_list_size;
++		file_list = malloc(num_bytes);
++	}
++
++	if (file_list) {
++		file_list_index = 0;
++		for (i = 0; i < num_entries_capped; i++)
++		{
++			if ((strncmp(dirent_list[i]->d_name, "diag_log_",LOG_FILENAME_PREFIX_LEN) != 0))
++				continue;
++			if (file_list_index < file_list_size)
++			{
++				name_ptr = file_list +
++						(file_list_index * FILE_LIST_NAME_SIZE);
++				strncpy(name_ptr, dirent_list[i]->d_name, FILE_LIST_NAME_SIZE);
++				*(name_ptr + (FILE_LIST_NAME_SIZE - 1)) = 0;
++					file_list_index++;
++			}
++			if (file_list_index > 0) {
++				if (file_list_index < file_list_size) {
++					int new_size = FILE_LIST_NAME_SIZE *file_list_index;
++					char *temp_ptr = realloc(file_list, new_size);
++					if (temp_ptr)
++						file_list = temp_ptr;
++				}
++			file_list_size = file_list_index;
++			}
++		}
++	}
++	else if (num_bytes > 0) {
++		printf("Memory Allocation error.\n");
++		status = 0;
++	}
++	
++	i = num_entries;
++	while (i--) {
++	free(dirent_list[i]);
++	}
++	
++	free(dirent_list); 
++	return status;
++}
++
++static int get_oldest_file(char* oldest_file, char *oldest_dir)
++{
++	int status = 0;
++		status = create_oldest_file_list(oldest_dir);
++
++	if (file_list) {
++		if (oldest_file) {
++			strncpy(oldest_file, file_list,
++				FILE_LIST_NAME_SIZE);
++			file_list_index++;
++			status = 1;
++		} else {
++			printf("In %s, oldest_file is NULL\n", __func__);
++		}
++		
++	}else {
++		status =0;
++		printf("No Log files in the dicrectory.\n");
++	}
++
++	return status;
++}
++/* Number of Log file in /tmp directory */
++static int get_file_count(char *oldest_dir)
++{
++	struct dirent **dirent_list;
++	int i,num_entries = 0;
++	int num_entries_capped = 0;
++
++	num_entries = scandir(oldest_dir, &dirent_list, 0,(int(*)(const struct dirent **, const struct dirent **))alphasort);
++	if(!dirent_list) {
++		printf("In %s, couldn't get the dirent_list, errno: %d, directory: %s\n",
++			__func__, errno, oldest_dir);
++		return 0;
++	} else if (num_entries < 0) {
++		printf("In %s, error determining directory entries, errno: %d, directory: %s\n",
++			 __func__, errno, oldest_dir);
++		return 0;
++	}
++	
++	for (i = 0; i < num_entries; i++) {
++		if ((strncmp(dirent_list[i]->d_name, "diag_log_",LOG_FILENAME_PREFIX_LEN) != 0))
++			continue;
++	file_count++;
++	}
++	return file_count;
++}
++
++int delete_log()
++{
++	int status;
++	char oldest_file[FILE_LIST_NAME_SIZE] = "";
++	struct stat file_stat;
++
++	status = get_oldest_file(oldest_file,
++					output_dir);
++	if (0 == status) {
++		printf("diag: In %s, Unable to determine oldest file for deletion\n",
++			 __func__);
++		return -1;
++	}
++	std_strlprintf(file_name_del,
++			FILE_NAME_LEN, "%s%s%s",
++			output_dir, "/", oldest_file);
++	if (!strncmp(file_name_curr, file_name_del, FILE_NAME_LEN)) {
++		printf("diag: In %s, Cannot delete file, file %s is in use \n",
++			 __func__, file_name_curr);
++		return -1;
++	}
++	stat(file_name_del, &file_stat);
++	/* Convert size to KB */
++	file_stat.st_size /= 1024;
++	if (unlink(file_name_del)) {
++		printf("In %s, Unable to delete file: %s, errno: %d\n",
++			__func__, file_name_del, errno);
++		return -1;
++	} else {
++		printf("In %s, Deleting logfile %s of size %lld KB\n",
++			__func__, file_name_del,
++			(long long int) file_stat.st_size);
++		free(file_list);
++	}
++	return 0;
++}
++
++
++int main(int argc, char **argv)
++{
++	int ret;
++	int c,ch,found_cmd;
++	struct sockaddr_un addr;
++	struct timeval tv = {20, 0};
++	struct sigaction act;
++	int count_mask_bytes = 0;
++	unsigned char mask_buf[MASK_FILE_BUF_SIZE];
++	unsigned char mask_log[4];
++	FILE *read_mask_fp;
++	*(int *)mask_buf = USER_SPACE_DATA_TYPE;
++	*(int *)mask_log = USER_SPACE_LOG_EVENT; 
++	
++	count_mask_bytes = 4;
++	memset (&act, '\0', sizeof(act));
++	act.sa_sigaction = &log_timeout;
++	act.sa_flags = SA_SIGINFO;
++	if (sigaction(SIGALRM, &act, NULL) < 0) {
++		perror ("sigaction");
++		return 1;
++	}
++
++	for (;;) {
++		c = getopt(argc, argv, "hf:o:t:s");
++		if (c < 0)
++			break;
++
++		switch (c) {
++		case 'c':
++			cleanup_mask = 1;
++			break;
++		
++		case 's':
++			max_file_size = atol(optarg);
++			if ((long)max_file_size <= 0)
++				max_file_size = 100000000;
++			else {
++				max_file_size *= 1024 * 1024;
++			//	if (max_file_size >= 0 && max_file_size < 1024 * 1024)
++			//		max_file_size = 100000000;
++			}
++			min_file_size = ((max_file_size / 100) * 80);
++			break;
++		
++		case 'o':
++			file_count = get_file_count(output_dir);
++			printf("QMDL File Count in /tmp Directory = %d\n", file_count);
++			
++			if(max_file_num > 1 && (file_count >= max_file_num)) { /* Check file_count before creating the Log File. */
++				printf("In %s, File count reached max file num %u so deleting oldest file\n",__func__, max_file_num);
++			
++			while(file_count > max_file_num)
++				if (!delete_log()) {
++				file_count--;
++				}
++			}
++
++			get_time_string(timestamp_buf, sizeof(timestamp_buf));
++			snprintf(file_name_curr,
++					FILE_NAME_LEN, "%s%s%s%s",
++					output_dir,"/diag_log_",
++					timestamp_buf, ".qmdl");
++			fd_device = open(file_name_curr,
++					O_CREAT | O_RDWR | O_SYNC | O_TRUNC,
++					0644);
++			if(fd_device < 0) {
++				printf(" File open error: %d\n", errno);
++				return -1;
++			}
++			else {
++				file_count++;
++			}
++			printf("QMDL Fil: %s\n", file_name_curr);
++			break;
++
++		case 'f':
++			open_mask_file = strdup(optarg);
++			diag_mask_file = 1;
++			break;
++		case 't':
++			printf("Timeout for QMDL Logging\n");
++			diag_timeout = atoi(optarg);
++			printf("Time out value = %d\n", diag_timeout);
++			alarm(diag_timeout);
++			break;
++		default:
++		case 'h':
++			usage();
++			break;
++		}
++	}
++
++	fd_dev = socket(AF_UNIX, SOCK_SEQPACKET, 0);
++	if (fd_dev < 0)
++		goto failure_case3;
++
++	memset(&addr, 0, sizeof(addr));
++	addr.sun_family = AF_UNIX;
++	strncpy(addr.sun_path, "\0diag", sizeof(addr.sun_path)-1);
++	
++	ret = connect(fd_dev, (struct sockaddr*)&addr, sizeof(addr));
++	if (ret < 0)
++		goto failure_case2;
++	
++	ret = write(fd_dev,mask_log,4);
++	if(ret < 0)
++		printf("LOg MAsk failed to write\n");
++
++	pthread_create(&read_thread_hdl, NULL, CreateWaitThread, NULL);
++	if(read_thread_hdl == 0) {
++		printf("Failed to create Read Thread.\n");
++		goto failure_case2;
++	}
++	pthread_create(&write_thread_hdl, NULL, WriteThread, NULL);
++	if(write_thread_hdl == 0) {
++		printf("Failed to create Write Thread.\n");
++		if(read_thread_hdl == 0)
++			pthread_cancel(read_thread_hdl);
++		goto failure_case2;
++	}
++
++	if ((read_mask_fp = fopen(open_mask_file, "rb")) == NULL) {
++		printf("can't open mask file: %s, errno: %d\n", open_mask_file,errno);
++		goto failure_case1;
++	}
++
++	if(diag_mask_file){
++		while(1){
++			ch = fgetc(read_mask_fp);
++			if (ch == EOF)
++			break;  
++			mask_buf[count_mask_bytes] = ch;
++			if (mask_buf[count_mask_bytes] == CONTROL_CHAR) {
++
++			if (!found_cmd)
++				found_cmd = 1;
++			ret = write(fd_dev, mask_buf, count_mask_bytes+1);
++			if(ret < 0) {
++				printf("Write Error on the Socket: errno = %d\n", errno);
++				goto failure_case0;
++			}
++		
++			*(int *)mask_buf = USER_SPACE_DATA_TYPE;
++			count_mask_bytes = 4;
++			} else {
++			count_mask_bytes++;
++			}
++		}
++		if(!found_cmd){
++			printf("No command found:\n");
++		}
++	}
++	while(1)
++		sleep(3600);
++
++failure_case0:
++	fclose(read_mask_fp);
++
++failure_case1:
++	pthread_cancel(read_thread_hdl);
++	pthread_cancel(write_thread_hdl);
++
++failure_case2:
++	close(fd_dev);
++
++failure_case3:
++	close(fd_device);
++
++	return 0;
++}
+diff --git a/tools/send_data.c b/tools/send_data.c
+index 95ac274..84a338b 100644
+--- a/tools/send_data.c
++++ b/tools/send_data.c
+@@ -47,6 +47,10 @@
+ #define DIAG_CMD_RSP_BAD_COMMAND			0x13
+ #define DIAG_CMD_RSP_BAD_PARAMS				0x14
+ #define DIAG_CMD_RSP_BAD_LENGTH				0x15
++#define USER_SPACE_RAW_DATA_TYPE                        0x00000080
++#define USER_SPACE_LOG_EVENT                            0x00000010
++
++typedef uint32_t        uint32;
+ 
+ int main(int argc, char **argv)
+ {
+@@ -58,12 +62,31 @@ int main(int argc, char **argv)
+ 	char buf[8192];
+ 	int ret;
+ 	int fd;
+-	int i;
++	int i,j=1;
++	unsigned char *req_modem_loopback;
++	unsigned char *req_modem_logging;
++	int REQ_LOOPBACK_LEN;
++	unsigned char* ptr;
++	uint32 count_received_bytes;
++	(void)argc;
++	(void)argv;
++	
++	REQ_LOOPBACK_LEN = argc -1 + 4;
++
++	printf("REQ_LOOPBACK_LEN = %d\n", REQ_LOOPBACK_LEN);
++
++	req_modem_loopback = calloc(argc - 1 + 4, sizeof(*req_modem_loopback));
++	if (!req_modem_loopback)
++		exit(1);
++	*(int *)req_modem_loopback = USER_SPACE_RAW_DATA_TYPE;
++
++	req_modem_logging = calloc(4, sizeof(*req_modem_loopback));
++
++	*(int *)req_modem_logging = USER_SPACE_LOG_EVENT;
+ 
+-	msg = calloc(argc - 1, sizeof(*msg));
++	for (i = 4; i < REQ_LOOPBACK_LEN; i++,j++)
++		req_modem_loopback[i] = atoi(argv[j]);
+ 
+-	for (i = 1; i < argc; i++)
+-		msg[i - 1] = atoi(argv[i]);
+ 
+ 	fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+ 	if (fd < 0)
+@@ -76,8 +99,12 @@ int main(int argc, char **argv)
+ 	ret = connect(fd, (struct sockaddr*)&addr, sizeof(addr));
+ 	if (ret < 0)
+ 		err(1, "failed to connect to diag");
++	
++	n = write(fd,req_modem_logging,4);
++	if(n < 0)
++		err(1, "failed to send request");
+ 
+-	n = write(fd, msg, argc - 1);
++	n = write(fd, req_modem_loopback, REQ_LOOPBACK_LEN);
+ 	if (n < 0)
+ 		err(1, "failed to send request");
+ 
+@@ -108,12 +135,25 @@ int main(int argc, char **argv)
+ 			printf("Diag response: Bad command\n");
+ 			break;
+ 		}
+-
++		
++		ptr = (unsigned char*)buf;
++                ptr = ptr+4;
++                ptr += 4;
++                count_received_bytes = *(uint32*)ptr;
++                ptr += sizeof(uint32);
++#if 0
+ 		for (i = 0; i < n; i++) {
+ 			printf("%s%d", i == 0 ? "" : " ", buf[i]);
+ 			if (i % 16 == 15 || i == n - 1)
+ 				printf("\n");
+ 		}
++#endif
++	 for (i = 0; i < count_received_bytes; i++) {
++		if (i % 8 == 0) {
++			printf("\n  ");
++		}
++		printf("%02x ", ptr[i]);
++	}
+ 
+ 		if (buf[0] == msg[0])
+ 			break;
+-- 
+2.7.4
+

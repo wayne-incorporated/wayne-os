@@ -1,0 +1,25 @@
+commit 91e399519580930623e1eb7be43374f0ba8aba41
+Author: Fanbo Meng <fanbo.meng@ibm.com>
+Date:   Thu Aug 5 09:23:36 2021 -0400
+
+    Revert "[SystemZ][z/OS] Update target specific __attribute__((aligned)) value for test"
+    
+    This reverts commit d91234b21c1a1a34d98157089a8769d8f9a32f06.
+    
+    Reviewed By: abhina.sreeskantharajan
+    
+    Differential Revision: https://reviews.llvm.org/D107565
+
+diff --git a/clang/test/Sema/struct-packed-align.c b/clang/test/Sema/struct-packed-align.c
+index b4bddebe230e..03b012e34028 100644
+--- a/clang/test/Sema/struct-packed-align.c
++++ b/clang/test/Sema/struct-packed-align.c
+@@ -59,7 +59,7 @@ extern int e2[__alignof(struct as1) == 8 ? 1 : -1];
+ struct __attribute__((aligned)) as1_2 {
+     char c;
+ };
+-#if ((defined(__s390x__) && !defined(__MVS__)) || (defined(__ARM_32BIT_STATE) && !defined(__ANDROID__)))
++#if ( defined(__s390x__) || ( defined (__ARM_32BIT_STATE) && ! defined(__ANDROID__) ) )
+ extern int e1_2[sizeof(struct as1_2) == 8 ? 1 : -1];
+ extern int e2_2[__alignof(struct as1_2) == 8 ? 1 : -1];
+ #else

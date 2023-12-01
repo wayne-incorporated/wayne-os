@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<node name="/org/chromium/Modemfwd"
+      xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+  <interface name="org.chromium.Modemfwd">
+    <method name="SetDebugMode">
+      <tp:docstring>
+        Set the verbose logging mode.
+      </tp:docstring>
+      <arg name="debug_mode" type="b" direction="in">
+        True to set verbose logging, false to turn it off.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <method name="ForceFlash">
+      <tp:docstring>
+        Act as though a modem with the given device ID appeared and needs
+        flashing.
+      </tp:docstring>
+      <arg name="device_id" type="s" direction="in">
+        Device ID of the modem to attempt to force-flash.
+      </arg>
+      <arg name="options" type="a{sv}" direction="in">
+        A list of optional arguments to be used when force-flashing.
+        Supported values: "carrier_uuid", "variant", "use_modems_fw_info".
+      </arg>
+      <arg name="success" type="b" direction="out">
+        Whether force-flashing was successful.
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+    <signal name="UpdateFirmwareCompleted">
+      <tp:docstring>
+          Triggered when a flashing sequence is completed. Return error on
+          failure. This signal could also be triggered as a failure during the
+          daemon init sequence.
+      </tp:docstring>
+      <arg type="b" name="success" />
+      <arg type="s" name="error" />
+    </signal>
+  </interface>
+</node>

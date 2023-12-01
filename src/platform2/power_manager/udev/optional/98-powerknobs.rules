@@ -1,0 +1,10 @@
+# Enable WiFi Power Save Mode
+ACTION=="add|change", SUBSYSTEM=="net", TEST=="phy80211", RUN+="/usr/sbin/iw dev %k set power_save on"
+
+# Disable power save mode for Intel HDA until b/69234606 is fixed.
+ACTION=="add", SUBSYSTEM=="module", DEVPATH=="/module/snd_hda_intel", \
+  ATTR{parameters/power_save}="0", ATTR{parameters/power_save_controller}="N"
+
+# Configure SSD/HDD power management setting on power plug/unplug
+ACTION=="change", SUBSYSTEM=="power_supply", ATTR{type}!="Battery", \
+  RUN+="/usr/bin/set_blkdev_pm"

@@ -1,0 +1,122 @@
+#!/bin/bash
+# Copyright 2015 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Works only in the chromium chroot.
+
+export LC_ALL=C
+TRIM_TEMP_TEMPLACE=test_trim.XXXXXX
+TRIM_TEMP=$(mktemp -d --tmpdir "${TRIM_TEMP_TEMPLACE}")
+
+CHROMEOS_TRIM_DIR="${TRIM_TEMP}"
+
+# Source the script to test.
+. scripts/chromeos-trim --test
+
+MOCK_PARTITION_SIZE=4095
+MEGA_BYTES=$(( 1024 * 1024 ))
+
+STATEFUL="testful"
+PARTITION_DEV_STATS="./tests/partition_high_write_stats"
+
+MOCK_DEVICE_STATS="./tests/device_stats"
+CURRENT_STAT_FILE_LINE="${TRIM_TEMP}/current_line"
+
+sleep() {
+  echo "sleep: $*"
+}
+
+fstrim() {
+  # We mock that each run trim 1MB.
+  echo "fstrim: $* [ ${STATEFUL} : 1 MB (${MEGA_BYTES} bytes) trimmed ]"
+}
+
+get_stateful_total_space_blocks() {
+  # We assume $1 is 1M.
+  echo ${MOCK_PARTITION_SIZE}
+}
+
+get_disk_time_ms() {
+  local current_line
+
+  if [ -f "${CURRENT_STAT_FILE_LINE}" ]; then
+    . "${CURRENT_STAT_FILE_LINE}"
+  else
+    current_line=1
+  fi
+  head -${current_line} "${MOCK_DEVICE_STATS}" | tail -1 | awk '{print $10}'
+  : $(( current_line += 1 ))
+  echo "current_line=${current_line}" > "${CURRENT_STAT_FILE_LINE}"
+}
+
+log_msg() {
+  # Remove time reference to prevent flaky tests.
+  echo "$*" | grep -v "second"
+}
+
+run_do_trim() {
+  local result_exp=$1
+  local result_actual="${TRIM_TEMP}/result_actual"
+  do_trim > "${result_actual}"
+  diff -q "${result_exp}" "${result_actual}"
+}
+
+# Simple test to check we can read write.
+read_status_file
+duration=20
+trim_status="${TRIM_TEST_ONLY}"
+write_status_file
+duration=0
+trim_status="${TRIM_NOT_SUPPORTED}"
+read_status_file
+if [ ${duration} -eq 0 ]; then
+  echo "Unable to read status file: Got ${duration}, expected 20."
+  exit 1
+fi
+
+if [ "${trim_status}" != "${TRIM_TEST_ONLY}" ]; then
+  echo "Invalid trim status."
+  exit 1
+fi
+
+# Do a run with a write bump in device stats.
+run_do_trim "./tests/good_golden_run" || exit 1
+
+exp_trim_ammount=$(get_stateful_total_space_blocks)
+: $(( exp_trim_ammount /= FSTRIM_SLICE_MB ))
+# We purposely set the partition size to not divide by FRSTRIM_SLICE_MB, so add 1.
+: $(( exp_trim_ammount += 1 ))
+if [ $(( trimmed_amount / MEGA_BYTES )) -ne ${exp_trim_ammount} ]; then
+  echo "Invalid number of runs : " \
+       "$(( trimmed_amount / MEGA_BYTES ))"
+  exit 1
+fi
+
+# Artificially reduce the time allowed to 1 second.
+MAX_TRIM_WORKER_TIME_SEC=3
+DELAY_BTW_FSTRIM_SEC=1
+CURRENT_DATE_FILE="${TRIM_TEMP}/current_date"
+
+date() {
+  if [ -f "${CURRENT_DATE_FILE}" ]; then
+    . "${CURRENT_DATE_FILE}"
+  else
+    current_date=0
+  fi
+  : $(( current_date += 1 ))
+  echo "current_date=${current_date}" > "${CURRENT_DATE_FILE}"
+  echo "${current_date}"
+}
+
+run_do_trim "./tests/interrupted_golden_run" || exit 1
+
+# Check trim failure are reported properly
+fstrim() {
+  echo "Error Trimming"
+  exit 1
+}
+
+run_do_trim "./tests/failed_fstrim_golden_run" || exit 1
+
+rm -rf "${TRIM_TEMP}"

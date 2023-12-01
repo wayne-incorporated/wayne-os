@@ -1,0 +1,52 @@
+From ea5dfb2e06621417590d45064fb1e37776f7f588 Mon Sep 17 00:00:00 2001
+From: Chia-I Wu <olv@google.com>
+Date: Mon, 5 Jun 2023 22:15:27 -0700
+Subject: [PATCH] Fix strict aliasing violations in YCbCr view tests
+
+Commit 30ff60631 ("Use correct render target format in YCbCr view
+tests") reinterpret_casts Vec* to IVec*/UVec*, which are strict aliasing
+violations.  It causes issues with the chromeos toolchain (llvm 17 git
+with -Os atm).  Use a union for type-punning instead.
+
+Components: Vulkan
+
+VK-GL-CTS issue: 4509
+
+Affected tests:
+dEQP-VK.ycbcr.plane_view.image_view.*
+
+Change-Id: I71969285177f5ba7b831cd6214dd2b8367179a96
+---
+ .../modules/vulkan/ycbcr/vktYCbCrViewTests.cpp       | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/external/vulkancts/modules/vulkan/ycbcr/vktYCbCrViewTests.cpp b/external/vulkancts/modules/vulkan/ycbcr/vktYCbCrViewTests.cpp
+index 5a1a71794..7b3a76925 100644
+--- a/external/vulkancts/modules/vulkan/ycbcr/vktYCbCrViewTests.cpp
++++ b/external/vulkancts/modules/vulkan/ycbcr/vktYCbCrViewTests.cpp
+@@ -424,14 +424,18 @@ void checkSupport(Context& context, TestParameters params)
+ }
+ 
+ Vec4 castResult(Vec4 result, VkFormat f) {
++	union {
++		Vec4 vec;
++		IVec4 ivec;
++		UVec4 uvec;
++	} cast = { result };
++
+ 	if (isIntFormat(f)) {
+-		IVec4* result_ptr = reinterpret_cast<IVec4*>(&result);
+-		IVec4 ivec = *(result_ptr);
++		IVec4 ivec = cast.ivec;
+ 		return Vec4((float)ivec.x(), (float)ivec.y(), (float)ivec.z(), (float)ivec.w());
+ 	}
+ 	else if (isUintFormat(f)) {
+-		UVec4* result_ptr = reinterpret_cast<UVec4*>(&result);
+-		UVec4 uvec = *(result_ptr);
++		UVec4 uvec = cast.uvec;
+ 		return Vec4((float)uvec.x(), (float)uvec.y(), (float)uvec.z(), (float)uvec.w());
+ 	}
+ 	else {
+-- 
+2.41.0.162.gfafddb0af9-goog
+

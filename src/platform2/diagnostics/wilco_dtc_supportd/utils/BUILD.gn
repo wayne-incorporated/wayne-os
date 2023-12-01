@@ -1,0 +1,61 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("libutils_pkg_deps") {
+  pkg_deps = [
+    "libchrome",
+    "libmojo",
+  ]
+}
+
+source_set("libutils") {
+  configs += [ ":libutils_pkg_deps" ]
+  public_deps = [ "system:libsystem" ]
+  sources = [ "mojo_utils.cc" ]
+}
+
+if (use.test || use.fuzzer) {
+  source_set("libutils_test_utils") {
+    configs += [ ":libutils_pkg_deps" ]
+    deps = [
+      ":libutils",
+      "system:libsystem_test_utils",
+      "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+    ]
+    sources = [
+      "file_test_utils.cc",
+      "mojo_test_utils.cc",
+    ]
+  }
+}
+
+if (use.test) {
+  source_set("mojo_testrunner") {
+    configs += [
+      ":libutils_pkg_deps",
+      "//common-mk:test",
+    ]
+    deps = [ "//common-mk/testrunner:testrunner" ]
+    sources = [ "mojo_testrunner.cc" ]
+  }
+
+  source_set("libutils_test") {
+    sources = [
+      "file_test_utils_test.cc",
+      "mojo_utils_test.cc",
+    ]
+    configs += [
+      ":libutils_pkg_deps",
+      "//common-mk:test",
+    ]
+    deps = [
+      ":libutils",
+      ":libutils_test_utils",
+      ":mojo_testrunner",
+      "system:libsystem_test",
+    ]
+  }
+}

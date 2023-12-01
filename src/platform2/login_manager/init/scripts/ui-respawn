@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+# Copyright 2013 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -17,6 +17,8 @@
 # 3: (Defined in session_manager_service.h) The session_manager has detected
 #    a condition that requires a powerwash to recover. It should have requested
 #    that the device reboot before exiting, so stop respawning the UI.
+# 4: (Defined in session_manager_service.h) The ui job was started while the
+#    device was shutting down. Stop respawning the UI.
 # Other nonzero: respawn up to RESPAWN_LIMIT times in RESPAWN_WINDOW_SECONDS,
 #                then stop.
 
@@ -27,9 +29,11 @@ RESPAWN_LIMIT=6
 RESPAWN_WINDOW_SECONDS=60
 RESPAWN_TIMESTAMP_FILE=/tmp/ui-respawn-timestamps
 
-MUST_WIPE_DEVICE=3  # Defined in session_manager_service.h
+# Defined in session_manager_service.h
+CHILD_EXITING_TOO_FAST=2
+MUST_WIPE_DEVICE=3
+DEVICE_SHUTTING_DOWN=4
 
-CHILD_EXITING_TOO_FAST=2  # Defined in session_manager_service.h
 TOO_CRASHY_LIMIT=1
 TOO_CRASHY_WINDOW_SECONDS=180
 TOO_CRASHY_TIMESTAMP_FILE=/tmp/ui-too-crashy-timestamps
@@ -51,13 +55,15 @@ under_limit() {
   local time="$2"
   local limit="$3"
 
-  local tfile=$(mktemp)
-  local curtime=$(date +%s)
+  local tfile
+  tfile=$(mktemp)
+  local curtime
+  curtime=$(date +%s)
   echo "${curtime}" >>"${file}"  # To ensure the file exists.
   awk "\$0 >= ${curtime} - ${time}" "${file}" >"${tfile}"
   mv "${tfile}" "${file}"
 
-  if [ $(wc -l < "${file}") -gt ${limit} ]; then
+  if [ "$(wc -l < "${file}")" -gt "${limit}" ]; then
     return 1
   else
     return 0
@@ -65,18 +71,18 @@ under_limit() {
 }
 
 over_ui_crash_limit() {
-  ! under_limit $TOO_CRASHY_TIMESTAMP_FILE $TOO_CRASHY_WINDOW_SECONDS \
-      $TOO_CRASHY_LIMIT
+  ! under_limit "${TOO_CRASHY_TIMESTAMP_FILE}" "${TOO_CRASHY_WINDOW_SECONDS}" \
+      "${TOO_CRASHY_LIMIT}"
 }
 
 under_reboot_limit() {
-  under_limit $REBOOT_TIMESTAMP_FILE $REBOOT_WINDOW_SECONDS \
-      $REBOOT_LIMIT
+  under_limit "${REBOOT_TIMESTAMP_FILE}" "${REBOOT_WINDOW_SECONDS}" \
+      "${REBOOT_LIMIT}"
 }
 
 under_respawn_limit() {
-  under_limit $RESPAWN_TIMESTAMP_FILE $RESPAWN_WINDOW_SECONDS \
-      $RESPAWN_LIMIT
+  under_limit "${RESPAWN_TIMESTAMP_FILE}" "${RESPAWN_WINDOW_SECONDS}" \
+      "${RESPAWN_LIMIT}"
 }
 
 # ${RESULT}, ${EXIT_STATUS}, ${EXIT_SIGNAL} and {JOB} are standard
@@ -89,8 +95,8 @@ create_variables_for_systemd() {
     RESULT="failure"
     JOB="ui.service"
 
-    EXIT_SIGNAL=$(systemctl show -p ExecMainCode ${JOB} | cut -f 2 -d '=')
-    EXIT_STATUS=$(systemctl show -p ExecMainStatus ${JOB} | cut -f 2 -d '=')
+    EXIT_SIGNAL=$(systemctl show -p ExecMainCode "${JOB}" | cut -f 2 -d '=')
+    EXIT_STATUS=$(systemctl show -p ExecMainStatus "${JOB}" | cut -f 2 -d '=')
   fi
 }
 
@@ -123,6 +129,11 @@ fi
 # If the job exited cleanly (e.g. logout), restart it.
 if [ "${EXIT_STATUS}" = "0" ] ; then
   start_service "${JOB}"
+  exit 0
+fi
+
+# If the job was stopped due to the device shutting down, do not restart it.
+if [ "${EXIT_STATUS}" = "${DEVICE_SHUTTING_DOWN}" ] ; then
   exit 0
 fi
 

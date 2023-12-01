@@ -1,0 +1,147 @@
+#!/bin/bash
+# Copyright 2014 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Return a list of all currently existing PIDs.
+getAllPids() {
+  exec ps --no-headers -opid --deselect -C ps
+}
+
+# Poll until the provided PID appears.
+pollForPid() {
+  local pid=$1
+  [[ -z "${pid}" ]] && return
+  until kill -0 "${pid}" 2> /dev/null; do
+    sleep .1
+  done
+}
+
+tearDown() {
+  # TODO(cmasone): Remove ps when http://crbug.com/442027 is sorted.
+  ps -f --forest -u $(id -u)
+  pkill -KILL -e -P $$
+  echo "------------------------------ Test complete."
+  echo
+}
+
+# Asserts that the given PID is alive.
+assertPid() {
+  [[ $# -eq 1 ]] || fail "assertPid requires 1 arg, you passed $@"
+  local pid=$1
+  kill -0 "${pid}"
+  assertEquals "${pid} should not have been killed." 0 $?
+}
+
+readonly ASSERT_NO_PID_TIMEOUT=20000  # Timeout in msec. Chosen arbitrarily.
+# Asserts that the given PID is not alive.
+assertNoPid() {
+  [[ $# -eq 1 ]] || fail "assertPid requires 1 arg, you passed $@"
+  local pid=$1 i=0
+
+  while [[ ${i} -lt ${ASSERT_NO_PID_TIMEOUT} ]]; do
+    if ! kill -0 "${pid}" 2> /dev/null; then
+      return
+    fi
+    sleep .1
+    : $(( i += 100 ))
+    echo "Waited ${i} msec for ${pid} to die."
+  done
+  fail "${pid} should not be alive."
+}
+
+# Runs a background process that holds open a file under ${SHUNIT_TMPDIR}.
+# Passing "untermable" as the sole argument will make this process ignore TERM.
+# Upon return, the process will be backgrounded and the pid is in $!.
+runBackgroundProcess() {
+  local untermable
+  if [[ $# -gt 0 && "$1" == "untermable" ]]; then
+    untermable="trap : SIGTERM;"
+  fi
+  local tmpfile=$(mktemp -p "${SHUNIT_TMPDIR}" "killers_$$_$1_XXXXXXXX")
+  touch "${tmpfile}" || fail "Could not create ${tmpfile}"
+  bash -c "exec 3<'${tmpfile}'; ${untermable} kill -STOP \$\$" &
+  pollForPid $!
+}
+
+# Run a test of kill_with_open_files_on. Pass "untermable" as the sole
+# argument to test terminating processes that ignore SIGTERM.
+doKillWithOpenFilesTest() {
+  local pid1 pid2
+  runBackgroundProcess "$@"
+  pid1=$!
+  runBackgroundProcess "$@"
+  pid2=$!
+
+  kill_with_open_files_on "" "${SHUNIT_TMPDIR}"/*
+
+  assertNoPid "${pid1}"
+  assertNoPid "${pid2}"
+}
+
+testKillWithOpenFiles() {
+  doKillWithOpenFilesTest
+}
+
+testKillWithOpenFiles_NonTERMable() {
+  doKillWithOpenFilesTest untermable
+}
+
+testKillWithOpenFiles_EmptyParams() {
+  local before_pids=$(getAllPids)
+  local error_out=$(kill_with_open_files_on "" "" 2>&1)
+  local after_pids=$(getAllPids)
+
+  assertNotNull "${before_pids}"
+  assertNotNull "${after_pids}"
+  assertEquals "${error_out}" "${before_pids}" "${after_pids}"
+}
+
+testKillWithOpenFiles_UnresolvedGlob() {
+  local before_pids=$(getAllPids)
+  local error_out=$(kill_with_open_files_on "" "${SHUNIT_TMPDIR}"/* 2>&1)
+  local after_pids=$(getAllPids)
+
+  assertNotNull "${before_pids}"
+  assertNotNull "${after_pids}"
+  assertEquals "${error_out}" "${before_pids}" "${after_pids}"
+}
+
+testKillWithOpenFiles_PathFilter() {
+  local pid1 pid2
+  runBackgroundProcess foo
+  pid1=$!
+  runBackgroundProcess bar
+  pid2=$!
+
+  kill_with_open_files_on_path_and_mountpoints ".*_foo_" "" "${SHUNIT_TMPDIR}"/*
+
+  assertNoPid "${pid1}"
+  assertPid "${pid2}"
+}
+
+main() {
+  if [[ $# -ne 0 ]]; then
+    echo "Usage: $0" >&2
+    exit 1
+  fi
+  echo "Note: Messages like 'Killed bash -c \"...\"' are normal"
+
+  # Detect whether we're being run inside a pid namespace where we are init.
+  # If not, start such a pid namespace. This is to ensure we don't kill real
+  # processes on the system during tests.
+  if ! grep -Eqs "$0|pid ns: init" /proc/1/cmdline ]] && \
+     [[ -z ${UNSHARE} ]]; then
+    exec sudo UNSHARE=true unshare -f -p --mount-proc "$0" "$@"
+  fi
+
+  # Default to the temp dir ($T) that portage has set up for us.
+  # This is needed when doing out of tree builds.
+  TMPDIR="${T:-.}"
+
+  . "$(dirname "$0")/ui-killers-helper" || return 1
+  LOGPATH="${TMPDIR}/${LOGPATH##*/}"
+  . /usr/bin/shunit2
+}
+
+main "$@"

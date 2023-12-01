@@ -1,0 +1,43 @@
+From c6cd93d150a2418d0d5d6d90a5e258d4653f437f Mon Sep 17 00:00:00 2001
+From: Meng-Huan Yu <menghuan@chromium.org>
+Date: Fri, 12 Mar 2021 03:18:51 +0800
+Subject: [PATCH] use memfd_create instead of shm_open
+
+---
+ src/os.cc | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/os.cc b/src/os.cc
+index 089b92d..61f22cb 100644
+--- a/src/os.cc
++++ b/src/os.cc
+@@ -36,6 +36,7 @@
+ #include <sys/shm.h>
+ #endif
+ #include <unistd.h>
++#include <sys/mman.h>
+ 
+ #ifndef SHM_HUGETLB
+ #define SHM_HUGETLB      04000  // remove when glibc defines it
+@@ -580,7 +581,9 @@ bool OsLayer::AllocateTestMem(int64 length, uint64 paddr_base) {
+       int shm_object;
+       void *shmaddr = NULL;
+ 
+-      shm_object = shm_open("/stressapptest", O_CREAT | O_RDWR, S_IRWXU);
++      // shm_open doesn't work because /dev/shm will not occupy all memory by
++      // default. Use memfd_create() instead.
++      shm_object = memfd_create("/stressapptest", 0);
+       if (shm_object < 0) {
+         int err = errno;
+         string errtxt = ErrorString(err);
+@@ -631,7 +634,6 @@ bool OsLayer::AllocateTestMem(int64 length, uint64 paddr_base) {
+       logprintf(0, "Log: Using posix shared memory object 0x%x %s.\n",
+                 shm_object, location_message);
+     } while (0);
+-    shm_unlink("/stressapptest");
+   }
+ #endif  // HAVE_SYS_SHM_H
+ 
+-- 
+2.31.0.rc2.261.g7f71774620-goog
+

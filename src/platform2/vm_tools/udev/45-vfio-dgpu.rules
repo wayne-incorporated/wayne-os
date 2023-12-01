@@ -1,0 +1,9 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Whenever NVIDIA dGPU is added, let /sbin/dgpu.sh determine which module to
+# bind to the dGPU device. That is whether to bind vfio_pci or nvidia module.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", RUN+="/sbin/dgpu.sh -a"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200", RUN+="/sbin/dgpu.sh -a"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x040300", RUN+="/sbin/dgpu.sh -a"

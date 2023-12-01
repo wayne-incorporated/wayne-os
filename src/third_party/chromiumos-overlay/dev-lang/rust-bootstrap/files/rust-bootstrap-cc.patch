@@ -1,0 +1,25 @@
+Take the name of the linker from the CC environment variable, if set.
+This uses unwrap_or(...) rather than unwrap_or_else(|| ...) because
+the latter fails to compile with mrustc-0.9.
+
+diff --git a/rustc-1.29.0-src/src/librustc_codegen_llvm/back/link.rs b/rustc-1.29.0-src/src/librustc_codegen_llvm/back/link.rs
+index 845a66c..cd5b0bd 100644
+--- a/rustc-1.29.0-src/src/librustc_codegen_llvm/back/link.rs
++++ b/rustc-1.29.0-src/src/librustc_codegen_llvm/back/link.rs
+@@ -84,6 +84,7 @@ pub fn get_linker(sess: &Session) -> (PathBuf, Command) {
+ 
+     let msvc_tool = windows_registry::find_tool(&sess.opts.target_triple.triple(), "link.exe");
+ 
++    let cc = env::var("CC").unwrap_or("cc".into());
+     let linker_path = sess.opts.cg.linker.as_ref().map(|s| &**s)
+         .or(sess.target.target.options.linker.as_ref().map(|s| s.as_ref()))
+         .unwrap_or(match sess.linker_flavor() {
+@@ -92,7 +93,7 @@ pub fn get_linker(sess: &Session) -> (PathBuf, Command) {
+             }
+             LinkerFlavor::Em if cfg!(windows) => "emcc.bat".as_ref(),
+             LinkerFlavor::Em => "emcc".as_ref(),
+-            LinkerFlavor::Gcc => "cc".as_ref(),
++            LinkerFlavor::Gcc => cc.as_ref(),
+             LinkerFlavor::Ld => "ld".as_ref(),
+             LinkerFlavor::Lld(_) => "lld".as_ref(),
+         });

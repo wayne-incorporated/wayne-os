@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@
 #include <string>
 #include <vector>
 
-#include <base/callback.h>
-#include <base/callback_helpers.h>
+#include "base/time/time.h"
 #include <base/check.h>
+#include <base/functional/callback.h>
+#include <base/functional/callback_helpers.h>
 #include <base/logging.h>
 #include <dbus/message.h>
 #include <dbus/object_proxy.h>
+#include <dbus/scoped_dbus_error.h>
 
 namespace {
 
@@ -22,6 +24,7 @@ constexpr char kStartUnitMode[] = "replace";
 constexpr char kStartUnitMethodName[] = "StartUnit";
 constexpr char kSetEnvironmentMethodName[] = "SetEnvironment";
 constexpr char kUnsetEnvironmentMethodName[] = "UnsetEnvironment";
+constexpr base::TimeDelta kDefaultTimeout = base::TimeDelta::Min();
 
 std::unique_ptr<dbus::Response> CallEnvironmentMethod(
     dbus::ObjectProxy* proxy,
@@ -72,6 +75,18 @@ std::unique_ptr<dbus::Response> SystemdUnitStarter::TriggerImpulse(
     const std::string& unit_name,
     const std::vector<std::string>& args_keyvals,
     TriggerMode mode) {
+  dbus::ScopedDBusError dbus_error;
+  return this->TriggerImpulseWithTimeoutAndError(unit_name, args_keyvals, mode,
+                                                 kDefaultTimeout, &dbus_error);
+}
+
+std::unique_ptr<dbus::Response>
+SystemdUnitStarter::TriggerImpulseWithTimeoutAndError(
+    const std::string& unit_name,
+    const std::vector<std::string>& args_keyvals,
+    TriggerMode mode,
+    base::TimeDelta timeout,
+    dbus::ScopedDBusError* error) {
   DLOG(INFO) << "Starting " << unit_name << " unit";
 
   // If we are not able to properly set the environment for the
@@ -85,15 +100,17 @@ std::unique_ptr<dbus::Response> SystemdUnitStarter::TriggerImpulse(
   writer.AppendString(unit_name + ".target");
   writer.AppendString(kStartUnitMode);
 
+  int timeout_ms = timeout.is_min() ? dbus::ObjectProxy::TIMEOUT_USE_DEFAULT
+                                    : timeout.InMilliseconds();
   std::unique_ptr<dbus::Response> response;
   switch (mode) {
     case TriggerMode::SYNC:
-      response = systemd_dbus_proxy_->CallMethodAndBlock(
-          &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT);
+      response = systemd_dbus_proxy_->CallMethodAndBlockWithErrorDetails(
+          &method_call, timeout_ms, error);
       break;
     case TriggerMode::ASYNC:
-      systemd_dbus_proxy_->CallMethod(&method_call,
-                                      dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+      // TODO(vsomani): replace with CallMethodWithErrorResponse when needed.
+      systemd_dbus_proxy_->CallMethod(&method_call, timeout_ms,
                                       base::DoNothing());
       break;
   }

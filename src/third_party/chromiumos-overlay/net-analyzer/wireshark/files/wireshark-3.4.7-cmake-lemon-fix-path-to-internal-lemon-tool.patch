@@ -1,0 +1,38 @@
+From 5ea34c43635b465b739bbad030e649b7f7b7f357 Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Wed, 25 Aug 2021 20:13:03 +0300
+Subject: [PATCH 1/2] cmake: lemon: fix path to internal lemon tool
+
+Wireshark fails to build on my Gentoo/ChromeOS systems
+because the lemon command is not  properly specified or
+included in PATH, failing with:
+
+/bin/sh: lemon: command not found
+
+The relevant excerpt from build.ninja is:
+
+COMMAND = cd ..._build/plugins/epan/mate && lemon -T.../tools/lemon/lempar.c
+-d. .../plugins/epan/mate/mate_grammar.lemon
+
+By specifying the full path to "lemon" we ensure it is
+always searched for and found in the correct location.
+---
+ cmake/modules/UseLemon.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/cmake/modules/UseLemon.cmake b/cmake/modules/UseLemon.cmake
+index 849ffc1c87..a3bf99fa33 100644
+--- a/cmake/modules/UseLemon.cmake
++++ b/cmake/modules/UseLemon.cmake
+@@ -13,7 +13,7 @@ MACRO(ADD_LEMON_FILES _source _generated)
+           # These files are generated as side-effect
+           ${_out}.h
+           ${_out}.out
+-         COMMAND lemon
++         COMMAND ${CMAKE_BINARY_DIR}/run/lemon
+            -T${_lemonpardir}/lempar.c
+            -d.
+            ${_in}
+-- 
+2.32.0
+

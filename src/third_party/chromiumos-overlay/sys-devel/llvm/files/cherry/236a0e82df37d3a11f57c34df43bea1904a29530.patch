@@ -1,0 +1,637 @@
+commit 236a0e82df37d3a11f57c34df43bea1904a29530
+Author: Florian Hahn <flo@fhahn.com>
+Date:   Thu May 11 16:49:18 2023 +0100
+
+    [LV] Use VPValue to get expanded value for SCEV step expressions.
+    
+    Update skeleton creation logic to use SCEV expansion results from
+    expanding the pre-header. This avoids another set of SCEV expansions
+    that may happen after the CFG has been modified.
+    
+    Fixes #58811.
+    
+    Depends on D147964.
+    
+    Reviewed By: Ayal
+    
+    Differential Revision: https://reviews.llvm.org/D147965
+
+diff --git a/llvm/lib/Transforms/Vectorize/LoopVectorizationPlanner.h b/llvm/lib/Transforms/Vectorize/LoopVectorizationPlanner.h
+index 3a35f3b75474..511162511f8e 100644
+--- a/llvm/lib/Transforms/Vectorize/LoopVectorizationPlanner.h
++++ b/llvm/lib/Transforms/Vectorize/LoopVectorizationPlanner.h
+@@ -311,9 +311,14 @@ public:
+   /// TODO: \p IsEpilogueVectorization is needed to avoid issues due to epilogue
+   /// vectorization re-using plans for both the main and epilogue vector loops.
+   /// It should be removed once the re-use issue has been fixed.
+-  void executePlan(ElementCount VF, unsigned UF, VPlan &BestPlan,
+-                   InnerLoopVectorizer &LB, DominatorTree *DT,
+-                   bool IsEpilogueVectorization);
++  /// Returns a mapping of SCEVs to their expanded IR values. Note that this is
++  /// a temporary workaround needed due to the current epilogue
++  /// handling workaround needed due to the current epilogue handling.
++  DenseMap<const SCEV *, Value *> executePlan(ElementCount VF, unsigned UF,
++                                              VPlan &BestPlan,
++                                              InnerLoopVectorizer &LB,
++                                              DominatorTree *DT,
++                                              bool IsEpilogueVectorization);
+ 
+ #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+   void printPlans(raw_ostream &O);
+diff --git a/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp b/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
+index 07fde7975ef8..2c27e18e2301 100644
+--- a/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
++++ b/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
+@@ -442,6 +442,8 @@ static std::optional<unsigned> getSmallBestKnownTC(ScalarEvolution &SE,
+ namespace {
+ // Forward declare GeneratedRTChecks.
+ class GeneratedRTChecks;
++
++using SCEV2ValueTy = DenseMap<const SCEV *, Value *>;
+ } // namespace
+ 
+ namespace llvm {
+@@ -497,8 +499,10 @@ public:
+   /// loop and the start value for the canonical induction, if it is != 0. The
+   /// latter is the case when vectorizing the epilogue loop. In the case of
+   /// epilogue vectorization, this function is overriden to handle the more
+-  /// complex control flow around the loops.
+-  virtual std::pair<BasicBlock *, Value *> createVectorizedLoopSkeleton();
++  /// complex control flow around the loops.  \p ExpandedSCEVs is used to
++  /// look up SCEV expansions for expressions needed during skeleton creation.
++  virtual std::pair<BasicBlock *, Value *>
++  createVectorizedLoopSkeleton(const SCEV2ValueTy &ExpandedSCEVs);
+ 
+   /// Fix the vectorized code, taking care of header phi's, live-outs, and more.
+   void fixVectorizedLoop(VPTransformState &State, VPlan &Plan);
+@@ -555,12 +559,13 @@ public:
+ 
+   /// Create a new phi node for the induction variable \p OrigPhi to resume
+   /// iteration count in the scalar epilogue, from where the vectorized loop
+-  /// left off. In cases where the loop skeleton is more complicated (eg.
+-  /// epilogue vectorization) and the resume values can come from an additional
+-  /// bypass block, the \p AdditionalBypass pair provides information about the
+-  /// bypass block and the end value on the edge from bypass to this loop.
++  /// left off. \p Step is the SCEV-expanded induction step to use. In cases
++  /// where the loop skeleton is more complicated (i.e., epilogue vectorization)
++  /// and the resume values can come from an additional bypass block, the \p
++  /// AdditionalBypass pair provides information about the bypass block and the
++  /// end value on the edge from bypass to this loop.
+   PHINode *createInductionResumeValue(
+-      PHINode *OrigPhi, const InductionDescriptor &ID,
++      PHINode *OrigPhi, const InductionDescriptor &ID, Value *Step,
+       ArrayRef<BasicBlock *> BypassBlocks,
+       std::pair<BasicBlock *, Value *> AdditionalBypass = {nullptr, nullptr});
+ 
+@@ -646,6 +651,7 @@ protected:
+   /// block, the \p AdditionalBypass pair provides information about the bypass
+   /// block and the end value on the edge from bypass to this loop.
+   void createInductionResumeValues(
++      const SCEV2ValueTy &ExpandedSCEVs,
+       std::pair<BasicBlock *, Value *> AdditionalBypass = {nullptr, nullptr});
+ 
+   /// Complete the loop skeleton by adding debug MDs, creating appropriate
+@@ -835,15 +841,18 @@ public:
+ 
+   // Override this function to handle the more complex control flow around the
+   // three loops.
+-  std::pair<BasicBlock *, Value *> createVectorizedLoopSkeleton() final {
+-    return createEpilogueVectorizedLoopSkeleton();
++  std::pair<BasicBlock *, Value *> createVectorizedLoopSkeleton(
++
++      const SCEV2ValueTy &ExpandedSCEVs) final {
++
++    return createEpilogueVectorizedLoopSkeleton(ExpandedSCEVs);
+   }
+ 
+   /// The interface for creating a vectorized skeleton using one of two
+   /// different strategies, each corresponding to one execution of the vplan
+   /// as described above.
+   virtual std::pair<BasicBlock *, Value *>
+-  createEpilogueVectorizedLoopSkeleton() = 0;
++  createEpilogueVectorizedLoopSkeleton(const SCEV2ValueTy &ExpandedSCEVs) = 0;
+ 
+   /// Holds and updates state information required to vectorize the main loop
+   /// and its epilogue in two separate passes. This setup helps us avoid
+@@ -871,7 +880,8 @@ public:
+                                        EPI, LVL, CM, BFI, PSI, Check) {}
+   /// Implements the interface for creating a vectorized skeleton using the
+   /// *main loop* strategy (ie the first pass of vplan execution).
+-  std::pair<BasicBlock *, Value *> createEpilogueVectorizedLoopSkeleton() final;
++  std::pair<BasicBlock *, Value *>
++  createEpilogueVectorizedLoopSkeleton(const SCEV2ValueTy &ExpandedSCEVs) final;
+ 
+ protected:
+   /// Emits an iteration count bypass check once for the main loop (when \p
+@@ -901,7 +911,8 @@ public:
+   }
+   /// Implements the interface for creating a vectorized skeleton using the
+   /// *epilogue loop* strategy (ie the second pass of vplan execution).
+-  std::pair<BasicBlock *, Value *> createEpilogueVectorizedLoopSkeleton() final;
++  std::pair<BasicBlock *, Value *>
++  createEpilogueVectorizedLoopSkeleton(const SCEV2ValueTy &ExpandedSCEVs) final;
+ 
+ protected:
+   /// Emits an iteration count bypass check after the main vector loop has
+@@ -2424,21 +2435,6 @@ static void buildScalarSteps(Value *ScalarIV, Value *Step,
+   }
+ }
+ 
+-// Generate code for the induction step. Note that induction steps are
+-// required to be loop-invariant
+-static Value *CreateStepValue(const SCEV *Step, ScalarEvolution &SE,
+-                              Instruction *InsertBefore,
+-                              Loop *OrigLoop = nullptr) {
+-  const DataLayout &DL = SE.getDataLayout();
+-  assert((!OrigLoop || SE.isLoopInvariant(Step, OrigLoop)) &&
+-         "Induction step should be loop invariant");
+-  if (auto *E = dyn_cast<SCEVUnknown>(Step))
+-    return E->getValue();
+-
+-  SCEVExpander Exp(SE, DL, "induction");
+-  return Exp.expandCodeFor(Step, Step->getType(), InsertBefore);
+-}
+-
+ /// Compute the transformed value of Index at offset StartValue using step
+ /// StepValue.
+ /// For integer induction, returns StartValue + Index * StepValue.
+@@ -3142,7 +3138,7 @@ void InnerLoopVectorizer::createVectorLoopSkeleton(StringRef Prefix) {
+ }
+ 
+ PHINode *InnerLoopVectorizer::createInductionResumeValue(
+-    PHINode *OrigPhi, const InductionDescriptor &II,
++    PHINode *OrigPhi, const InductionDescriptor &II, Value *Step,
+     ArrayRef<BasicBlock *> BypassBlocks,
+     std::pair<BasicBlock *, Value *> AdditionalBypass) {
+   Value *VectorTripCount = getOrCreateVectorTripCount(LoopVectorPreHeader);
+@@ -3161,8 +3157,6 @@ PHINode *InnerLoopVectorizer::createInductionResumeValue(
+     if (II.getInductionBinOp() && isa<FPMathOperator>(II.getInductionBinOp()))
+       B.setFastMathFlags(II.getInductionBinOp()->getFastMathFlags());
+ 
+-    Value *Step =
+-        CreateStepValue(II.getStep(), *PSE.getSE(), &*B.GetInsertPoint());
+     EndValue =
+         emitTransformedIndex(B, VectorTripCount, II.getStartValue(), Step, II);
+     EndValue->setName("ind.end");
+@@ -3170,8 +3164,6 @@ PHINode *InnerLoopVectorizer::createInductionResumeValue(
+     // Compute the end value for the additional bypass (if applicable).
+     if (AdditionalBypass.first) {
+       B.SetInsertPoint(&(*AdditionalBypass.first->getFirstInsertionPt()));
+-      Value *Step =
+-          CreateStepValue(II.getStep(), *PSE.getSE(), &*B.GetInsertPoint());
+       EndValueFromAdditionalBypass = emitTransformedIndex(
+           B, AdditionalBypass.second, II.getStartValue(), Step, II);
+       EndValueFromAdditionalBypass->setName("ind.end");
+@@ -3200,7 +3192,22 @@ PHINode *InnerLoopVectorizer::createInductionResumeValue(
+   return BCResumeVal;
+ }
+ 
++/// Return the expanded step for \p ID using \p ExpandedSCEVs to look up SCEV
++/// expansion results.
++static Value *getExpandedStep(const InductionDescriptor &ID,
++                              const SCEV2ValueTy &ExpandedSCEVs) {
++  const SCEV *Step = ID.getStep();
++  if (auto *C = dyn_cast<SCEVConstant>(Step))
++    return C->getValue();
++  if (auto *U = dyn_cast<SCEVUnknown>(Step))
++    return U->getValue();
++  auto I = ExpandedSCEVs.find(Step);
++  assert(I != ExpandedSCEVs.end() && "SCEV must be expanded at this point");
++  return I->second;
++}
++
+ void InnerLoopVectorizer::createInductionResumeValues(
++    const SCEV2ValueTy &ExpandedSCEVs,
+     std::pair<BasicBlock *, Value *> AdditionalBypass) {
+   assert(((AdditionalBypass.first && AdditionalBypass.second) ||
+           (!AdditionalBypass.first && !AdditionalBypass.second)) &&
+@@ -3216,7 +3223,8 @@ void InnerLoopVectorizer::createInductionResumeValues(
+     PHINode *OrigPhi = InductionEntry.first;
+     const InductionDescriptor &II = InductionEntry.second;
+     PHINode *BCResumeVal = createInductionResumeValue(
+-        OrigPhi, II, LoopBypassBlocks, AdditionalBypass);
++        OrigPhi, II, getExpandedStep(II, ExpandedSCEVs), LoopBypassBlocks,
++        AdditionalBypass);
+     OrigPhi->setIncomingValueForBlock(LoopScalarPreHeader, BCResumeVal);
+   }
+ }
+@@ -3257,7 +3265,8 @@ BasicBlock *InnerLoopVectorizer::completeLoopSkeleton() {
+ }
+ 
+ std::pair<BasicBlock *, Value *>
+-InnerLoopVectorizer::createVectorizedLoopSkeleton() {
++InnerLoopVectorizer::createVectorizedLoopSkeleton(
++    const SCEV2ValueTy &ExpandedSCEVs) {
+   /*
+    In this function we generate a new loop. The new loop will contain
+    the vectorized instructions while the old loop will continue to run the
+@@ -3312,7 +3321,7 @@ InnerLoopVectorizer::createVectorizedLoopSkeleton() {
+   emitMemRuntimeChecks(LoopScalarPreHeader);
+ 
+   // Emit phis for the new starting index of the scalar loop.
+-  createInductionResumeValues();
++  createInductionResumeValues(ExpandedSCEVs);
+ 
+   return {completeLoopSkeleton(), nullptr};
+ }
+@@ -7674,11 +7683,9 @@ static void AddRuntimeUnrollDisableMetaData(Loop *L) {
+   }
+ }
+ 
+-void LoopVectorizationPlanner::executePlan(ElementCount BestVF, unsigned BestUF,
+-                                           VPlan &BestVPlan,
+-                                           InnerLoopVectorizer &ILV,
+-                                           DominatorTree *DT,
+-                                           bool IsEpilogueVectorization) {
++SCEV2ValueTy LoopVectorizationPlanner::executePlan(
++    ElementCount BestVF, unsigned BestUF, VPlan &BestVPlan,
++    InnerLoopVectorizer &ILV, DominatorTree *DT, bool IsEpilogueVectorization) {
+   assert(BestVPlan.hasVF(BestVF) &&
+          "Trying to execute plan with unsupported VF");
+   assert(BestVPlan.hasUF(BestUF) &&
+@@ -7710,7 +7717,7 @@ void LoopVectorizationPlanner::executePlan(ElementCount BestVF, unsigned BestUF,
+   // middle block. The vector loop is created during VPlan execution.
+   Value *CanonicalIVStartValue;
+   std::tie(State.CFG.PrevBB, CanonicalIVStartValue) =
+-      ILV.createVectorizedLoopSkeleton();
++      ILV.createVectorizedLoopSkeleton(State.ExpandedSCEVs);
+ 
+   // Only use noalias metadata when using memory checks guaranteeing no overlap
+   // across all iterations.
+@@ -7778,6 +7785,8 @@ void LoopVectorizationPlanner::executePlan(ElementCount BestVF, unsigned BestUF,
+   ILV.fixVectorizedLoop(State, BestVPlan);
+ 
+   ILV.printDebugTracesAtEnd();
++
++  return State.ExpandedSCEVs;
+ }
+ 
+ #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+@@ -7799,7 +7808,8 @@ Value *InnerLoopUnroller::getBroadcastInstrs(Value *V) { return V; }
+ /// This function is partially responsible for generating the control flow
+ /// depicted in https://llvm.org/docs/Vectorizers.html#epilogue-vectorization.
+ std::pair<BasicBlock *, Value *>
+-EpilogueVectorizerMainLoop::createEpilogueVectorizedLoopSkeleton() {
++EpilogueVectorizerMainLoop::createEpilogueVectorizedLoopSkeleton(
++    const SCEV2ValueTy &ExpandedSCEVs) {
+   createVectorLoopSkeleton("");
+ 
+   // Generate the code to check the minimum iteration count of the vector
+@@ -7917,7 +7927,8 @@ EpilogueVectorizerMainLoop::emitIterationCountCheck(BasicBlock *Bypass,
+ /// This function is partially responsible for generating the control flow
+ /// depicted in https://llvm.org/docs/Vectorizers.html#epilogue-vectorization.
+ std::pair<BasicBlock *, Value *>
+-EpilogueVectorizerEpilogueLoop::createEpilogueVectorizedLoopSkeleton() {
++EpilogueVectorizerEpilogueLoop::createEpilogueVectorizedLoopSkeleton(
++    const SCEV2ValueTy &ExpandedSCEVs) {
+   createVectorLoopSkeleton("vec.epilog.");
+ 
+   // Now, compare the remaining count and if there aren't enough iterations to
+@@ -8015,7 +8026,8 @@ EpilogueVectorizerEpilogueLoop::createEpilogueVectorizedLoopSkeleton() {
+   // check, then the resume value for the induction variable comes from
+   // the trip count of the main vector loop, hence passing the AdditionalBypass
+   // argument.
+-  createInductionResumeValues({VecEpilogueIterationCountCheck,
++  createInductionResumeValues(ExpandedSCEVs,
++                              {VecEpilogueIterationCountCheck,
+                                EPI.VectorTripCount} /* AdditionalBypass */);
+ 
+   return {completeLoopSkeleton(), EPResumeVal};
+@@ -10387,8 +10399,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
+                                            EPI, &LVL, &CM, BFI, PSI, Checks);
+ 
+         VPlan &BestMainPlan = LVP.getBestPlanFor(EPI.MainLoopVF);
+-        LVP.executePlan(EPI.MainLoopVF, EPI.MainLoopUF, BestMainPlan, MainILV,
+-                        DT, true);
++        auto ExpandedSCEVs = LVP.executePlan(EPI.MainLoopVF, EPI.MainLoopUF,
++                                             BestMainPlan, MainILV, DT, true);
+         ++LoopsVectorized;
+ 
+         // Second pass vectorizes the epilogue and adjusts the control flow
+@@ -10442,7 +10454,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
+             }
+ 
+             ResumeV = MainILV.createInductionResumeValue(
+-                IndPhi, *ID, {EPI.MainLoopIterationCountCheck});
++                IndPhi, *ID, getExpandedStep(*ID, ExpandedSCEVs),
++                {EPI.MainLoopIterationCountCheck});
+           }
+           assert(ResumeV && "Must have a resume value");
+           VPValue *StartVal = BestEpiPlan.getVPValueOrAddLiveIn(ResumeV);
+diff --git a/llvm/lib/Transforms/Vectorize/VPlan.h b/llvm/lib/Transforms/Vectorize/VPlan.h
+index 6392a5a04a11..38dc08b7c6a2 100644
+--- a/llvm/lib/Transforms/Vectorize/VPlan.h
++++ b/llvm/lib/Transforms/Vectorize/VPlan.h
+@@ -411,6 +411,10 @@ struct VPTransformState {
+   /// This is currently only used to add no-alias metadata based on the
+   /// memchecks.  The actually versioning is performed manually.
+   LoopVersioning *LVer = nullptr;
++
++  /// Map SCEVs to their expanded values. Populated when executing
++  /// VPExpandSCEVRecipes.
++  DenseMap<const SCEV *, Value *> ExpandedSCEVs;
+ };
+ 
+ /// VPBlockBase is the building block of the Hierarchical Control-Flow Graph.
+diff --git a/llvm/lib/Transforms/Vectorize/VPlanRecipes.cpp b/llvm/lib/Transforms/Vectorize/VPlanRecipes.cpp
+index 37b03081cb94..821e156f95c3 100644
+--- a/llvm/lib/Transforms/Vectorize/VPlanRecipes.cpp
++++ b/llvm/lib/Transforms/Vectorize/VPlanRecipes.cpp
+@@ -1136,7 +1136,9 @@ void VPExpandSCEVRecipe::execute(VPTransformState &State) {
+ 
+   Value *Res = Exp.expandCodeFor(Expr, Expr->getType(),
+                                  &*State.Builder.GetInsertPoint());
+-
++  assert(!State.ExpandedSCEVs.contains(Expr) &&
++         "Same SCEV expanded multiple times");
++  State.ExpandedSCEVs[Expr] = Res;
+   for (unsigned Part = 0, UF = State.UF; Part < UF; ++Part)
+     State.set(this, Res, {Part, 0});
+ }
+diff --git a/llvm/test/Transforms/LoopVectorize/create-induction-resume.ll b/llvm/test/Transforms/LoopVectorize/create-induction-resume.ll
+index 04cc0efb2907..656a8707daf4 100644
+--- a/llvm/test/Transforms/LoopVectorize/create-induction-resume.ll
++++ b/llvm/test/Transforms/LoopVectorize/create-induction-resume.ll
+@@ -29,7 +29,6 @@ define void @test(i32 %arg, i32 %L1.limit, i32 %L2.switch, i1 %c) {
+ ; CHECK:       L1.early.exit:
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       L1.exit:
+-; CHECK-NEXT:    [[INDUCTION_IV_LCSSA2:%.*]] = phi i32 [ [[INDUCTION_IV]], [[L1_BACKEDGE]] ]
+ ; CHECK-NEXT:    [[INDUCTION_IV_LCSSA1:%.*]] = phi i32 [ [[INDUCTION_IV]], [[L1_BACKEDGE]] ]
+ ; CHECK-NEXT:    [[L1_EXIT_VAL:%.*]] = phi i32 [ [[L1_SUM_NEXT]], [[L1_BACKEDGE]] ]
+ ; CHECK-NEXT:    br label [[L2_HEADER:%.*]]
+@@ -45,7 +44,7 @@ define void @test(i32 %arg, i32 %L1.limit, i32 %L2.switch, i1 %c) {
+ ; CHECK:       L2.Inner.header.preheader:
+ ; CHECK-NEXT:    br i1 false, label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; CHECK:       vector.ph:
+-; CHECK-NEXT:    [[TMP3:%.*]] = mul i32 12, [[INDUCTION_IV_LCSSA2]]
++; CHECK-NEXT:    [[TMP3:%.*]] = mul i32 12, [[INDUCTION_IV_LCSSA1]]
+ ; CHECK-NEXT:    [[IND_END:%.*]] = add i32 1, [[TMP3]]
+ ; CHECK-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; CHECK:       vector.body:
+@@ -58,11 +57,11 @@ define void @test(i32 %arg, i32 %L1.limit, i32 %L2.switch, i1 %c) {
+ ; CHECK-NEXT:    br i1 [[CMP_N]], label [[L2_HEADER_LOOPEXIT:%.*]], label [[SCALAR_PH]]
+ ; CHECK:       scalar.ph:
+ ; CHECK-NEXT:    [[BC_RESUME_VAL:%.*]] = phi i32 [ [[IND_END]], [[MIDDLE_BLOCK]] ], [ 1, [[L2_INNER_HEADER_PREHEADER]] ]
+-; CHECK-NEXT:    [[BC_RESUME_VAL3:%.*]] = phi i64 [ 13, [[MIDDLE_BLOCK]] ], [ 1, [[L2_INNER_HEADER_PREHEADER]] ]
++; CHECK-NEXT:    [[BC_RESUME_VAL2:%.*]] = phi i64 [ 13, [[MIDDLE_BLOCK]] ], [ 1, [[L2_INNER_HEADER_PREHEADER]] ]
+ ; CHECK-NEXT:    br label [[L2_INNER_HEADER:%.*]]
+ ; CHECK:       L2.Inner.header:
+ ; CHECK-NEXT:    [[L2_ACCUM:%.*]] = phi i32 [ [[L2_ACCUM_NEXT:%.*]], [[L2_INNER_HEADER]] ], [ [[BC_RESUME_VAL]], [[SCALAR_PH]] ]
+-; CHECK-NEXT:    [[L2_IV:%.*]] = phi i64 [ [[L2_IV_NEXT:%.*]], [[L2_INNER_HEADER]] ], [ [[BC_RESUME_VAL3]], [[SCALAR_PH]] ]
++; CHECK-NEXT:    [[L2_IV:%.*]] = phi i64 [ [[L2_IV_NEXT:%.*]], [[L2_INNER_HEADER]] ], [ [[BC_RESUME_VAL2]], [[SCALAR_PH]] ]
+ ; CHECK-NEXT:    [[L2_ACCUM_NEXT]] = sub i32 [[L2_ACCUM]], [[L1_EXIT_VAL]]
+ ; CHECK-NEXT:    [[L2_DUMMY_BUT_NEED_IT:%.*]] = sext i32 [[L2_ACCUM_NEXT]] to i64
+ ; CHECK-NEXT:    [[L2_IV_NEXT]] = add nuw nsw i64 [[L2_IV]], 1
+diff --git a/llvm/test/Transforms/LoopVectorize/pointer-induction-unroll.ll b/llvm/test/Transforms/LoopVectorize/pointer-induction-unroll.ll
+index 2652009501a8..36728c259010 100644
+--- a/llvm/test/Transforms/LoopVectorize/pointer-induction-unroll.ll
++++ b/llvm/test/Transforms/LoopVectorize/pointer-induction-unroll.ll
+@@ -27,9 +27,8 @@ define void @non_constant_scalar_expansion(i32 %0, ptr %call) {
+ ; STRIDED-NEXT:    [[TMP1:%.*]] = sext i32 [[MUL]] to i64
+ ; STRIDED-NEXT:    br i1 false, label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; STRIDED:       vector.ph:
+-; STRIDED-NEXT:    [[TMP2:%.*]] = sext i32 [[MUL]] to i64
+-; STRIDED-NEXT:    [[TMP3:%.*]] = mul i64 4294967264, [[TMP2]]
+-; STRIDED-NEXT:    [[IND_END:%.*]] = getelementptr i8, ptr null, i64 [[TMP3]]
++; STRIDED-NEXT:    [[TMP2:%.*]] = mul i64 4294967264, [[TMP1]]
++; STRIDED-NEXT:    [[IND_END:%.*]] = getelementptr i8, ptr null, i64 [[TMP2]]
+ ; STRIDED-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; STRIDED:       vector.body:
+ ; STRIDED-NEXT:    [[INDEX:%.*]] = phi i64 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[VECTOR_BODY]] ]
+diff --git a/llvm/test/Transforms/LoopVectorize/pointer-induction.ll b/llvm/test/Transforms/LoopVectorize/pointer-induction.ll
+index 55b553b7a87e..47db2eed52b8 100644
+--- a/llvm/test/Transforms/LoopVectorize/pointer-induction.ll
++++ b/llvm/test/Transforms/LoopVectorize/pointer-induction.ll
+@@ -233,9 +233,8 @@ define void @non_constant_vector_expansion(i32 %0, ptr %call) {
+ ; STRIDED:       vector.scevcheck:
+ ; STRIDED-NEXT:    br i1 true, label [[SCALAR_PH]], label [[VECTOR_PH:%.*]]
+ ; STRIDED:       vector.ph:
+-; STRIDED-NEXT:    [[TMP2:%.*]] = sext i32 [[MUL]] to i64
+-; STRIDED-NEXT:    [[TMP3:%.*]] = mul i64 4294967264, [[TMP2]]
+-; STRIDED-NEXT:    [[IND_END:%.*]] = getelementptr i8, ptr null, i64 [[TMP3]]
++; STRIDED-NEXT:    [[TMP2:%.*]] = mul i64 4294967264, [[TMP1]]
++; STRIDED-NEXT:    [[IND_END:%.*]] = getelementptr i8, ptr null, i64 [[TMP2]]
+ ; STRIDED-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; STRIDED:       vector.body:
+ ; STRIDED-NEXT:    [[POINTER_PHI:%.*]] = phi ptr [ null, [[VECTOR_PH]] ], [ [[PTR_IND:%.*]], [[VECTOR_BODY]] ]
+diff --git a/llvm/test/Transforms/LoopVectorize/pr58811-scev-expansion.ll b/llvm/test/Transforms/LoopVectorize/pr58811-scev-expansion.ll
+index 707de7b8f02f..3f97c0c81132 100644
+--- a/llvm/test/Transforms/LoopVectorize/pr58811-scev-expansion.ll
++++ b/llvm/test/Transforms/LoopVectorize/pr58811-scev-expansion.ll
+@@ -19,12 +19,11 @@ define void @test1_pr58811() {
+ ; CHECK-NEXT:    [[INDUCTION_IV_NEXT]] = add i32 [[INDUCTION_IV]], [[TMP1]]
+ ; CHECK-NEXT:    br i1 false, label [[LOOP_1]], label [[LOOP_2_PREHEADER:%.*]]
+ ; CHECK:       loop.2.preheader:
+-; CHECK-NEXT:    [[INDUCTION_IV_LCSSA1:%.*]] = phi i32 [ [[INDUCTION_IV]], [[LOOP_1]] ]
+ ; CHECK-NEXT:    [[INDUCTION_IV_LCSSA:%.*]] = phi i32 [ [[INDUCTION_IV]], [[LOOP_1]] ]
+ ; CHECK-NEXT:    [[IV_1_LCSSA:%.*]] = phi i32 [ [[IV_1]], [[LOOP_1]] ]
+ ; CHECK-NEXT:    br i1 false, label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; CHECK:       vector.ph:
+-; CHECK-NEXT:    [[IND_END:%.*]] = mul i32 196, [[INDUCTION_IV_LCSSA1]]
++; CHECK-NEXT:    [[IND_END:%.*]] = mul i32 196, [[INDUCTION_IV_LCSSA]]
+ ; CHECK-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; CHECK:       vector.body:
+ ; CHECK-NEXT:    [[INDEX:%.*]] = phi i32 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[VECTOR_BODY]] ]
+@@ -46,11 +45,11 @@ define void @test1_pr58811() {
+ ; CHECK-NEXT:    br i1 [[CMP_N]], label [[LOOP_3_PREHEADER:%.*]], label [[SCALAR_PH]]
+ ; CHECK:       scalar.ph:
+ ; CHECK-NEXT:    [[BC_RESUME_VAL:%.*]] = phi i16 [ 196, [[MIDDLE_BLOCK]] ], [ 0, [[LOOP_2_PREHEADER]] ]
+-; CHECK-NEXT:    [[BC_RESUME_VAL2:%.*]] = phi i32 [ [[IND_END]], [[MIDDLE_BLOCK]] ], [ 0, [[LOOP_2_PREHEADER]] ]
++; CHECK-NEXT:    [[BC_RESUME_VAL1:%.*]] = phi i32 [ [[IND_END]], [[MIDDLE_BLOCK]] ], [ 0, [[LOOP_2_PREHEADER]] ]
+ ; CHECK-NEXT:    br label [[LOOP_2:%.*]]
+ ; CHECK:       loop.2:
+ ; CHECK-NEXT:    [[IV_3:%.*]] = phi i16 [ [[IV_3_NEXT:%.*]], [[LOOP_2]] ], [ [[BC_RESUME_VAL]], [[SCALAR_PH]] ]
+-; CHECK-NEXT:    [[IV_4:%.*]] = phi i32 [ [[IV_4_NEXT:%.*]], [[LOOP_2]] ], [ [[BC_RESUME_VAL2]], [[SCALAR_PH]] ]
++; CHECK-NEXT:    [[IV_4:%.*]] = phi i32 [ [[IV_4_NEXT:%.*]], [[LOOP_2]] ], [ [[BC_RESUME_VAL1]], [[SCALAR_PH]] ]
+ ; CHECK-NEXT:    [[IV_4_NEXT]] = sub i32 [[IV_4]], [[IV_1_LCSSA]]
+ ; CHECK-NEXT:    [[IV_3_NEXT]] = add i16 [[IV_3]], 1
+ ; CHECK-NEXT:    [[CMP88_1:%.*]] = icmp ult i16 [[IV_3]], 198
+@@ -103,3 +102,187 @@ loop.3:
+ unreachable.bb:                                   ; No predecessors!
+   br label %loop.1.preheader
+ }
++
++define void @test2_pr58811() {
++; CHECK-LABEL: @test2_pr58811(
++; CHECK-NEXT:  entry:
++; CHECK-NEXT:    br label [[LOOP_1_HEADER:%.*]]
++; CHECK:       loop.1.header.loopexit:
++; CHECK-NEXT:    [[SUB93_2_LCSSA:%.*]] = phi i32 [ [[SUB93_2:%.*]], [[LOOP_4:%.*]] ]
++; CHECK-NEXT:    br label [[LOOP_1_HEADER]]
++; CHECK:       loop.1.header:
++; CHECK-NEXT:    [[P_1:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUB93_2_LCSSA]], [[LOOP_1_HEADER_LOOPEXIT:%.*]] ]
++; CHECK-NEXT:    [[TMP0:%.*]] = mul i32 [[P_1]], -1
++; CHECK-NEXT:    br label [[LOOP_2:%.*]]
++; CHECK:       loop.2:
++; CHECK-NEXT:    [[INDUCTION_IV:%.*]] = phi i32 [ [[INDUCTION_IV_NEXT:%.*]], [[LOOP_2]] ], [ [[TMP0]], [[LOOP_1_HEADER]] ]
++; CHECK-NEXT:    [[IV_2:%.*]] = phi i32 [ [[P_1]], [[LOOP_1_HEADER]] ], [ [[ADD101:%.*]], [[LOOP_2]] ]
++; CHECK-NEXT:    [[IV_3:%.*]] = phi i32 [ 0, [[LOOP_1_HEADER]] ], [ [[SUB93:%.*]], [[LOOP_2]] ]
++; CHECK-NEXT:    [[TMP1:%.*]] = mul nuw nsw i32 [[IV_3]], -1
++; CHECK-NEXT:    [[SUB93]] = add i32 [[IV_3]], 1
++; CHECK-NEXT:    [[ADD101]] = add i32 [[IV_3]], [[IV_2]]
++; CHECK-NEXT:    [[INDUCTION_IV_NEXT]] = add i32 [[INDUCTION_IV]], [[TMP1]]
++; CHECK-NEXT:    br i1 false, label [[LOOP_2]], label [[LOOP_3_PREHEADER:%.*]]
++; CHECK:       loop.3.preheader:
++; CHECK-NEXT:    [[IV_2_LCSSA:%.*]] = phi i32 [ [[IV_2]], [[LOOP_2]] ]
++; CHECK-NEXT:    [[INDUCTION_IV_LCSSA:%.*]] = phi i32 [ [[INDUCTION_IV]], [[LOOP_2]] ]
++; CHECK-NEXT:    br i1 false, label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
++; CHECK:       vector.ph:
++; CHECK-NEXT:    [[IND_END:%.*]] = mul i32 196, [[INDUCTION_IV_LCSSA]]
++; CHECK-NEXT:    br label [[VECTOR_BODY:%.*]]
++; CHECK:       vector.body:
++; CHECK-NEXT:    [[INDEX:%.*]] = phi i32 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[VECTOR_BODY]] ]
++; CHECK-NEXT:    [[OFFSET_IDX:%.*]] = mul i32 [[INDEX]], [[INDUCTION_IV_LCSSA]]
++; CHECK-NEXT:    [[TMP2:%.*]] = mul i32 0, [[INDUCTION_IV_LCSSA]]
++; CHECK-NEXT:    [[TMP3:%.*]] = add i32 [[OFFSET_IDX]], [[TMP2]]
++; CHECK-NEXT:    [[TMP4:%.*]] = mul i32 1, [[INDUCTION_IV_LCSSA]]
++; CHECK-NEXT:    [[TMP5:%.*]] = add i32 [[OFFSET_IDX]], [[TMP4]]
++; CHECK-NEXT:    [[TMP6:%.*]] = mul i32 2, [[INDUCTION_IV_LCSSA]]
++; CHECK-NEXT:    [[TMP7:%.*]] = add i32 [[OFFSET_IDX]], [[TMP6]]
++; CHECK-NEXT:    [[TMP8:%.*]] = mul i32 3, [[INDUCTION_IV_LCSSA]]
++; CHECK-NEXT:    [[TMP9:%.*]] = add i32 [[OFFSET_IDX]], [[TMP8]]
++; CHECK-NEXT:    [[INDEX_NEXT]] = add nuw i32 [[INDEX]], 4
++; CHECK-NEXT:    [[TMP10:%.*]] = icmp eq i32 [[INDEX_NEXT]], 196
++; CHECK-NEXT:    br i1 [[TMP10]], label [[MIDDLE_BLOCK:%.*]], label [[VECTOR_BODY]], !llvm.loop [[LOOP4:![0-9]+]]
++; CHECK:       middle.block:
++; CHECK-NEXT:    [[CMP_N:%.*]] = icmp eq i32 199, 196
++; CHECK-NEXT:    [[IND_ESCAPE:%.*]] = mul i32 195, [[INDUCTION_IV_LCSSA]]
++; CHECK-NEXT:    br i1 [[CMP_N]], label [[LOOP_4_PREHEADER:%.*]], label [[SCALAR_PH]]
++; CHECK:       scalar.ph:
++; CHECK-NEXT:    [[BC_RESUME_VAL:%.*]] = phi i16 [ 196, [[MIDDLE_BLOCK]] ], [ 0, [[LOOP_3_PREHEADER]] ]
++; CHECK-NEXT:    [[BC_RESUME_VAL1:%.*]] = phi i32 [ [[IND_END]], [[MIDDLE_BLOCK]] ], [ 0, [[LOOP_3_PREHEADER]] ]
++; CHECK-NEXT:    br label [[LOOP_3:%.*]]
++; CHECK:       loop.3:
++; CHECK-NEXT:    [[INT16_TINDARRAYSAFEVAR_186_0747_1:%.*]] = phi i16 [ [[INC_1:%.*]], [[LOOP_3]] ], [ [[BC_RESUME_VAL]], [[SCALAR_PH]] ]
++; CHECK-NEXT:    [[UINT32_TVAR_177_2745_1:%.*]] = phi i32 [ [[SUB93_1:%.*]], [[LOOP_3]] ], [ [[BC_RESUME_VAL1]], [[SCALAR_PH]] ]
++; CHECK-NEXT:    [[SUB93_1]] = sub i32 [[UINT32_TVAR_177_2745_1]], [[IV_2_LCSSA]]
++; CHECK-NEXT:    [[INC_1]] = add i16 [[INT16_TINDARRAYSAFEVAR_186_0747_1]], 1
++; CHECK-NEXT:    [[CMP88_1:%.*]] = icmp ult i16 [[INT16_TINDARRAYSAFEVAR_186_0747_1]], 198
++; CHECK-NEXT:    br i1 [[CMP88_1]], label [[LOOP_3]], label [[LOOP_4_PREHEADER]], !llvm.loop [[LOOP5:![0-9]+]]
++; CHECK:       loop.4.preheader:
++; CHECK-NEXT:    [[UINT32_TVAR_177_2745_1_LCSSA:%.*]] = phi i32 [ [[UINT32_TVAR_177_2745_1]], [[LOOP_3]] ], [ [[IND_ESCAPE]], [[MIDDLE_BLOCK]] ]
++; CHECK-NEXT:    br label [[LOOP_4]]
++; CHECK:       loop.4:
++; CHECK-NEXT:    [[UINT32_TVAR_177_2745_2:%.*]] = phi i32 [ [[SUB93_2]], [[LOOP_4]] ], [ 0, [[LOOP_4_PREHEADER]] ]
++; CHECK-NEXT:    [[SUB93_2]] = sub i32 [[UINT32_TVAR_177_2745_2]], [[UINT32_TVAR_177_2745_1_LCSSA]]
++; CHECK-NEXT:    br i1 false, label [[LOOP_4]], label [[LOOP_1_HEADER_LOOPEXIT]]
++;
++entry:
++  br label %loop.1.header
++
++loop.1.header:
++  %p.1 = phi i32 [ 0, %entry ], [ %sub93.2, %loop.4 ]
++  br label %loop.2
++
++loop.2:
++  %iv.2 = phi i32 [ %p.1, %loop.1.header ], [ %add101, %loop.2 ]
++  %iv.3 = phi i32 [ 0, %loop.1.header ], [ %sub93, %loop.2 ]
++  %sub93 = add i32 %iv.3, 1
++  %add101 = add i32 %iv.3, %iv.2
++  br i1 false, label %loop.2, label %loop.3
++
++loop.3:
++  %iv.4 = phi i16 [ 0, %loop.2 ], [ %inc.1, %loop.3 ]
++  %iv.5 = phi i32 [ 0, %loop.2 ], [ %sub93.1, %loop.3 ]
++  %sub93.1 = sub i32 %iv.5, %iv.2
++  %inc.1 = add i16 %iv.4, 1
++  %cmp88.1 = icmp ult i16 %iv.4, 198
++  br i1 %cmp88.1, label %loop.3, label %loop.4
++
++loop.4:
++  %iv.6 = phi i32 [ 0, %loop.3 ], [ %sub93.2, %loop.4 ]
++  %sub93.2 = sub i32 %iv.6, %iv.5
++  br i1 false, label %loop.4, label %loop.1.header
++}
++
++define void @test3_pr58811() {
++; CHECK-LABEL: @test3_pr58811(
++; CHECK-NEXT:  entry:
++; CHECK-NEXT:    br label [[LOOP_1_HEADER:%.*]]
++; CHECK:       loop.1.header:
++; CHECK-NEXT:    [[P_1:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUB93_2:%.*]], [[LOOP_1_LATCH:%.*]] ]
++; CHECK-NEXT:    [[REM85:%.*]] = urem i32 1, [[P_1]]
++; CHECK-NEXT:    br label [[LOOP_2:%.*]]
++; CHECK:       loop.2:
++; CHECK-NEXT:    [[P_2:%.*]] = phi i32 [ 1, [[LOOP_1_HEADER]] ], [ 0, [[LOOP_2]] ]
++; CHECK-NEXT:    [[ADD101:%.*]] = add i32 [[REM85]], [[P_2]]
++; CHECK-NEXT:    br i1 false, label [[LOOP_2]], label [[LOOP_3_PREHEADER:%.*]]
++; CHECK:       loop.3.preheader:
++; CHECK-NEXT:    [[P_2_LCSSA:%.*]] = phi i32 [ [[P_2]], [[LOOP_2]] ]
++; CHECK-NEXT:    [[ADD101_LCSSA:%.*]] = phi i32 [ [[ADD101]], [[LOOP_2]] ]
++; CHECK-NEXT:    [[TMP0:%.*]] = udiv i32 1, [[P_1]]
++; CHECK-NEXT:    [[TMP1:%.*]] = mul nuw i32 [[P_1]], [[TMP0]]
++; CHECK-NEXT:    [[TMP2:%.*]] = add i32 [[TMP1]], -1
++; CHECK-NEXT:    [[TMP3:%.*]] = sub i32 [[TMP2]], [[P_2_LCSSA]]
++; CHECK-NEXT:    br i1 false, label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
++; CHECK:       vector.ph:
++; CHECK-NEXT:    [[IND_END:%.*]] = mul i32 196, [[TMP3]]
++; CHECK-NEXT:    br label [[VECTOR_BODY:%.*]]
++; CHECK:       vector.body:
++; CHECK-NEXT:    [[INDEX:%.*]] = phi i32 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[VECTOR_BODY]] ]
++; CHECK-NEXT:    [[OFFSET_IDX:%.*]] = mul i32 [[INDEX]], [[TMP3]]
++; CHECK-NEXT:    [[TMP4:%.*]] = mul i32 0, [[TMP3]]
++; CHECK-NEXT:    [[TMP5:%.*]] = add i32 [[OFFSET_IDX]], [[TMP4]]
++; CHECK-NEXT:    [[TMP6:%.*]] = mul i32 1, [[TMP3]]
++; CHECK-NEXT:    [[TMP7:%.*]] = add i32 [[OFFSET_IDX]], [[TMP6]]
++; CHECK-NEXT:    [[TMP8:%.*]] = mul i32 2, [[TMP3]]
++; CHECK-NEXT:    [[TMP9:%.*]] = add i32 [[OFFSET_IDX]], [[TMP8]]
++; CHECK-NEXT:    [[TMP10:%.*]] = mul i32 3, [[TMP3]]
++; CHECK-NEXT:    [[TMP11:%.*]] = add i32 [[OFFSET_IDX]], [[TMP10]]
++; CHECK-NEXT:    [[INDEX_NEXT]] = add nuw i32 [[INDEX]], 4
++; CHECK-NEXT:    [[TMP12:%.*]] = icmp eq i32 [[INDEX_NEXT]], 196
++; CHECK-NEXT:    br i1 [[TMP12]], label [[MIDDLE_BLOCK:%.*]], label [[VECTOR_BODY]], !llvm.loop [[LOOP6:![0-9]+]]
++; CHECK:       middle.block:
++; CHECK-NEXT:    [[CMP_N:%.*]] = icmp eq i32 199, 196
++; CHECK-NEXT:    [[IND_ESCAPE:%.*]] = mul i32 195, [[TMP3]]
++; CHECK-NEXT:    br i1 [[CMP_N]], label [[LOOP_4_PREHEADER:%.*]], label [[SCALAR_PH]]
++; CHECK:       scalar.ph:
++; CHECK-NEXT:    [[BC_RESUME_VAL:%.*]] = phi i16 [ 196, [[MIDDLE_BLOCK]] ], [ 0, [[LOOP_3_PREHEADER]] ]
++; CHECK-NEXT:    [[BC_RESUME_VAL1:%.*]] = phi i32 [ [[IND_END]], [[MIDDLE_BLOCK]] ], [ 0, [[LOOP_3_PREHEADER]] ]
++; CHECK-NEXT:    br label [[LOOP_3:%.*]]
++; CHECK:       loop.3:
++; CHECK-NEXT:    [[IV_3:%.*]] = phi i16 [ [[INC_1:%.*]], [[LOOP_3]] ], [ [[BC_RESUME_VAL]], [[SCALAR_PH]] ]
++; CHECK-NEXT:    [[IV_4:%.*]] = phi i32 [ [[SUB93_1:%.*]], [[LOOP_3]] ], [ [[BC_RESUME_VAL1]], [[SCALAR_PH]] ]
++; CHECK-NEXT:    [[SUB93_1]] = sub i32 [[IV_4]], [[ADD101_LCSSA]]
++; CHECK-NEXT:    [[INC_1]] = add i16 [[IV_3]], 1
++; CHECK-NEXT:    [[CMP88_1:%.*]] = icmp ult i16 [[IV_3]], 198
++; CHECK-NEXT:    br i1 [[CMP88_1]], label [[LOOP_3]], label [[LOOP_4_PREHEADER]], !llvm.loop [[LOOP7:![0-9]+]]
++; CHECK:       loop.4.preheader:
++; CHECK-NEXT:    [[IV_4_LCSSA:%.*]] = phi i32 [ [[IV_4]], [[LOOP_3]] ], [ [[IND_ESCAPE]], [[MIDDLE_BLOCK]] ]
++; CHECK-NEXT:    br label [[LOOP_4:%.*]]
++; CHECK:       loop.4:
++; CHECK-NEXT:    [[IV_5:%.*]] = phi i32 [ [[SUB93_2]], [[LOOP_4]] ], [ 0, [[LOOP_4_PREHEADER]] ]
++; CHECK-NEXT:    [[SUB93_2]] = sub i32 [[IV_5]], [[IV_4_LCSSA]]
++; CHECK-NEXT:    br label [[LOOP_4]]
++; CHECK:       loop.1.latch:
++; CHECK-NEXT:    br label [[LOOP_1_HEADER]]
++;
++entry:
++  br label %loop.1.header
++
++loop.1.header:
++  %p.1 = phi i32 [ 0, %entry ], [ %sub93.2, %loop.1.latch ]
++  %rem85 = urem i32 1, %p.1
++  br label %loop.2
++
++loop.2:
++  %p.2 = phi i32 [ 1, %loop.1.header ], [ 0, %loop.2 ]
++  %add101 = add i32 %rem85, %p.2
++  br i1 false, label %loop.2, label %loop.3
++
++loop.3:
++  %iv.3 = phi i16 [ 0, %loop.2 ], [ %inc.1, %loop.3 ]
++  %iv.4 = phi i32 [ 0, %loop.2 ], [ %sub93.1, %loop.3 ]
++  %sub93.1 = sub i32 %iv.4, %add101
++  %inc.1 = add i16 %iv.3, 1
++  %cmp88.1 = icmp ult i16 %iv.3, 198
++  br i1 %cmp88.1, label %loop.3, label %loop.4
++
++loop.4:
++  %iv.5 = phi i32 [ 0, %loop.3 ], [ %sub93.2, %loop.4 ]
++  %sub93.2 = sub i32 %iv.5, %iv.4
++  br label %loop.4
++
++loop.1.latch:                                 ; No predecessors!
++  br label %loop.1.header
++}

@@ -1,0 +1,65 @@
+From 6062f200f666aa8982637379bf294c084a188150 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 16:17:59 -0300
+Subject: [PATCH 129/163] Handle pragma GCC optimize for clang
+
+---
+ libio/tst-bz24051.c  | 6 +++++-
+ libio/tst-bz24153.c  | 6 +++++-
+ malloc/tst-tcfree3.c | 6 +++++-
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/libio/tst-bz24051.c b/libio/tst-bz24051.c
+index f315525071..3649dbbdbd 100644
+--- a/libio/tst-bz24051.c
++++ b/libio/tst-bz24051.c
+@@ -19,7 +19,11 @@
+ 
+ /* Prevent putchar -> _IO_putc inline expansion.  */
+ #define __NO_INLINE__
+-#pragma GCC optimize("O0")
++#ifdef __clang__
++# pragma clang optimize off
++#else
++# pragma GCC optimize("O0")
++#endif
+ 
+ #include <stdio.h>
+ #include <string.h>
+diff --git a/libio/tst-bz24153.c b/libio/tst-bz24153.c
+index a069bf0695..9cfaa3b83c 100644
+--- a/libio/tst-bz24153.c
++++ b/libio/tst-bz24153.c
+@@ -18,7 +18,11 @@
+ 
+ /* Prevent getchar -> getc inline expansion.  */
+ #define __NO_INLINE__
+-#pragma GCC optimize ("O0")
++#ifdef __clang__
++# pragma clang optimize off
++#else
++# pragma GCC optimize("O0")
++#endif
+ 
+ #include <stdarg.h>
+ #include <stdio.h>
+diff --git a/malloc/tst-tcfree3.c b/malloc/tst-tcfree3.c
+index 3a3149b3b2..215134a9ae 100644
+--- a/malloc/tst-tcfree3.c
++++ b/malloc/tst-tcfree3.c
+@@ -20,7 +20,11 @@
+ #include <string.h>
+ 
+ /* Prevent GCC from optimizing away any malloc/free pairs.  */
+-#pragma GCC optimize ("O0")
++#ifdef __clang__
++# pragma clang optimize off
++#else
++# pragma GCC optimize("O0")
++#endif
+ 
+ static int
+ do_test (void)
+-- 
+2.37.2
+

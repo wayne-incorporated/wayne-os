@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,20 @@
 #include <string>
 #include <utility>
 
-#include <base/bind.h>
-#include <base/callback.h>
-#include <base/callback_helpers.h>
 #include <base/files/file_util.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback.h>
+#include <base/functional/callback_helpers.h>
+#include <base/logging.h>
 #include <brillo/cryptohome.h>
 #include <brillo/dbus/dbus_object.h>
 #include <chromeos/dbus/service_constants.h>
 #include <dbus/message.h>
 #include <dbus/object_proxy.h>
 
+#include "arc/arc.pb.h"
 #include "bootlockbox/proto_bindings/boot_lockbox_rpc.pb.h"
 #include "login_manager/dbus_util.h"
-#include "login_manager/proto_bindings/arc.pb.h"
 
 namespace login_manager {
 
@@ -43,8 +44,8 @@ ArcSideloadStatus::~ArcSideloadStatus() {}
 
 void ArcSideloadStatus::Initialize() {
   boot_lockbox_proxy_->WaitForServiceToBeAvailable(
-      base::Bind(&ArcSideloadStatus::OnBootLockboxServiceAvailable,
-                 weak_ptr_factory_.GetWeakPtr()));
+      base::BindOnce(&ArcSideloadStatus::OnBootLockboxServiceAvailable,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 bool ArcSideloadStatus::IsAdbSideloadAllowed() {
@@ -64,10 +65,10 @@ void ArcSideloadStatus::EnableAdbSideload(EnableAdbSideloadCallback callback) {
   // finished. Otherwise, a QueryAdbSideload call (potentially from another
   // client) can return with a outdated cached result.
 
-  dbus::MethodCall method_call(cryptohome::kBootLockboxInterface,
-                               cryptohome::kBootLockboxStoreBootLockbox);
+  dbus::MethodCall method_call(bootlockbox::kBootLockboxInterface,
+                               bootlockbox::kBootLockboxStoreBootLockbox);
 
-  cryptohome::StoreBootLockboxRequest proto;
+  bootlockbox::StoreBootLockboxRequest proto;
   proto.set_key(kSideloadingAllowedBootAttribute);
   proto.set_data("1");
   dbus::MessageWriter writer(&method_call);
@@ -75,8 +76,8 @@ void ArcSideloadStatus::EnableAdbSideload(EnableAdbSideloadCallback callback) {
 
   boot_lockbox_proxy_->CallMethod(
       &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-      base::Bind(&ArcSideloadStatus::OnEnableAdbSideloadSet,
-                 weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+      base::BindOnce(&ArcSideloadStatus::OnEnableAdbSideloadSet,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void ArcSideloadStatus::QueryAdbSideload(QueryAdbSideloadCallback callback) {
@@ -92,44 +93,45 @@ void ArcSideloadStatus::QueryAdbSideload(QueryAdbSideloadCallback callback) {
 
 void ArcSideloadStatus::OnBootLockboxServiceAvailable(bool service_available) {
   if (!service_available) {
-    LOG(ERROR) << "Failed to listen for cryptohome service start. Continue as "
+    LOG(ERROR) << "Failed to listen for bootlockbox service start. Continue as "
                << "sideloading is disallowed.";
     SetAdbSideloadStatusAndNotify(ArcSideloadStatusInterface::Status::DISABLED);
     return;
   }
 
-  GetAdbSideloadAllowed(base::Bind(&DoNothing));
+  GetAdbSideloadAllowed(base::BindOnce(&DoNothing));
 }
 
 void ArcSideloadStatus::GetAdbSideloadAllowed(
     EnableAdbSideloadCallback callback) {
-  dbus::MethodCall method_call(cryptohome::kBootLockboxInterface,
-                               cryptohome::kBootLockboxReadBootLockbox);
+  dbus::MethodCall method_call(bootlockbox::kBootLockboxInterface,
+                               bootlockbox::kBootLockboxReadBootLockbox);
 
-  cryptohome::ReadBootLockboxRequest proto;
+  bootlockbox::ReadBootLockboxRequest proto;
   proto.set_key(kSideloadingAllowedBootAttribute);
   dbus::MessageWriter writer(&method_call);
   writer.AppendProtoAsArrayOfBytes(proto);
 
   boot_lockbox_proxy_->CallMethod(
       &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-      base::Bind(&ArcSideloadStatus::OnGotAdbSideloadAllowed,
-                 weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+      base::BindOnce(&ArcSideloadStatus::OnGotAdbSideloadAllowed,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 ArcSideloadStatusInterface::Status ArcSideloadStatus::ParseResponseFromRead(
     dbus::Response* response) {
   if (!response) {
-    LOG(ERROR) << cryptohome::kBootLockboxInterface << "."
-               << cryptohome::kBootLockboxReadBootLockbox << " request failed.";
+    LOG(ERROR) << bootlockbox::kBootLockboxInterface << "."
+               << bootlockbox::kBootLockboxReadBootLockbox
+               << " request failed.";
     return ArcSideloadStatusInterface::Status::DISABLED;
   }
 
   dbus::MessageReader reader(response);
-  cryptohome::ReadBootLockboxReply reply;
+  bootlockbox::ReadBootLockboxReply reply;
   if (!reader.PopArrayOfBytesAsProto(&reply)) {
-    LOG(ERROR) << cryptohome::kBootLockboxInterface << "."
-               << cryptohome::kBootLockboxReadBootLockbox
+    LOG(ERROR) << bootlockbox::kBootLockboxInterface << "."
+               << bootlockbox::kBootLockboxReadBootLockbox
                << " unable to pop ReadBootLockboxReply proto.";
     return ArcSideloadStatusInterface::Status::DISABLED;
   }
@@ -137,30 +139,35 @@ ArcSideloadStatusInterface::Status ArcSideloadStatus::ParseResponseFromRead(
   if (reply.has_error()) {
     switch (reply.error()) {
       // When the attribute is unset, defaults to no sideloading.
-      case cryptohome::BOOTLOCKBOX_ERROR_MISSING_KEY:
+      case bootlockbox::BOOTLOCKBOX_ERROR_MISSING_KEY:
         return ArcSideloadStatusInterface::Status::DISABLED;
 
       // When boot lockbox is still uninitialized, which is normal after
       // powerwash.
-      case cryptohome::BOOTLOCKBOX_ERROR_NVSPACE_UNINITIALIZED:
+      case bootlockbox::BOOTLOCKBOX_ERROR_NVSPACE_UNINITIALIZED:
         return ArcSideloadStatusInterface::Status::DISABLED;
 
-      // When boot lockbox is not yet defined. This can happen to device
+      // When boot lockbox is not yet defined, which is normal after
+      // powerwash.
+      case bootlockbox::BOOTLOCKBOX_ERROR_NVSPACE_UNDEFINED:
+        return ArcSideloadStatusInterface::Status::DISABLED;
+
+      // When boot lockbox said we need a powerwash. This can happen to device
       // launched before boot lockbox was first introduced.
-      case cryptohome::BOOTLOCKBOX_ERROR_NVSPACE_UNDEFINED:
+      case bootlockbox::BOOTLOCKBOX_ERROR_NEED_POWERWASH:
         return ArcSideloadStatusInterface::Status::NEED_POWERWASH;
 
       default:
-        LOG(ERROR) << cryptohome::kBootLockboxInterface << "."
-                   << cryptohome::kBootLockboxReadBootLockbox
+        LOG(ERROR) << bootlockbox::kBootLockboxInterface << "."
+                   << bootlockbox::kBootLockboxReadBootLockbox
                    << " returned error: " << reply.error();
         return ArcSideloadStatusInterface::Status::DISABLED;
     }
   }
 
   if (!reply.has_data()) {
-    LOG(ERROR) << cryptohome::kBootLockboxInterface << "."
-               << cryptohome::kBootLockboxReadBootLockbox
+    LOG(ERROR) << bootlockbox::kBootLockboxInterface << "."
+               << bootlockbox::kBootLockboxReadBootLockbox
                << " missing data field in ReadBootLockboxReply.";
     return ArcSideloadStatusInterface::Status::DISABLED;
   }
@@ -187,7 +194,7 @@ void ArcSideloadStatus::OnEnableAdbSideloadSet(
   }
 
   dbus::MessageReader reader(result);
-  cryptohome::StoreBootLockboxReply reply;
+  bootlockbox::StoreBootLockboxReply reply;
   if (!reader.PopArrayOfBytesAsProto(&reply)) {
     std::move(callback).Run(ArcSideloadStatusInterface::Status::DISABLED,
                             "response is not a StoreBootLockboxReply");
@@ -195,7 +202,7 @@ void ArcSideloadStatus::OnEnableAdbSideloadSet(
   }
 
   if (reply.has_error()) {
-    if (reply.error() == cryptohome::BOOTLOCKBOX_ERROR_NVSPACE_UNDEFINED) {
+    if (reply.error() == bootlockbox::BOOTLOCKBOX_ERROR_NEED_POWERWASH) {
       std::move(callback).Run(
           ArcSideloadStatusInterface::Status::NEED_POWERWASH, nullptr);
     } else {
@@ -228,7 +235,7 @@ void ArcSideloadStatus::SetAdbSideloadStatusAndNotify(
 
 void ArcSideloadStatus::SendQueryAdbSideloadResponse(
     QueryAdbSideloadCallback callback) {
-  callback.Run(sideload_status_);
+  std::move(callback).Run(sideload_status_);
 }
 
 }  // namespace login_manager

@@ -1,0 +1,76 @@
+# Copyright 2010 The ChromiumOS Authors
+# Distributed under the terms of the GNU General Public License v2
+
+# Brian Stell <bstell@chromium.org> (27 August 2010)
+# For Chromium OS enable FreeType sub-pixel anti-aliasing and bytecode
+# interpreter
+media-libs/freetype bindist
+
+# Jungshik Shin <jshin@chromium.org) (31 August 2010)
+# We don't want to generate fonts.scale when installing fonts with font.eclass
+# ( http://sources.gentoo.org/cgi-bin/viewvc.cgi/gentoo-x86/eclass/font.eclass?revision=1.50&view=markup )
+media-fonts/croscorefonts X
+media-fonts/crosextrafonts X
+media-fonts/crosextrafonts-carlito X
+media-fonts/lohitfonts-cros X
+media-fonts/droidfonts-cros X
+media-fonts/ja-ipafonts X
+media-fonts/ko-nanumfonts X
+media-fonts/ml-anjalioldlipi X
+media-fonts/notofonts X
+media-fonts/noto-cjk X
+media-fonts/my-padauk X
+media-fonts/dejavu X
+media-fonts/sil-abyssinica X
+media-fonts/tlbt-jomohari X
+media-fonts/robotofonts X
+
+# Romaric Jodin <rjodin@chromium.org> (25 March 2023)
+# ffmpeg-5.1.1-r2 depends on `VK_EXT_VIDEO_DECODE_H264_EXTENSION_NAME` which
+# does not exist in `vulkan-headers-1.3.239` because it has been promoted to
+# `VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME`.
+# To avoid a build issue in ffmpeg, let's just disable the usage of vulkan in
+# ffmpeg as it does not need it at the moment.
+media-video/ffmpeg vulkan
+
+# Allow hardened glibc on the target.
+sys-libs/glibc -hardened
+
+# Disable asan for these two packages.
+chromeos-base/libevdev asan
+chromeos-base/gestures asan
+# Disable asan on minijail (https://crbug.com/848440).
+chromeos-base/minijail asan
+# Disable ubsan on minijail (https://crbug.com/877846).
+chromeos-base/minijail ubsan
+# These packages build a static binary (https://crbug.com/941517).
+chromeos-base/security_tests asan
+
+# Don't require python to depend on bluez.
+dev-lang/python bluetooth
+sci-geosciences/gpsd bluetooth
+
+# These packages are required as test dependencies, but we don't want to
+# automatically run their tests even when built with the 'test' flag.
+# TODO(cjmcdonald): Remove these once we have EAPI 7 available and can mark
+# them as build-only dependencies with BDEPEND.
+app-arch/gzip test
+dev-python/pytest test
+sys-process/psmisc test
+sys-apps/diffutils test
+
+# cmocka is a test-only dependency for some packages, but we don't want to
+# automatically run its own unit tests.
+dev-util/cmocka test
+
+# dev-python/py has a test dependency on a later version of pytest than we
+# provide. Upgrading pytest adds a dependency on dev-python/hypothesis, which
+# requires dev-lang/python to be built with SQLite, which is USE masked on all
+# boards.
+dev-python/py test
+
+# We don't use cxx library bindings for libgpiod.
+dev-libs/libgpiod cxx
+
+# We build perf without clang/LLVM support.
+dev-util/perf clang

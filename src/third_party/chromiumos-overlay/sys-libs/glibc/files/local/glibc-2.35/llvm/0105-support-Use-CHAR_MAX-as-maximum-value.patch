@@ -1,0 +1,34 @@
+From de547901bab62dad57a867ac3ab86ed13e0ca576 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 15 Mar 2022 18:01:57 -0300
+Subject: [PATCH 105/163] support: Use CHAR_MAX as maximum value
+
+---
+ support/support_process_state.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/support/support_process_state.c b/support/support_process_state.c
+index ca86dc11e6..ab02ce9ee1 100644
+--- a/support/support_process_state.c
++++ b/support/support_process_state.c
+@@ -59,7 +59,7 @@ support_process_state_wait (pid_t pid, enum support_process_state state)
+ 
+   for (;;)
+     {
+-      char cur_state = -1;
++      char cur_state = CHAR_MAX;
+       while (xgetline (&line, &linesiz, fstatus) > 0)
+ 	if (strncmp (line, "State:", strlen ("State:")) == 0)
+ 	  {
+@@ -67,7 +67,7 @@ support_process_state_wait (pid_t pid, enum support_process_state state)
+ 	    break;
+ 	  }
+       /* Fallback to nanosleep for invalid state.  */
+-      if (cur_state == -1)
++      if (cur_state == CHAR_MAX)
+ 	break;
+ 
+       for (size_t i = 0; i < array_length (process_states); ++i)
+-- 
+2.37.2
+

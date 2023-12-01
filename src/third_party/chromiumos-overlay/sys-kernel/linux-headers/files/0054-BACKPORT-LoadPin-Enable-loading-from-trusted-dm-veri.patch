@@ -1,0 +1,94 @@
+From 7e50a23e2108b1f8fbe2d9772f9df4031d023b91 Mon Sep 17 00:00:00 2001
+From: Matthias Kaehlcke <mka@chromium.org>
+Date: Mon, 27 Jun 2022 08:35:25 -0700
+Subject: [PATCH] BACKPORT: LoadPin: Enable loading from trusted dm-verity
+ devices
+
+Extend LoadPin to allow loading of kernel files from trusted dm-verity [1]
+devices.
+
+This change adds the concept of trusted verity devices to LoadPin. LoadPin
+maintains a list of root digests of verity devices it considers trusted.
+Userspace can populate this list through an ioctl on the new LoadPin
+securityfs entry 'dm-verity'. The ioctl receives a file descriptor of
+a file with verity digests as parameter. Verity reads the digests from
+this file after confirming that the file is located on the pinned root.
+The digest file must contain one digest per line. The list of trusted
+digests can only be set up once, which is typically done at boot time.
+
+When a kernel file is read LoadPin first checks (as usual) whether the file
+is located on the pinned root, if so the file can be loaded. Otherwise, if
+the verity extension is enabled, LoadPin determines whether the file is
+located on a verity backed device and whether the root digest of that
+device is in the list of trusted digests. The file can be loaded if the
+verity device has a trusted root digest.
+
+Background:
+
+As of now LoadPin restricts loading of kernel files to a single pinned
+filesystem, typically the rootfs. This works for many systems, however it
+can result in a bloated rootfs (and OTA updates) on platforms where
+multiple boards with different hardware configurations use the same rootfs
+image. Especially when 'optional' files are large it may be preferable to
+download/install them only when they are actually needed by a given board.
+Chrome OS uses Downloadable Content (DLC) [2] to deploy certain 'packages'
+at runtime. As an example a DLC package could contain firmware for a
+peripheral that is not present on all boards. DLCs use dm-verity to verify
+the integrity of the DLC content.
+
+[1] https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/verity.html
+[2] https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/dlcservice/docs/developer.md
+
+Signed-off-by: Matthias Kaehlcke <mka@chromium.org>
+Acked-by: Mike Snitzer <snitzer@kernel.org>
+Link: https://lore.kernel.org/lkml/20220627083512.v7.2.I01c67af41d2f6525c6d023101671d7339a9bc8b5@changeid
+Signed-off-by: Kees Cook <keescook@chromium.org>
+
+(cherry picked from commit 3f805f8cc23ba35679dd01446929292911c2b469)
+
+Conflicts:
+  security/loadpin/Kconfig
+  security/loadpin/loadpin.c
+    dropped these changes, we are only interested in the uapi header
+
+BUG=b:230351412
+TEST=none
+
+Change-Id: I01c67af41d2f6525c6d023101671d7339a9bc8b5
+Signed-off-by: Matthias Kaehlcke <mka@chromium.org>
+---
+ include/uapi/linux/loadpin.h | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+ create mode 100644 include/uapi/linux/loadpin.h
+
+diff --git a/include/uapi/linux/loadpin.h b/include/uapi/linux/loadpin.h
+new file mode 100644
+index 000000000000..daa6dbb8bb02
+--- /dev/null
++++ b/include/uapi/linux/loadpin.h
+@@ -0,0 +1,22 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++/*
++ * Copyright (c) 2022, Google LLC
++ */
++
++#ifndef _UAPI_LINUX_LOOP_LOADPIN_H
++#define _UAPI_LINUX_LOOP_LOADPIN_H
++
++#define LOADPIN_IOC_MAGIC	'L'
++
++/**
++ * LOADPIN_IOC_SET_TRUSTED_VERITY_DIGESTS - Set up the root digests of verity devices
++ *                                          that loadpin should trust.
++ *
++ * Takes a file descriptor from which to read the root digests of trusted verity devices. The file
++ * is expected to contain a list of digests in ASCII format, with one line per digest. The ioctl
++ * must be issued on the securityfs attribute 'loadpin/dm-verity' (which can be typically found
++ * under /sys/kernel/security/loadpin/dm-verity).
++ */
++#define LOADPIN_IOC_SET_TRUSTED_VERITY_DIGESTS _IOW(LOADPIN_IOC_MAGIC, 0x00, unsigned int)
++
++#endif /* _UAPI_LINUX_LOOP_LOADPIN_H */
+-- 
+2.37.1.559.g78731f0fdb-goog
+

@@ -1,0 +1,27 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+description    "Start the VM log forwarding service"
+author         "chromium-os-dev@chromium.org"
+
+# Starts the VM log forwarding service, which is responsible for collecting
+# logs from VMs, scrubbing the contents, and then forwarding them to /dev/log
+# or to a specified file. Dependent services are injected dynamically by the
+# associated ebuild.
+start on @dependent_start_services@
+stop on @dependent_stop_services@
+respawn
+
+# VMlog-forwarder is a restartable daemon.
+oom score -100
+
+pre-start script
+  # Ensure the kernel module is loaded.
+  modprobe -q vhost-vsock
+end script
+
+# When forwarding to /dev/log (the default), we run as syslog.
+# When forwarding to the user's cryptohome/ we run as user crosvm.
+exec minijail0 -l -p -r -v -N -n -c 0  -G -u crosvm -g crosvm \
+     -- /usr/bin/vmlog_forwarder --log_destination=/cryptohome/crosvm/log

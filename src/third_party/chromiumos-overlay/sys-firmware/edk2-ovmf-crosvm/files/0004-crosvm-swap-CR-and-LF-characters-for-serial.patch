@@ -1,0 +1,29 @@
+From 11575e7585fa7e65b75dc74a31ee950f96bb8c37 Mon Sep 17 00:00:00 2001
+From: Mike Gerow <gerow@google.com>
+Date: Wed, 1 Feb 2023 16:10:00 -0800
+Subject: [PATCH 4/8] [crosvm] swap CR and LF characters for serial
+
+BUG=b:236185272
+---
+ MdePkg/Include/Protocol/SimpleTextIn.h | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/MdePkg/Include/Protocol/SimpleTextIn.h b/MdePkg/Include/Protocol/SimpleTextIn.h
+index 838fae279e..6d15e237b3 100644
+--- a/MdePkg/Include/Protocol/SimpleTextIn.h
++++ b/MdePkg/Include/Protocol/SimpleTextIn.h
+@@ -42,8 +42,9 @@ typedef struct {
+ //
+ #define CHAR_BACKSPACE        0x0008
+ #define CHAR_TAB              0x0009
+-#define CHAR_LINEFEED         0x000A
+-#define CHAR_CARRIAGE_RETURN  0x000D
++// TODO(b/236185272): Figure out why we need to swap CR and LF.
++#define CHAR_LINEFEED         0x000D
++#define CHAR_CARRIAGE_RETURN  0x000A
+ 
+ //
+ // EFI Scan codes
+-- 
+2.39.1.456.gfc5497dd1b-goog
+

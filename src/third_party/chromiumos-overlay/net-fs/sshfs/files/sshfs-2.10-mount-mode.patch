@@ -1,0 +1,50 @@
+From 8fd6c63a93c8aa32a2ad2ed960f828b570265709 Mon Sep 17 00:00:00 2001
+From: Anand K Mistry <amistry@chromium.org>
+Date: Thu, 11 Apr 2019 11:14:13 -0700
+Subject: [PATCH] Use a dummy mount mode when the mountpoint /dev/fd/%d
+
+A mountpoint of /dev/fd/%d is special and indicates that the fuse
+mountpoint has already been set up. Since the path isn't a directory, it
+won't have the expected mode bits which are verified in the ssh
+connection setup.
+---
+ sshfs.c | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+--- a/sshfs.c
++++ b/sshfs.c
+@@ -4027,6 +4027,8 @@ int main(int argc, char *argv[])
+ 		char *mountpoint;
+ 		int multithreaded;
+ 		int foreground;
++		int fuse_fd;
++		int len = 0;
+ #if !defined(__APPLE__) && !defined(__CYGWIN__)
+ 		struct stat st;
+ #endif
+@@ -4042,12 +4044,17 @@ int main(int argc, char *argv[])
+ 		}
+ 
+ #if !defined(__APPLE__) && !defined(__CYGWIN__)
+-		res = stat(mountpoint, &st);
+-		if (res == -1) {
+-			perror(mountpoint);
+-			exit(1);
++		if (sscanf(mountpoint, "/dev/fd/%u%n", &fuse_fd, &len) == 1 &&
++		    len == strlen(mountpoint)) {
++			sshfs.mnt_mode = S_IFDIR | 0755;
++		} else {
++			res = stat(mountpoint, &st);
++			if (res == -1) {
++				perror(mountpoint);
++				exit(1);
++			}
++			sshfs.mnt_mode = st.st_mode;
+ 		}
+-		sshfs.mnt_mode = st.st_mode;
+ #else
+ 		sshfs.mnt_mode = S_IFDIR | 0755;
+ #endif
+-- 
+2.11.0
+

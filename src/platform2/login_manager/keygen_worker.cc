@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,13 @@
 #include <unistd.h>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
 #include <base/logging.h>
-#include <base/optional.h>
 #include <crypto/rsa_private_key.h>
 #include <crypto/scoped_nss_types.h>
 
@@ -43,7 +43,7 @@ int GenerateKey(const base::FilePath& file_path,
   }
   // This program will be executed in the correct mount namespace so
   // |ns_mnt_path| can be nullopt.
-  ScopedPK11SlotDescriptor desc(nss->OpenUserDB(user_homedir, base::nullopt));
+  ScopedPK11SlotDescriptor desc(nss->OpenUserDB(user_homedir, std::nullopt));
   PLOG_IF(FATAL, !desc) << "Could not open/create user NSS DB at "
                         << nssdb.value();
   LOG(INFO) << "Generating Owner key.";

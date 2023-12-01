@@ -1,0 +1,35 @@
+From aba5709f23023a422f6a0f8483a6711bcb701355 Mon Sep 17 00:00:00 2001
+From: Andrzej Ostruszka <amo@semihalf.com>
+Date: Fri, 14 Apr 2023 12:41:51 +0000
+Subject: [PATCH] Protect against crash in get_lease
+
+There is one scenario which is causing crashes in ChromiumOS: we get ARP
+response to GW arp check and proceed to dhcp_bind but the state->new is
+NULL.  This causes crashes in dhcp_bind() when trying to get lease from
+it (memcpy'ing from bootp->vend leads to read from 0x000000ec address).
+
+The exact scenario is unknown yet - previous patch "Drop ARP on DHCP
+drop" was supposed to fix this - so to prevent this crash let's check
+the pointer and log an error message.
+---
+ src/dhcp.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/dhcp.c b/src/dhcp.c
+index 5e31c757..acbaaae2 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -2532,6 +2532,10 @@ dhcp_bind(struct interface *ifp)
+ 		state->offer = NULL;
+ 		state->offer_len = 0;
+ 	}
++	if (!state->new) {
++		logerrx("missing offer for %s", ifp->name);
++		return;
++	}
+ 	get_lease(ifp, lease, state->new, state->new_len);
+ 	if (ifo->options & DHCPCD_STATIC) {
+ 		loginfox("%s: using static address %s/%d",
+-- 
+2.40.0.634.g4ca3ef3211-goog
+

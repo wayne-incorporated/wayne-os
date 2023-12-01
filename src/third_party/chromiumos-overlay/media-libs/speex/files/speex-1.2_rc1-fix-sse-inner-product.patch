@@ -1,0 +1,68 @@
+Subject: [PATCH] Fix SSE optimized inner product function.
+
+The original implementation assumes the filter length is multiples of 8,
+but it is only multiples of 4.
+---
+ libspeex/resample_sse.h | 46 ++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 34 insertions(+), 12 deletions(-)
+
+diff --git a/libspeex/resample_sse.h b/libspeex/resample_sse.h
+index 4bd35a2..5d8a3f3 100644
+--- a/libspeex/resample_sse.h
++++ b/libspeex/resample_sse.h
+@@ -39,18 +39,40 @@
+ #define OVERRIDE_INNER_PRODUCT_SINGLE
+ static inline float inner_product_single(const float *a, const float *b, unsigned int len)
+ {
+-   int i;
+-   float ret;
+-   __m128 sum = _mm_setzero_ps();
+-   for (i=0;i<len;i+=8)
+-   {
+-      sum = _mm_add_ps(sum, _mm_mul_ps(_mm_loadu_ps(a+i), _mm_loadu_ps(b+i)));
+-      sum = _mm_add_ps(sum, _mm_mul_ps(_mm_loadu_ps(a+i+4), _mm_loadu_ps(b+i+4)));
+-   }
+-   sum = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
+-   sum = _mm_add_ss(sum, _mm_shuffle_ps(sum, sum, 0x55));
+-   _mm_store_ss(&ret, sum);
+-   return ret;
++  float sum = 0;
++  unsigned int chunk = len / 4;
++  if (chunk) {
++    __asm__ __volatile__ (
++        "xorps %%xmm0, %%xmm0                       \n"
++        "1:                                         \n"
++        "lddqu (%[a]), %%xmm1                       \n"
++        "lddqu (%[b]), %%xmm2                       \n"
++        "mulps %%xmm1, %%xmm2                       \n"
++        "addps %%xmm2, %%xmm0                       \n"
++        "add $16, %[a]                              \n"
++        "add $16, %[b]                              \n"
++        "sub $1, %[chunk]                           \n"
++        "jnz 1b                                     \n"
++        "movhlps %%xmm0, %%xmm1                     \n"
++        "addps %%xmm1, %%xmm0                       \n"
++        "movaps %%xmm0, %%xmm1                      \n"
++        "shufps $1, %%xmm0, %%xmm0                  \n"
++        "addss %%xmm1, %%xmm0                       \n"
++        "movss %%xmm0, %[sum]                       \n"
++       : /* output */
++          "=r"(chunk),
++          "=r"(a),
++          "=r"(b),
++          [sum]"=m"(sum)
++        : /* input */
++          [chunk]"0"(chunk),
++          [a]"1"(a),
++          [b]"2"(b)
++        : /* clobber */
++          "xmm0", "xmm1", "xmm2", "memory", "cc"
++        );
++  }
++  return sum;
+ }
+ 
+ #define OVERRIDE_INTERPOLATE_PRODUCT_SINGLE
+-- 
+1.7.12.4
+

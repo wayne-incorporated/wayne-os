@@ -1,4 +1,4 @@
-# Copyright 2018 The Chromium OS Authors. All rights reserved.
+# Copyright 2018 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -36,6 +36,7 @@ pkg_config("target_defaults") {
     "libmetrics",
     "libminijail",
     "libpasswordprovider",
+    "libsegmentation",
     "nss",
 
     # system_api depends on protobuf (or protobuf-lite). It must appear
@@ -56,8 +57,9 @@ pkg_config("target_defaults") {
     "OS_CHROMEOS",
     "USE_ARC_ADB_SIDELOADING=${use.arc_adb_sideloading}",
     "USE_CHEETS=${use.cheets}",
-    "USE_NSS_CERTS",
+    "USE_NSS_CERTS=1",
     "USE_SYSTEMD=${use.systemd}",
+    "USE_APPLY_LANDLOCK_POLICY=${use.apply_landlock_policy}",
     "USE_USER_SESSION_ISOLATION=${use.user_session_isolation}",
   ]
 }
@@ -83,12 +85,15 @@ static_library("libsession_manager") {
     "crossystem_impl.cc",
     "cumulative_use_time_metric.cc",
     "dbus_util.cc",
+    "dev_mode_unblock_broker.cc",
+    "device_identifier_generator.cc",
     "device_local_account_manager.cc",
     "device_policy_service.cc",
     "feature_flags_util.cc",
     "file_checker.cc",
     "generator_job.cc",
     "key_generator.cc",
+    "landlock_policy.cc",
     "liveness_checker_impl.cc",
     "login_metrics.cc",
     "login_screen_storage.cc",
@@ -96,11 +101,12 @@ static_library("libsession_manager") {
     "owner_key_loss_mitigator.cc",
     "policy_key.cc",
     "policy_service.cc",
+    "policy_service_util.cc",
     "policy_store.cc",
     "regen_mitigator.cc",
     "resilient_policy_store.cc",
+    "scheduler_util.cc",
     "secret_util.cc",
-    "server_backed_state_key_generator.cc",
     "session_manager_impl.cc",
     "session_manager_service.cc",
     "subprocess.cc",
@@ -159,6 +165,7 @@ if (use.test) {
       "libbrillo-test",
       "libchrome-test",
       "libcros_config",
+      "libsegmentation-test",
     ]
   }
   executable("session_manager_test") {
@@ -168,6 +175,8 @@ if (use.test) {
       "child_exit_dispatcher_test.cc",
       "chrome_setup_test.cc",
       "cumulative_use_time_metric_test.cc",
+      "dev_mode_unblock_broker_test.cc",
+      "device_identifier_generator_test.cc",
       "device_local_account_manager_test.cc",
       "device_policy_service_test.cc",
       "fake_browser_job.cc",
@@ -180,6 +189,7 @@ if (use.test) {
       "feature_flags_util_test.cc",
       "key_generator_test.cc",
       "keygen_worker.cc",
+      "landlock_policy_test.cc",
       "liveness_checker_impl_test.cc",
       "login_metrics_test.cc",
       "login_screen_storage_test.cc",
@@ -188,10 +198,11 @@ if (use.test) {
       "nss_util_test.cc",
       "policy_key_test.cc",
       "policy_service_test.cc",
+      "policy_service_util_test.cc",
       "policy_store_test.cc",
       "regen_mitigator_test.cc",
       "resilient_policy_store_test.cc",
-      "server_backed_state_key_generator_test.cc",
+      "scheduler_util_test.cc",
       "session_manager_impl_test.cc",
       "session_manager_process_test.cc",
       "subprocess_test.cc",

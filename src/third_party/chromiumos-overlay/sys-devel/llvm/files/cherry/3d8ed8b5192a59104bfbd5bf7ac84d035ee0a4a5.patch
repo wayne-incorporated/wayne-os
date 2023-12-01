@@ -1,0 +1,310 @@
+commit 3d8ed8b5192a59104bfbd5bf7ac84d035ee0a4a5
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Mon Apr 17 11:39:07 2023 -0700
+
+    Revert "[VPlan] Switch to checking sinking legality for recurrences in VPlan."
+    
+    This reverts commit 7fc0b3049df532fce726d1ff6869a9f6e3183780.
+    
+    Causes a clang hang when building xz utils, github issue #62187.
+
+diff --git a/llvm/include/llvm/Analysis/IVDescriptors.h b/llvm/include/llvm/Analysis/IVDescriptors.h
+index ad936d213134..696d5e290c16 100644
+--- a/llvm/include/llvm/Analysis/IVDescriptors.h
++++ b/llvm/include/llvm/Analysis/IVDescriptors.h
+@@ -186,11 +186,14 @@ public:
+   /// previous iteration (e.g. if the value is defined in the previous
+   /// iteration, we refer to it as first-order recurrence, if it is defined in
+   /// the iteration before the previous, we refer to it as second-order
+-  /// recurrence and so on). Note that this function optimistically assumes that
+-  /// uses of the recurrence can be re-ordered if necessary and users need to
+-  /// check and perform the re-ordering.
+-  static bool isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
+-                                     DominatorTree *DT);
++  /// recurrence and so on). \p SinkAfter includes pairs of instructions where
++  /// the first will be rescheduled to appear after the second if/when the loop
++  /// is vectorized. It may be augmented with additional pairs if needed in
++  /// order to handle Phi as a first-order recurrence.
++  static bool
++  isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
++                         MapVector<Instruction *, Instruction *> &SinkAfter,
++                         DominatorTree *DT);
+ 
+   RecurKind getRecurrenceKind() const { return Kind; }
+ 
+diff --git a/llvm/include/llvm/Transforms/Vectorize/LoopVectorizationLegality.h b/llvm/include/llvm/Transforms/Vectorize/LoopVectorizationLegality.h
+index 1863e2e65553..4514e6000e59 100644
+--- a/llvm/include/llvm/Transforms/Vectorize/LoopVectorizationLegality.h
++++ b/llvm/include/llvm/Transforms/Vectorize/LoopVectorizationLegality.h
+@@ -516,6 +516,10 @@ private:
+   /// Holds the phi nodes that are fixed-order recurrences.
+   RecurrenceSet FixedOrderRecurrences;
+ 
++  /// Holds instructions that need to sink past other instructions to handle
++  /// fixed-order recurrences.
++  MapVector<Instruction *, Instruction *> SinkAfter;
++
+   /// Holds the widest induction type encountered.
+   Type *WidestIndTy = nullptr;
+ 
+diff --git a/llvm/lib/Analysis/IVDescriptors.cpp b/llvm/lib/Analysis/IVDescriptors.cpp
+index 6fcf584bd4cc..22b9f64ef88d 100644
+--- a/llvm/lib/Analysis/IVDescriptors.cpp
++++ b/llvm/lib/Analysis/IVDescriptors.cpp
+@@ -927,8 +927,9 @@ bool RecurrenceDescriptor::isReductionPHI(PHINode *Phi, Loop *TheLoop,
+   return false;
+ }
+ 
+-bool RecurrenceDescriptor::isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
+-                                                  DominatorTree *DT) {
++bool RecurrenceDescriptor::isFixedOrderRecurrence(
++    PHINode *Phi, Loop *TheLoop,
++    MapVector<Instruction *, Instruction *> &SinkAfter, DominatorTree *DT) {
+ 
+   // Ensure the phi node is in the loop header and has two incoming values.
+   if (Phi->getParent() != TheLoop->getHeader() ||
+@@ -964,7 +965,8 @@ bool RecurrenceDescriptor::isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
+     Previous = dyn_cast<Instruction>(PrevPhi->getIncomingValueForBlock(Latch));
+   }
+ 
+-  if (!Previous || !TheLoop->contains(Previous) || isa<PHINode>(Previous))
++  if (!Previous || !TheLoop->contains(Previous) || isa<PHINode>(Previous) ||
++      SinkAfter.count(Previous)) // Cannot rely on dominance due to motion.
+     return false;
+ 
+   // Ensure every user of the phi node (recursively) is dominated by the
+@@ -973,9 +975,23 @@ bool RecurrenceDescriptor::isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
+   // loop.
+   // TODO: Consider extending this sinking to handle memory instructions.
+ 
++  // We optimistically assume we can sink all users after Previous. Keep a set
++  // of instructions to sink after Previous ordered by dominance in the common
++  // basic block. It will be applied to SinkAfter if all users can be sunk.
++  auto CompareByComesBefore = [](const Instruction *A, const Instruction *B) {
++    return A->comesBefore(B);
++  };
++  std::set<Instruction *, decltype(CompareByComesBefore)> InstrsToSink(
++      CompareByComesBefore);
++
+   BasicBlock *PhiBB = Phi->getParent();
+   SmallVector<Instruction *, 8> WorkList;
+   auto TryToPushSinkCandidate = [&](Instruction *SinkCandidate) {
++    // Already sunk SinkCandidate.
++    if (SinkCandidate->getParent() == PhiBB &&
++        InstrsToSink.find(SinkCandidate) != InstrsToSink.end())
++      return true;
++
+     // Cyclic dependence.
+     if (Previous == SinkCandidate)
+       return false;
+@@ -989,12 +1005,55 @@ bool RecurrenceDescriptor::isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
+         SinkCandidate->mayReadFromMemory() || SinkCandidate->isTerminator())
+       return false;
+ 
++    // Avoid sinking an instruction multiple times (if multiple operands are
++    // fixed order recurrences) by sinking once - after the latest 'previous'
++    // instruction.
++    auto It = SinkAfter.find(SinkCandidate);
++    if (It != SinkAfter.end()) {
++      auto *OtherPrev = It->second;
++      // Find the earliest entry in the 'sink-after' chain. The last entry in
++      // the chain is the original 'Previous' for a recurrence handled earlier.
++      auto EarlierIt = SinkAfter.find(OtherPrev);
++      while (EarlierIt != SinkAfter.end()) {
++        Instruction *EarlierInst = EarlierIt->second;
++        EarlierIt = SinkAfter.find(EarlierInst);
++        // Bail out if order has not been preserved.
++        if (EarlierIt != SinkAfter.end() &&
++            !DT->dominates(EarlierInst, OtherPrev))
++          return false;
++        OtherPrev = EarlierInst;
++      }
++      // Bail out if order has not been preserved.
++      if (OtherPrev != It->second && !DT->dominates(It->second, OtherPrev))
++        return false;
++
++      // SinkCandidate is already being sunk after an instruction after
++      // Previous. Nothing left to do.
++      if (DT->dominates(Previous, OtherPrev) || Previous == OtherPrev)
++        return true;
++
++      // If there are other instructions to be sunk after SinkCandidate, remove
++      // and re-insert SinkCandidate can break those instructions. Bail out for
++      // simplicity.
++      if (any_of(SinkAfter,
++          [SinkCandidate](const std::pair<Instruction *, Instruction *> &P) {
++            return P.second == SinkCandidate;
++          }))
++        return false;
++
++      // Otherwise, Previous comes after OtherPrev and SinkCandidate needs to be
++      // re-sunk to Previous, instead of sinking to OtherPrev. Remove
++      // SinkCandidate from SinkAfter to ensure it's insert position is updated.
++      SinkAfter.erase(SinkCandidate);
++    }
++
+     // If we reach a PHI node that is not dominated by Previous, we reached a
+     // header PHI. No need for sinking.
+     if (isa<PHINode>(SinkCandidate))
+       return true;
+ 
+     // Sink User tentatively and check its users
++    InstrsToSink.insert(SinkCandidate);
+     WorkList.push_back(SinkCandidate);
+     return true;
+   };
+@@ -1009,6 +1068,11 @@ bool RecurrenceDescriptor::isFixedOrderRecurrence(PHINode *Phi, Loop *TheLoop,
+     }
+   }
+ 
++  // We can sink all users of Phi. Update the mapping.
++  for (Instruction *I : InstrsToSink) {
++    SinkAfter[I] = Previous;
++    Previous = I;
++  }
+   return true;
+ }
+ 
+diff --git a/llvm/lib/Transforms/Vectorize/LoopVectorizationLegality.cpp b/llvm/lib/Transforms/Vectorize/LoopVectorizationLegality.cpp
+index 3a868e8625a8..f45d800b28ba 100644
+--- a/llvm/lib/Transforms/Vectorize/LoopVectorizationLegality.cpp
++++ b/llvm/lib/Transforms/Vectorize/LoopVectorizationLegality.cpp
+@@ -743,7 +743,8 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
+           continue;
+         }
+ 
+-        if (RecurrenceDescriptor::isFixedOrderRecurrence(Phi, TheLoop, DT)) {
++        if (RecurrenceDescriptor::isFixedOrderRecurrence(Phi, TheLoop,
++                                                         SinkAfter, DT)) {
+           AllowedExit.insert(Phi);
+           FixedOrderRecurrences.insert(Phi);
+           continue;
+@@ -916,6 +917,18 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
+     }
+   }
+ 
++  // For fixed order recurrences, we use the previous value (incoming value from
++  // the latch) to check if it dominates all users of the recurrence. Bail out
++  // if we have to sink such an instruction for another recurrence, as the
++  // dominance requirement may not hold after sinking.
++  BasicBlock *LoopLatch = TheLoop->getLoopLatch();
++  if (any_of(FixedOrderRecurrences, [LoopLatch, this](const PHINode *Phi) {
++        Instruction *V =
++            cast<Instruction>(Phi->getIncomingValueForBlock(LoopLatch));
++        return SinkAfter.contains(V);
++      }))
++    return false;
++
+   // Now we know the widest induction type, check if our found induction
+   // is the same size. If it's not, unset it here and InnerLoopVectorizer
+   // will create another.
+diff --git a/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp b/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
+index 254af15523cc..daebffb16b5a 100644
+--- a/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
++++ b/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
+@@ -9055,8 +9055,7 @@ std::optional<VPlanPtr> LoopVectorizationPlanner::tryToBuildVPlanWithVPRecipes(
+ 
+   // Sink users of fixed-order recurrence past the recipe defining the previous
+   // value and introduce FirstOrderRecurrenceSplice VPInstructions.
+-  if (!VPlanTransforms::adjustFixedOrderRecurrences(*Plan, Builder))
+-    return std::nullopt;
++  VPlanTransforms::adjustFixedOrderRecurrences(*Plan, Builder);
+ 
+   // Interleave memory: for each Interleave Group we marked earlier as relevant
+   // for this VPlan, replace the Recipes widening its memory instructions with a
+diff --git a/llvm/lib/Transforms/Vectorize/VPlanTransforms.cpp b/llvm/lib/Transforms/Vectorize/VPlanTransforms.cpp
+index ec1a1a8307e9..c657b7615cc6 100644
+--- a/llvm/lib/Transforms/Vectorize/VPlanTransforms.cpp
++++ b/llvm/lib/Transforms/Vectorize/VPlanTransforms.cpp
+@@ -657,10 +657,9 @@ static bool properlyDominates(const VPRecipeBase *A, const VPRecipeBase *B,
+   return VPDT.properlyDominates(ParentA, ParentB);
+ }
+ 
+-/// Sink users of \p FOR after the recipe defining the previous value \p
+-/// Previous of the recurrence. \returns true if all users of \p FOR could be
+-/// re-arranged as needed or false if it is not possible.
+-static bool
++// Sink users of \p FOR after the recipe defining the previous value \p Previous
++// of the recurrence.
++static void
+ sinkRecurrenceUsersAfterPrevious(VPFirstOrderRecurrencePHIRecipe *FOR,
+                                  VPRecipeBase *Previous,
+                                  VPDominatorTree &VPDT) {
+@@ -669,18 +668,15 @@ sinkRecurrenceUsersAfterPrevious(VPFirstOrderRecurrencePHIRecipe *FOR,
+   SmallPtrSet<VPRecipeBase *, 8> Seen;
+   Seen.insert(Previous);
+   auto TryToPushSinkCandidate = [&](VPRecipeBase *SinkCandidate) {
+-    // The previous value must not depend on the users of the recurrence phi. In
+-    // that case, FOR is not a fixed order recurrence.
+-    if (SinkCandidate == Previous)
+-      return false;
+-
++    assert(
++        SinkCandidate != Previous &&
++        "The previous value cannot depend on the users of the recurrence phi.");
+     if (isa<VPHeaderPHIRecipe>(SinkCandidate) ||
+         !Seen.insert(SinkCandidate).second ||
+         properlyDominates(Previous, SinkCandidate, VPDT))
+-      return true;
++      return;
+ 
+     WorkList.push_back(SinkCandidate);
+-    return true;
+   };
+ 
+   // Recursively sink users of FOR after Previous.
+@@ -691,8 +687,7 @@ sinkRecurrenceUsersAfterPrevious(VPFirstOrderRecurrencePHIRecipe *FOR,
+            "only recipes with a single defined value expected");
+     for (VPUser *User : Current->getVPSingleValue()->users()) {
+       if (auto *R = dyn_cast<VPRecipeBase>(User))
+-        if (!TryToPushSinkCandidate(R))
+-          return false;
++        TryToPushSinkCandidate(R);
+     }
+   }
+ 
+@@ -709,10 +704,9 @@ sinkRecurrenceUsersAfterPrevious(VPFirstOrderRecurrencePHIRecipe *FOR,
+     SinkCandidate->moveAfter(Previous);
+     Previous = SinkCandidate;
+   }
+-  return true;
+ }
+ 
+-bool VPlanTransforms::adjustFixedOrderRecurrences(VPlan &Plan,
++void VPlanTransforms::adjustFixedOrderRecurrences(VPlan &Plan,
+                                                   VPBuilder &Builder) {
+   VPDominatorTree VPDT;
+   VPDT.recalculate(Plan);
+@@ -735,8 +729,7 @@ bool VPlanTransforms::adjustFixedOrderRecurrences(VPlan &Plan,
+       Previous = PrevPhi->getBackedgeValue()->getDefiningRecipe();
+     }
+ 
+-    if (!sinkRecurrenceUsersAfterPrevious(FOR, Previous, VPDT))
+-      return false;
++    sinkRecurrenceUsersAfterPrevious(FOR, Previous, VPDT);
+ 
+     // Introduce a recipe to combine the incoming and previous values of a
+     // fixed-order recurrence.
+@@ -755,5 +748,4 @@ bool VPlanTransforms::adjustFixedOrderRecurrences(VPlan &Plan,
+     // all users.
+     RecurSplice->setOperand(0, FOR);
+   }
+-  return true;
+ }
+diff --git a/llvm/lib/Transforms/Vectorize/VPlanTransforms.h b/llvm/lib/Transforms/Vectorize/VPlanTransforms.h
+index 430628cb068d..e5bd1a42f877 100644
+--- a/llvm/lib/Transforms/Vectorize/VPlanTransforms.h
++++ b/llvm/lib/Transforms/Vectorize/VPlanTransforms.h
+@@ -77,10 +77,7 @@ struct VPlanTransforms {
+   /// to combine the value from the recurrence phis and previous values. The
+   /// current implementation assumes all users can be sunk after the previous
+   /// value, which is enforced by earlier legality checks.
+-  /// \returns true if all users of fixed-order recurrences could be re-arranged
+-  /// as needed or false if it is not possible. In the latter case, \p Plan is
+-  /// not valid.
+-  static bool adjustFixedOrderRecurrences(VPlan &Plan, VPBuilder &Builder);
++  static void adjustFixedOrderRecurrences(VPlan &Plan, VPBuilder &Builder);
+ 
+   /// Optimize \p Plan based on \p BestVF and \p BestUF. This may restrict the
+   /// resulting plan to \p BestVF and \p BestUF.
+

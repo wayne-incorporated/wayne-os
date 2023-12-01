@@ -1,0 +1,41 @@
+From 1bd8b62911b4cfec8c7b7b5285e88a58f299252e Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 29 Mar 2022 09:48:27 -0300
+Subject: [PATCH 146/163] conform: Use -dD instead of -dN on compiler
+ invocation
+
+clang does not support -dN.
+---
+ conform/conformtest.py | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/conform/conformtest.py b/conform/conformtest.py
+index 90c81ac88e..ce39c447f3 100644
+--- a/conform/conformtest.py
++++ b/conform/conformtest.py
+@@ -622,7 +622,7 @@ class HeaderTests(object):
+             c_file_out.write('#include <%s>\n' % self.header)
+         # -O0 to negate effect of possible -O<N> passed to $CC
+         # See https://bugs.gentoo.org/659030#c6
+-        cmd = ('%s -O0 %s -E %s -P -Wp,-dN > %s'
++        cmd = ('%s -O0 %s -E %s -P -Wp,-dD > %s'
+                % (self.cc, self.cflags_namespace, c_file, out_file))
+         subprocess.check_call(cmd, shell=True)
+         bad_tokens = set()
+@@ -641,11 +641,11 @@ class HeaderTests(object):
+                     # macros defined by user code including the
+                     # header.)
+                     continue
+-                match = re.match(r'#define (.*)', line)
++                match = re.match(r'#define (.*?[^\(\s]+)', line)
+                 if match:
+                     self.check_token(bad_tokens, match.group(1))
+                     continue
+-                match = re.match(r'#undef (.*)', line)
++                match = re.match(r'#undef (.*?[^\(\s]+)', line)
+                 if match:
+                     bad_tokens.discard(match.group(1))
+                     continue
+-- 
+2.37.2
+

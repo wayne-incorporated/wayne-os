@@ -1,0 +1,42 @@
+From d994227f8d3e79a342c9f2bdaf12044e64082dd3 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Mon, 7 Mar 2022 10:43:41 -0300
+Subject: [PATCH 008/163] elf: Remove inline _dl_dprintf
+
+It is not used on rtld and ldsodef interfaces are meant to be used
+solely on loader.  It also removes the only usage of gcc extension
+__builtin_va_arg_pack.
+
+(cherry picked from commit f60e45ba10f0ca2794318de95720cdbdb6ff20d0)
+---
+ sysdeps/generic/ldsodefs.h | 11 -----------
+ 1 file changed, 11 deletions(-)
+
+diff --git a/sysdeps/generic/ldsodefs.h b/sysdeps/generic/ldsodefs.h
+index 977f1c3678..67bdb94a83 100644
+--- a/sysdeps/generic/ldsodefs.h
++++ b/sysdeps/generic/ldsodefs.h
+@@ -822,20 +822,9 @@ extern void _dl_debug_printf_c (const char *fmt, ...)
+ 
+ /* Write a message on the specified descriptor FD.  The parameters are
+    interpreted as for a `printf' call.  */
+-#if IS_IN (rtld) || !defined (SHARED)
+ extern void _dl_dprintf (int fd, const char *fmt, ...)
+      __attribute__ ((__format__ (__printf__, 2, 3)))
+      attribute_hidden;
+-#else
+-__attribute__ ((always_inline, __format__ (__printf__, 2, 3)))
+-static inline void
+-_dl_dprintf (int fd, const char *fmt, ...)
+-{
+-  /* Use local declaration to avoid includign <stdio.h>.  */
+-  extern int __dprintf(int fd, const char *format, ...) attribute_hidden;
+-  __dprintf (fd, fmt, __builtin_va_arg_pack ());
+-}
+-#endif
+ 
+ /* Write LENGTH bytes at BUFFER to FD, like write.  Returns the number
+    of bytes written on success, or a negative error constant on
+-- 
+2.37.2
+

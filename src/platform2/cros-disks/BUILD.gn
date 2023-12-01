@@ -1,0 +1,309 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":cros-disks",
+    ":install_cros_disks_config",
+    ":install_dbus_config",
+    ":install_minijail_config",
+    ":install_powerd_prefs",
+    ":install_setuid_restriction",
+    ":install_tmpfilesd",
+    ":install_usb_device_info",
+    ":libdisks",
+    ":libdisks-adaptors",
+  ]
+  if (use.seccomp) {
+    deps += [ ":install_seccomp_policies" ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":cros-disks_filesystem_label_fuzzer",
+      ":cros-disks_mount_info_fuzzer",
+    ]
+  }
+  if (use.test) {
+    deps += [
+      ":disks_testrunner",
+      ":disks_testrunner_root",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "blkid",
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "libminijail",
+    "libsession_manager-client",
+  ]
+  libs = [ "rootdev" ]
+}
+
+generate_dbus_adaptors("libdisks-adaptors") {
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/cros-disks/dbus_adaptors"
+  sources = [ "dbus_bindings/org.chromium.CrosDisks.xml" ]
+}
+
+static_library("libdisks") {
+  sources = [
+    "archive_manager.cc",
+    "archive_mounter.cc",
+    "cros_disks_server.cc",
+    "daemon.cc",
+    "device_ejector.cc",
+    "device_event.cc",
+    "device_event_moderator.cc",
+    "device_event_queue.cc",
+    "disk.cc",
+    "disk_manager.cc",
+    "disk_monitor.cc",
+    "drivefs_helper.cc",
+    "drivefs_helper.h",
+    "file_reader.cc",
+    "filesystem_label.cc",
+    "format_manager.cc",
+    "fuse_mount_manager.cc",
+    "fuse_mounter.cc",
+    "fusebox_helper.cc",
+    "fusebox_helper.h",
+    "metrics.cc",
+    "mount_info.cc",
+    "mount_manager.cc",
+    "mount_options.cc",
+    "mount_point.cc",
+    "partition_manager.cc",
+    "platform.cc",
+    "process.cc",
+    "quote.cc",
+    "rar_mounter.cc",
+    "rename_manager.cc",
+    "sandboxed_init.cc",
+    "sandboxed_process.cc",
+    "session_manager_proxy.cc",
+    "smbfs_helper.cc",
+    "sshfs_helper.cc",
+    "system_mounter.cc",
+    "udev_device.cc",
+    "uri.cc",
+    "usb_device_info.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libdisks-adaptors" ]
+}
+
+executable("cros-disks") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libdisks" ]
+  install_path = "bin"
+}
+
+install_config("install_usb_device_info") {
+  sources = [ "usb-device-info" ]
+  install_path = "/usr/share/cros-disks"
+}
+
+# We invoke systemd-tmpfiles explicitly from the upstart config
+# since it needs to run when /sys/fs/cgroup is available.
+install_config("install_tmpfilesd") {
+  sources = [ "tmpfiles.d/cros-disks.conf" ]
+  install_path = "/usr/lib/tmpfiles.d/on-demand"
+}
+
+install_config("install_dbus_config") {
+  sources = [ "org.chromium.CrosDisks.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_minijail_config") {
+  sources = [ "minijail/cros-disks.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_setuid_restriction") {
+  sources = [ "setuid_restrictions/cros_disks_uid_allowlist.txt" ]
+  install_path = "/usr/share/cros/startup/process_management_policies"
+}
+
+install_config("install_powerd_prefs") {
+  sources = [
+    "powerd_prefs/suspend_freezer_deps_fuse-archive",
+    "powerd_prefs/suspend_freezer_deps_mount-zip",
+    "powerd_prefs/suspend_freezer_deps_rar2fs",
+  ]
+  install_path = "/usr/share/power_manager"
+}
+
+if (use.chromeless_tty) {
+  # Insert the --no-session-manager flag.
+  action("install_cros_disks_config") {
+    sources = [ "cros-disks.conf" ]
+    script = "//common-mk/file_generator_wrapper.py"
+    outputs = [ "${target_gen_dir}/cros-disks.conf" ]
+    args = [
+      rebase_path("rewrite_disks_conf.sh"),
+      rebase_path("cros-disks.conf"),
+      "${target_gen_dir}/cros-disks.conf",
+    ]
+    install_configs = [
+      {
+        path = "/etc/init"
+      },
+    ]
+  }
+} else {
+  install_config("install_cros_disks_config") {
+    sources = [ "cros-disks.conf" ]
+    install_path = "/etc/init"
+  }
+}
+
+if (use.seccomp) {
+  install_config("install_seccomp_policies") {
+    arch = getenv("ARCH")
+    sources = [
+      "seccomp_policy/archivemount-seccomp-$arch.policy",
+      "seccomp_policy/fusebox-seccomp-$arch.policy",
+      "seccomp_policy/mkfs-seccomp-$arch.policy",
+      "seccomp_policy/mount-zip-seccomp-$arch.policy",
+      "seccomp_policy/rar2fs-seccomp-$arch.policy",
+      "seccomp_policy/smbfs-seccomp-$arch.policy",
+    ]
+
+    # NOSORT
+    outputs = [
+      "archivemount-seccomp.policy",
+      "fusebox-seccomp.policy",
+      "mkfs-seccomp.policy",
+      "mount-zip-seccomp.policy",
+      "rar2fs-seccomp.policy",
+      "smbfs-seccomp.policy",
+    ]
+
+    install_path = "/usr/share/policy"
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("fuzzed_data_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+  executable("cros-disks_filesystem_label_fuzzer") {
+    sources = [ "fuzzers/filesystem_label_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer:common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libdisks" ]
+  }
+  executable("cros-disks_mount_info_fuzzer") {
+    sources = [ "fuzzers/mount_info_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer:common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libdisks" ]
+  }
+}
+
+if (use.test) {
+  source_set("common_test_sources") {
+    sources = [
+      "archive_manager_test.cc",
+      "archive_mounter_test.cc",
+      "device_event_moderator_test.cc",
+      "device_event_queue_test.cc",
+      "disk_manager_test.cc",
+      "disk_monitor_test.cc",
+      "disk_test.cc",
+      "drivefs_helper_test.cc",
+      "error_logger_test.cc",
+      "file_reader_test.cc",
+      "filesystem_label_test.cc",
+      "format_manager_test.cc",
+      "fuse_mount_manager_test.cc",
+      "fuse_mounter_test.cc",
+      "fusebox_helper_test.cc",
+      "metrics_test.cc",
+      "mock_platform.h",
+      "mount_info_test.cc",
+      "mount_manager_test.cc",
+      "mount_options_test.cc",
+      "mount_point_test.cc",
+      "platform_test.cc",
+      "process_test.cc",
+      "quote_test.cc",
+      "rar_mounter_test.cc",
+      "rename_manager_test.cc",
+      "sandboxed_init_test.cc",
+      "smbfs_helper_test.cc",
+      "sshfs_helper_test.cc",
+      "system_mounter_test.cc",
+      "udev_device_test.cc",
+      "uri_test.cc",
+      "usb_device_info_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":disks_test_config",
+      ":target_defaults",
+    ]
+  }
+
+  COMMON_TEST_FILTER = ":DiskManagerTest.*"
+  COMMON_TEST_FILTER += ":ExternalMounterTest.*"
+  COMMON_TEST_FILTER += ":UdevDeviceTest.*"
+  COMMON_TEST_FILTER += ":MountInfoTest.RetrieveFromCurrentProcess"
+  COMMON_TEST_FILTER += ":GlibProcessTest.*"
+
+  pkg_config("disks_test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("disks_testrunner_root") {
+    run_test = true
+    gtest_filter_qemu = "*RunAsRoot*"
+    if (!use.x86 && !use.amd64) {
+      gtest_filter_qemu += COMMON_TEST_FILTER
+    }
+
+    test_config = {
+      run_as_root = true
+      gtest_filter = gtest_filter_qemu
+    }
+
+    deps = [
+      ":common_test_sources",
+      ":libdisks",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("disks_testrunner") {
+    run_test = true
+    gtest_filter_qemu = "-*RunAsRoot*"
+    if (!use.x86 && !use.amd64) {
+      gtest_filter_qemu += COMMON_TEST_FILTER
+    }
+
+    test_config = {
+      run_as_root = false
+      gtest_filter = gtest_filter_qemu
+    }
+
+    deps = [
+      ":common_test_sources",
+      ":libdisks",
+      "//common-mk/testrunner",
+    ]
+  }
+}

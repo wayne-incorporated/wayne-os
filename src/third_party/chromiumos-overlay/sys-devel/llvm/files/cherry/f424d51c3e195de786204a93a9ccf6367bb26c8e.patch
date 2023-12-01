@@ -1,0 +1,55 @@
+commit f424d51c3e195de786204a93a9ccf6367bb26c8e
+Author: Simon Pilgrim <llvm-dev@redking.me.uk>
+Date:   Sat Mar 21 12:14:02 2020 +0000
+
+    Revert rGe6a7e3b5e3e7 "[X86][SSE] matchShuffleWithSHUFPD - add support for unary shuffles."
+    
+    This reverts commit e6a7e3b5e3e779a3bfb617c8d9ed4302edab2cef.
+    
+    Avoids register pressure regression reported at PR45263
+
+diff --git a/llvm/lib/Target/X86/X86ISelLowering.cpp b/llvm/lib/Target/X86/X86ISelLowering.cpp
+index 575803f0323..f590dab6c44 100644
+--- a/llvm/lib/Target/X86/X86ISelLowering.cpp
++++ b/llvm/lib/Target/X86/X86ISelLowering.cpp
+@@ -15948,7 +15948,6 @@ static bool matchShuffleWithSHUFPD(MVT VT, SDValue &V1, SDValue &V2,
+   // Mask for V8F64: 0/1,  8/9,  2/3,  10/11, 4/5, ..
+   // Mask for V4F64; 0/1,  4/5,  2/3,  6/7..
+   ShuffleImm = 0;
+-  bool UnaryMask = isUndefOrZeroOrInRange(Mask, 0, NumElts);
+   bool ShufpdMask = true;
+   bool CommutableMask = true;
+   for (int i = 0; i < NumElts; ++i) {
+@@ -15956,7 +15955,7 @@ static bool matchShuffleWithSHUFPD(MVT VT, SDValue &V1, SDValue &V2,
+       continue;
+     if (Mask[i] < 0)
+       return false;
+-    int Val = (i & 6) + (UnaryMask ? 0 : (NumElts * (i & 1)));
++    int Val = (i & 6) + NumElts * (i & 1);
+     int CommutVal = (i & 0xe) + NumElts * ((i & 1) ^ 1);
+     if (Mask[i] < Val || Mask[i] > Val + 1)
+       ShufpdMask = false;
+@@ -15968,9 +15967,7 @@ static bool matchShuffleWithSHUFPD(MVT VT, SDValue &V1, SDValue &V2,
+   if (!ShufpdMask && !CommutableMask)
+     return false;
+ 
+-  if (UnaryMask)
+-    V2 = V1;
+-  else if (!ShufpdMask && CommutableMask)
++  if (!ShufpdMask && CommutableMask)
+     std::swap(V1, V2);
+ 
+   ForceV1Zero = ZeroLane[0];
+diff --git a/llvm/test/CodeGen/X86/sse-intrinsics-fast-isel.ll b/llvm/test/CodeGen/X86/sse-intrinsics-fast-isel.ll
+index 5f9dbdf888a..85400656e2e 100644
+--- a/llvm/test/CodeGen/X86/sse-intrinsics-fast-isel.ll
++++ b/llvm/test/CodeGen/X86/sse-intrinsics-fast-isel.ll
+@@ -2791,7 +2791,7 @@ define void @test_mm_storeh_pi(x86_mmx *%a0, <4 x float> %a1) nounwind {
+ ;
+ ; X64-SSE2-LABEL: test_mm_storeh_pi:
+ ; X64-SSE2:       # %bb.0:
+-; X64-SSE2-NEXT:    shufps $78, %xmm0, %xmm0 # encoding: [0x0f,0xc6,0xc0,0x4e]
++; X64-SSE2-NEXT:    pshufd $78, %xmm0, %xmm0 # encoding: [0x66,0x0f,0x70,0xc0,0x4e]
+ ; X64-SSE2-NEXT:    # xmm0 = xmm0[2,3,0,1]
+ ; X64-SSE2-NEXT:    movq %xmm0, %rax # encoding: [0x66,0x48,0x0f,0x7e,0xc0]
+ ; X64-SSE2-NEXT:    movq %rax, (%rdi) # encoding: [0x48,0x89,0x07]

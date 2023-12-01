@@ -1,0 +1,23 @@
+Upstream bugs:
+https://bugs.gentoo.org/678410
+https://bugs.python.org/issue23395
+
+This patch fixes some spurious exceptions caused by interrupts
+that don't have a handler registered in some situations.
+
+diff --git a/Modules/signalmodule.c b/Modules/signalmodule.c
+index 0b9e8f1..f161e18 100644
+--- a/Modules/signalmodule.c
++++ b/Modules/signalmodule.c
+@@ -1575,7 +1575,10 @@ PyErr_CheckSignals(void)
+ void
+ PyErr_SetInterrupt(void)
+ {
+-    trip_signal(SIGINT);
++    if ((Handlers[SIGINT].func != IgnoreHandler) &&
++        (Handlers[SIGINT].func != DefaultHandler)) {
++        trip_signal(SIGINT);
++    }
+ }
+ 
+ void

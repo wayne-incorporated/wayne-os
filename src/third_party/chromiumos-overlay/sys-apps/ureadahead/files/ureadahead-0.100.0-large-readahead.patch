@@ -1,0 +1,83 @@
+commit fdeaf7b867fda0760a1d965496f288401039f092
+Author: pliard <pliard@google.com>
+Date:   Tue Jul 23 09:54:41 2019 +0900
+
+    Support readahead() calls larger than 32 pages
+
+diff --git a/src/pack.c b/src/pack.c
+index 7903870..d7c6c8e 100644
+--- a/src/pack.c
++++ b/src/pack.c
+@@ -79,6 +79,13 @@
+  **/
+ #define NUM_THREADS 4
+ 
++/**
++ * READAHEAD_MAX_LENGTH:
++ *
++ * Maximum length that can be passed to readahead(). On kernels older than v4.10
++ * readahead() reads up to 32 pages regardless of the provided length.
++ **/
++#define READAHEAD_MAX_LENGTH (32 * 4096)
+ 
+ typedef enum pack_flags {
+ 	PACK_ROTATIONAL = 0x01,
+@@ -221,6 +228,23 @@ pack_file_name_for_device (const void *parent,
+ 	nih_return_system_error (NULL);
+ }
+ 
++static int
++load_pages_in_core (int   fd,
++		    off_t offset,
++		    off_t length)
++{
++	while (length > 0) {
++		const off_t read_length = length <= READAHEAD_MAX_LENGTH ?
++			length : READAHEAD_MAX_LENGTH;
++		int ret = readahead (fd, offset, read_length);
++		if (ret < 0) {
++			return ret;
++		}
++		offset += read_length;
++		length -= read_length;
++	}
++	return 0;
++}
+ 
+ PackFile *
+ read_pack (const void *parent,
+@@ -246,7 +270,7 @@ read_pack (const void *parent,
+ 
+ 	/* Obvious really... */
+ 	if (fstat (fileno (fp), &stat) == 0)
+-		readahead (fileno (fp), 0, stat.st_size);
++		load_pages_in_core (fileno (fp), 0, stat.st_size);
+ 
+ 	file = NIH_MUST (nih_new (parent, PackFile));
+ 
+@@ -744,9 +768,9 @@ do_readahead_hdd (PackFile *file,
+ 		    || (file->blocks[i].pathidx >= file->num_paths))
+ 			continue;
+ 
+-		readahead (fds[file->blocks[i].pathidx],
+-			   file->blocks[i].offset,
+-			   file->blocks[i].length);
++		load_pages_in_core (fds[file->blocks[i].pathidx],
++				    file->blocks[i].offset,
++				    file->blocks[i].length);
+ 	}
+ 
+ 	print_time ("Readahead", &start);
+@@ -859,9 +883,9 @@ ra_thread (void *ptr)
+ 		}
+ 
+ 		do {
+-			readahead (fd,
+-				   ctx->file->blocks[i].offset,
+-				   ctx->file->blocks[i].length);
++			load_pages_in_core (fd,
++					    ctx->file->blocks[i].offset,
++					    ctx->file->blocks[i].length);
+ 		} while ((++i < ctx->file->num_blocks)
+ 			 && (ctx->file->blocks[i].pathidx == pathidx));
+ 	}

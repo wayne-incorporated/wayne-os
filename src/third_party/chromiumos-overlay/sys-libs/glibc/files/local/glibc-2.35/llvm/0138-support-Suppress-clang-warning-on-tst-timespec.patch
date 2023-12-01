@@ -1,0 +1,63 @@
+From 4ff8685a670301f872c1ced4cdf6b3dbae5d67ab Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 11:26:46 -0300
+Subject: [PATCH 138/163] support: Suppress clang warning on tst-timespec
+
+clang warns that converting from TIME_T_MAX to double (upper_bound)
+loses precision (from 9223372036854775807 to 9223372036854775808):
+
+  tst-timespec.c:290:19: error: implicit conversion from 'time_t' (aka
+  'long') to 'double' changes value from 9223372036854775807 to
+  9223372036854775808 [-Werror,-Wimplicit-const-int-float-conversion]
+     .upper_bound = TIME_T_MAX, .lower_bound = 1, .result = 1,
+                    ^~~~~~~~~~
+  tst-timespec.c:48:20: note: expanded from macro 'TIME_T_MAX'
+  #define TIME_T_MAX TYPE_MAXIMUM (time_t)
+                     ^~~~~~~~~~~~~~~~~~~~~
+  ../include/intprops.h:57:4: note: expanded from macro 'TYPE_MAXIMUM'
+    ((t) (! TYPE_SIGNED (t)
+  \
+     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It does not matter for the test.
+
+Checked on x86_64-linux-gnu.
+---
+ support/tst-timespec.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/support/tst-timespec.c b/support/tst-timespec.c
+index 648a990e9c..b3cbb866ce 100644
+--- a/support/tst-timespec.c
++++ b/support/tst-timespec.c
+@@ -20,6 +20,7 @@
+ #include <support/check.h>
+ #include <limits.h>
+ #include <intprops.h>
++#include <libc-diag.h>
+ 
+ #define TIMESPEC_HZ 1000000000
+ 
+@@ -179,6 +180,11 @@ struct timespec_norm_test_case norm_cases[] = {
+   }
+ };
+ 
++/* clang warns that converting from TIME_T_MAX to double (upper_bound)
++   loses precision (from 9223372036854775807 to 9223372036854775808).
++   It does not matter in tests below.  */
++DIAG_PUSH_NEEDS_COMMENT_CLANG;
++DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wimplicit-const-int-float-conversion");
+ /* Test cases for timespec_check_in_range  */
+ struct timespec_test_case check_cases[] = {
+   /* 0 - In range  */
+@@ -290,6 +296,7 @@ struct timespec_test_case check_cases[] = {
+    .upper_bound = TIME_T_MAX, .lower_bound = 1, .result = 1,
+   },
+ };
++DIAG_POP_NEEDS_COMMENT_CLANG;
+ 
+ static int
+ do_test (void)
+-- 
+2.37.2
+

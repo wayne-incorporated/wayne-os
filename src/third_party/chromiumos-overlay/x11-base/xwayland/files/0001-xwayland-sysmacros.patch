@@ -1,0 +1,38 @@
+Patch to fix build issues with glibc 2.25+.
+upstream link:
+https://gitlab.freedesktop.org/xorg/xserver/commit/82f8cf8990009f6cac567814dd6b7fd41cfad82d
+
+glibc 2.25 has dropped sys/sysmacros.h from sys/types.h, so add
+it explicitly in config/udev.c.
+
+This is similar to the commit 84e3b96b
+Signed-off-by: Manoj Gupta <manojgupta@chromium.org>
+Reviewed-by: Adam Jackson <ajax@redhat.com>
+
+diff --git a/config/udev.c b/config/udev.c
+index 8c6c4b666536092986c2184ef34bb5623ae6a854..314acba6cea3ac03b3cd4410bc7cf0d00718f9a9 100644
+--- a/config/udev.c
++++ b/config/udev.c
+@@ -39,6 +39,10 @@
+ #include "globals.h"
+ #include "systemd-logind.h"
+ 
++#ifdef HAVE_SYS_SYSMACROS_H
++#include <sys/sysmacros.h>
++#endif
++
+ #define UDEV_XKB_PROP_KEY "xkb"
+ 
+ #define LOG_PROPERTY(path, prop, val)                                   \
+diff --git a/include/dix-config.h.in b/include/dix-config.h.in
+index 3bd22b8bb773f0b2bd6b14458fa25bbd388f27c1..855b3d50c11ef603a3ffd7267576bc2ca866a2c8 100644
+--- a/include/dix-config.h.in
++++ b/include/dix-config.h.in
+@@ -506,4 +506,7 @@
+ /* Have epoll_create1() */
+ #undef HAVE_EPOLL_CREATE1
+ 
++/* Have <sys/sysmacros.h> header */
++#undef HAVE_SYS_SYSMACROS_H
++
+ #endif /* _DIX_CONFIG_H_ */

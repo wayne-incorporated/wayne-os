@@ -1,0 +1,30 @@
+// Copyright 2018 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// Note:
+//   1. This file is copied from,
+//      https://source.chromium.org/chromium/chromium/src/+/main:mojo/public/mojom/base/big_buffer.mojom
+//   2. On chromium, we must use the version under mojo folder so we do not need
+//      to and must not sync this file to chromium.
+
+module mojo_base.mojom;
+
+[Stable]
+struct BigBufferSharedMemoryRegion {
+  handle<shared_buffer> buffer_handle;
+  uint32 size;
+};
+
+// A helper union to be used when messages want to accept arbitrarily large
+// chunks of byte data. Beyond a certain size threshold, shared memory will be
+// used in lieu of an inline byte array. If shared memory could not be allocated
+// by the sender and the contents of the buffer would be too large to inline,
+// this will instead take on the value of |invalid_buffer=true| indicating that
+// the buffer does not represent any contents intended by the sender.
+[Stable]
+union BigBuffer {
+  array<uint8> bytes;
+  BigBufferSharedMemoryRegion shared_memory;
+  bool invalid_buffer;
+};

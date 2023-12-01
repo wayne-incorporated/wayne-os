@@ -1,0 +1,66 @@
+The patch is reduced to one file perf_event.h which is relevant for the
+perf tool.
+The rest changes target kernel and can't be applied due to the changed
+kernel source tree at ToT.
+
+From 8b8ff8cc3b8155c18162e8b1f70e1230db176862 Mon Sep 17 00:00:00 2001
+From: Adrian Hunter <adrian.hunter@intel.com>
+Date: Tue, 7 Sep 2021 19:39:01 +0300
+Subject: [PATCH] perf/x86: Add new event for AUX output counter index
+
+PEBS-via-PT records contain a mask of applicable counters. To identify
+which event belongs to which counter, a side-band event is needed. Until
+now, there has been no side-band event, and consequently users were limited
+to using a single event.
+
+Add such a side-band event. Note the event is optimised to output only
+when the counter index changes for an event. That works only so long as
+all PEBS-via-PT events are scheduled together, which they are for a
+recording session because they are in a single group.
+
+Also no attribute bit is used to select the new event, so a new
+kernel is not compatible with older perf tools.  The assumption
+being that PEBS-via-PT is sufficiently esoteric that users will not
+be troubled by this.
+
+Signed-off-by: Adrian Hunter <adrian.hunter@intel.com>
+Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+Link: https://lkml.kernel.org/r/20210907163903.11820-2-adrian.hunter@intel.com
+---
+ arch/x86/events/core.c          |  6 ++++++
+ arch/x86/events/intel/core.c    | 16 ++++++++++++++++
+ arch/x86/events/perf_event.h    |  1 +
+ include/linux/perf_event.h      |  1 +
+ include/uapi/linux/perf_event.h | 15 +++++++++++++++
+ kernel/events/core.c            | 30 ++++++++++++++++++++++++++++++
+ 6 files changed, 69 insertions(+)
+
+diff --git a/include/uapi/linux/perf_event.h b/include/uapi/linux/perf_event.h
+index f92880a15645..c89535de1ec8 100644
+--- a/include/uapi/linux/perf_event.h
++++ b/include/uapi/linux/perf_event.h
+@@ -1141,6 +1141,21 @@ enum perf_event_type {
+ 	 */
+ 	PERF_RECORD_TEXT_POKE			= 20,
+ 
++	/*
++	 * Data written to the AUX area by hardware due to aux_output, may need
++	 * to be matched to the event by an architecture-specific hardware ID.
++	 * This records the hardware ID, but requires sample_id to provide the
++	 * event ID. e.g. Intel PT uses this record to disambiguate PEBS-via-PT
++	 * records from multiple events.
++	 *
++	 * struct {
++	 *	struct perf_event_header	header;
++	 *	u64				hw_id;
++	 *	struct sample_id		sample_id;
++	 * };
++	 */
++	PERF_RECORD_AUX_OUTPUT_HW_ID		= 21,
++
+ 	PERF_RECORD_MAX,			/* non-ABI */
+ };
+ 
+-- 
+2.40.1.606.ga4b1b128d6-goog
+

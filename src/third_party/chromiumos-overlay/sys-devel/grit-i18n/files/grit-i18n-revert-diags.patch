@@ -1,0 +1,41 @@
+From da0e88cd1d0d69d15e508e11b9c6526567979423 Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@chromium.org>
+Date: Mon, 10 Feb 2020 15:39:12 -0500
+Subject: [PATCH] Revert "Add missing codec diagnostic logging on one more grit
+ entry point."
+
+This reverts commit 5e847a43a3a4ce01cd4195d9b9d4c9e2fd6f4f05.
+
+This breaks grit usage outside of the chromium tree.
+Drop this once we upgrade & grit itself has been fixed.
+
+Bug: https://crbug.com/1050744
+---
+ tools/grit/grit.py | 8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/tools/grit/grit.py b/tools/grit/grit.py
+index c0e81eaf251b..98b99bbc3900 100755
+--- a/grit.py
++++ b/grit.py
+@@ -8,16 +8,10 @@
+ 
+ from __future__ import print_function
+ 
+-import os
+ import sys
+ 
+ import grit.grit_runner
+ 
+-sys.path.append(os.path.abspath(
+-    os.path.join(os.path.dirname(__file__), '..', 'diagnosis')))
+-import crbug_1001171
+-
+ 
+ if __name__ == '__main__':
+-  with crbug_1001171.DumpStateOnLookupError():
+-    sys.exit(grit.grit_runner.Main(sys.argv[1:]))
++  sys.exit(grit.grit_runner.Main(sys.argv[1:]))
+-- 
+2.25.0.225.g125e21ebc7-goog
+

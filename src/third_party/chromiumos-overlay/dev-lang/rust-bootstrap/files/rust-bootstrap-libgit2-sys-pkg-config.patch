@@ -1,0 +1,15 @@
+diff --git a/rustc-1.29.0-src/src/vendor/libgit2-sys/build.rs b/rustc-1.29.0-src/src/vendor/libgit2-sys/build.rs
+index 1e92dbc..883a0e4 100644
+--- a/rustc-1.29.0-src/src/vendor/libgit2-sys/build.rs
++++ b/rustc-1.29.0-src/src/vendor/libgit2-sys/build.rs
+@@ -29,7 +29,9 @@ fn main() {
+     if curl {
+         register_dep("CURL");
+     }
+-    let has_pkgconfig = Command::new("pkg-config").output().is_ok();
++    let pkg_config = env::var_os("PKG_CONFIG")
++        .unwrap_or_else(|| "pkg-config".into());
++    let has_pkgconfig = Command::new(pkg_config).output().is_ok();
+ 
+     if env::var("LIBGIT2_SYS_USE_PKG_CONFIG").is_ok() {
+         if pkg_config::find_library("libgit2").is_ok() {

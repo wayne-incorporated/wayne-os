@@ -1,0 +1,29 @@
+From 18bae62207d273d91fd0d6201441a2865633cfde Mon Sep 17 00:00:00 2001
+From: Sushma Venkatesh Reddy <sushma.venkatesh.reddy@intel.com>
+Date: Tue, 9 Nov 2021 16:33:00 -0800
+Subject: [PATCH] Disable Media Memory Compression (MMC) on ADL
+
+While using MMC on Chrome OS which provides external surfaces, we are
+observing corruptions. Work in progress from gmmlib and iHD teams to fix
+the issue. To avoid this impacting the milestones, we will disable MMC.
+
+Signed-off-by: Sushma Venkatesh Reddy <sushma.venkatesh.reddy@intel.com>
+---
+ media_driver/linux/gen12/ddi/media_sku_wa_g12.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/media_driver/linux/gen12/ddi/media_sku_wa_g12.cpp b/media_driver/linux/gen12/ddi/media_sku_wa_g12.cpp
+index c911e06c3..8197400b4 100644
+--- a/media_driver/linux/gen12/ddi/media_sku_wa_g12.cpp
++++ b/media_driver/linux/gen12/ddi/media_sku_wa_g12.cpp
+@@ -565,6 +565,7 @@ static bool InitAdlpMediaSku(struct GfxDeviceInfo *devInfo,
+         MEDIA_WR_SKU(skuTable, FtrGT0_5, 1);
+     }
+ 
++    MEDIA_WR_SKU(skuTable, FtrE2ECompression, 0);
+     MEDIA_WR_SKU(skuTable, FtrAV1VLDLSTDecoding, 1);
+     MEDIA_WR_SKU(skuTable, FtrGucSubmission, 1);
+     MEDIA_WR_SKU(skuTable, FtrDecodeHEVC422VTScalaDisable, 1);
+-- 
+2.31.0
+

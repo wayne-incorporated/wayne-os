@@ -1,0 +1,39 @@
+From 818e94fa3911967273397fb1562f0b737a70d9d3 Mon Sep 17 00:00:00 2001
+From: Denis Nikitin <denik@chromium.org>
+Date: Thu, 4 May 2023 15:05:07 -0700
+Subject: [PATCH 1/2] Fix compiler error with llvm-17
+
+SampleProfileReader::create now reaquires additional argument,
+FileSystem.
+---
+ llvm_profile_reader.cc | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/llvm_profile_reader.cc b/llvm_profile_reader.cc
+index 18b8d31..eb4edf5 100644
+--- a/llvm_profile_reader.cc
++++ b/llvm_profile_reader.cc
+@@ -7,6 +7,7 @@
+ #include "symbol_map.h"
+ #include "llvm/Config/llvm-config.h"
+ #include "llvm/ProfileData/SampleProfReader.h"
++#include "llvm/Support/VirtualFileSystem.h"
+ 
+ namespace devtools_crosstool_autofdo {
+ 
+@@ -25,7 +26,11 @@ bool LLVMProfileReader::ReadFromFile(const std::string &filename) {
+ #if LLVM_VERSION_MAJOR >= 12
+   llvm::sampleprof::FunctionSamples::ProfileIsFS = false;
+   auto reader_or_err = llvm::sampleprof::SampleProfileReader::create(
+-      filename, C, discriminator_pass);
++      filename, C,
++#if LLVM_VERSION_MAJOR >= 17
++      *llvm::vfs::getRealFileSystem(),
++#endif
++      discriminator_pass);
+ #else
+   auto reader_or_err =
+       llvm::sampleprof::SampleProfileReader::create(filename, C);
+-- 
+2.40.1.521.gf1e218fcd8-goog
+

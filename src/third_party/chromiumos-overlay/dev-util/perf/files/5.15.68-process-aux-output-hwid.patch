@@ -1,0 +1,75 @@
+This is a local patch to handle the AUX_OUTPUT_HW_ID event
+recorded on the newer kernels.
+To handle the event properly the perf tool version must match with the kernel.
+With the older perf we only have a choice to accept the event and just ignore
+it. This way perf will remain compatible with the new and older kernels.
+
+The patch combines the changes from these patches:
+https://lore.kernel.org/lkml/20210907163903.11820-3-adrian.hunter@intel.com/
+https://lore.kernel.org/all/20230116124928.5440-13-mike.leach@linaro.org/
+but instead of handling the event just skips it.
+
+diff --git a/tools/include/uapi/linux/perf_event.h b/tools/include/uapi/linux/perf_event.h
+index f92880a15645..c89535de1ec8 100644
+--- a/tools/include/uapi/linux/perf_event.h
++++ b/tools/include/uapi/linux/perf_event.h
+@@ -1141,6 +1141,21 @@ enum perf_event_type {
+ 	 */
+ 	PERF_RECORD_TEXT_POKE			= 20,
+ 
++       /*
++        * Data written to the AUX area by hardware due to aux_output, may need
++        * to be matched to the event by an architecture-specific hardware ID.
++        * This records the hardware ID, but requires sample_id to provide the
++        * event ID. e.g. Intel PT uses this record to disambiguate PEBS-via-PT
++        * records from multiple events.
++        *
++        * struct {
++        *      struct perf_event_header        header;
++        *      u64                             hw_id;
++        *      struct sample_id                sample_id;
++        * };
++        */
++       PERF_RECORD_AUX_OUTPUT_HW_ID            = 21,
++
+ 	PERF_RECORD_MAX,			/* non-ABI */
+ };
+ 
+diff --git a/tools/perf/util/event.c b/tools/perf/util/event.c
+index ac706304afe9..fe24801f8e9f 100644
+--- a/tools/perf/util/event.c
++++ b/tools/perf/util/event.c
+@@ -57,6 +57,7 @@ static const char *perf_event__names[] = {
+ 	[PERF_RECORD_BPF_EVENT]			= "BPF_EVENT",
+ 	[PERF_RECORD_CGROUP]			= "CGROUP",
+ 	[PERF_RECORD_TEXT_POKE]			= "TEXT_POKE",
++       [PERF_RECORD_AUX_OUTPUT_HW_ID]          = "AUX_OUTPUT_HW_ID",
+ 	[PERF_RECORD_HEADER_ATTR]		= "ATTR",
+ 	[PERF_RECORD_HEADER_EVENT_TYPE]		= "EVENT_TYPE",
+ 	[PERF_RECORD_HEADER_TRACING_DATA]	= "TRACING_DATA",
+diff --git a/tools/perf/util/machine.c b/tools/perf/util/machine.c
+--- a/tools/perf/util/machine.c
++++ b/tools/perf/util/machine.c
+ 		ret = machine__process_bpf(machine, event, sample); break;
+ 	case PERF_RECORD_TEXT_POKE:
+ 		ret = machine__process_text_poke(machine, event, sample); break;
++	case PERF_RECORD_AUX_OUTPUT_HW_ID:
++		// Accept and ignore the event.
++		ret = 0; break;
+ 	default:
+ 		ret = -1;
+ 		break;
+diff --git a/tools/perf/util/session.c b/tools/perf/util/session.c
+--- a/tools/perf/util/session.c
++++ b/tools/perf/util/session.c
+@@ -1554,8 +1554,8 @@
+ 		return tool->ksymbol(tool, event, sample, machine);
+ 	case PERF_RECORD_BPF_EVENT:
+ 		return tool->bpf(tool, event, sample, machine);
+-	case PERF_RECORD_TEXT_POKE:
+-		return tool->text_poke(tool, event, sample, machine);
++	case PERF_RECORD_AUX_OUTPUT_HW_ID:
++		return 0;
+ 	default:
+ 		++evlist->stats.nr_unknown_events;
+ 		return -1;

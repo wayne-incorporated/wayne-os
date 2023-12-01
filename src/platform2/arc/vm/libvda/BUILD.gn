@@ -1,0 +1,151 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/deps.gni")
+import("//common-mk/mojom_bindings_generator.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":libvda",
+    ":libvda_gpu_unittest",
+    ":libvda_pc",
+  ]
+
+  if (use.test) {
+    deps += [ ":libvda_fake_unittest" ]
+  }
+
+  if (use.fuzzer) {
+    deps += [ ":libvda_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "dbus-1",
+    "libchrome",
+    "libmojo",
+    "system_api",
+  ]
+}
+
+generate_mojom_bindings("video_mojo_bindings") {
+  mojo_root = "${platform2_root}"
+  use_pic = true
+  pkg_deps = [
+    "libchrome",
+    "libmojo",
+  ]
+  sources = [
+    "gpu/mojom/gfx.mojom",
+    "gpu/mojom/video.mojom",
+    "gpu/mojom/video_common.mojom",
+    "gpu/mojom/video_decode_accelerator.mojom",
+    "gpu/mojom/video_decoder.mojom",
+    "gpu/mojom/video_encode_accelerator.mojom",
+    "gpu/mojom/video_frame_pool.mojom",
+    "gpu/mojom/video_protected_buffer_allocator.mojom",
+  ]
+}
+
+source_set("libvda_source_set") {
+  configs += [
+    ":target_defaults",
+    "//common-mk:pic",
+  ]
+  deps = [ ":video_mojo_bindings" ]
+  sources = [
+    "decode/fake/fake_vda_impl.cc",
+    "decode/gpu/decode_helpers.cc",
+    "decode/gpu/gpu_vd_impl.cc",
+    "decode/gpu/gpu_vda_impl.cc",
+    "decode_wrapper.cc",
+    "encode/fake/fake_vea_impl.cc",
+    "encode/gpu/gpu_vea_impl.cc",
+    "encode_wrapper.cc",
+    "event_pipe.cc",
+    "gbm_util.cc",
+    "gpu/format_util.cc",
+    "gpu/vaf_connection.cc",
+  ]
+}
+
+shared_library("libvda") {
+  output_name = "libvda"
+  sources = [
+    "at_exit_util.cc",
+    "log_util.cc",
+  ]
+  pkg_deps = [ "gbm" ]
+  deps = [ ":libvda_source_set" ]
+}
+
+generate_pkg_config("libvda_pc") {
+  deps = [ ":libvda" ]
+  output_name = "libvda"
+  description = "CrOS VDA Connection Library"
+  version = "0.1"
+  libs = [ "-lvda" ]
+  requires_private = [
+    "libchrome",
+    "libmojo",
+  ]
+}
+
+if (use.test) {
+  # Unit tests for the fake VDA impl.
+  executable("libvda_fake_unittest") {
+    sources = [
+      "decode/test/decode_unittest_common.cc",
+      "decode_fake_test.cc",
+      "encode/test/encode_unittest_common.cc",
+      "encode_fake_test.cc",
+    ]
+    configs += [ "//common-mk:test" ]
+    pkg_deps = [
+      "gbm",
+      "libchrome-test",
+    ]
+    deps = [
+      ":libvda_source_set",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+# Unit tests for the GPU VDA impl, to be executed by tast tests.
+executable("libvda_gpu_unittest") {
+  sources = [
+    "decode/test/decode_event_thread.cc",
+    "decode/test/decode_unittest_common.cc",
+    "decode/test/encoded_data_helper.cc",
+    "decode_gpu_test.cc",
+  ]
+
+  # Need to define UNIT_TEST for ShadowingAtExitManager.
+  defines = [ "UNIT_TEST" ]
+  ldflags = [ "-pthread" ]
+  configs += [ "//common-mk:test" ]
+  libs = [ "pthread" ]
+  pkg_deps = [
+    "gbm",
+    "libchrome-test",
+  ]
+  deps = [ ":libvda_source_set" ]
+}
+
+if (use.fuzzer) {
+  executable("libvda_fuzzer") {
+    sources = [
+      "at_exit_util.cc",
+      "decode/test/decode_unittest_common.cc",
+      "decode_fuzzer.cc",
+    ]
+    configs += [ "//common-mk/common_fuzzer" ]
+    configs -= [ "//common-mk:no_exceptions" ]
+    pkg_deps = [ "gbm" ]
+    deps = [ ":libvda_source_set" ]
+  }
+}

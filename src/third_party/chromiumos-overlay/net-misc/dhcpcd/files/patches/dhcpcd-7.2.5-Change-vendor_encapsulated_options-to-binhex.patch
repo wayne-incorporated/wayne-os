@@ -1,0 +1,120 @@
+From ad006eda5935885b04f66f948c171c073dfecff6 Mon Sep 17 00:00:00 2001
+From: Victor Dodon <printesoi@chromium.org>
+Date: Mon, 14 Jun 2021 12:49:27 +0000
+Subject: [PATCH 16/19] Change vendor_encapsulated_options to binhex
+
+Make option vendor_encapsulated_options of type binhex and pass
+VendorEncapsulatedOptions on dbus as a byte array
+
+BUG=chromium:574578
+TEST=run `dbus-monitor --system \
+"type=signal,path=/org/chromium/dhcpcd,interface=org.chromium.dhcpcd,arg1='BOUND'"`
+and check that VendorEncapsulatedOptions is sent
+as array of bytes
+---
+ src/dbus/dbus-dict.c        | 47 +++++++++++++++++++++++++++++++++++++
+ src/dbus/rpc-dbus.c         |  2 +-
+ src/dhcpcd-definitions.conf |  2 +-
+ 3 files changed, 49 insertions(+), 2 deletions(-)
+
+diff --git a/src/dbus/dbus-dict.c b/src/dbus/dbus-dict.c
+index 8e3cf4e4..53b261ef 100644
+--- a/src/dbus/dbus-dict.c
++++ b/src/dbus/dbus-dict.c
+@@ -28,6 +28,7 @@
+ #include <arpa/inet.h>
+ 
+ #include <ctype.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <syslog.h>
+@@ -165,6 +166,50 @@ append_config_value(DBusMessageIter *entry, int type,
+ 	return retval;
+ }
+ 
++static int
++append_config_byte_array(DBusMessageIter *entry, const char *data)
++{
++	DBusMessageIter var, array;
++	dbus_bool_t ok = TRUE;
++	uint8_t u8, u8_2;
++	size_t len;
++	const char *it, *end;
++	const char *tsa, *ts;
++
++	tsa = DBUS_TYPE_ARRAY_AS_STRING DBUS_TYPE_BYTE_AS_STRING;
++	ts = DBUS_TYPE_BYTE_AS_STRING;
++
++	dbus_message_iter_open_container(entry, DBUS_TYPE_VARIANT, tsa, &var);
++	dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, ts, &array);
++
++	len = strlen(data);
++	it = data;
++	end = data + len;
++
++	/* "a12" is treated as "0a12" */
++	if (len & 1) {
++		ok = (sscanf(it++, "%1hhx", &u8) == 1) &&
++			dbus_message_iter_append_basic(&array, DBUS_TYPE_BYTE,
++						       &u8);
++	}
++
++	while (ok && it < end) {
++		/* sscanf("1z", "%2hhx", &u8) will store 0x01 in u8 and
++		 * will return 1 */
++		ok = (sscanf(it++, "%1hhx", &u8) == 1) &&
++			(sscanf(it++, "%1hhx", &u8_2) == 1);
++		if (!ok)
++			break;
++
++		u8 = (u8 << 4) | u8_2;
++		ok = dbus_message_iter_append_basic(&array, DBUS_TYPE_BYTE, &u8);
++	}
++
++	dbus_message_iter_close_container(&var, &array);
++	dbus_message_iter_close_container(entry, &var);
++	return ok ? 0 : -1;
++}
++
+ static int
+ append_config_array(DBusMessageIter *entry, int type, const char *data)
+ {
+@@ -177,6 +222,8 @@ append_config_array(DBusMessageIter *entry, int type, const char *data)
+ 	struct in_addr in;
+ 
+ 	switch (type) {
++	case DBUS_TYPE_BYTE:
++		return append_config_byte_array(entry, data);
+ 	case DBUS_TYPE_STRING:
+ 		tsa = DBUS_TYPE_ARRAY_AS_STRING DBUS_TYPE_STRING_AS_STRING;
+ 		ts = DBUS_TYPE_STRING_AS_STRING;
+diff --git a/src/dbus/rpc-dbus.c b/src/dbus/rpc-dbus.c
+index 4298d4c2..df9b54d2 100644
+--- a/src/dbus/rpc-dbus.c
++++ b/src/dbus/rpc-dbus.c
+@@ -160,7 +160,7 @@ static const struct o_dbus dhos[] = {
+ 	{ "nis_domain=", DBUS_TYPE_STRING, 0, "NISDomain" },
+ 	{ "nis_servers=", DBUS_TYPE_ARRAY, DBUS_TYPE_UINT32, "NISServers" },
+ 	{ "ntp_servers=", DBUS_TYPE_ARRAY, DBUS_TYPE_UINT32, "NTPServers" },
+-	{ "vendor_encapsulated_options=", DBUS_TYPE_STRING, 0,
++	{ "vendor_encapsulated_options=", DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+ 	  "VendorEncapsulatedOptions" },
+ 	{ "netbios_name_servers=" ,DBUS_TYPE_ARRAY, DBUS_TYPE_UINT32,
+ 	  "NetBIOSNameServers" },
+diff --git a/src/dhcpcd-definitions.conf b/src/dhcpcd-definitions.conf
+index f9205956..df4075e8 100644
+--- a/src/dhcpcd-definitions.conf
++++ b/src/dhcpcd-definitions.conf
+@@ -58,7 +58,7 @@ define 39	byte			tcp_keepalive_garbage
+ define 40	string			nis_domain
+ define 41	array ipaddress		nis_servers
+ define 42	array ipaddress		ntp_servers
+-define 43	string			vendor_encapsulated_options
++define 43	binhex			vendor_encapsulated_options
+ define 44	array ipaddress		netbios_name_servers
+ define 45	ipaddress		netbios_dd_server
+ define 46	byte			netbios_node_type
+-- 
+2.33.0.800.g4c38ced690-goog
+

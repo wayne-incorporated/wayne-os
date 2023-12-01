@@ -1,0 +1,52 @@
+Only include Cflags for absl_config since it is required by all the sub
+libraries. This prevents the resulting CFLAGS from being >800 entries
+which can lead to flags being truncated.
+
+Author: Allen Webb <allenwebb@google.com>
+diff --git a/CMake/AbseilHelpers.cmake b/CMake/AbseilHelpers.cmake
+index f2ce5675..3767a3ad 100644
+--- a/CMake/AbseilHelpers.cmake
++++ b/CMake/AbseilHelpers.cmake
+@@ -158,16 +158,23 @@ function(absl_cc_library)
+           set(PC_DEPS "${PC_DEPS} absl_${CMAKE_MATCH_1} = ${PC_VERSION}")
+         endif()
+       endforeach()
+-      foreach(cflag ${ABSL_CC_LIB_COPTS})
+-        if(${cflag} MATCHES "^(-Wno|/wd)")
+-          # These flags are needed to suppress warnings that might fire in our headers.
+-          set(PC_CFLAGS "${PC_CFLAGS} ${cflag}")
+-        elseif(${cflag} MATCHES "^(-W|/w[1234eo])")
+-          # Don't impose our warnings on others.
+-        else()
+-          set(PC_CFLAGS "${PC_CFLAGS} ${cflag}")
+-        endif()
+-      endforeach()
++      # Only include CFLAGS once in absl_config since it is required by everything else.
++      if(_NAME STREQUAL "conf")
++        set(PC_CFLAGS "${PC_CFLAGS} ${cflag}")
++        foreach(cflag ${ABSL_CC_LIB_COPTS})
++          if(${cflag} MATCHES "^(-Wno|/wd)")
++            # These flags are needed to suppress warnings that might fire in our headers.
++            set(PC_CFLAGS "${PC_CFLAGS} ${cflag}")
++          elseif(${cflag} MATCHES "^(-W|/w[1234eo])")
++            # Don't impose our warnings on others.
++          else()
++            set(PC_CFLAGS "${PC_CFLAGS} ${cflag}")
++          endif()
++        endforeach()
++        set(PC_CFLAGS "${PC_CFLAGS}\n")
++      else()
++        set(PC_CFLAGS "")
++      endif()
+       FILE(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/lib/pkgconfig/absl_${_NAME}.pc" CONTENT "\
+ prefix=${CMAKE_INSTALL_PREFIX}\n\
+ exec_prefix=\${prefix}\n\
+@@ -180,7 +187,7 @@ URL: https://abseil.io/\n\
+ Version: ${PC_VERSION}\n\
+ Requires:${PC_DEPS}\n\
+ Libs: -L\${libdir} $<JOIN:${ABSL_CC_LIB_LINKOPTS}, > $<$<NOT:$<BOOL:${ABSL_CC_LIB_IS_INTERFACE}>>:-labsl_${_NAME}>\n\
+-Cflags: -I\${includedir}${PC_CFLAGS}\n")
++${PC_CFLAGS}")
+       INSTALL(FILES "${CMAKE_BINARY_DIR}/lib/pkgconfig/absl_${_NAME}.pc"
+               DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+     endif()

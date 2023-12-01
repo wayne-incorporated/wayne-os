@@ -1,0 +1,59 @@
+From bdbf157a199796ef8e517f9d4ba5e67288e86630 Mon Sep 17 00:00:00 2001
+From: Guangyao-Bai <guangyao.bai@intel.com>
+Date: Mon, 27 Mar 2023 01:24:15 +0800
+Subject: [PATCH] [Media Common][VP] Update Modifier code logic
+
+Update Modifier code logic: surface need to check whether aux table is reasonable
+---
+ .../common/ddi/media_libva_interface_next.cpp | 23 ++++++++++++++++---
+ 1 file changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/media_softlet/linux/common/ddi/media_libva_interface_next.cpp b/media_softlet/linux/common/ddi/media_libva_interface_next.cpp
+index b879f0033dcf..34d21fe80905 100644
+--- a/media_softlet/linux/common/ddi/media_libva_interface_next.cpp
++++ b/media_softlet/linux/common/ddi/media_libva_interface_next.cpp
+@@ -3894,13 +3894,30 @@ VAStatus MediaLibvaInterfaceNext::ExportSurfaceHandle(
+     {
+         DDI_ASSERTMESSAGE("could not find related modifier values");
+         return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
+-    }    
++    }
++
++    // Query Aux Plane info form GMM
++    bool hasAuxPlane           = false;
++    GMM_RESOURCE_FLAG GmmFlags = mediaSurface->pGmmResourceInfo->GetResFlags();
++
++    if (((GmmFlags.Gpu.MMC                           ||
++          GmmFlags.Gpu.CCS)                          &&
++         (GmmFlags.Info.MediaCompressed              ||
++          GmmFlags.Info.RenderCompressed)            &&
++          mediaCtx->m_auxTableMgr) )
++          {
++              hasAuxPlane = true;
++          }
++          else
++          {
++              hasAuxPlane = false;
++          }
+ 
+     int compositeObject = flags & VA_EXPORT_SURFACE_COMPOSED_LAYERS;
+ 
+     uint32_t formats[4];
+-    bool hasAuxPlane = (mediaCtx->m_auxTableMgr)? true: false;
+     uint32_t planesNum = GetPlaneNum(mediaSurface, hasAuxPlane);
++
+     if(compositeObject)
+     {
+         formats[0] = GetDrmFormatOfCompositeObject(desc->fourcc);
+@@ -3947,7 +3964,7 @@ VAStatus MediaLibvaInterfaceNext::ExportSurfaceHandle(
+     uint32_t auxOffsetY = (uint32_t)mediaSurface->pGmmResourceInfo->GetPlanarAuxOffset(0, GMM_AUX_Y_CCS);
+     uint32_t auxOffsetUV = (uint32_t)mediaSurface->pGmmResourceInfo->GetPlanarAuxOffset(0, GMM_AUX_UV_CCS);
+ 
+-    if(mediaCtx->m_auxTableMgr)
++    if(hasAuxPlane)
+     {
+         status = InitSurfaceDescriptorWithAuxTableMgr(desc, formats, compositeObject, planesNum,
+             offsetY, offsetU, offsetV, auxOffsetY, auxOffsetUV, mediaSurface->iPitch);
+-- 
+2.17.1
+

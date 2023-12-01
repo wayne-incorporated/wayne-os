@@ -1,0 +1,37 @@
+From ff8efd4aad50c4c3a890027d25f4d30b655410d5 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 24 Aug 2022 12:06:00 -0300
+Subject: [PATCH 069/163] diag: Add clang specific DIAG_PUSH_NEEDS_COMMENT
+ macros
+
+---
+ include/libc-diag.h | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/include/libc-diag.h b/include/libc-diag.h
+index e1dbe99eb3..61e33d6c36 100644
+--- a/include/libc-diag.h
++++ b/include/libc-diag.h
+@@ -71,6 +71,19 @@
+ # define DIAG_IGNORE_Os_NEEDS_COMMENT(version, option)
+ #endif
+ 
++/* Same as before, but only enables the warning suppression for clang.
++   It is for clang-only issues and options that only clang emits.  */
++#ifdef __clang__
++# define DIAG_PUSH_NEEDS_COMMENT_CLANG _Pragma ("clang diagnostic push")
++# define DIAG_POP_NEEDS_COMMENT_CLANG _Pragma ("clang diagnostic pop")
++# define DIAG_IGNORE_NEEDS_COMMENT_CLANG(version, option) \
++  _Pragma (_DIAG_STR (clang diagnostic ignored option))
++#else
++# define DIAG_PUSH_NEEDS_COMMENT_CLANG
++# define DIAG_POP_NEEDS_COMMENT_CLANG
++# define DIAG_IGNORE_NEEDS_COMMENT_CLANG(version, option)
++#endif
++
+ /* Some warnings are not support for all compilers.  */
+ #ifndef __clang__
+ # define DIAG_IGNORE_NEEDS_COMMENT_GCC(VERSION, WARNING) \
+-- 
+2.37.2
+

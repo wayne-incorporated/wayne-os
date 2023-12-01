@@ -1,0 +1,84 @@
+commit d2792e7d37c4b454a6b052cd569ff13ed7f22159
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Thu Jul 14 09:49:06 2022 -0700
+
+    [clang][test] fix typo in fn attr
+    
+    While testing backports of
+    https://reviews.llvm.org/D129572#inline-1245936
+    commit 2240d72f15f3 ("[X86] initial -mfunction-return=thunk-extern support")
+    I noticed that one of my unit tests mistyped a function attribute. The
+    unit test was intended to test fn attr merging behavior, but with the
+    typo it was not.  Small fixup.
+    
+    Reviewed By: aaron.ballman, erichkeane
+    
+    Differential Revision: https://reviews.llvm.org/D129691
+
+diff --git a/clang/test/CodeGen/attr-function-return.c b/clang/test/CodeGen/attr-function-return.c
+index 8b68cfe52afa..2ec3fb146432 100644
+--- a/clang/test/CodeGen/attr-function-return.c
++++ b/clang/test/CodeGen/attr-function-return.c
+@@ -1,11 +1,12 @@
+ // RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:   -Werror=ignored-attributes \
+ // RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-NOM
+ // RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
+-// RUN:   -mfunction-return=keep | FileCheck %s \
+-// RUN:   --check-prefixes=CHECK,CHECK-KEEP
++// RUN:   -Werror=ignored-attributes -mfunction-return=keep \
++// RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-KEEP
+ // RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
+-// RUN:  -mfunction-return=thunk-extern | FileCheck %s \
+-// RUN:  --check-prefixes=CHECK,CHECK-EXTERN
++// RUN:   -Werror=ignored-attributes -mfunction-return=thunk-extern \
++// RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-EXTERN
+ 
+ #if !__has_attribute(function_return)
+ #error "missing attribute support for function_return"
+@@ -14,13 +15,13 @@
+ // CHECK: @keep() [[KEEP:#[0-9]+]]
+ __attribute__((function_return("keep"))) void keep(void) {}
+ 
+-// CHECK: @keep2() [[KEEP:#[0-9]+]]
++// CHECK: @keep2() [[KEEP]]
+ [[gnu::function_return("keep")]] void keep2(void) {}
+ 
+ // CHECK: @thunk_extern() [[EXTERN:#[0-9]+]]
+ __attribute__((function_return("thunk-extern"))) void thunk_extern(void) {}
+ 
+-// CHECK: @thunk_extern2() [[EXTERN:#[0-9]+]]
++// CHECK: @thunk_extern2() [[EXTERN]]
+ [[gnu::function_return("thunk-extern")]] void thunk_extern2(void) {}
+ 
+ // CHECK: @double_thunk_keep() [[KEEP]]
+@@ -39,7 +40,7 @@ __attribute__((function_return("thunk-extern")))
+ void double_keep_thunk(void) {}
+ 
+ // CHECK: @double_keep_thunk2() [[EXTERN]]
+-[[gnu::function_return("thunk-keep")]][[gnu::function_return("thunk-extern")]]
++[[gnu::function_return("keep")]][[gnu::function_return("thunk-extern")]]
+ void double_keep_thunk2(void) {}
+ 
+ // CHECK: @thunk_keep() [[KEEP]]
+diff --git a/clang/test/CodeGen/attr-function-return.cpp b/clang/test/CodeGen/attr-function-return.cpp
+index 9d58b7b2f857..47ef1a74cbb6 100644
+--- a/clang/test/CodeGen/attr-function-return.cpp
++++ b/clang/test/CodeGen/attr-function-return.cpp
+@@ -1,11 +1,12 @@
+ // RUN: %clang_cc1 -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:   -Werror=unknown-attributes \
+ // RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-NOM
+ // RUN: %clang_cc1 -triple x86_64-linux-gnu %s -emit-llvm -o - \
+-// RUN:   -mfunction-return=keep | FileCheck %s \
+-// RUN:   --check-prefixes=CHECK,CHECK-KEEP
++// RUN:   -Werror=unknown-attributes -mfunction-return=keep \
++// RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-KEEP
+ // RUN: %clang_cc1 -triple x86_64-linux-gnu %s -emit-llvm -o - \
+-// RUN:  -mfunction-return=thunk-extern | FileCheck %s \
+-// RUN:  --check-prefixes=CHECK,CHECK-EXTERN
++// RUN:   -Werror=unknown-attributes -mfunction-return=thunk-extern \
++// RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-EXTERN
+ 
+ int foo(void) {
+   // CHECK: @"_ZZ3foovENK3$_0clEv"({{.*}}) [[NOATTR:#[0-9]+]]

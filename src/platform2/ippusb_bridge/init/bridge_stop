@@ -1,0 +1,10 @@
+#!/bin/sh
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+logger -t bridge_stop \
+  "Stopping ippusb_bridge for $ID_VENDOR_ID:$ID_MODEL_ID" \
+  "on $BUSNUM:$DEVNUM ($DEVNAME)"
+exec /sbin/stop --no-wait --quiet ippusb-bridge \
+  BUS="$BUSNUM" DEV="$DEVNUM" VID="$ID_VENDOR_ID" PID="$ID_MODEL_ID"

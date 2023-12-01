@@ -1,0 +1,80 @@
+From ea3d9e95916ae1195d79629ee9233658ded6ab14 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 15 Mar 2022 16:01:29 -0300
+Subject: [PATCH 102/163] Use -frounding-math iff compiler supports it
+
+---
+ Makeconfig   |  2 +-
+ configure    | 22 ++++++++++++++++++++++
+ configure.ac |  9 +++++++++
+ 3 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/Makeconfig b/Makeconfig
+index 2bd78e9edc..b93db42a86 100644
+--- a/Makeconfig
++++ b/Makeconfig
+@@ -861,7 +861,7 @@ endif
+ # We have to assume that glibc functions are called in any rounding
+ # mode and also change the rounding mode in a few functions. So,
+ # disable any optimization that assume default rounding mode.
+-+math-flags = -frounding-math
+++math-flags = $(config-cflags-frounding-math)
+ 
+ # Logically only "libnldbl", "nonlib" and "testsuite" should be using
+ # -fno-math-errno. However due to GCC bug #88576, only "libm" can use
+diff --git a/configure b/configure
+index aa81d162db..93002e05c6 100755
+--- a/configure
++++ b/configure
+@@ -6587,6 +6587,28 @@ $as_echo "$libc_cv_cc_signaling_nans" >&6; }
+ config_vars="$config_vars
+ config-cflags-signaling-nans = $libc_cv_cc_signaling_nans"
+ 
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for compiler option -frounding-math" >&5
++$as_echo_n "checking for compiler option -frounding-math... " >&6; }
++if ${libc_cv_cc_rounding_math+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  if { ac_try='${CC-cc} -Werror -frounding-math -xc /dev/null -S -o /dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }; then :
++  libc_cv_cc_rounding_math=-frounding-math
++else
++  libc_cv_cc_rounding_math=
++fi
++
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_cc_rounding_math" >&5
++$as_echo "$libc_cv_cc_rounding_math" >&6; }
++config_vars="$config_vars
++config-cflags-frounding-math = $libc_cv_cc_rounding_math"
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking if $CC accepts -fno-tree-loop-distribute-patterns with \
+ __attribute__ ((__optimize__))" >&5
+ $as_echo_n "checking if $CC accepts -fno-tree-loop-distribute-patterns with \
+diff --git a/configure.ac b/configure.ac
+index 9f8f9514d1..d4eaedf6b6 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1603,6 +1603,15 @@ LIBC_TRY_CC_OPTION([-Werror -fsignaling-nans],
+ LIBC_CONFIG_VAR([config-cflags-signaling-nans],
+ 		[$libc_cv_cc_signaling_nans])
+ 
++dnl Determina if compiler support -frounding-math
++AC_CACHE_CHECK([for compiler option -frounding-math], libc_cv_cc_rounding_math, [dnl
++LIBC_TRY_CC_OPTION([-Werror -frounding-math],
++		   [libc_cv_cc_rounding_math=-frounding-math],
++		   [libc_cv_cc_rounding_math=])
++])
++LIBC_CONFIG_VAR([config-cflags-frounding-math],
++	       	[$libc_cv_cc_rounding_math])
++
+ AC_CACHE_CHECK(if $CC accepts -fno-tree-loop-distribute-patterns with \
+ __attribute__ ((__optimize__)), libc_cv_cc_loop_to_function, [dnl
+ cat > conftest.c <<EOF
+-- 
+2.37.2
+

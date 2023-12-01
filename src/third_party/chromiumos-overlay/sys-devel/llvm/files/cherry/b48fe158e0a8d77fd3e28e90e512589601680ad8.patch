@@ -1,0 +1,187 @@
+commit b48fe158e0a8d77fd3e28e90e512589601680ad8
+Author: Sanjay Patel <spatel@rotateright.com>
+Date:   Wed Mar 9 17:36:37 2022 -0500
+
+    [Analysis] remove bogus smin/smax pattern detection
+    
+    This is a revert of cfcc42bdc. The analysis is wrong as shown by
+    the minimal tests for instcombine:
+    https://alive2.llvm.org/ce/z/y9Dp8A
+    
+    There may be a way to salvage some of the other tests,
+    but that can be done as follow-ups. This avoids a miscompile
+    and fixes #54311.
+
+diff --git a/llvm/lib/Analysis/ValueTracking.cpp b/llvm/lib/Analysis/ValueTracking.cpp
+index 760edf6530ff..80e0d922edad 100644
+--- a/llvm/lib/Analysis/ValueTracking.cpp
++++ b/llvm/lib/Analysis/ValueTracking.cpp
+@@ -5802,20 +5802,6 @@ static SelectPatternResult matchMinMax(CmpInst::Predicate Pred,
+   if (Pred != CmpInst::ICMP_SGT && Pred != CmpInst::ICMP_SLT)
+     return {SPF_UNKNOWN, SPNB_NA, false};
+ 
+-  // Z = X -nsw Y
+-  // (X >s Y) ? 0 : Z ==> (Z >s 0) ? 0 : Z ==> SMIN(Z, 0)
+-  // (X <s Y) ? 0 : Z ==> (Z <s 0) ? 0 : Z ==> SMAX(Z, 0)
+-  if (match(TrueVal, m_Zero()) &&
+-      match(FalseVal, m_NSWSub(m_Specific(CmpLHS), m_Specific(CmpRHS))))
+-    return {Pred == CmpInst::ICMP_SGT ? SPF_SMIN : SPF_SMAX, SPNB_NA, false};
+-
+-  // Z = X -nsw Y
+-  // (X >s Y) ? Z : 0 ==> (Z >s 0) ? Z : 0 ==> SMAX(Z, 0)
+-  // (X <s Y) ? Z : 0 ==> (Z <s 0) ? Z : 0 ==> SMIN(Z, 0)
+-  if (match(FalseVal, m_Zero()) &&
+-      match(TrueVal, m_NSWSub(m_Specific(CmpLHS), m_Specific(CmpRHS))))
+-    return {Pred == CmpInst::ICMP_SGT ? SPF_SMAX : SPF_SMIN, SPNB_NA, false};
+-
+   const APInt *C1;
+   if (!match(CmpRHS, m_APInt(C1)))
+     return {SPF_UNKNOWN, SPNB_NA, false};
+diff --git a/llvm/test/CodeGen/X86/vec_minmax_match.ll b/llvm/test/CodeGen/X86/vec_minmax_match.ll
+index 6334e6706d2e..c963bad07d1a 100644
+--- a/llvm/test/CodeGen/X86/vec_minmax_match.ll
++++ b/llvm/test/CodeGen/X86/vec_minmax_match.ll
+@@ -35,9 +35,9 @@ define <4 x i32> @smin_vec2(<4 x i32> %x) {
+ define <4 x i32> @smin_vec3(<4 x i32> %x, <4 x i32> %y) {
+ ; CHECK-LABEL: smin_vec3:
+ ; CHECK:       # %bb.0:
+-; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm0
+-; CHECK-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+-; CHECK-NEXT:    vpminsd %xmm1, %xmm0, %xmm0
++; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm2
++; CHECK-NEXT:    vpcmpgtd %xmm1, %xmm0, %xmm0
++; CHECK-NEXT:    vpandn %xmm2, %xmm0, %xmm0
+ ; CHECK-NEXT:    retq
+   %sub = sub nsw <4 x i32> %x, %y
+   %cmp = icmp sgt <4 x i32> %x, %y
+@@ -50,9 +50,9 @@ define <4 x i32> @smin_vec3(<4 x i32> %x, <4 x i32> %y) {
+ define <4 x i32> @smin_vec4(<4 x i32> %x, <4 x i32> %y) {
+ ; CHECK-LABEL: smin_vec4:
+ ; CHECK:       # %bb.0:
+-; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm0
+-; CHECK-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+-; CHECK-NEXT:    vpminsd %xmm1, %xmm0, %xmm0
++; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm2
++; CHECK-NEXT:    vpcmpgtd %xmm0, %xmm1, %xmm0
++; CHECK-NEXT:    vpand %xmm2, %xmm0, %xmm0
+ ; CHECK-NEXT:    retq
+   %sub = sub nsw <4 x i32> %x, %y
+   %cmp = icmp slt <4 x i32> %x, %y
+@@ -91,9 +91,9 @@ define <4 x i32> @smax_vec2(<4 x i32> %x) {
+ define <4 x i32> @smax_vec3(<4 x i32> %x, <4 x i32> %y) {
+ ; CHECK-LABEL: smax_vec3:
+ ; CHECK:       # %bb.0:
+-; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm0
+-; CHECK-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+-; CHECK-NEXT:    vpmaxsd %xmm1, %xmm0, %xmm0
++; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm2
++; CHECK-NEXT:    vpcmpgtd %xmm0, %xmm1, %xmm0
++; CHECK-NEXT:    vpandn %xmm2, %xmm0, %xmm0
+ ; CHECK-NEXT:    retq
+   %sub = sub nsw <4 x i32> %x, %y
+   %cmp = icmp slt <4 x i32> %x, %y
+@@ -106,9 +106,9 @@ define <4 x i32> @smax_vec3(<4 x i32> %x, <4 x i32> %y) {
+ define <4 x i32> @smax_vec4(<4 x i32> %x, <4 x i32> %y) {
+ ; CHECK-LABEL: smax_vec4:
+ ; CHECK:       # %bb.0:
+-; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm0
+-; CHECK-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+-; CHECK-NEXT:    vpmaxsd %xmm1, %xmm0, %xmm0
++; CHECK-NEXT:    vpsubd %xmm1, %xmm0, %xmm2
++; CHECK-NEXT:    vpcmpgtd %xmm1, %xmm0, %xmm0
++; CHECK-NEXT:    vpand %xmm2, %xmm0, %xmm0
+ ; CHECK-NEXT:    retq
+   %sub = sub nsw <4 x i32> %x, %y
+   %cmp = icmp sgt <4 x i32> %x, %y
+diff --git a/llvm/test/Transforms/InstCombine/select-min-max.ll b/llvm/test/Transforms/InstCombine/select-min-max.ll
+index 04dc62ec2f92..6682e1750d31 100644
+--- a/llvm/test/Transforms/InstCombine/select-min-max.ll
++++ b/llvm/test/Transforms/InstCombine/select-min-max.ll
+@@ -252,9 +252,10 @@ define i8 @umin_umax(i8 %x) {
+ 
+ define i8 @not_smax(i8 %i41, i8 %i43) {
+ ; CHECK-LABEL: @not_smax(
+-; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41:%.*]], [[I43:%.*]]
+-; CHECK-NEXT:    [[TMP1:%.*]] = call i8 @llvm.smax.i8(i8 [[I46]], i8 0)
+-; CHECK-NEXT:    ret i8 [[TMP1]]
++; CHECK-NEXT:    [[I44:%.*]] = icmp slt i8 [[I41:%.*]], [[I43:%.*]]
++; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41]], [[I43]]
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[I44]], i8 0, i8 [[I46]]
++; CHECK-NEXT:    ret i8 [[SPEC_SELECT]]
+ ;
+   %i44 = icmp slt i8 %i41, %i43
+   %i46 = sub nsw i8 %i41, %i43
+@@ -264,9 +265,10 @@ define i8 @not_smax(i8 %i41, i8 %i43) {
+ 
+ define i8 @not_smax_swap(i8 %i41, i8 %i43) {
+ ; CHECK-LABEL: @not_smax_swap(
+-; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41:%.*]], [[I43:%.*]]
+-; CHECK-NEXT:    [[TMP1:%.*]] = call i8 @llvm.smax.i8(i8 [[I46]], i8 0)
+-; CHECK-NEXT:    ret i8 [[TMP1]]
++; CHECK-NEXT:    [[I44:%.*]] = icmp sgt i8 [[I41:%.*]], [[I43:%.*]]
++; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41]], [[I43]]
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[I44]], i8 [[I46]], i8 0
++; CHECK-NEXT:    ret i8 [[SPEC_SELECT]]
+ ;
+   %i44 = icmp sgt i8 %i41, %i43
+   %i46 = sub nsw i8 %i41, %i43
+@@ -276,9 +278,10 @@ define i8 @not_smax_swap(i8 %i41, i8 %i43) {
+ 
+ define i8 @not_smin(i8 %i41, i8 %i43) {
+ ; CHECK-LABEL: @not_smin(
+-; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41:%.*]], [[I43:%.*]]
+-; CHECK-NEXT:    [[TMP1:%.*]] = call i8 @llvm.smin.i8(i8 [[I46]], i8 0)
+-; CHECK-NEXT:    ret i8 [[TMP1]]
++; CHECK-NEXT:    [[I44:%.*]] = icmp sgt i8 [[I41:%.*]], [[I43:%.*]]
++; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41]], [[I43]]
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[I44]], i8 0, i8 [[I46]]
++; CHECK-NEXT:    ret i8 [[SPEC_SELECT]]
+ ;
+   %i44 = icmp sgt i8 %i41, %i43
+   %i46 = sub nsw i8 %i41, %i43
+@@ -288,9 +291,10 @@ define i8 @not_smin(i8 %i41, i8 %i43) {
+ 
+ define i8 @not_smin_swap(i8 %i41, i8 %i43) {
+ ; CHECK-LABEL: @not_smin_swap(
+-; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41:%.*]], [[I43:%.*]]
+-; CHECK-NEXT:    [[TMP1:%.*]] = call i8 @llvm.smin.i8(i8 [[I46]], i8 0)
+-; CHECK-NEXT:    ret i8 [[TMP1]]
++; CHECK-NEXT:    [[I44:%.*]] = icmp slt i8 [[I41:%.*]], [[I43:%.*]]
++; CHECK-NEXT:    [[I46:%.*]] = sub nsw i8 [[I41]], [[I43]]
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[I44]], i8 [[I46]], i8 0
++; CHECK-NEXT:    ret i8 [[SPEC_SELECT]]
+ ;
+   %i44 = icmp slt i8 %i41, %i43
+   %i46 = sub nsw i8 %i41, %i43
+diff --git a/llvm/test/Transforms/LoopVectorize/bzip_reverse_loops.ll b/llvm/test/Transforms/LoopVectorize/bzip_reverse_loops.ll
+index 81fc2b51bc4b..bc17daa668c6 100644
+--- a/llvm/test/Transforms/LoopVectorize/bzip_reverse_loops.ll
++++ b/llvm/test/Transforms/LoopVectorize/bzip_reverse_loops.ll
+@@ -40,7 +40,8 @@ do.end:                                           ; preds = %cond.end
+ ;CHECK: example1
+ ;CHECK: load <4 x i32>
+ ;CHECK-NEXT: shufflevector <4 x i32>
+-;CHECK: call <4 x i32> @llvm.smax.v4i32
++;CHECK: sub nsw <4 x i32>
++;CHECK: select <4 x i1>
+ ;CHECK: store <4 x i32>
+ ;CHECK: ret
+ define void @example1(i32* nocapture %a, i32 %n, i32 %wsize) nounwind uwtable ssp {
+diff --git a/llvm/test/Transforms/PhaseOrdering/min-max-abs-cse.ll b/llvm/test/Transforms/PhaseOrdering/min-max-abs-cse.ll
+index 9bc3a5a00c4a..2f3dd4b291de 100644
+--- a/llvm/test/Transforms/PhaseOrdering/min-max-abs-cse.ll
++++ b/llvm/test/Transforms/PhaseOrdering/min-max-abs-cse.ll
+@@ -9,7 +9,12 @@
+ 
+ define i8 @smax_nsw(i8 %a, i8 %b) {
+ ; CHECK-LABEL: @smax_nsw(
+-; CHECK-NEXT:    ret i8 0
++; CHECK-NEXT:    [[SUB:%.*]] = sub nsw i8 [[A:%.*]], [[B:%.*]]
++; CHECK-NEXT:    [[CMP1:%.*]] = icmp slt i8 [[A]], [[B]]
++; CHECK-NEXT:    [[M1:%.*]] = select i1 [[CMP1]], i8 0, i8 [[SUB]]
++; CHECK-NEXT:    [[TMP1:%.*]] = call i8 @llvm.smax.i8(i8 [[SUB]], i8 0)
++; CHECK-NEXT:    [[R:%.*]] = sub i8 [[TMP1]], [[M1]]
++; CHECK-NEXT:    ret i8 [[R]]
+ ;
+   %sub = sub nsw i8 %a, %b
+   %cmp1 = icmp slt i8 %a, %b

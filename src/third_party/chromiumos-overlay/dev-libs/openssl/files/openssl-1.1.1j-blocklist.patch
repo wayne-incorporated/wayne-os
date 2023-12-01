@@ -1,0 +1,358 @@
+From ef26f0407eed02a3b48775689c9ffe6c0aef5f10 Mon Sep 17 00:00:00 2001
+From: Mattias Nissler <mnissler@chromium.org>
+Date: Mon, 4 Nov 2019 20:47:18 +0100
+Subject: [PATCH] Support for blocklisting certificates for verification
+
+We can add certs to the blocklist by serial (with 'serial <n>') or by
+sha256sum with ('sha256 <n>').
+
+This is a forward-port of the original blocklisting patch for 1.0.2 by
+ellyjones@chromium.org. The code is somewhat problematic (for example
+it reads the blocklist file for each certificate it checks, only works
+for the internal verification code path we happen to use, doesn't have
+proper error handling), so ideally we'd find a better solution to do
+blocklisting moving forward. Alas, this is what we have right now.
+
+BUG=chromium:203154
+TEST=unit test,security_OpenSSLBlocklist
+TEST=FEATURES=test emerge openssl
+TEST=tast run <target> security.OpenSSLBlocklist
+---
+ crypto/x509/x509_vfy.c                        | 125 ++++++++++++++++++
+ test/recipes/90-test_blocklist.t              |  71 ++++++++++
+ .../90-test_blocklist_data/globalsign.pem     |  22 +++
+ .../recipes/90-test_blocklist_data/google.pem |  53 ++++++++
+ test/recipes/90-test_blocklist_data/gts.pem   |  25 ++++
+ 5 files changed, 296 insertions(+)
+ create mode 100644 test/recipes/90-test_blocklist.t
+ create mode 100644 test/recipes/90-test_blocklist_data/globalsign.pem
+ create mode 100644 test/recipes/90-test_blocklist_data/google.pem
+ create mode 100644 test/recipes/90-test_blocklist_data/gts.pem
+
+--- a/crypto/x509/x509_vfy.c
++++ b/crypto/x509/x509_vfy.c
+@@ -250,6 +250,127 @@ static int verify_chain(X509_STORE_CTX *ctx)
+     return ok;
+ }
+ 
++/* A version of fgets() that returns the first sz - 1 characters of the next
++ * line from 'in'. The rest of the line is discarded. */
++static int gets_trunc(BIO *in, char *buf, int sz)
++{
++    char b;
++    int i = 0;
++
++    if (sz < 1)
++        return i;
++
++    while (BIO_read(in, &b, 1)) {
++        if (i < sz - 1)
++            buf[i++] = b;
++        if (!b || b == '\n')
++            break;
++    }
++
++    buf[i] = '\0';
++
++    return i;
++}
++
++/* Converts a byte string into a hex string, null-terminated. The 'out' buffer
++ * must be at least 2 * insize + 1 bytes long. */
++static void hexify(unsigned char *in, char *out, int insize)
++{
++    int i;
++    static const char hex[] = "0123456789abcdef";
++    for (i = 0; i < insize; i++) {
++        out[i * 2] = hex[in[i] >> 4];
++        out[i * 2 + 1] = hex[in[i] & 0xf];
++    }
++    out[i * 2] = '\0';
++}
++
++static int is_blocklisted(X509 *x)
++{
++    /* See http://tools.ietf.org/html/rfc5280#section-4.1.2.2:
++     * "Certificate users MUST be able to handle serialNumber values up to
++     *  20 octets.  Conforming CAs MUST NOT use serialNumber values longer
++     *  than 20 octets."
++     */
++    static const int MAX_SERIAL = 20;
++    static const int MAX_BLOCKLIST_LINE = 1024;
++
++    unsigned char md[EVP_MAX_MD_SIZE];
++    char hexsha256[EVP_MAX_MD_SIZE * 2 + 1];
++    char hexsha1[EVP_MAX_MD_SIZE * 2 + 1];
++    char hexserial[MAX_SERIAL * 2 + 1];
++    const EVP_MD *sha256 = EVP_sha256();
++    const EVP_MD *sha1 = EVP_sha1();
++    unsigned int n;
++    char line[MAX_BLOCKLIST_LINE];
++    BIO *file;
++    int ret = 0;
++    ASN1_INTEGER *serial = NULL;
++    unsigned int serial_len;
++    const char *path = getenv("OPENSSL_BLOCKLIST_PATH");
++
++    if (!path)
++        path = OPENSSLDIR "/blocklist";
++
++    file = BIO_new_file(path, "r");
++    if (!file) {
++        ERR_clear_error();
++        return 0;
++    }
++
++    if (!X509_digest(x, sha256, md, &n))
++        goto out;
++    hexify(md, hexsha256, n);
++    if (!X509_digest(x, sha1, md, &n))
++        goto out;
++    hexify(md, hexsha1, n);
++    serial = X509_get_serialNumber(x);
++    serial_len = serial->length;
++    if (serial_len > sizeof(hexserial) / 2)
++        /* We only match the first MAX_SERIAL bytes of the serial. */
++        serial_len = sizeof(hexserial) / 2;
++    hexify(serial->data, hexserial, serial_len);
++
++    while (gets_trunc(file, line, sizeof(line))) {
++        char *p, *str = line;
++        char *cmd = strsep(&str, " ");
++        char *arg = strsep(&str, " ");
++        if (!cmd || !arg || cmd[0] == '#')
++            continue;
++        if ((p = strchr(arg, '\n')))
++            *p = '\0';
++        if (!strcmp(cmd, "sha256") && !strcmp(arg, hexsha256)) {
++            ret = 1;
++            goto out;
++        }
++        if (!strcmp(cmd, "sha1") && !strcmp(arg, hexsha1)) {
++            ret = 1;
++            goto out;
++        }
++        if (!strcmp(cmd, "serial") && !strcmp(arg, hexserial)) {
++            ret = 1;
++            goto out;
++        }
++    }
++
++out:
++    BIO_free(file);
++    return ret;
++}
++
++static int check_blocklist(X509_STORE_CTX *ctx)
++{
++    int i;
++    X509 *x;
++
++    for (i = 0; i < ctx->num_untrusted; i++) {
++        x = sk_X509_value(ctx->chain, i);
++        if (is_blocklisted(x))
++            return 0;
++    }
++    return 1;
++}
++
+ int X509_verify_cert(X509_STORE_CTX *ctx)
+ {
+     SSL_DANE *dane = ctx->dane;
+@@ -3193,6 +3314,10 @@ static int build_chain(X509_STORE_CTX *ctx)
+             trust = check_trust(ctx, num);
+     }
+ 
++    if (!check_blocklist(ctx)) {
++        trust = X509_TRUST_REJECTED;
++    }
++
+     switch (trust) {
+     case X509_TRUST_TRUSTED:
+         return 1;
+--- /dev/null
++++ b/test/recipes/90-test_blocklist.t
+@@ -0,0 +1,71 @@
++#! /usr/bin/env perl
++# Copyright 2019 The OpenSSL Project Authors. All Rights Reserved.
++#
++# Licensed under the OpenSSL license (the "License").  You may not use
++# this file except in compliance with the License.  You can obtain a copy
++# in the file LICENSE in the source distribution or at
++# https://www.openssl.org/source/license.html
++
++use strict;
++use warnings;
++
++use File::Spec::Functions qw/catfile curdir/;
++use OpenSSL::Test;
++use OpenSSL::Test::Utils;
++use OpenSSL::Test qw/:DEFAULT with data_file/;
++
++setup("test_blocklist");
++
++# Fix time to 2019-11-01 for predictable validity.
++my @check_time=("-attime", "1572562800");
++
++sub test_blocklist {
++    my $desc = shift;
++    my $blocklist = shift;
++    my $expected_exit = shift;
++
++    # Use a blocklist file in the test-runs directory.
++    my $blocklist_file = catfile(curdir(), "blocklist");
++    $ENV{OPENSSL_BLOCKLIST_PATH} = $blocklist_file;
++
++    open(my $blocklist_fh, ">", $blocklist_file);
++    print $blocklist_fh $blocklist;
++    close $blocklist_fh;
++
++    with({ exit_checker => sub { return shift == $expected_exit; } },
++         sub { ok(run(app(["openssl", "verify", @check_time,
++                           "-CAfile", data_file("globalsign.pem"),
++                           "-untrusted", data_file("gts.pem"),
++                           data_file("google.pem")])),
++                  $desc);
++         });
++
++    unlink $blocklist_file;
++}
++
++plan tests => 3;
++
++subtest "=== Blocklist: Successful chain verification ===" => sub {
++    plan tests => 2;
++
++    test_blocklist("no blocklist", "", 0);
++
++    my $h = "60f1da1ee6967650f8e3f0d017effd9864d439367ee6839c999e668bd2b08131";
++    test_blocklist("non-matching sha256", "sha256 " + $h, 0);
++};
++
++subtest "=== Blocklist: Intermediate ===" => sub {
++    plan tests => 3;
++
++    test_blocklist("serial", "serial 01e3b49aa18d8aa981256950b8", 2);
++    test_blocklist("sha1", "sha1 dfe2070c79e7ff36a925ffa327ffe3deecf8f9c2", 2);
++    test_blocklist("sha256", "sha256 95c074e35902a14abd9d19afb6e7f80e669ff8e2363270539d963613f04aaa21", 2);
++};
++
++subtest "=== Blocklist: Leaf ===" => sub {
++    plan tests => 3;
++
++    test_blocklist("serial", "serial eaab738ecc290675020000000047d911", 2);
++    test_blocklist("sha1", "sha1 0fd9151c4d4a317b647e87713bd7226b8b4fcbda", 2);
++    test_blocklist("sha256", "sha256 49905184c9d70d7c850709f5bfa3f7c966dbe391e8e5d8aea1c11be942dcf0bb", 2);
++};
+--- /dev/null
++++ b/test/recipes/90-test_blocklist_data/globalsign.pem
+@@ -0,0 +1,22 @@
++-----BEGIN CERTIFICATE-----
++MIIDujCCAqKgAwIBAgILBAAAAAABD4Ym5g0wDQYJKoZIhvcNAQEFBQAwTDEgMB4G
++A1UECxMXR2xvYmFsU2lnbiBSb290IENBIC0gUjIxEzARBgNVBAoTCkdsb2JhbFNp
++Z24xEzARBgNVBAMTCkdsb2JhbFNpZ24wHhcNMDYxMjE1MDgwMDAwWhcNMjExMjE1
++MDgwMDAwWjBMMSAwHgYDVQQLExdHbG9iYWxTaWduIFJvb3QgQ0EgLSBSMjETMBEG
++A1UEChMKR2xvYmFsU2lnbjETMBEGA1UEAxMKR2xvYmFsU2lnbjCCASIwDQYJKoZI
++hvcNAQEBBQADggEPADCCAQoCggEBAKbPJA6+Lm8omUVCxKs+IVSbC9N/hHD6ErPL
++v4dfxn+G07IwXNb9rfF73OX4YJYJkhD10FPe+3t+c4isUoh7SqbKSaZeqKeMWhG8
++eoLrvozps6yWJQeXSpkqBy+0Hne/ig+1AnwblrjFuTosvNYSuetZfeLQBoZfXklq
++tTleiDTsvHgMCJiEbKjNS7SgfQx5TfC4LcshytVsW33hoCmEofnTlEnLJGKRILzd
++C9XZzPnqJworc5HGnRusyMvo4KD0L5CLTfuwNhv2GXqF4G3yYROIXJ/gkwpRl4pa
++zq+r1feqCapgvdzZX99yqWATXgAByUr6P6TqBwMhAo6CygPCm48CAwEAAaOBnDCB
++mTAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUm+IH
++V2ccHsBqBt5ZtJot39wZhi4wNgYDVR0fBC8wLTAroCmgJ4YlaHR0cDovL2NybC5n
++bG9iYWxzaWduLm5ldC9yb290LXIyLmNybDAfBgNVHSMEGDAWgBSb4gdXZxwewGoG
++3lm0mi3f3BmGLjANBgkqhkiG9w0BAQUFAAOCAQEAmYFThxxol4aR7OBKuEQLq4Gs
++J0/WwbgcQ3izDJr86iw8bmEbTUsp9Z8FHSbBuOmDAGJFtqkIk7mpM0sYmsL4h4hO
++291xNBrBVNpGP+DTKqttVCL1OmLNIG+6KYnX3ZHu01yiPqFbQfXf5WRDLenVOavS
++ot+3i9DAgBkcRcAtjOj4LaR0VknFBbVPFd5uRHg5h6h+u/N5GJG79G+dwfCMNYxd
++AfvDbbnvRG15RjF+Cv6pgsH/76tuIMRQyV+dTZsXjAzlAcmgQWpzU/qlULRuJQ/7
++TBj0/VLZjmmx6BEP3ojY+x1J96relc8geMJgEtslQIxq/H5COEBkEveegeGTLg==
++-----END CERTIFICATE-----
+--- /dev/null
++++ b/test/recipes/90-test_blocklist_data/google.pem
+@@ -0,0 +1,53 @@
++-----BEGIN CERTIFICATE-----
++MIIJRTCCCC2gAwIBAgIRAOqrc47MKQZ1AgAAAABH2REwDQYJKoZIhvcNAQELBQAw
++QjELMAkGA1UEBhMCVVMxHjAcBgNVBAoTFUdvb2dsZSBUcnVzdCBTZXJ2aWNlczET
++MBEGA1UEAxMKR1RTIENBIDFPMTAeFw0xOTEwMTAyMTAyMjhaFw0yMDAxMDIyMTAy
++MjhaMGYxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpDYWxpZm9ybmlhMRYwFAYDVQQH
++Ew1Nb3VudGFpbiBWaWV3MRMwEQYDVQQKEwpHb29nbGUgTExDMRUwEwYDVQQDDAwq
++Lmdvb2dsZS5jb20wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASQGSFNZeb85+EY
++HSJTKF+w+U3aVOBYE5N2tU4DTzaEfJozQwEdxjjHflOLDowLzMUFQHuc0zGuBN5L
++MEkhPCyCo4IG2zCCBtcwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUF
++BwMBMAwGA1UdEwEB/wQCMAAwHQYDVR0OBBYEFP68VbeQZB5338zH/1Vw2jQ9fyHZ
++MB8GA1UdIwQYMBaAFJjR+G4Q68+b7GCfGJAboOt9Cf0rMGQGCCsGAQUFBwEBBFgw
++VjAnBggrBgEFBQcwAYYbaHR0cDovL29jc3AucGtpLmdvb2cvZ3RzMW8xMCsGCCsG
++AQUFBzAChh9odHRwOi8vcGtpLmdvb2cvZ3NyMi9HVFMxTzEuY3J0MIIEnQYDVR0R
++BIIElDCCBJCCDCouZ29vZ2xlLmNvbYINKi5hbmRyb2lkLmNvbYIWKi5hcHBlbmdp
++bmUuZ29vZ2xlLmNvbYISKi5jbG91ZC5nb29nbGUuY29tghgqLmNyb3dkc291cmNl
++Lmdvb2dsZS5jb22CBiouZy5jb4IOKi5nY3AuZ3Z0Mi5jb22CESouZ2NwY2RuLmd2
++dDEuY29tggoqLmdncGh0LmNugg4qLmdrZWNuYXBwcy5jboIWKi5nb29nbGUtYW5h
++bHl0aWNzLmNvbYILKi5nb29nbGUuY2GCCyouZ29vZ2xlLmNsgg4qLmdvb2dsZS5j
++by5pboIOKi5nb29nbGUuY28uanCCDiouZ29vZ2xlLmNvLnVrgg8qLmdvb2dsZS5j
++b20uYXKCDyouZ29vZ2xlLmNvbS5hdYIPKi5nb29nbGUuY29tLmJygg8qLmdvb2ds
++ZS5jb20uY2+CDyouZ29vZ2xlLmNvbS5teIIPKi5nb29nbGUuY29tLnRygg8qLmdv
++b2dsZS5jb20udm6CCyouZ29vZ2xlLmRlggsqLmdvb2dsZS5lc4ILKi5nb29nbGUu
++ZnKCCyouZ29vZ2xlLmh1ggsqLmdvb2dsZS5pdIILKi5nb29nbGUubmyCCyouZ29v
++Z2xlLnBsggsqLmdvb2dsZS5wdIISKi5nb29nbGVhZGFwaXMuY29tgg8qLmdvb2ds
++ZWFwaXMuY26CESouZ29vZ2xlY25hcHBzLmNughQqLmdvb2dsZWNvbW1lcmNlLmNv
++bYIRKi5nb29nbGV2aWRlby5jb22CDCouZ3N0YXRpYy5jboINKi5nc3RhdGljLmNv
++bYISKi5nc3RhdGljY25hcHBzLmNuggoqLmd2dDEuY29tggoqLmd2dDIuY29tghQq
++Lm1ldHJpYy5nc3RhdGljLmNvbYIMKi51cmNoaW4uY29tghAqLnVybC5nb29nbGUu
++Y29tghMqLndlYXIuZ2tlY25hcHBzLmNughYqLnlvdXR1YmUtbm9jb29raWUuY29t
++gg0qLnlvdXR1YmUuY29tghYqLnlvdXR1YmVlZHVjYXRpb24uY29tghEqLnlvdXR1
++YmVraWRzLmNvbYIHKi55dC5iZYILKi55dGltZy5jb22CGmFuZHJvaWQuY2xpZW50
++cy5nb29nbGUuY29tggthbmRyb2lkLmNvbYIbZGV2ZWxvcGVyLmFuZHJvaWQuZ29v
++Z2xlLmNughxkZXZlbG9wZXJzLmFuZHJvaWQuZ29vZ2xlLmNuggRnLmNvgghnZ3Bo
++dC5jboIMZ2tlY25hcHBzLmNuggZnb28uZ2yCFGdvb2dsZS1hbmFseXRpY3MuY29t
++ggpnb29nbGUuY29tgg9nb29nbGVjbmFwcHMuY26CEmdvb2dsZWNvbW1lcmNlLmNv
++bYIYc291cmNlLmFuZHJvaWQuZ29vZ2xlLmNuggp1cmNoaW4uY29tggp3d3cuZ29v
++Lmdsggh5b3V0dS5iZYILeW91dHViZS5jb22CFHlvdXR1YmVlZHVjYXRpb24uY29t
++gg95b3V0dWJla2lkcy5jb22CBXl0LmJlMCEGA1UdIAQaMBgwCAYGZ4EMAQICMAwG
++CisGAQQB1nkCBQMwLwYDVR0fBCgwJjAkoCKgIIYeaHR0cDovL2NybC5wa2kuZ29v
++Zy9HVFMxTzEuY3JsMIIBBQYKKwYBBAHWeQIEAgSB9gSB8wDxAHcAsh4FzIuizYog
++Todm+Su5iiUgZ2va+nDnsklTLe+LkF4AAAFtt7HklQAABAMASDBGAiEAqQWtUhby
++6kN7bmQ6+HsTWHnsJ6JfetP6BPXd21tzIY8CIQCpj3/wBTW5ak1bJh2yyBaEiYhL
++X2U1QK/l6i1l3AbRhAB2AF6nc/nfVsDntTZIfdBJ4DJ6kZoMhKESEoQYdZaBcUVY
++AAABbbex5KsAAAQDAEcwRQIhAK5DgdFa7XEEqngyBJzkPL11moosB06YVdEG/e2Z
++4t+mAiBdH5bKDIqINpR32vBt8Nqp2L7f8e0jZLsQF/Pj3AP/5zANBgkqhkiG9w0B
++AQsFAAOCAQEAAz/Zkc3geb2WF2T6csWwtFel8aWSXecEWG/xvO0HDlpCPCDUlauI
++8LByL/gimC6Uwc4DJ8hZnr+sSELVo2dZhKhddF5n03VeJNIlOteW4+cFS5Yr2jxG
++vLUtp997vv+rI5p73mWW06GaEJlloHA6M7rfpt6emE6rpX6KESN7mghWUgToyoVw
++hRpGqCyTXvpFCqq9aOkFgPGJBL47NBHq2D7CbYMrooqsNiqZ1CtEWiAMjd2T9Uqz
++DEXc6vVfSEpvdxjKQTqjxnc6grQsBWrVgHU/6+1NBhC5WBqO/INFln2gXuo1CMhr
++Y37udPEQv3QqV2G0uJNcTjYyj1l45W8COA==
++-----END CERTIFICATE-----
++
+--- /dev/null
++++ b/test/recipes/90-test_blocklist_data/gts.pem
+@@ -0,0 +1,25 @@
++-----BEGIN CERTIFICATE-----
++MIIESjCCAzKgAwIBAgINAeO0mqGNiqmBJWlQuDANBgkqhkiG9w0BAQsFADBMMSAw
++HgYDVQQLExdHbG9iYWxTaWduIFJvb3QgQ0EgLSBSMjETMBEGA1UEChMKR2xvYmFs
++U2lnbjETMBEGA1UEAxMKR2xvYmFsU2lnbjAeFw0xNzA2MTUwMDAwNDJaFw0yMTEy
++MTUwMDAwNDJaMEIxCzAJBgNVBAYTAlVTMR4wHAYDVQQKExVHb29nbGUgVHJ1c3Qg
++U2VydmljZXMxEzARBgNVBAMTCkdUUyBDQSAxTzEwggEiMA0GCSqGSIb3DQEBAQUA
++A4IBDwAwggEKAoIBAQDQGM9F1IvN05zkQO9+tN1pIRvJzzyOTHW5DzEZhD2ePCnv
++UA0Qk28FgICfKqC9EksC4T2fWBYk/jCfC3R3VZMdS/dN4ZKCEPZRrAzDsiKUDzRr
++mBBJ5wudgzndIMYcLe/RGGFl5yODIKgjEv/SJH/UL+dEaltN11BmsK+eQmMF++Ac
++xGNhr59qM/9il71I2dN8FGfcddwuaej4bXhp0LcQBbjxMcI7JP0aM3T4I+DsaxmK
++FsbjzaTNC9uzpFlgOIg7rR25xoynUxv8vNmkq7zdPGHXkxWY7oG9j+JkRyBABk7X
++rJfoucBZEqFJJSPk7XA0LKW0Y3z5oz2D0c1tJKwHAgMBAAGjggEzMIIBLzAOBgNV
++HQ8BAf8EBAMCAYYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMBIGA1Ud
++EwEB/wQIMAYBAf8CAQAwHQYDVR0OBBYEFJjR+G4Q68+b7GCfGJAboOt9Cf0rMB8G
++A1UdIwQYMBaAFJviB1dnHB7AagbeWbSaLd/cGYYuMDUGCCsGAQUFBwEBBCkwJzAl
++BggrBgEFBQcwAYYZaHR0cDovL29jc3AucGtpLmdvb2cvZ3NyMjAyBgNVHR8EKzAp
++MCegJaAjhiFodHRwOi8vY3JsLnBraS5nb29nL2dzcjIvZ3NyMi5jcmwwPwYDVR0g
++BDgwNjA0BgZngQwBAgIwKjAoBggrBgEFBQcCARYcaHR0cHM6Ly9wa2kuZ29vZy9y
++ZXBvc2l0b3J5LzANBgkqhkiG9w0BAQsFAAOCAQEAGoA+Nnn78y6pRjd9XlQWNa7H
++TgiZ/r3RNGkmUmYHPQq6Scti9PEajvwRT2iWTHQr02fesqOqBY2ETUwgZQ+lltoN
++FvhsO9tvBCOIazpswWC9aJ9xju4tWDQH8NVU6YZZ/XteDSGU9YzJqPjY8q3MDxrz
++mqepBCf5o8mw/wJ4a2G6xzUr6Fb6T8McDO22PLRL6u3M4Tzs3A2M1j6bykJYi8wW
++IRdAvKLWZu/axBVbzYmqmwkm5zLSDW5nIAJbELCQCZwMH56t2Dvqofxs6BBcCFIZ
++USpxu6x6td0V7SvJCCosirSmIatj/9dSSVDQibet8q/7UK4v4ZUN80atnZz1yg==
++-----END CERTIFICATE-----
+-- 
+2.21.0
+

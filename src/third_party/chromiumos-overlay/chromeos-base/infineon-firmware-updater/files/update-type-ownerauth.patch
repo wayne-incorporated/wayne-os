@@ -1,0 +1,338 @@
+Adds a new "tpm12-ownerauth" update type. This can be used on TPMs that already
+have an owner. The owner password is assumed to be the well-known secret, i.e.
+the auth secret used for communication with the TPM is the SHA-1 hash of 20
+zero bytes. We check that owner authentication using this secret is successful
+during the preparation phase before the actual update attempt starts.
+
+--- a/TPMFactoryUpd/CommandFlow_TpmUpdate.c
++++ b/TPMFactoryUpd/CommandFlow_TpmUpdate.c
+@@ -313,7 +313,7 @@ CommandFlow_TpmUpdate_UpdateFirmware(
+ 			}
+ 
+ 			// Set TPM Owner authentication hash only in case of corresponding update type
+-			if (UPDATE_TYPE_TPM12_TAKEOWNERSHIP == unUpdateType)
++			if (UPDATE_TYPE_TPM12_TAKEOWNERSHIP == unUpdateType || UPDATE_TYPE_TPM12_OWNERAUTH == unUpdateType)
+ 			{
+ 				unReturnValue = Platform_MemoryCopy(sFirmwareUpdateData.rgbOwnerAuthHash, sizeof(sFirmwareUpdateData.rgbOwnerAuthHash), s_ownerAuthData.authdata, sizeof(s_ownerAuthData.authdata));
+ 				if (RC_SUCCESS != unReturnValue)
+@@ -443,6 +443,12 @@ CommandFlow_TpmUpdate_PrepareFirmwareUpdate(
+ 					PpTpmUpdate->unReturnCode = CommandFlow_TpmUpdate_PrepareTPM12Ownership();
+ 					unReturnValue = RC_SUCCESS;
+ 				}
++				else if (UPDATE_TYPE_TPM12_OWNERAUTH == unUpdateType)
++				{
++					// Check if owner authorization works.
++					PpTpmUpdate->unReturnCode = CommandFlow_TpmUpdate_PrepareTPM12OwnerAuth();
++					unReturnValue = RC_SUCCESS;
++				}
+ 				else
+ 				{
+ 					unReturnValue = RC_E_FAIL;
+@@ -519,7 +525,7 @@ CommandFlow_TpmUpdate_IsFirmwareUpdatable(
+ 			if (PpTpmUpdate->sTpmState.attribs.tpm12)
+ 			{
+ 				// Check if the correct update type is set
+-				if (UPDATE_TYPE_TPM12_DEFERREDPP != unUpdateType && UPDATE_TYPE_TPM12_TAKEOWNERSHIP != unUpdateType)
++				if (UPDATE_TYPE_TPM12_DEFERREDPP != unUpdateType && UPDATE_TYPE_TPM12_TAKEOWNERSHIP != unUpdateType && UPDATE_TYPE_TPM12_OWNERAUTH != unUpdateType)
+ 				{
+ 					PpTpmUpdate->unReturnCode = RC_E_INVALID_UPDATE_OPTION;
+ 					ERROR_STORE(PpTpmUpdate->unReturnCode, L"Wrong update type detected. The underlying TPM is a TPM1.2.");
+@@ -528,7 +534,7 @@ CommandFlow_TpmUpdate_IsFirmwareUpdatable(
+ 				}
+ 
+ 				// Check if TPM already has an owner
+-				if (PpTpmUpdate->sTpmState.attribs.tpm12owner)
++				if (PpTpmUpdate->sTpmState.attribs.tpm12owner && UPDATE_TYPE_TPM12_OWNERAUTH != unUpdateType)
+ 				{
+ 					PpTpmUpdate->unReturnCode = RC_E_TPM12_OWNED;
+ 					ERROR_STORE(PpTpmUpdate->unReturnCode, L"TPM1.2 Owner detected. Update cannot be done.");
+@@ -742,6 +748,47 @@ CommandFlow_TpmUpdate_PrepareTPM12Ownership()
+ }
+ 
+ /**
++ *	@brief		Check that we have TPM owner auth.
++ *	@details	The corresponding TPM Owner authentication is described in the user manual.
++ *
++ *	@retval		RC_SUCCESS						TPM owner auth works as expected.
++ *	@retval		RC_E_FAIL						An unexpected error occurred.
++ *	@retval		RC_E_TPM12_DISABLED_DEACTIVATED	In case the TPM is disabled and deactivated.
++ *	@retval		...								Error codes from Micro TSS functions
++ */
++_Check_return_
++unsigned int
++CommandFlow_TpmUpdate_PrepareTPM12OwnerAuth()
++{
++	unsigned int unReturnValue = RC_SUCCESS;
++
++	LOGGING_WRITE_LEVEL4(LOGGING_METHOD_ENTRY_STRING);
++
++	do
++	{
++		unReturnValue = FirmwareUpdate_CheckOwnerAuthorization(s_ownerAuthData.authdata);
++		if (RC_SUCCESS != unReturnValue)
++		{
++			ERROR_STORE(unReturnValue, L"CheckOwnerAuthorization failed!");
++			break;
++		}
++	}
++	WHILE_FALSE_END;
++
++	// Map return value in case TPM is disabled or deactivated to corresponding tool exit code
++	if ((TPM_DEACTIVATED == (unReturnValue ^ RC_TPM_MASK)) ||
++			(TPM_DISABLED == (unReturnValue ^ RC_TPM_MASK)))
++	{
++		unReturnValue = RC_E_TPM12_DISABLED_DEACTIVATED;
++		ERROR_STORE(unReturnValue, L"CheckOwnerAuthorization failed!");
++	}
++
++	LOGGING_WRITE_LEVEL4_FMT(LOGGING_METHOD_EXIT_STRING_RET_VAL, unReturnValue);
++
++	return unReturnValue;
++}
++
++/**
+  *	@brief		Parses the update configuration settings
+  *	@details	Parses the update configuration settings for a settings file based update flow
+  *
+@@ -809,6 +856,14 @@ CommandFlow_TpmUpdate_Parse(
+ 						break;
+ 					}
+ 				}
++				else if(0 == Platform_StringCompare(PwszValue, CMD_UPDATE_OPTION_TPM12_OWNERAUTH, PunValueSize, TRUE))
++				{
++					if (!PropertyStorage_AddKeyUIntegerValuePair(PROPERTY_CONFIG_FILE_UPDATE_TYPE12, UPDATE_TYPE_TPM12_OWNERAUTH))
++					{
++						ERROR_STORE_FMT(unReturnValue, wszErrorMsgFormat, PROPERTY_CONFIG_FILE_UPDATE_TYPE12);
++						break;
++					}
++				}
+ 				else
+ 				{
+ 					unReturnValue = RC_E_INVALID_SETTING;
+--- a/TPMFactoryUpd/CommandFlow_TpmUpdate.h
++++ b/TPMFactoryUpd/CommandFlow_TpmUpdate.h
+@@ -85,6 +85,19 @@ unsigned int
+ CommandFlow_TpmUpdate_PrepareTPM12Ownership();
+ 
+ /**
++ *	@brief		Check that we have TPM owner auth.
++ *	@details	The corresponding TPM Owner authentication is described in the user manual.
++ *
++ *	@retval		RC_SUCCESS						TPM owner auth works as expected.
++ *	@retval		RC_E_FAIL						An unexpected error occurred.
++ *	@retval		RC_E_TPM12_DISABLED_DEACTIVATED	In case the TPM is disabled and deactivated.
++ *	@retval		...								Error codes from Micro TSS functions
++ */
++_Check_return_
++unsigned int
++CommandFlow_TpmUpdate_PrepareTPM12OwnerAuth();
++
++/**
+  *	@brief		Parse the update config settings file
+  *	@details
+  *
+--- a/TPMFactoryUpd/CommandLineParser.c
++++ b/TPMFactoryUpd/CommandLineParser.c
+@@ -120,6 +120,10 @@ CommandLineParser_Parse(
+ 				{
+ 					unUpdateType = UPDATE_TYPE_CONFIG_FILE;
+ 				}
++				else if (0 == Platform_StringCompare(wszValue, CMD_UPDATE_OPTION_TPM12_OWNERAUTH, RG_LEN(CMD_UPDATE_OPTION_TPM12_OWNERAUTH), TRUE))
++				{
++					unUpdateType = UPDATE_TYPE_TPM12_OWNERAUTH;
++				}
+ 				else
+ 				{
+ 					unReturnValue = RC_E_BAD_COMMANDLINE;
+--- a/TPMFactoryUpd/Resource.h
++++ b/TPMFactoryUpd/Resource.h
+@@ -83,6 +83,8 @@
+ #define RES_TPM_UPDATE_PREPARE_PP_FAIL				L"       TPM1.2 Physical Presence is locked and Deferred Physical\n       Presence is not set. The firmware cannot be updated."
+ #define RES_TPM_UPDATE_PREPARE_TAKEOWNERSHIP		L"       TPM1.2 Ownership preparation was successful."
+ #define	RES_TPM_UPDATE_PREPARE_TAKEOWNERSHIP_FAIL	L"       TPM1.2 Ownership preparation failed."
++#define RES_TPM_UPDATE_PREPARE_OWNERAUTH		L"       TPM1.2 Owner auth preparation was successful."
++#define RES_TPM_UPDATE_PREPARE_OWNERAUTH_FAIL		L"       TPM1.2 Owner auth preparation failed."
+ #define RES_TPM_UPDATE_DO_NOT_TURN_OFF				L"    DO NOT TURN OFF OR SHUT DOWN THE SYSTEM DURING THE UPDATE PROCESS!"
+ #define RES_TPM_UPDATE_UPDATE						L"       Updating the TPM firmware ..."
+ #define RES_TPM_UPDATE_SUCCESS						L"       TPM Firmware Update completed successfully."
+@@ -103,6 +105,7 @@
+ #define CMD_UPDATE									L"update"
+ #define CMD_UPDATE_OPTION_TPM12_DEFERREDPP			L"tpm12-PP"
+ #define CMD_UPDATE_OPTION_TPM12_TAKEOWNERSHIP		L"tpm12-takeownership"
++#define CMD_UPDATE_OPTION_TPM12_OWNERAUTH		L"tpm12-ownerauth"
+ #define CMD_UPDATE_OPTION_TPM20_EMPTYPLATFORMAUTH	L"tpm20-emptyplatformauth"
+ #define CMD_UPDATE_OPTION_CONFIG_FILE				L"config-file"
+ #define CMD_FIRMWARE								L"firmware"
+@@ -128,38 +131,39 @@
+ #define HELP_LINE12		L"  Possible values for <update-type> are:"
+ #define HELP_LINE13		L"   %ls - TPM1.2 with Physical Presence or Deferred Physical Presence." /* Use with format CMD_UPDATE_OPTION_TPM12_DEFERREDPP */
+ #define HELP_LINE14		L"   %ls - TPM1.2 with TPM Ownership taken by TPMFactoryUpd." /* Use with format CMD_UPDATE_OPTION_TPM12_TAKEOWNERSHIP */
+-#define HELP_LINE15		L"   %ls - TPM2.0 with platformAuth set to Empty Buffer." /* Use with format CMD_UPDATE_OPTION_TPM20_EMPTYPLATFORMAUTH */
+-#define HELP_LINE16		L"   %ls - Updates either a TPM1.2 or TPM2.0 to the firmware version"
+-#define HELP_LINE17     L"                 configured in the configuration file. Requires the -config parameter." /* Use with format CMD_UPDATE_OPTION_CONFIG_FILE */
+-#define HELP_LINE18		L"  Cannot be used with -%ls or -%ls parameter." /* Use with format CMD_INFO and CMD_TPM12_CLEAROWNERSHIP*/
+-#define HELP_LINE19		L"\n-%ls <firmware-file>" /* Use with format CMD_FIRMWARE */
+-#define HELP_LINE20		L"  Specifies the path to the firmware image to be used for TPM Firmware Update."
+-#define HELP_LINE21		L"  Required if -%ls parameter is given with values tpm*." /* Use with format CMD_UPDATE*/
+-#define HELP_LINE22		L"  Cannot be used with -%ls, -%ls or -%ls parameter." /* Use with format CMD_INFO, CMD_CONFIG and CMD_TPM12_CLEAROWNERSHIP*/
+-#define HELP_LINE23		L"\n-%ls <config-file>" /* Use with format CMD_CONFIG */
+-#define HELP_LINE24		L"  Specifies the path to the configuration file to be used for TPM Firmware Update."
+-#define HELP_LINE25		L"  Required if -%ls parameter is given with value %ls." /* Use with format CMD_UPDATE, CMD_UPDATE_OPTION_CONFIG_FILE */
+-#define HELP_LINE26		L"  Cannot be used with -%ls, -%ls or -%ls parameter." /* Use with format CMD_INFO, CMD_FIRMWARE and CMD_TPM12_CLEAROWNERSHIP*/
+-#define HELP_LINE27		L"\n-%ls [<log-file>]" /* Use with format CMD_LOG */
+-#define HELP_LINE28		L"  Optional parameter. Activates logging for TPMFactoryUpd to the log file"
+-#define HELP_LINE29		L"  specified by <log-file>. Default value .\\TPMFactoryUpd.log is used if"
+-#define HELP_LINE30		L"  <log-file> is not given."
+-#define HELP_LINE31		L"  Note: total path and file name length must not exceed 260 characters"
+-#define HELP_LINE32		L"\n-%ls" /* Use with format CMD_TPM12_CLEAROWNERSHIP */
+-#define HELP_LINE33		L"  Clears the TPM Ownership taken by TPMFactoryUpd."
+-#define HELP_LINE34		L"  Cannot be used with -%ls, -%ls, -%ls or -%ls parameter." /* Use with format CMD_FIRMWARE, CMD_UPDATE, CMD_CONFIG and CMD_INFO */
+-#define HELP_LINE35		L"\n-%ls <mode> <path>" /* Use with format CMD_ACCESS_MODE */
+-#define HELP_LINE36		L"  Optional parameter. Sets the mode the tool should use to connect to"
+-#define HELP_LINE37		L"  the TPM device."
+-#define HELP_LINE38		L"  Possible values for <mode> are:"
+-#define HELP_LINE39		L"  1 - Memory based access (default value, only supported on x86 based systems"
+-#define HELP_LINE40		L"      with PCH TPM support)"
+-#define HELP_LINE41		L"  3 - Linux TPM driver. The <path> option can be set to define a device path"
+-#define HELP_LINE42		L"      (default value: /dev/tpm0)"
+-#define HELP_LINE43		L"\n-%ls" /* use with format CMD_DRY_RUN */
+-#define HELP_LINE44		L"  Optional parameter. Do everything except actually updating the image."
+-#define HELP_LINE45		L"\n-%ls" /* use with format CMD_IGNORE_ERROR_ON_COMPLETE */
+-#define HELP_LINE46		L"  Optional parameter. Ignores TPM_FAIL errors from FieldUpgradeComplete."
++#define HELP_LINE15		L"   %ls - TPM1.2 with TPM owner auth." /* Use with format CMD_UPDATE_OPTION_TPM12_OWNERAUTH */
++#define HELP_LINE16		L"   %ls - TPM2.0 with platformAuth set to Empty Buffer." /* Use with format CMD_UPDATE_OPTION_TPM20_EMPTYPLATFORMAUTH */
++#define HELP_LINE17		L"   %ls - Updates either a TPM1.2 or TPM2.0 to the firmware version"
++#define HELP_LINE18     L"                 configured in the configuration file. Requires the -config parameter." /* Use with format CMD_UPDATE_OPTION_CONFIG_FILE */
++#define HELP_LINE19		L"  Cannot be used with -%ls or -%ls parameter." /* Use with format CMD_INFO and CMD_TPM12_CLEAROWNERSHIP*/
++#define HELP_LINE20		L"\n-%ls <firmware-file>" /* Use with format CMD_FIRMWARE */
++#define HELP_LINE21		L"  Specifies the path to the firmware image to be used for TPM Firmware Update."
++#define HELP_LINE22		L"  Required if -%ls parameter is given with values tpm*." /* Use with format CMD_UPDATE*/
++#define HELP_LINE23		L"  Cannot be used with -%ls, -%ls or -%ls parameter." /* Use with format CMD_INFO, CMD_CONFIG and CMD_TPM12_CLEAROWNERSHIP*/
++#define HELP_LINE24		L"\n-%ls <config-file>" /* Use with format CMD_CONFIG */
++#define HELP_LINE25		L"  Specifies the path to the configuration file to be used for TPM Firmware Update."
++#define HELP_LINE26		L"  Required if -%ls parameter is given with value %ls." /* Use with format CMD_UPDATE, CMD_UPDATE_OPTION_CONFIG_FILE */
++#define HELP_LINE27		L"  Cannot be used with -%ls, -%ls or -%ls parameter." /* Use with format CMD_INFO, CMD_FIRMWARE and CMD_TPM12_CLEAROWNERSHIP*/
++#define HELP_LINE28		L"\n-%ls [<log-file>]" /* Use with format CMD_LOG */
++#define HELP_LINE29		L"  Optional parameter. Activates logging for TPMFactoryUpd to the log file"
++#define HELP_LINE30		L"  specified by <log-file>. Default value .\\TPMFactoryUpd.log is used if"
++#define HELP_LINE31		L"  <log-file> is not given."
++#define HELP_LINE32		L"  Note: total path and file name length must not exceed 260 characters"
++#define HELP_LINE33		L"\n-%ls" /* Use with format CMD_TPM12_CLEAROWNERSHIP */
++#define HELP_LINE34		L"  Clears the TPM Ownership taken by TPMFactoryUpd."
++#define HELP_LINE35		L"  Cannot be used with -%ls, -%ls, -%ls or -%ls parameter." /* Use with format CMD_FIRMWARE, CMD_UPDATE, CMD_CONFIG and CMD_INFO */
++#define HELP_LINE36		L"\n-%ls <mode> <path>" /* Use with format CMD_ACCESS_MODE */
++#define HELP_LINE37		L"  Optional parameter. Sets the mode the tool should use to connect to"
++#define HELP_LINE38		L"  the TPM device."
++#define HELP_LINE39		L"  Possible values for <mode> are:"
++#define HELP_LINE40		L"  1 - Memory based access (default value, only supported on x86 based systems"
++#define HELP_LINE41		L"      with PCH TPM support)"
++#define HELP_LINE42		L"  3 - Linux TPM driver. The <path> option can be set to define a device path"
++#define HELP_LINE43		L"      (default value: /dev/tpm0)"
++#define HELP_LINE44		L"\n-%ls" /* use with format CMD_DRY_RUN */
++#define HELP_LINE45		L"  Optional parameter. Do everything except actually updating the image."
++#define HELP_LINE46		L"\n-%ls" /* use with format CMD_IGNORE_ERROR_ON_COMPLETE */
++#define HELP_LINE47		L"  Optional parameter. Ignores TPM_FAIL errors from FieldUpgradeComplete."
+ 
+ //{{NO_DEPENDENCIES}}
+ // Microsoft Visual C++ generated include file.
+--- a/TPMFactoryUpd/Response.c
++++ b/TPMFactoryUpd/Response.c
+@@ -524,6 +524,10 @@ Response_ShowUpdate(
+ 						{
+ 							CONSOLEIO_WRITE_BREAK(FALSE, RES_TPM_UPDATE_PREPARE_TAKEOWNERSHIP);
+ 						}
++						else if (UPDATE_TYPE_TPM12_OWNERAUTH == unUpdateType)
++						{
++							CONSOLEIO_WRITE_BREAK(FALSE, RES_TPM_UPDATE_PREPARE_OWNERAUTH);
++						}
+ 
+ 						CONSOLEIO_WRITE_BREAK(FALSE, MENU_NEWLINE);
+ 						CONSOLEIO_WRITE_BREAK(FALSE, RES_TPM_UPDATE_DO_NOT_TURN_OFF);
+@@ -540,6 +544,10 @@ Response_ShowUpdate(
+ 						{
+ 							CONSOLEIO_WRITE_BREAK(FALSE, RES_TPM_UPDATE_PREPARE_TAKEOWNERSHIP_FAIL);
+ 						}
++						else if (UPDATE_TYPE_TPM12_OWNERAUTH == unUpdateType)
++						{
++							CONSOLEIO_WRITE_BREAK(FALSE, RES_TPM_UPDATE_PREPARE_OWNERAUTH_FAIL);
++						}
+ 					}
+ 				}
+ 
+@@ -1017,40 +1025,41 @@ Response_ShowHelp()
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE12);
+ 		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE13, CMD_UPDATE_OPTION_TPM12_DEFERREDPP);
+ 		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE14, CMD_UPDATE_OPTION_TPM12_TAKEOWNERSHIP);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE15, CMD_UPDATE_OPTION_TPM20_EMPTYPLATFORMAUTH);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE16, CMD_UPDATE_OPTION_CONFIG_FILE);
+-		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE17)
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE18, CMD_INFO, CMD_TPM12_CLEAROWNERSHIP);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE19, CMD_FIRMWARE);
+-		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE20);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE21, CMD_UPDATE);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE22, CMD_INFO, CMD_CONFIG, CMD_TPM12_CLEAROWNERSHIP);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE23, CMD_CONFIG);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE24, CMD_UPDATE, CMD_UPDATE_OPTION_CONFIG_FILE);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE15, CMD_UPDATE_OPTION_TPM12_OWNERAUTH);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE16, CMD_UPDATE_OPTION_TPM20_EMPTYPLATFORMAUTH);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE17, CMD_UPDATE_OPTION_CONFIG_FILE);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE18)
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE19, CMD_INFO, CMD_TPM12_CLEAROWNERSHIP);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE20, CMD_FIRMWARE);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE21);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE22, CMD_UPDATE);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE23, CMD_INFO, CMD_CONFIG, CMD_TPM12_CLEAROWNERSHIP);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE24, CMD_CONFIG);
+ 		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE25, CMD_UPDATE, CMD_UPDATE_OPTION_CONFIG_FILE);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE26, CMD_INFO, CMD_FIRMWARE, CMD_TPM12_CLEAROWNERSHIP);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE27, CMD_LOG);
+-		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE28);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE26, CMD_UPDATE, CMD_UPDATE_OPTION_CONFIG_FILE);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE27, CMD_INFO, CMD_FIRMWARE, CMD_TPM12_CLEAROWNERSHIP);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE28, CMD_LOG);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE29);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE30);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE31, CMD_TPM12_CLEAROWNERSHIP);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE31);
+ 		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE32, CMD_TPM12_CLEAROWNERSHIP);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE33, CMD_FIRMWARE, CMD_UPDATE, CMD_CONFIG, CMD_INFO);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE34, CMD_INFO, CMD_UPDATE, CMD_FIRMWARE, CMD_CONFIG);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE33, CMD_TPM12_CLEAROWNERSHIP);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE34, CMD_FIRMWARE, CMD_UPDATE, CMD_CONFIG, CMD_INFO);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE35, CMD_INFO, CMD_UPDATE, CMD_FIRMWARE, CMD_CONFIG);
+ #ifdef LINUX
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE35, CMD_ACCESS_MODE);
+-		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE36);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE36, CMD_ACCESS_MODE);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE37);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE38);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE39);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE40);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE41);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE42);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE43);
+ #endif
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE43, CMD_DRY_RUN);
+-		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE44);
+-		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE45, CMD_IGNORE_ERROR_ON_COMPLETE);
+-		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE46);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE44, CMD_DRY_RUN);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE45);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE46, CMD_IGNORE_ERROR_ON_COMPLETE);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE47);
+ 	}
+ 	WHILE_FALSE_END;
+ 
+--- a/TPMFactoryUpd/TPMFactoryUpdStruct.h
++++ b/TPMFactoryUpd/TPMFactoryUpdStruct.h
+@@ -72,7 +72,9 @@ typedef enum td_ENUM_UPDATE_TYPES
+ 	/// Update type for TPM2.0 using empty platformAuth
+ 	UPDATE_TYPE_TPM20_EMPTYPLATFORMAUTH = 3,
+ 	/// Update type for using settings from configuration file
+-	UPDATE_TYPE_CONFIG_FILE = 4
++	UPDATE_TYPE_CONFIG_FILE = 4,
++	/// Update type for TPM1.2 using owner auth
++	UPDATE_TYPE_TPM12_OWNERAUTH = 5
+ } ENUM_UPDATE_TYPES;
+ 
+ /**

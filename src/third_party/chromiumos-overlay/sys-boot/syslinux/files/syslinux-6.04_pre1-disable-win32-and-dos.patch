@@ -1,0 +1,65 @@
+From 2b7cba34973d85801ef0064c6b522f4c82fdd55a Mon Sep 17 00:00:00 2001
+From: Ted Brandston <tbrandston@google.com>
+Date: Mon, 12 Jul 2021 10:34:51 -0400
+Subject: [PATCH] Remove all dos and win targets
+
+Based on Jeffery Miller's (jefferymiller@google.com) old patch,
+updated based on google review.
+
+The old commit message:
+
+The dos and dosutil targets require UPX which is not
+installed in the sdk and never has been.
+Starting with cros 80 the ebuild will fail when
+it finds a log entry of a missing command such
+as upx here.
+Remove these targets so it does not give the warning.
+---
+ Makefile | 12 +++++-------
+ 1 file changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index b472945..aa072a0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -164,9 +164,8 @@ BOBJECTS = $(BTARGET) \
+ 	mbr/*.bin \
+ 	core/pxelinux.0 core/lpxelinux.0 \
+ 	core/isolinux.bin core/isolinux-debug.bin \
+-	dos/syslinux.com \
+ 	win32/syslinux.exe win64/syslinux64.exe \
+-	dosutil/*.com dosutil/*.sys \
++	dosutil/*.sys \
+ 	$(MODULES)
+ 
+ # BSUBDIRs build the on-target binary components.
+@@ -188,7 +187,7 @@ NETINSTALLABLE = efi/syslinux.efi $(INSTALLABLE_MODULES)
+ else
+ 
+ BSUBDIRS = codepage com32 lzo core memdisk mbr sample \
+-	   diag libinstaller dos win32 win64 dosutil txt
++	   diag libinstaller win32 win64 txt
+ 
+ ITARGET  =
+ IOBJECTS = $(ITARGET) \
+@@ -203,14 +202,13 @@ INSTALL_SBIN  = extlinux/extlinux
+ # Things to install in /usr/lib/syslinux
+ INSTALL_AUX   =	core/pxelinux.0 \
+ 		core/isolinux.bin core/isolinux-debug.bin \
+-		dos/syslinux.com core/lpxelinux.0 \
+-		mbr/*.bin $(INSTALLABLE_MODULES)
+-INSTALL_AUX_OPT = win32/syslinux.exe win64/syslinux64.exe
++		core/lpxelinux.0 mbr/*.bin \
++		$(INSTALLABLE_MODULES)
+ INSTALL_DIAG  =	diag/mbr/handoff.bin \
+ 		diag/geodsp/geodsp1s.img.xz diag/geodsp/geodspms.img.xz
+ 
+ # These directories manage their own installables
+-INSTALLSUBDIRS = com32 utils dosutil
++INSTALLSUBDIRS = com32 utils
+ 
+ # Things to install in /boot/extlinux
+ EXTBOOTINSTALL = $(INSTALLABLE_MODULES)
+-- 
+2.32.0.93.g670b81a890-goog
+

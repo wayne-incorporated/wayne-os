@@ -1,0 +1,41 @@
+commit ee8a5e4bc2c986b8e6c07e81fb58dc1e5a5c2d17
+Author: Alexey Lapshin <a.v.lapshin@mail.ru>
+Date:   Mon Apr 12 14:27:14 2021 +0300
+
+    Fix chrome os failure after 021de7cf80268091cf13485a538b611b37d0b33e.
+    
+    chrome os build failed after D98511:
+    https://bugs.chromium.org/p/chromium/issues/detail?id=1197970
+    
+    This patch fixes permission issue appeared after D98511.
+
+diff --git a/llvm/tools/llvm-objcopy/llvm-objcopy.cpp b/llvm/tools/llvm-objcopy/llvm-objcopy.cpp
+index 6c6b26b3c32f..d3cc94782bed 100644
+--- a/llvm/tools/llvm-objcopy/llvm-objcopy.cpp
++++ b/llvm/tools/llvm-objcopy/llvm-objcopy.cpp
+@@ -259,6 +259,12 @@ static Error restoreStatOnFile(StringRef Filename,
+   if (std::error_code EC = sys::fs::status(FD, OStat))
+     return createFileError(Filename, EC);
+   if (OStat.type() == sys::fs::file_type::regular_file) {
++#ifndef _WIN32
++    // Keep ownership if llvm-objcopy is called under root.
++    if (Config.InputFilename == Config.OutputFilename && OStat.getUser() == 0)
++      sys::fs::changeFileOwnership(FD, Stat.getUser(), Stat.getGroup());
++#endif
++
+     sys::fs::perms Perm = Stat.permissions();
+     if (Config.InputFilename != Config.OutputFilename)
+       Perm = static_cast<sys::fs::perms>(Perm & ~sys::fs::getUmask() & ~06000);
+@@ -268,12 +274,6 @@ static Error restoreStatOnFile(StringRef Filename,
+     if (auto EC = sys::fs::setPermissions(FD, Perm))
+ #endif
+       return createFileError(Filename, EC);
+-
+-#ifndef _WIN32
+-    // Keep ownership if llvm-objcopy is called under root.
+-    if (Config.InputFilename == Config.OutputFilename && OStat.getUser() == 0)
+-      sys::fs::changeFileOwnership(FD, Stat.getUser(), Stat.getGroup());
+-#endif
+   }
+ 
+   if (auto EC = sys::Process::SafelyCloseFileDescriptor(FD))

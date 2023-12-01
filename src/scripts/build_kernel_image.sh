@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+# Copyright 2010 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,7 +12,8 @@
 # reflected in ensure_secure_kernelparams.config and deployed to production
 # signing before landed here.
 
-SCRIPT_ROOT=$(dirname $(readlink -f "$0"))
+SCRIPT_ROOT=$(dirname "$(readlink -f "$0")")
+# shellcheck source=common.sh
 . "${SCRIPT_ROOT}/common.sh" || exit 1
 
 # Flags.
@@ -28,7 +29,7 @@ DEFINE_string vmlinuz "vmlinuz" \
   "The path to the kernel (Default: vmlinuz)"
 DEFINE_string working_dir "/tmp/vmlinuz.working" \
   "Working directory for in-progress files. (Default: /tmp/vmlinuz.working)"
-DEFINE_boolean keep_work ${FLAGS_FALSE} \
+DEFINE_boolean keep_work "${FLAGS_FALSE}" \
   "Keep temporary files (*.keyblock, *.vbpubk). (Default: false)"
 DEFINE_string keys_dir "${VBOOT_TESTKEYS_DIR}" \
   "Directory with the RSA signing keys. (Defaults to test keys)"
@@ -60,9 +61,9 @@ DEFINE_string verity_hash_alg "sha256" \
   "Cryptographic hash algorithm used for dm-verity. (Default: sha256)"
 DEFINE_string verity_salt "" \
   "Salt to use for rootfs hash (Default: \"\")"
-DEFINE_boolean enable_rootfs_verification ${FLAGS_TRUE} \
+DEFINE_boolean enable_rootfs_verification "${FLAGS_TRUE}" \
   "Enable kernel-based root fs integrity checking. (Default: true)"
-DEFINE_boolean enable_bootcache ${FLAGS_FALSE} \
+DEFINE_boolean enable_bootcache "${FLAGS_FALSE}" \
   "Enable boot cache to accelerate booting. (Default: false)"
 DEFINE_string enable_serial "" \
   "Enable serial port for printks. Example values: ttyS0"
@@ -78,23 +79,25 @@ switch_to_strict_mode
 
 # N.B.  Ordering matters for some of the libraries below, because
 # some of the files contain initialization used by later files.
+# shellcheck source=build_library/board_options.sh
 . "${BUILD_LIBRARY_DIR}/board_options.sh" || exit 1
+# shellcheck source=build_library/disk_layout_util.sh
 . "${BUILD_LIBRARY_DIR}/disk_layout_util.sh" || exit 1
 
 
 rootdigest() {
   local digest=${table#*root_hexdigest=}
-  echo ${digest% salt*}
+  echo "${digest% salt*}"
 }
 
 salt() {
   local salt=${table#*salt=}
-  echo ${salt%}
+  echo "${salt%}"
 }
 
 hashstart() {
   local hash=${table#*hashstart=}
-  echo ${hash% alg*}
+  echo "${hash% alg*}"
 }
 
 # Estimate of sectors used by verity
@@ -134,7 +137,7 @@ if [[ -n "${FLAGS_rootfs_image}" && -n "${FLAGS_rootfs_hash}" ]]; then
   else
     # We try to autodetect the rootfs_image filesystem size.
     if [[ -f "${FLAGS_rootfs_image}" ]]; then
-      root_fs_size=$(stat -c '%s' ${FLAGS_rootfs_image})
+      root_fs_size=$(stat -c '%s' "${FLAGS_rootfs_image}")
     elif [[ -b "${FLAGS_rootfs_image}" ]]; then
       root_fs_type="$(awk -v rootdev="${FLAGS_rootfs_image}" \
                      '$1 == rootdev { print $3 }' /proc/mounts | head -n 1)"
@@ -181,11 +184,11 @@ with --rootfs_image_size."
   info "Generating root fs hash tree (salt '${FLAGS_verity_salt}')."
   # Runs as sudo in case the image is a block device.
   table=$(sudo verity mode=create \
-                      alg=${FLAGS_verity_hash_alg} \
-                      payload=${FLAGS_rootfs_image} \
-                      payload_blocks=${root_fs_blocks} \
-                      hashtree=${FLAGS_rootfs_hash} \
-                      salt=${FLAGS_verity_salt})
+                      alg="${FLAGS_verity_hash_alg}" \
+                      payload="${FLAGS_rootfs_image}" \
+                      payload_blocks="${root_fs_blocks}" \
+                      hashtree="${FLAGS_rootfs_hash}" \
+                      salt="${FLAGS_verity_salt}")
   if [[ -f "${FLAGS_rootfs_hash}" ]]; then
     sudo chmod a+r "${FLAGS_rootfs_hash}"
   fi
@@ -251,7 +254,7 @@ vt.global_cursor_default=0
 kern_guid=%U
 EOF
 
-WORK="${WORK} ${FLAGS_working_dir}/boot.config"
+WORK=("${FLAGS_working_dir}/boot.config")
 info "Emitted cross-platform boot params to ${FLAGS_working_dir}/boot.config"
 
 # Add common boot options first.
@@ -287,26 +290,24 @@ cros_secure
 drm.trace=0x106
 EOF
 
+WORK+=("${config}")
 if [[ "${FLAGS_arch}" == "x86" || "${FLAGS_arch}" == "amd64" ]]; then
   # Legacy BIOS will use the kernel in the rootfs (via syslinux), as will
   # standard EFI BIOS (via grub, from the EFI System Partition). Chrome OS
   # BIOS will use a separate signed kernel partition, which we'll create now.
-  cat <<EOF >> "${FLAGS_working_dir}/config.txt"
+  cat <<EOF >> "${config}"
 add_efi_memmap
 boot=local
 noresume
 noswap
 i915.modeset=1
 EOF
-  WORK="${WORK} ${FLAGS_working_dir}/config.txt"
 
   bootloader_path="/lib64/bootstub/bootstub.efi"
 elif [[ "${FLAGS_arch}" == "arm" || "${FLAGS_arch}" == "mips"  || "${FLAGS_arch}" == "arm64" ]]; then
-  WORK="${WORK} ${FLAGS_working_dir}/config.txt"
-
   # arm does not need/have a bootloader in kernel partition
   dd if="/dev/zero" of="${FLAGS_working_dir}/bootloader.bin" bs=512 count=1
-  WORK="${WORK} ${FLAGS_working_dir}/bootloader.bin"
+  WORK+=("${FLAGS_working_dir}/bootloader.bin")
 
   bootloader_path="${FLAGS_working_dir}/bootloader.bin"
 else
@@ -318,14 +319,14 @@ kernel_image="${FLAGS_vmlinuz}"
 # an artifact by cbuildbot.  Non .bin's need to be explicitly specified
 # and would require the entire set of artifacts to be specified.
 info "Saving kernel as ${FLAGS_working_dir}/vmlinuz.bin"
-cp ${kernel_image} ${FLAGS_working_dir}/vmlinuz.bin
+cp "${kernel_image}" "${FLAGS_working_dir}/vmlinuz.bin"
 
 for image_type in $(get_image_types); do
   already_seen_rootfs=0
-  for partition in $(get_partitions ${image_type}); do
-    format=$(get_format ${image_type} "${partition}")
+  for partition in $(get_partitions "${image_type}"); do
+    format=$(get_format "${image_type}" "${partition}")
     if [[ "${format}" == "ubi" ]]; then
-      type=$(get_type ${image_type} "${partition}")
+      type=$(get_type "${image_type}" "${partition}")
       # cgpt.py ensures that the rootfs partitions are compatible, in that if
       # one is ubi then both are, and they have the same number of reserved
       # blocks. We only want to attach one of them in boot to save time, so
@@ -339,26 +340,25 @@ for image_type in $(get_image_types); do
       else
         partname="${partition}"
       fi
-      reserved=$(get_reserved_erase_blocks ${image_type} "${partition}")
-      echo "ubi.mtd=${partname},0,${reserved},${partname}" \
-          >> "${FLAGS_working_dir}/config.txt"
-      fs_format=$(get_filesystem_format ${image_type} "${partition}")
+      reserved=$(get_reserved_erase_blocks "${image_type}" "${partition}")
+      echo "ubi.mtd=${partname},0,${reserved},${partname}" >> "${config}"
+      fs_format=$(get_filesystem_format "${image_type}" "${partition}")
       if [[ "${fs_format}" != "ubifs" ]]; then
-        echo "ubi.block=${partname},0" >> "${FLAGS_working_dir}/config.txt"
+        echo "ubi.block=${partname},0" >> "${config}"
       fi
     fi
   done
 done
 
-config_file="${FLAGS_working_dir}/config.txt"
-modify_kernel_command_line "${config_file}"
+modify_kernel_command_line "${config}"
+
 # Create and sign the kernel blob
 vbutil_kernel \
   --pack "${FLAGS_to}" \
   --keyblock "${FLAGS_keys_dir}/${FLAGS_keyblock}" \
   --signprivate "${FLAGS_keys_dir}/${FLAGS_private}" \
   --version 1 \
-  --config "${config_file}" \
+  --config "${config}" \
   --bootloader "${bootloader_path}" \
   --vmlinuz "${kernel_image}" \
   --arch "${FLAGS_arch}"
@@ -375,9 +375,9 @@ fi
 set +e  # cleanup failure is a-ok
 
 if [[ ${FLAGS_keep_work} -eq ${FLAGS_FALSE} ]]; then
-  info "Cleaning up temporary files: ${WORK}"
-  rm ${WORK}
-  rmdir ${FLAGS_working_dir}
+  info "Cleaning up temporary files: ${WORK[*]}"
+  rm "${WORK[@]}"
+  rmdir "${FLAGS_working_dir}"
 fi
 
 info "Kernel partition image emitted: ${FLAGS_to}"

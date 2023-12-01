@@ -1,0 +1,241 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":hpsd",
+    ":install_minijail_conf",
+  ]
+  if (use.test) {
+    deps += [
+      ":dev_test",
+      ":hps_daemon_test",
+      ":hps_filter_test",
+      ":hps_metrics_test",
+      ":hps_test",
+    ]
+  }
+}
+
+config("target_defaults") {
+  cflags = [
+    "-Wall",
+    "-Werror",
+    "-Wextra",
+    "-Wpedantic",
+
+    # Allow C++20 designated initializers.
+    "-Wno-c++20-designator",
+
+    # We're not trying to be compatible with C++98.
+    "-Wno-c++98-compat",
+    "-Wno-c++98-compat-pedantic",
+
+    # For libchrome header compatibility.
+    "-Wno-cast-qual",
+    "-Wno-deprecated",
+    "-Wno-expansion-to-defined",
+    "-Wno-float-equal",
+    "-Wno-gnu-zero-variadic-macro-arguments",
+    "-Wno-old-style-cast",
+    "-Wno-padded",
+    "-Wno-reserved-id-macro",
+    "-Wno-reserved-identifier",
+    "-Wno-reserved-macro-identifier",
+    "-Wno-shadow-field-in-constructor",
+    "-Wno-sign-conversion",
+    "-Wno-thread-safety-negative",
+    "-Wno-undef",
+    "-Wno-unused-parameter",
+    "-Wno-weak-vtables",
+
+    # For libbrillo header compatibility.
+    "-Wno-extra-semi-stmt",
+  ]
+}
+
+config("test_warning_suppressions") {
+  cflags = [
+    "-Wno-global-constructors",
+    "-Wno-unused-member-function",
+    "-Wno-used-but-marked-unused",
+    "-Wno-covered-switch-default",  # required by EXPECT_DEATH
+  ]
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "minijail/hpsd.conf" ]
+  install_path = "/usr/share/minijail"
+
+}
+
+generate_dbus_adaptors("hpsd-adaptors") {
+  dbus_service_config = "daemon/dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/dbus_adaptors"
+  sources = [ "daemon/dbus_bindings/org.chromium.Hps.xml" ]
+}
+
+executable("hpsd") {
+  sources = [ "daemon/main.cc" ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":hpsdlib" ]
+}
+
+pkg_config("hpsdlib_config") {
+  # system_api depends on protobuf (or protobuf-lite). It must appear
+  # before protobuf here or the linker flags won't be in the right
+  # order.
+  # NOSORT
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "system_api",
+    "protobuf-lite",
+  ]
+  libs = [ "system_api-hps-protos" ]
+}
+
+static_library("hpsdlib") {
+  sources = [
+    "daemon/dbus_adaptor.cc",
+    "daemon/hps_daemon.cc",
+  ]
+  public_configs = [ ":hpsdlib_config" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":filters",
+    ":hpsd-adaptors",
+    ":hpslib",
+  ]
+}
+
+pkg_config("hpslib_config") {
+  pkg_deps = [
+    "libchrome",
+    "liblzma",
+    "libmetrics",
+    "libusb-1.0",
+  ]
+}
+
+static_library("hpslib") {
+  sources = [
+    "dev.cc",
+    "dev.h",
+    "hal/fake_dev.cc",
+    "hal/fake_dev.h",
+    "hal/i2c.cc",
+    "hal/i2c.h",
+    "hal/mcp.cc",
+    "hal/mcp.h",
+    "hal/retry.cc",
+    "hal/retry.h",
+    "hps_impl.cc",
+    "hps_metrics.cc",
+    "hps_reg.h",
+    "utils.cc",
+  ]
+  public_configs = [ ":hpslib_config" ]
+  configs += [ ":target_defaults" ]
+}
+
+static_library("filters") {
+  sources = [
+    "daemon/filters/average_filter.cc",
+    "daemon/filters/consecutive_results_filter.cc",
+    "daemon/filters/filter.cc",
+    "daemon/filters/filter.h",
+    "daemon/filters/filter_factory.cc",
+    "daemon/filters/filter_watcher.cc",
+    "daemon/filters/threshold_filter.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  pkg_deps = [ "libchrome" ]
+}
+
+if (use.test) {
+  executable("dev_test") {
+    sources = [ "dev_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_warning_suppressions",
+    ]
+    pkg_deps = [ "libchrome" ]
+    deps = [
+      ":hpslib",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("hps_test") {
+    sources = [ "hps_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_warning_suppressions",
+    ]
+    pkg_deps = [ "libchrome" ]
+    deps = [
+      ":hpslib",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("hps_metrics_test") {
+    sources = [
+      "hps_metrics.cc",
+      "hps_metrics_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_warning_suppressions",
+    ]
+    pkg_deps = [ "libmetrics" ]
+    deps = [ "//common-mk/testrunner:testrunner" ]
+  }
+
+  executable("hps_daemon_test") {
+    sources = [ "daemon/hps_daemon_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_warning_suppressions",
+    ]
+
+    deps = [
+      ":filters",
+      ":hpsdlib",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("hps_filter_test") {
+    sources = [ "daemon/filters/filter_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_warning_suppressions",
+    ]
+    libs = [ "system_api-hps-protos" ]
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+      "protobuf-lite",
+      "system_api",
+    ]
+    deps = [
+      ":filters",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+From 9025f9fa434e51766b8afb31ffb42cde7f5f74c9 Mon Sep 17 00:00:00 2001
+From: Grace Cham <hscham@google.com>
+Date: Mon, 23 May 2022 14:56:59 +0900
+Subject: [PATCH] puffin: include <unistd.h> explicitly
+
+It is removed from build/build_config.h from libchrome r950791 onwards.
+For unlink, close.
+
+Bug: 231676446
+Test: FEATURES=test emerge-hatch puffin
+
+Change-Id: Iae91fd56ac1403c4fe47b6a8939339a6d3049cdc
+---
+ src/unittest_common.cc | 2 ++
+ src/unittest_common.h  | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/src/unittest_common.cc b/src/unittest_common.cc
+index ad3a85f..ac050dd 100644
+--- a/src/unittest_common.cc
++++ b/src/unittest_common.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "puffin/src/unittest_common.h"
+ 
++#include <unistd.h>
++
+ using std::string;
+ using std::vector;
+ 
+diff --git a/src/unittest_common.h b/src/unittest_common.h
+index eac61e6..8727986 100644
+--- a/src/unittest_common.h
++++ b/src/unittest_common.h
+@@ -5,6 +5,8 @@
+ #ifndef SRC_UNITTEST_COMMON_H_
+ #define SRC_UNITTEST_COMMON_H_
+ 
++#include <unistd.h>
++
+ #include <string>
+ #include <vector>
+ 
+-- 
+2.36.1.124.g0e6072fb45-goog
+

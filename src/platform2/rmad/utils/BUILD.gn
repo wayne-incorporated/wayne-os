@@ -1,0 +1,87 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "iioservice_ipc",
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+    "libec",
+    "libmems",
+    "mojo_service_manager",
+    "protobuf",
+    "re2",
+    "system_api",
+    "vboot_host",
+  ]
+}
+
+source_set("libutils") {
+  sources = [
+    "calibration_utils.cc",
+    "cbi_utils_impl.cc",
+    "cmd_utils_impl.cc",
+    "component_utils.cc",
+    "cr50_utils_impl.cc",
+    "cros_config_utils.cc",
+    "cros_config_utils_impl.cc",
+    "crossystem_utils_impl.cc",
+    "dbus_utils.cc",
+    "ec_utils_impl.cc",
+    "futility_utils_impl.cc",
+    "iio_ec_sensor_utils_impl.cc",
+    "iio_sensor_probe_utils_impl.cc",
+    "json_store.cc",
+    "mojo_service_utils_impl.cc",
+    "regions_utils_impl.cc",
+    "sensor_calibration_utils_impl.cc",
+    "sys_utils_impl.cc",
+    "type_conversions.cc",
+    "vpd_utils_impl.cc",
+    "write_protect_utils_impl.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ "//hardware_verifier/proto:hardware_verifier-protos" ]
+}
+
+if (use.test) {
+  pkg_config("test_pkg_deps") {
+    # Manually add the include path so that the generated hardware_verifier.pb.h
+    # can include runtime_probe.pb.h properly.
+    cflags = [ "-I${sysroot}/usr/include/runtime_probe/proto_bindings" ]
+
+    pkg_deps = [ "libmems_test_support" ]
+  }
+
+  source_set("libutils_test") {
+    sources = [
+      "cbi_utils_test.cc",
+      "cmd_utils_test.cc",
+      "component_utils_test.cc",
+      "cr50_utils_test.cc",
+      "cros_config_utils_test.cc",
+      "dbus_utils_test.cc",
+      "futility_utils_test.cc",
+      "iio_ec_sensor_utils_test.cc",
+      "iio_sensor_probe_utils_test.cc",
+      "json_store_test.cc",
+      "mojo_service_utils_test.cc",
+      "regions_utils_test.cc",
+      "sensor_calibration_utils_test.cc",
+      "sys_utils_test.cc",
+      "type_conversions_test.cc",
+      "vpd_utils_test.cc",
+      "write_protect_utils_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_pkg_deps",
+    ]
+    deps = [ ":libutils" ]
+  }
+}

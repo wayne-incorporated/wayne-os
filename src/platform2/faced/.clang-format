@@ -1,0 +1,45 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+BasedOnStyle: InheritParentConfig
+
+#
+# Faceauth-specific settings and overrides.
+#
+
+# The default platform2 ClangFormat config disables include sorting,
+# indicating that the `cpplint.py` presubmit does it. However, the default
+# platform2 config _also_ disables cpplint's include order checking, so we get
+# no checking or automation at all.
+#
+# Enable automatic sorting and grouping of #include lines for faceauth code to
+# keep things consistent and avoid code authors having to think about it. We
+# attempt to group things similar to how `cpplint.py` would want it [1]:
+#
+#   1. for foo.cc, foo.h
+#   2. c system files
+#   3. cpp system files
+#   4. other google headers
+#
+# [1]: https://source.chromium.org/chromium/chromium/tools/depot_tools/+/main:cpplint.py;l=4516-4521;drc=7b85da15c164580f8264d07586b50bb3ccaaa1bc
+IncludeBlocks: Regroup
+IncludeIsMainRegex: '([-_](test|unittest))?$'
+SortIncludes: CaseSensitive
+IncludeCategories:
+  # C system includes
+  - Regex:           '^<(sys/)?[a-z_]+.h>'
+    Priority:        1
+    CaseSensitive:   true
+  # C++ system includes
+  - Regex:           '^<[a-z/]+>$'
+    Priority:        2
+    CaseSensitive:   true
+  # Other system libraries
+  - Regex:           '^<.*'
+    Priority:        3
+    CaseSensitive:   true
+  # Other includes
+  - Regex:           '.*'
+    Priority:        4
+    CaseSensitive:   true

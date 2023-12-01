@@ -1,0 +1,20 @@
+LLVMWrapper tries to get Triple.h from ADT or TargetParser, depending
+on LLVM version. Ours is in ADT, and LLVMWrapper wrongly tries to
+get it from TargetParser. This patch fixes that.
+
+diff --git a/compiler/rustc_llvm/llvm-wrapper/LLVMWrapper.h b/compiler/rustc_llvm/llvm-wrapper/LLVMWrapper.h
+index 0589062..4725ded 100644
+--- a/compiler/rustc_llvm/llvm-wrapper/LLVMWrapper.h
++++ b/compiler/rustc_llvm/llvm-wrapper/LLVMWrapper.h
+@@ -44,11 +44,7 @@
+ #include "llvm/IR/IRPrintingPasses.h"
+ #include "llvm/Linker/Linker.h"
+ 
+-#if LLVM_VERSION_GE(16, 0)
+-#include "llvm/TargetParser/Triple.h"
+-#else
+ #include "llvm/ADT/Triple.h"
+-#endif
+ 
+ extern "C" void LLVMRustSetLastError(const char *);
+ 

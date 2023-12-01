@@ -1,0 +1,25 @@
+From 4399174adbeecc24533598ae3d7aa62137327e0f Mon Sep 17 00:00:00 2001
+From: Po-Hsien Wang <pwang@chromium.org>
+Date: Mon, 3 Apr 2023 15:15:50 -0700
+Subject: [PATCH 3/3] Fix subprocess.capture_output in python3.6
+
+---
+ tools/capture-vulkan/gfxrecon-capture-vulkan.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/capture-vulkan/gfxrecon-capture-vulkan.py b/tools/capture-vulkan/gfxrecon-capture-vulkan.py
+index f40295cf..45a6de2c 100644
+--- a/tools/capture-vulkan/gfxrecon-capture-vulkan.py
++++ b/tools/capture-vulkan/gfxrecon-capture-vulkan.py
+@@ -336,7 +336,7 @@ if '__main__' == __name__:
+ 
+     # Run the program and and exit with the exit status of the program
+     print('Executing program', get_command_path(args))
+-    result = subprocess.run(args.program_and_args, capture_output=True)
++    result = subprocess.run(args.program_and_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+     if 0 != result.returncode:
+         print('Errors:\n', result.stderr.decode('utf-8'))
+     print('Output:\n', result.stdout.decode('utf-8'))
+-- 
+2.40.0.423.gd6c402a77b-goog
+

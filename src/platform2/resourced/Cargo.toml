@@ -1,0 +1,59 @@
+[package]
+name = "resourced"
+version = "0.1.0"
+authors = ["The ChromiumOS Authors"]
+edition = "2021"
+
+# Build the GRPC APIs only when feature vm_grpc is enabled.
+build = "src/vm_grpc/proto/build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+# Feature chromeos is turned on when building with ebuild.
+chromeos = ["featured"]
+vm_grpc = ["grpcio", "futures", "futures-channel", "futures-executor", "futures-util"]
+
+[dependencies]
+anyhow = "1.0"
+dbus = "0.9"
+dbus-crossroads = "0.5.0"
+dbus-tokio = "0.7.5"
+glob = "0.3"
+libc = "0.2"
+libchromeos = { path = "../libchromeos-rs/" } # provided by ebuild
+log = "0.4"
+once_cell = "1.7"
+regex = "1.5"
+tempfile = "3.0.2"
+tokio = { version = "1.19.2", features = ["rt", "time"] }
+system_api = { path = "../system_api" } # provided by ebuild
+protobuf = "3.2"
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+featured = { version = "0.1.0", optional = true }
+grpcio = { version = "0.9.1", optional = true}
+futures = { version = "0.3.13", default-features = false, optional = true }
+futures-channel = { version = "0.3.14", optional = true}
+futures-executor = { version = "0.3.14", optional = true}
+futures-util = { version = "0.3", features = ["sink"] , default-features = false, optional = true }
+
+[patch.crates-io] # ignored by ebuild
+audio_streams = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/audio_streams-0.1.0/" } # ignored by ebuild
+base_event_token_derive = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/base_event_token_derive-0.1.0/" } # ignored by ebuild
+crosvm-base = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/crosvm-base-0.1.0/" } # ignored by ebuild
+data_model = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/data_model-0.1.50/" } # ignored by ebuild
+featured = {  path = "../../../src/platform2/featured/rust-client" } # ignored by ebuild
+grpcio-sys = {  path = "../../../chroot/usr/lib/cros_rust_registry/registry/grpcio-sys-0.9.1+1.38.0/" } # ignored by ebuild
+minijail = { path = "../../platform/minijail/rust/minijail" } # ignored by ebuild
+sync = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/sync-0.1.149/" } # ignored by ebuild
+
+[[example]]
+name = "test_client_v2"
+path = "./src/vm_grpc/test_client/client_v2.rs"
+required-features = ["vm_grpc"]
+
+[build-dependencies]
+protoc-grpcio = "2.0.0"
+protoc-rust = "2.27.1"
+anyhow = "1.0"

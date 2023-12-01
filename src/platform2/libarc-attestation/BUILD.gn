@@ -1,0 +1,56 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":install_libarc-attestation_headers",
+    ":libarc-attestation",
+  ]
+
+  if (use.test) {
+    deps += [ ":libarc-attestation_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+shared_library("libarc-attestation") {
+  sources = [ "lib/interface.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "lib"
+
+  pkg_deps = [
+    "protobuf",
+    "system_api",
+  ]
+}
+
+install_config("install_libarc-attestation_headers") {
+  sources = [ "lib/interface.h" ]
+  install_path = "/usr/include/chromeos/libarc-attestation"
+}
+
+executable("arc-attestation-cmd") {
+  sources = [ "cmd_client/arc_attestation_cmd.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+}
+
+if (use.test) {
+  executable("libarc-attestation_test") {
+    sources = [ "testrunner.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [ "//common-mk/testrunner" ]
+  }
+}

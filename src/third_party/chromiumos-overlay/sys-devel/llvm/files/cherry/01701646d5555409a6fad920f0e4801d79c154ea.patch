@@ -1,0 +1,183 @@
+commit 01701646d5555409a6fad920f0e4801d79c154ea
+Author: Duncan P. N. Exon Smith <dexonsmith@apple.com>
+Date:   Mon Feb 15 12:08:06 2021 -0800
+
+    Transforms: Clone distinct nodes in metadata mapper unless RF_ReuseAndMutateDistinctMDs
+    
+    This is a follow up to 22a52dfddcefad4f275eb8ad1cc0e200074c2d8a and a
+    revert of df763188c9a1ecb1e7e5c4d4ea53a99fbb755903.
+    
+    With this change, we only skip cloning distinct nodes in
+    MDNodeMapper::mapDistinct if RF_ReuseAndMutateDistinctMDs, dropping the
+    no-longer-needed local helper `cloneOrBuildODR()`.  Skipping cloning in
+    other cases is unsound and breaks CloneModule, which is why the textual
+    IR for PR48841 didn't pass previously. This commit adds the test as:
+    Transforms/ThinLTOBitcodeWriter/cfi-debug-info-cloned-type-references-global-value.ll
+    
+    Cloning less often exposed a hole in subprogram cloning in
+    CloneFunctionInto thanks to df763188c9a1ecb1e7e5c4d4ea53a99fbb755903's
+    test ThinLTO/X86/Inputs/dicompositetype-unique-alias.ll. If a function
+    has a subprogram attachment whose scope is a DICompositeType that
+    shouldn't be cloned, but it has no internal debug info pointing at that
+    type, that composite type was being cloned. This commit plugs that hole,
+    calling DebugInfoFinder::processSubprogram from CloneFunctionInto.
+    
+    As hinted at in 22a52dfddcefad4f275eb8ad1cc0e200074c2d8a's commit
+    message, I think we need to formalize ownership of metadata a bit more
+    so that ValueMapper/CloneFunctionInto (and similar functions) can deal
+    with cloning (or not) metadata in a more generic, less fragile way.
+    
+    This fixes PR48841.
+    
+    Differential Revision: https://reviews.llvm.org/D96734
+
+diff --git a/llvm/include/llvm/IR/DebugInfo.h b/llvm/include/llvm/IR/DebugInfo.h
+index e7c1d9a90677..b33e0a90ea41 100644
+--- a/llvm/include/llvm/IR/DebugInfo.h
++++ b/llvm/include/llvm/IR/DebugInfo.h
+@@ -81,6 +81,9 @@ public:
+   /// Process debug info location.
+   void processLocation(const Module &M, const DILocation *Loc);
+ 
++  /// Process subprogram.
++  void processSubprogram(DISubprogram *SP);
++
+   /// Clear all lists.
+   void reset();
+ 
+@@ -89,7 +92,6 @@ private:
+ 
+   void processCompileUnit(DICompileUnit *CU);
+   void processScope(DIScope *Scope);
+-  void processSubprogram(DISubprogram *SP);
+   void processType(DIType *DT);
+   bool addCompileUnit(DICompileUnit *CU);
+   bool addGlobalVariable(DIGlobalVariableExpression *DIG);
+diff --git a/llvm/lib/Transforms/Utils/CloneFunction.cpp b/llvm/lib/Transforms/Utils/CloneFunction.cpp
+index 021c0bb9a1df..0ff28e9b3c29 100644
+--- a/llvm/lib/Transforms/Utils/CloneFunction.cpp
++++ b/llvm/lib/Transforms/Utils/CloneFunction.cpp
+@@ -144,6 +144,8 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+     DIFinder.emplace();
+ 
+     SPClonedWithinModule = OldFunc->getSubprogram();
++    if (SPClonedWithinModule)
++      DIFinder->processSubprogram(SPClonedWithinModule);
+   } else {
+     assert((NewFunc->getParent() == nullptr ||
+             NewFunc->getParent() != OldFunc->getParent()) &&
+@@ -195,7 +197,7 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+   }
+ 
+   if (Changes < CloneFunctionChangeType::DifferentModule &&
+-      (SPClonedWithinModule || DIFinder->subprogram_count() > 0)) {
++      DIFinder->subprogram_count() > 0) {
+     // Turn on module-level changes, since we need to clone (some of) the
+     // debug info metadata.
+     //
+@@ -208,14 +210,7 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+       (void)VMap.MD().try_emplace(N, N);
+     };
+ 
+-    // Avoid cloning what the subprogram references.
+-    if (SPClonedWithinModule) {
+-      mapToSelfIfNew(SPClonedWithinModule->getUnit());
+-      mapToSelfIfNew(SPClonedWithinModule->getType());
+-      mapToSelfIfNew(SPClonedWithinModule->getFile());
+-    }
+-
+-    // Avoid cloning other subprograms, compile units, and types.
++    // Avoid cloning types, compile units, and (other) subprograms.
+     for (DISubprogram *ISP : DIFinder->subprograms())
+       if (ISP != SPClonedWithinModule)
+         mapToSelfIfNew(ISP);
+@@ -225,6 +220,9 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+ 
+     for (DIType *Type : DIFinder->types())
+       mapToSelfIfNew(Type);
++  } else {
++    assert(!SPClonedWithinModule &&
++           "Subprogram should be in DIFinder->subprogram_count()...");
+   }
+ 
+   // Duplicate the metadata that is attached to the cloned function.
+diff --git a/llvm/lib/Transforms/Utils/ValueMapper.cpp b/llvm/lib/Transforms/Utils/ValueMapper.cpp
+index 9557fa9becf0..0b1d8c024d84 100644
+--- a/llvm/lib/Transforms/Utils/ValueMapper.cpp
++++ b/llvm/lib/Transforms/Utils/ValueMapper.cpp
+@@ -533,23 +533,13 @@ Optional<Metadata *> MDNodeMapper::tryToMapOperand(const Metadata *Op) {
+   return None;
+ }
+ 
+-static Metadata *cloneOrBuildODR(const MDNode &N) {
+-  auto *CT = dyn_cast<DICompositeType>(&N);
+-  // If ODR type uniquing is enabled, we would have uniqued composite types
+-  // with identifiers during bitcode reading, so we can just use CT.
+-  if (CT && CT->getContext().isODRUniquingDebugTypes() &&
+-      CT->getIdentifier() != "")
+-    return const_cast<DICompositeType *>(CT);
+-  return MDNode::replaceWithDistinct(N.clone());
+-}
+-
+ MDNode *MDNodeMapper::mapDistinctNode(const MDNode &N) {
+   assert(N.isDistinct() && "Expected a distinct node");
+   assert(!M.getVM().getMappedMD(&N) && "Expected an unmapped node");
+-  DistinctWorklist.push_back(
+-      cast<MDNode>((M.Flags & RF_ReuseAndMutateDistinctMDs)
+-                       ? M.mapToSelf(&N)
+-                       : M.mapToMetadata(&N, cloneOrBuildODR(N))));
++  DistinctWorklist.push_back(cast<MDNode>(
++      (M.Flags & RF_ReuseAndMutateDistinctMDs)
++          ? M.mapToSelf(&N)
++          : M.mapToMetadata(&N, MDNode::replaceWithDistinct(N.clone()))));
+   return DistinctWorklist.back();
+ }
+ 
+diff --git a/llvm/test/Transforms/ThinLTOBitcodeWriter/cfi-debug-info-cloned-type-references-global-value.ll b/llvm/test/Transforms/ThinLTOBitcodeWriter/cfi-debug-info-cloned-type-references-global-value.ll
+new file mode 100644
+index 000000000000..6d77b19e13c8
+--- /dev/null
++++ b/llvm/test/Transforms/ThinLTOBitcodeWriter/cfi-debug-info-cloned-type-references-global-value.ll
+@@ -0,0 +1,42 @@
++; RUN: opt -thinlto-bc -thinlto-split-lto-unit -o %t %s
++; RUN: llvm-modextract -b -n 0 -o - %t | llvm-dis | FileCheck %s
++
++; Crash test for CloneModule when there's a retained DICompositeType that
++; transitively references a global value.
++
++; CHECK: declare !type !{{[0-9]+}} !type !{{[0-9]+}} void @_Z1gIM1iKFivEEvT_(i64, i64)
++; CHECK: !llvm.dbg.cu
++; CHECK-DAG: distinct !DICompositeType({{.*}}, identifier: "_ZTS1oI1iiXadL_ZNKS0_5m_fn1EvEEE"
++; CHECK-DAG: distinct !DICompositeType({{.*}}, identifier: "_ZTS1i"
++; CHECK-DAG: !{i32 4, !"CFI Canonical Jump Tables", i32 0}
++
++target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
++target triple = "x86_64-unknown-linux-gnu"
++
++@_ZN1i1pE = dso_local constant [1 x i8] zeroinitializer, align 1
++@_ZNK1i5m_fn1Ev = external global i32
++
++declare !type !17 !type !18 void @_Z1gIM1iKFivEEvT_(i64, i64)
++
++!llvm.dbg.cu = !{!0}
++!llvm.module.flags = !{!14, !15}
++
++!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 12.0.0 (git@github.com:llvm/llvm-project.git 51bf4c0e6d4cbc6dfa57857fc78003413cbeb17f)", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, retainedTypes: !3, globals: !2, nameTableKind: None)
++!1 = !DIFile(filename: "<stdin>", directory: "/tmp")
++!2 = !{}
++!3 = !{!4}
++!4 = distinct !DICompositeType(tag: DW_TAG_class_type, name: "o<i, int, &i::m_fn1>", file: !5, line: 22, size: 8, flags: DIFlagTypePassByValue | DIFlagNonTrivial, elements: !2, templateParams: !6, identifier: "_ZTS1oI1iiXadL_ZNKS0_5m_fn1EvEEE")
++!5 = !DIFile(filename: "t.ii", directory: "/tmp")
++!6 = !{!7}
++!7 = !DITemplateValueParameter(type: !8, value: i64 ptrtoint (i32* @_ZNK1i5m_fn1Ev to i64))
++!8 = !DIDerivedType(tag: DW_TAG_ptr_to_member_type, baseType: !9, size: 128, extraData: !13)
++!9 = !DISubroutineType(types: !10)
++!10 = !{!11, !12}
++!11 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
++!12 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !11, size: 64, flags: DIFlagArtificial)
++!13 = distinct !DICompositeType(tag: DW_TAG_class_type, name: "i", file: !5, line: 13, size: 8, flags: DIFlagTypePassByValue | DIFlagNonTrivial, elements: !2, identifier: "_ZTS1i")
++!14 = !{i32 2, !"Debug Info Version", i32 3}
++!15 = !{i32 4, !"CFI Canonical Jump Tables", i32 0}
++!16 = !{i64 ptrtoint (i32* @_ZNK1i5m_fn1Ev to i64)}
++!17 = !{i64 0, !"_ZTSFvM1iKFivEE"}
++!18 = !{i64 0, !"_ZTSFvM1iKFivEE.generalized"}

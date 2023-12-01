@@ -1,0 +1,88 @@
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package system_proxy.worker;
+
+// The protection space determines the domain over which credentials can
+// be automatically applied (defined in RFC7235 , section 2.2).
+message ProtectionSpace {
+  // The origin of the URL of the web proxy server issuing
+  // the challenge, formatted as scheme://url:port.
+  optional string origin = 1;
+  // The case-sensitive realm string of the challenge.
+  optional string realm = 2;
+  // The authentication scheme that can be basic, digest or NTLM.
+  optional string scheme = 3;
+}
+
+message Credentials {
+  optional string username = 1;
+  optional string password = 2;
+  optional ProtectionSpace protection_space = 3;
+  // Authentication schemes for which policy set credentials can be
+  // automatically applied. Valid values are 'basic', 'digest' and 'ntlm'.
+  repeated string policy_credentials_auth_schemes = 4;
+}
+
+message SocketAddress {
+  // A listening ipv4 address for the local proxy server, serialized in
+  // network-byte-order.
+  optional bytes addr = 1;
+  // This value should fit in a uint16_t.
+  optional uint32 port = 2;
+}
+
+message LogRequest {
+  optional string message = 1;
+}
+
+message ProxyResolutionRequest {
+  optional string target_url = 1;
+}
+
+message ProxyResolutionReply {
+  optional string target_url = 1;
+  // An ordered list of proxy servers, at least one in size, with the last
+  // element always being the direct option. The format of the strings is
+  // scheme://host:port with the last element being "direct://". The only
+  // schemes supported at the moment are "http" and "direct".
+  repeated string proxy_servers = 2;
+}
+
+message AuthRequiredRequest {
+  optional ProtectionSpace protection_space = 1;
+  // If true, it means that the credentials previously acquired for proxy
+  // authentication are incorrect. This should force the user to re-enter the
+  // credentials in the system authentication dialogue.
+  optional bool bad_cached_credentials = 2;
+}
+
+message WorkerRequest {
+  oneof params {
+    LogRequest log_request = 1;
+    ProxyResolutionRequest proxy_resolution_request = 2;
+    AuthRequiredRequest auth_required_request = 3;
+  }
+}
+
+message KerberosConfig {
+  optional bool enabled = 1;
+  // Path to the Kerberos credential cache.
+  optional bytes krb5cc_path = 2;
+  // Path to the Kerberos configuration data.
+  optional bytes krb5conf_path = 3;
+}
+
+message ClearUserCredentials {}
+
+message WorkerConfigs {
+  oneof params {
+    Credentials credentials = 1;
+    // The local proxy listening address.
+    SocketAddress listening_address = 2;
+    ProxyResolutionReply proxy_resolution_reply = 3;
+    KerberosConfig kerberos_config = 4;
+    ClearUserCredentials clear_user_credentials = 5;
+  }
+}

@@ -1,0 +1,259 @@
+From 8422ea93dea286faddab9191a423c240367d4813 Mon Sep 17 00:00:00 2001
+From: Nikita Popov <npopov@redhat.com>
+Date: Tue, 26 Apr 2022 18:50:44 +0200
+Subject: [PATCH 1/2] [AsmParser] Automatically declare and lex attribute
+ keywords (NFC)
+
+Rather than listing these by hand, include all enum attribute
+keywords from Attributes.inc. This reduces the number of places
+one has to update whenever an enum attribute is added.
+
+Differential Revision: https://reviews.llvm.org/D124465
+---
+ llvm/include/llvm/AsmParser/LLToken.h | 85 ++------------------------
+ llvm/lib/AsmParser/LLLexer.cpp        | 86 ++-------------------------
+ 2 files changed, 10 insertions(+), 161 deletions(-)
+
+diff --git a/llvm/include/llvm/AsmParser/LLToken.h b/llvm/include/llvm/AsmParser/LLToken.h
+index c4ccd358f938..d39049fc4c5e 100644
+--- a/llvm/include/llvm/AsmParser/LLToken.h
++++ b/llvm/include/llvm/AsmParser/LLToken.h
+@@ -112,7 +112,6 @@ enum Kind {
+   kw_exact,
+   kw_inbounds,
+   kw_inrange,
+-  kw_align,
+   kw_addrspace,
+   kw_section,
+   kw_partition,
+@@ -121,7 +120,6 @@ enum Kind {
+   kw_module,
+   kw_asm,
+   kw_sideeffect,
+-  kw_alignstack,
+   kw_inteldialect,
+   kw_gc,
+   kw_prefix,
+@@ -177,85 +175,13 @@ enum Kind {
+ 
+   // Attributes:
+   kw_attributes,
+-  kw_allocalign,
+-  kw_allocsize,
+-  kw_alwaysinline,
+-  kw_argmemonly,
+-  kw_sanitize_address,
+-  kw_sanitize_hwaddress,
+-  kw_sanitize_memtag,
+-  kw_builtin,
+-  kw_byval,
+-  kw_inalloca,
+-  kw_cold,
+-  kw_convergent,
+-  kw_dereferenceable,
+-  kw_dereferenceable_or_null,
+-  kw_disable_sanitizer_instrumentation,
+-  kw_elementtype,
+-  kw_inaccessiblememonly,
+-  kw_inaccessiblemem_or_argmemonly,
+-  kw_inlinehint,
+-  kw_inreg,
+-  kw_jumptable,
+-  kw_minsize,
+-  kw_naked,
+-  kw_nest,
+-  kw_noalias,
+-  kw_noundef,
+-  kw_nobuiltin,
+-  kw_nocallback,
+-  kw_nocapture,
+-  kw_noduplicate,
+-  kw_nofree,
+-  kw_noimplicitfloat,
+-  kw_noinline,
+-  kw_norecurse,
+-  kw_nonlazybind,
+-  kw_nomerge,
+-  kw_nonnull,
+-  kw_noprofile,
+-  kw_noredzone,
+-  kw_noreturn,
+-  kw_nosync,
+-  kw_nocf_check,
+-  kw_nounwind,
+-  kw_nosanitize_bounds,
+-  kw_nosanitize_coverage,
+-  kw_null_pointer_is_valid,
+-  kw_optforfuzzing,
+-  kw_optnone,
+-  kw_optsize,
+-  kw_preallocated,
+-  kw_readnone,
+-  kw_readonly,
+-  kw_returned,
+-  kw_returns_twice,
+-  kw_signext,
+-  kw_speculatable,
+-  kw_ssp,
+-  kw_sspreq,
+-  kw_sspstrong,
+-  kw_safestack,
+-  kw_shadowcallstack,
+-  kw_sret,
+-  kw_sanitize_thread,
+-  kw_sanitize_memory,
+-  kw_speculative_load_hardening,
+-  kw_strictfp,
+-  kw_swifterror,
+-  kw_swiftself,
+-  kw_swiftasync,
+-  kw_uwtable,
+-  kw_vscale_range,
+-  kw_willreturn,
+-  kw_writeonly,
+-  kw_zeroext,
+-  kw_immarg,
+-  kw_byref,
+-  kw_mustprogress,
++
+   kw_sync,
+   kw_async,
++#define GET_ATTR_NAMES
++#define ATTRIBUTE_ENUM(ENUM_NAME, DISPLAY_NAME) \
++  kw_##DISPLAY_NAME,
++#include "llvm/IR/Attributes.inc"
+ 
+   kw_type,
+   kw_opaque,
+@@ -419,7 +345,6 @@ enum Kind {
+   kw_param,
+   kw_hotness,
+   kw_unknown,
+-  kw_hot,
+   kw_critical,
+   kw_relbf,
+   kw_variable,
+diff --git a/llvm/lib/AsmParser/LLLexer.cpp b/llvm/lib/AsmParser/LLLexer.cpp
+index 2a091a9c94f8..f9c6d555e9d1 100644
+--- a/llvm/lib/AsmParser/LLLexer.cpp
++++ b/llvm/lib/AsmParser/LLLexer.cpp
+@@ -567,7 +567,6 @@ lltok::Kind LLLexer::LexIdentifier() {
+   KEYWORD(exact);
+   KEYWORD(inbounds);
+   KEYWORD(inrange);
+-  KEYWORD(align);
+   KEYWORD(addrspace);
+   KEYWORD(section);
+   KEYWORD(partition);
+@@ -576,7 +575,6 @@ lltok::Kind LLLexer::LexIdentifier() {
+   KEYWORD(module);
+   KEYWORD(asm);
+   KEYWORD(sideeffect);
+-  KEYWORD(alignstack);
+   KEYWORD(inteldialect);
+   KEYWORD(gc);
+   KEYWORD(prefix);
+@@ -632,87 +630,14 @@ lltok::Kind LLLexer::LexIdentifier() {
+   KEYWORD(c);
+ 
+   KEYWORD(attributes);
+-
+-  KEYWORD(alwaysinline);
+-  KEYWORD(allocalign);
+-  KEYWORD(allocsize);
+-  KEYWORD(argmemonly);
+-  KEYWORD(builtin);
+-  KEYWORD(byval);
+-  KEYWORD(inalloca);
+-  KEYWORD(cold);
+-  KEYWORD(convergent);
+-  KEYWORD(dereferenceable);
+-  KEYWORD(dereferenceable_or_null);
+-  KEYWORD(disable_sanitizer_instrumentation);
+-  KEYWORD(elementtype);
+-  KEYWORD(inaccessiblememonly);
+-  KEYWORD(inaccessiblemem_or_argmemonly);
+-  KEYWORD(inlinehint);
+-  KEYWORD(inreg);
+-  KEYWORD(jumptable);
+-  KEYWORD(minsize);
+-  KEYWORD(naked);
+-  KEYWORD(nest);
+-  KEYWORD(noalias);
+-  KEYWORD(nobuiltin);
+-  KEYWORD(nocallback);
+-  KEYWORD(nocapture);
+-  KEYWORD(noduplicate);
+-  KEYWORD(nofree);
+-  KEYWORD(noimplicitfloat);
+-  KEYWORD(noinline);
+-  KEYWORD(norecurse);
+-  KEYWORD(nonlazybind);
+-  KEYWORD(nomerge);
+-  KEYWORD(nonnull);
+-  KEYWORD(noprofile);
+-  KEYWORD(noredzone);
+-  KEYWORD(noreturn);
+-  KEYWORD(nosync);
+-  KEYWORD(nocf_check);
+-  KEYWORD(noundef);
+-  KEYWORD(nounwind);
+-  KEYWORD(nosanitize_bounds);
+-  KEYWORD(nosanitize_coverage);
+-  KEYWORD(null_pointer_is_valid);
+-  KEYWORD(optforfuzzing);
+-  KEYWORD(optnone);
+-  KEYWORD(optsize);
+-  KEYWORD(preallocated);
+-  KEYWORD(readnone);
+-  KEYWORD(readonly);
+-  KEYWORD(returned);
+-  KEYWORD(returns_twice);
+-  KEYWORD(signext);
+-  KEYWORD(speculatable);
+-  KEYWORD(sret);
+-  KEYWORD(ssp);
+-  KEYWORD(sspreq);
+-  KEYWORD(sspstrong);
+-  KEYWORD(strictfp);
+-  KEYWORD(safestack);
+-  KEYWORD(shadowcallstack);
+-  KEYWORD(sanitize_address);
+-  KEYWORD(sanitize_hwaddress);
+-  KEYWORD(sanitize_memtag);
+-  KEYWORD(sanitize_thread);
+-  KEYWORD(sanitize_memory);
+-  KEYWORD(speculative_load_hardening);
+-  KEYWORD(swifterror);
+-  KEYWORD(swiftself);
+-  KEYWORD(swiftasync);
+-  KEYWORD(uwtable);
+-  KEYWORD(vscale_range);
+-  KEYWORD(willreturn);
+-  KEYWORD(writeonly);
+-  KEYWORD(zeroext);
+-  KEYWORD(immarg);
+-  KEYWORD(byref);
+-  KEYWORD(mustprogress);
+   KEYWORD(sync);
+   KEYWORD(async);
+ 
++#define GET_ATTR_NAMES
++#define ATTRIBUTE_ENUM(ENUM_NAME, DISPLAY_NAME) \
++  KEYWORD(DISPLAY_NAME);
++#include "llvm/IR/Attributes.inc"
++
+   KEYWORD(type);
+   KEYWORD(opaque);
+ 
+@@ -785,7 +710,6 @@ lltok::Kind LLLexer::LexIdentifier() {
+   KEYWORD(param);
+   KEYWORD(hotness);
+   KEYWORD(unknown);
+-  KEYWORD(hot);
+   KEYWORD(critical);
+   KEYWORD(relbf);
+   KEYWORD(variable);
+-- 
+2.31.0
+

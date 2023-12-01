@@ -1,0 +1,188 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":dbus_adaptors_generator",
+    ":dbus_proxies_generator",
+    ":dlp",
+    ":dlp_init",
+    ":install_init",
+    ":install_seccomp_policy",
+    ":install_system-services",
+    ":install_systemd",
+  ]
+  if (use.test) {
+    deps += [ ":dlp_test" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":dlp_adaptor_fuzzer" ]
+  }
+}
+
+# D-Bus adaptors code generator.
+generate_dbus_adaptors("dbus_adaptors_generator") {
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/dlp"
+  sources = [ "dbus_bindings/org.chromium.Dlp.xml" ]
+}
+
+# D-Bus proxies code generator
+generate_dbus_proxies("dbus_proxies_generator") {
+  mock_output_file = "include/dlp/dbus-proxy-mocks.h"
+  proxy_output_file = "include/dlp/dbus-proxies.h"
+  sources = [ "dbus_bindings/org.chromium.DlpFilesPolicyService.xml" ]
+}
+
+pkg_config("target_defaults") {
+  # NOSORT
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "libminijail",
+    "libsession_manager-client",
+    "sqlite3",
+
+    # system_api depends on protobuf (or protobuf-lite). It must
+    # appear before protobuf or the linker flags won't be in the right
+    # order.
+    "system_api",
+  ]
+
+  if (use.fuzzer) {
+    # Link against protobuf for fuzzers so we can use libprotobuf-mutator.
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+static_library("libdlp_static") {
+  sources = [
+    "dlp_adaptor.cc",
+    "dlp_daemon.cc",
+    "dlp_database.cc",
+    "dlp_metrics.cc",
+    "dlp_requests_cache.cc",
+    "fanotify_reader_thread.cc",
+    "fanotify_watcher.cc",
+    "kernel_version_tools.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ "//featured:libfeatures" ]
+}
+
+executable("dlp_init") {
+  sources = [ "dlp_init.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":libdlp_static" ]
+}
+
+executable("dlp") {
+  sources = [ "dlp.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":libdlp_static" ]
+}
+
+install_config("install_systemd") {
+  sources = [ "dbus/org.chromium.Dlp.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_system-services") {
+  sources = [ "dbus/org.chromium.Dlp.service" ]
+  install_path = "/usr/share/dbus-1/system-services"
+}
+
+install_config("install_init") {
+  sources = [ "init/dlp.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_seccomp_policy") {
+  _arch = getenv("ARCH")
+
+  sources = [ "seccomp_policy/dlp-seccomp-${_arch}.policy" ]
+  install_path = "/usr/share/policy"
+
+  outputs = [ "dlp-seccomp.policy" ]
+}
+
+# Unit tests.
+if (use.test) {
+  pkg_config("dlp_test_config") {
+    pkg_deps = [
+      "libchrome",
+      "libchrome-test",
+    ]
+  }
+  executable("dlp_test") {
+    sources = [
+      "dlp_adaptor_test.cc",
+      "dlp_adaptor_test_helper.cc",
+      "dlp_adaptor_test_helper.h",
+      "dlp_requests_cache_test.cc",
+
+      # TODO(crbug.com/1223082) Rewrite fanotify_watcher tests to use mocked
+      # fanotify as they are flaky otherwise.
+      # "fanotify_watcher_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":dlp_test_config",
+      ":target_defaults",
+    ]
+    defines = [ "UNIT_TEST" ]
+    deps = [
+      ":libdlp_static",
+      "//common-mk/testrunner:testrunner",
+      "//featured:libfake_platform_features",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("config_fuzzer_pkg_deps") {
+    pkg_deps = [ "libprotobuf-mutator" ]
+  }
+  executable("dlp_adaptor_fuzzer") {
+    sources = [
+      "dlp_adaptor_fuzzer.cc",
+      "dlp_adaptor_test_helper.cc",
+      "dlp_adaptor_test_helper.h",
+    ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      "//common-mk:test",
+      ":config_fuzzer_pkg_deps",
+      ":target_defaults",
+      ":local_proto_include",
+    ]
+    deps = [
+      ":dlp_adaptor_fuzzer_proto",
+      ":libdlp_static",
+      "//featured:libfake_platform_features",
+    ]
+    pkg_deps = [ "libchrome-test" ]
+  }
+  config("local_proto_include") {
+    include_dirs = [ "${sysroot}/usr/include/dlp/proto_bindings/" ]
+  }
+  proto_library("dlp_adaptor_fuzzer_proto") {
+    proto_in_dir = "./proto"
+    proto_out_dir = "include/dlp"
+    proto_lib_dirs = [ "${sysroot}/usr/include/chromeos/dbus/dlp" ]
+    configs = [ ":local_proto_include" ]
+    sources = [ "${proto_in_dir}/dlp_fuzzer.proto" ]
+  }
+}

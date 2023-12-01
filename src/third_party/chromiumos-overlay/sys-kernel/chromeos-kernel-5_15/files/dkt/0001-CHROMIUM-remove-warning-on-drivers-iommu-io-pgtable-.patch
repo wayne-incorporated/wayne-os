@@ -1,0 +1,27 @@
+From a0d9a14e74d241ee4b0f20e395fad519fa9f70a5 Mon Sep 17 00:00:00 2001
+From: Zubin Mithra <zsm@google.com>
+Date: Thu, 18 May 2023 07:25:06 -0700
+Subject: [PATCH] CHROMIUM: remove warning on
+ drivers/iommu/io-pgtable-arm.c:493
+
+Change-Id: Idcf24889a20e2b984129d66f50051cbf333b8b5e
+---
+ drivers/iommu/io-pgtable-arm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/iommu/io-pgtable-arm.c b/drivers/iommu/io-pgtable-arm.c
+index 711c6d8a0156..8def54b1029d 100644
+--- a/drivers/iommu/io-pgtable-arm.c
++++ b/drivers/iommu/io-pgtable-arm.c
+@@ -490,7 +490,7 @@ static int arm_lpae_map_pages(struct io_pgtable_ops *ops, unsigned long iova,
+ 
+ 	if (cfg->quirks & IO_PGTABLE_QUIRK_ARM_TTBR1)
+ 		iaext = ~iaext;
+-	if (WARN_ON(iaext || paddr >> cfg->oas))
++	if (iaext || paddr >> cfg->oas)
+ 		return -ERANGE;
+ 
+ 	/* If no access, then nothing to do */
+-- 
+2.40.1.698.g37aff9b760-goog
+

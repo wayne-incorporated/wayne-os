@@ -1,0 +1,67 @@
+From 051d49efd13479432a06504808b86111c6b33256 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 12 May 2022 15:36:01 -0300
+Subject: [PATCH 152/163] elf: Disable tst-dlopen-nodelete-reloc if compiler
+ does not generate STB_GNU_UNIQUE
+
+The test requires STB_GNU_UNIQUE symbols so NODELETE is propagated
+by do_lookup_unique.
+---
+ elf/Makefile | 22 +++++++++++++++-------
+ 1 file changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/elf/Makefile b/elf/Makefile
+index 6703bcd385..822b0bb29a 100644
+--- a/elf/Makefile
++++ b/elf/Makefile
+@@ -465,11 +465,15 @@ tests += \
+   valgrind-test \
+   # tests
+ tests-cxx = \
+-  tst-dlopen-nodelete-reloc \
+   tst-nodelete \
+   tst-unique3 \
+   tst-unique4 \
+   # tests-cxx
++ifeq (yes,$(config-gnu-unique-object))
++tests-cxx += \
++  tst-dlopen-nodelete-reloc \
++  # tests-cxx
++endif
+ 
+ tests += $(if $(CXX),$(tests-cxx))
+ 
+@@ -890,6 +894,15 @@ modules-names = \
+ # modules-names
+ 
+ modules-names-cxx = \
++  tst-nodelete-rtldmod \
++  tst-nodelete-uniquemod \
++  tst-nodelete-zmod \
++  tst-unique3lib \
++  tst-unique3lib2 \
++  tst-unique4lib \
++  # modules-names-cxx
++ifeq (yes,$(config-gnu-unique-object))
++modules-names-cxx += \
+   tst-dlopen-nodelete-reloc-mod1 \
+   tst-dlopen-nodelete-reloc-mod10 \
+   tst-dlopen-nodelete-reloc-mod11 \
+@@ -907,13 +920,8 @@ modules-names-cxx = \
+   tst-dlopen-nodelete-reloc-mod7 \
+   tst-dlopen-nodelete-reloc-mod8 \
+   tst-dlopen-nodelete-reloc-mod9 \
+-  tst-nodelete-rtldmod \
+-  tst-nodelete-uniquemod \
+-  tst-nodelete-zmod \
+-  tst-unique3lib \
+-  tst-unique3lib2 \
+-  tst-unique4lib \
+   # modules-names-cxx
++endif
+ 
+ modules-names += \
+   $(if $(CXX),$(modules-names-cxx)) \
+-- 
+2.37.2
+

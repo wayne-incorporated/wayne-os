@@ -1,0 +1,625 @@
+commit 22a52dfddcefad4f275eb8ad1cc0e200074c2d8a
+Author: Duncan P. N. Exon Smith <dexonsmith@apple.com>
+Date:   Thu Feb 11 08:23:39 2021 -0800
+
+    TransformUtils: Fix metadata handling in CloneModule (and improve CloneFunctionInto)
+    
+    This commit fixes how metadata is handled in CloneModule to be sound,
+    and improves how it's handled in CloneFunctionInto (although the latter
+    is still awkward when called within a module).
+    
+    Ruiling Song pointed out in PR48841 that CloneModule was changed to
+    unsoundly use the RF_ReuseAndMutateDistinctMDs flag (renamed in
+    fa35c1f80f0ea080a7cbc581416929b0a654f25c for clarity). This flag papered
+    over a crash caused by other various changes made to CloneFunctionInto
+    over the past few years that made it unsound to use cloning between
+    different modules.
+    
+    (This commit partially addresses PR48841, fixing the repro from
+    preprocessed source but not textual IR. MDNodeMapper::mapDistinctNode
+    became unsound in df763188c9a1ecb1e7e5c4d4ea53a99fbb755903 and this
+    commit does not address that regression.)
+    
+    RF_ReuseAndMutateDistinctMDs is designed for the IRMover to use,
+    avoiding unnecessary clones of all referenced metadata when linking
+    between modules (with IRMover, the source module is discarded after
+    linking). It never makes sense to use when you're not discarding the
+    source. This commit drops its incorrect use in CloneModule.
+    
+    Sadly, the right thing to do with metadata when cloning a function is
+    complicated, and this patch doesn't totally fix it.
+    
+    The first problem is that there are two different types of referenceable
+    metadata and it's not obvious what to with one of them when remapping.
+    
+    - `!0 = !{!1}` is metadata's version of a constant. Programatically it's
+      called "uniqued" (probably a better term would be "constant") because,
+      like `ConstantArray`, it's stored in uniquing tables. Once it's
+      constructed, it's illegal to change its arguments.
+    - `!0 = distinct !{!1}` is a bit closer to a global variable. It's legal
+      to change the operands after construction.
+    
+    What should be done with distinct metadata when cloning functions within
+    the same module?
+    
+    - Should new, cloned nodes be created?
+    - Should all references point to the same, old nodes?
+    
+    The answer depends on whether that metadata is effectively owned by a
+    function.
+    
+    And that's the second problem. Referenceable metadata's ownership model
+    is not clear or explicit. Technically, it's all stored on an
+    LLVMContext. However, any metadata that is `distinct`, that transitively
+    references a `distinct` node, or that transitively references a
+    GlobalValue is specific to a Module and is effectively owned by it. More
+    specifically, some metadata is effectively owned by a specific Function
+    within a module.
+    
+    Effectively function-local metadata was introduced somewhere around
+    c10d0e5ccd12f049bddb24dcf8bbb7fbbc6c68f2, which made it illegal for two
+    functions to share a DISubprogram attachment.
+    
+    When cloning a function within a module, you need to clone the
+    function-local debug info and suppress cloning of global debug info (the
+    status quo suppresses cloning some global debug info but not all). When
+    cloning a function to a new/different module, you need to clone all of
+    the debug info.
+    
+    Here's what I think we should do (eventually? soon? not this patch
+    though):
+    - Distinguish explicitly (somehow) between pure constant metadata owned
+      by the LLVMContext, global metadata owned by the Module, and local
+      metadata owned by a GlobalValue (such as a function).
+    - Update CloneFunctionInto to trigger cloning of all "local" metadata
+      (only), perhaps by adding a bit to RemapFlag. Alternatively, split
+      out a separate function CloneFunctionMetadataInto to prime the
+      metadata map that callers are updated to call ahead of time as
+      appropriate.
+    
+    Here's the somewhat more isolated fix in this patch:
+    - Converted the `ModuleLevelChanges` parameter to `CloneFunctionInto` to
+      an enum called `CloneFunctionChangeType` that is one of
+      LocalChangesOnly, GlobalChanges, DifferentModule, and ClonedModule.
+    - The code maintaining the "functions uniquely own subprograms"
+      invariant is now only active in the first two cases, where a function
+      is being cloned within a single module. That's necessary because this
+      code inhibits cloning of (some) "global" metadata that's effectively
+      owned by the module.
+    - The code maintaining the "all compile units must be explicitly
+      referenced by !llvm.dbg.cu" invariant is now only active in the
+      DifferentModule case, where a function is being cloned into a new
+      module in isolation.
+    - CoroSplit.cpp's call to CloneFunctionInto in CoroCloner::create
+      uses LocalChangeOnly, since fa635d730f74f3285b77cc1537f1692184b8bf5b
+      only set `ModuleLevelChanges` to trigger cloning of local metadata.
+    - CloneModule drops its unsound use of RF_ReuseAndMutateDistinctMDs
+      and special handling of !llvm.dbg.cu.
+    - Fixed some outdated header docs and left a couple of FIXMEs.
+    
+    Differential Revision: https://reviews.llvm.org/D96531
+
+diff --git a/llvm/include/llvm/Transforms/Utils/Cloning.h b/llvm/include/llvm/Transforms/Utils/Cloning.h
+index 56aaa5d48e2a..401b235e3490 100644
+--- a/llvm/include/llvm/Transforms/Utils/Cloning.h
++++ b/llvm/include/llvm/Transforms/Utils/Cloning.h
+@@ -119,24 +119,45 @@ BasicBlock *CloneBasicBlock(const BasicBlock *BB, ValueToValueMapTy &VMap,
+ /// values.  The final argument captures information about the cloned code if
+ /// non-null.
+ ///
+-/// VMap contains no non-identity GlobalValue mappings and debug info metadata
+-/// will not be cloned.
++/// \pre VMap contains no non-identity GlobalValue mappings.
+ ///
+ Function *CloneFunction(Function *F, ValueToValueMapTy &VMap,
+                         ClonedCodeInfo *CodeInfo = nullptr);
+ 
++enum class CloneFunctionChangeType {
++  LocalChangesOnly,
++  GlobalChanges,
++  DifferentModule,
++  ClonedModule,
++};
++
+ /// Clone OldFunc into NewFunc, transforming the old arguments into references
+ /// to VMap values.  Note that if NewFunc already has basic blocks, the ones
+ /// cloned into it will be added to the end of the function.  This function
+ /// fills in a list of return instructions, and can optionally remap types
+ /// and/or append the specified suffix to all values cloned.
+ ///
+-/// If ModuleLevelChanges is false, VMap contains no non-identity GlobalValue
+-/// mappings.
++/// If \p Changes is \a CloneFunctionChangeType::LocalChangesOnly, VMap is
++/// required to contain no non-identity GlobalValue mappings. Otherwise,
++/// referenced metadata will be cloned.
++///
++/// If \p Changes is less than \a CloneFunctionChangeType::DifferentModule
++/// indicating cloning into the same module (even if it's LocalChangesOnly), if
++/// debug info metadata transitively references a \a DISubprogram, it will be
++/// cloned, effectively upgrading \p Changes to GlobalChanges while suppressing
++/// cloning of types and compile units.
++///
++/// If \p Changes is \a CloneFunctionChangeType::DifferentModule, the new
++/// module's \c !llvm.dbg.cu will get updated with any newly created compile
++/// units. (\a CloneFunctionChangeType::ClonedModule leaves that work for the
++/// caller.)
+ ///
++/// FIXME: Consider simplifying this function by splitting out \a
++/// CloneFunctionMetadataInto() and expecting / updating callers to call it
++/// first when / how it's needed.
+ void CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+-                       ValueToValueMapTy &VMap, bool ModuleLevelChanges,
+-                       SmallVectorImpl<ReturnInst*> &Returns,
++                       ValueToValueMapTy &VMap, CloneFunctionChangeType Changes,
++                       SmallVectorImpl<ReturnInst *> &Returns,
+                        const char *NameSuffix = "",
+                        ClonedCodeInfo *CodeInfo = nullptr,
+                        ValueMapTypeRemapper *TypeMapper = nullptr,
+diff --git a/llvm/lib/ExecutionEngine/Orc/IndirectionUtils.cpp b/llvm/lib/ExecutionEngine/Orc/IndirectionUtils.cpp
+index 1cfcf8ae943d..e8dd1bb90c9a 100644
+--- a/llvm/lib/ExecutionEngine/Orc/IndirectionUtils.cpp
++++ b/llvm/lib/ExecutionEngine/Orc/IndirectionUtils.cpp
+@@ -316,8 +316,9 @@ void moveFunctionBody(Function &OrigF, ValueToValueMapTy &VMap,
+          "modules.");
+ 
+   SmallVector<ReturnInst *, 8> Returns; // Ignore returns cloned.
+-  CloneFunctionInto(NewF, &OrigF, VMap, /*ModuleLevelChanges=*/true, Returns,
+-                    "", nullptr, nullptr, Materializer);
++  CloneFunctionInto(NewF, &OrigF, VMap,
++                    CloneFunctionChangeType::DifferentModule, Returns, "",
++                    nullptr, nullptr, Materializer);
+   OrigF.deleteBody();
+ }
+ 
+diff --git a/llvm/lib/Target/AMDGPU/R600OpenCLImageTypeLoweringPass.cpp b/llvm/lib/Target/AMDGPU/R600OpenCLImageTypeLoweringPass.cpp
+index 5fd912e0fb39..8f1a069c232d 100644
+--- a/llvm/lib/Target/AMDGPU/R600OpenCLImageTypeLoweringPass.cpp
++++ b/llvm/lib/Target/AMDGPU/R600OpenCLImageTypeLoweringPass.cpp
+@@ -301,7 +301,8 @@ class R600OpenCLImageTypeLoweringPass : public ModulePass {
+       }
+     }
+     SmallVector<ReturnInst*, 8> Returns;
+-    CloneFunctionInto(NewF, F, VMap, /*ModuleLevelChanges=*/false, Returns);
++    CloneFunctionInto(NewF, F, VMap, CloneFunctionChangeType::LocalChangesOnly,
++                      Returns);
+ 
+     // Build new MDNode.
+     SmallVector<Metadata *, 6> KernelMDArgs;
+diff --git a/llvm/lib/Transforms/Coroutines/CoroSplit.cpp b/llvm/lib/Transforms/Coroutines/CoroSplit.cpp
+index 5cafe8c5021c..04f426db8421 100644
+--- a/llvm/lib/Transforms/Coroutines/CoroSplit.cpp
++++ b/llvm/lib/Transforms/Coroutines/CoroSplit.cpp
+@@ -840,7 +840,8 @@ void CoroCloner::create() {
+   auto savedLinkage = NewF->getLinkage();
+   NewF->setLinkage(llvm::GlobalValue::ExternalLinkage);
+ 
+-  CloneFunctionInto(NewF, &OrigF, VMap, /*ModuleLevelChanges=*/true, Returns);
++  CloneFunctionInto(NewF, &OrigF, VMap,
++                    CloneFunctionChangeType::LocalChangesOnly, Returns);
+ 
+   NewF->setLinkage(savedLinkage);
+   NewF->setVisibility(savedVisibility);
+diff --git a/llvm/lib/Transforms/IPO/Attributor.cpp b/llvm/lib/Transforms/IPO/Attributor.cpp
+index ba2423ab6b5e..ecbe59a7f360 100644
+--- a/llvm/lib/Transforms/IPO/Attributor.cpp
++++ b/llvm/lib/Transforms/IPO/Attributor.cpp
+@@ -1527,7 +1527,8 @@ static Function *internalizeFunction(Function &F) {
+   SmallVector<ReturnInst *, 8> Returns;
+ 
+   // Copy the body of the original function to the new one
+-  CloneFunctionInto(Copied, &F, VMap, /* ModuleLevelChanges */ false, Returns);
++  CloneFunctionInto(Copied, &F, VMap, CloneFunctionChangeType::LocalChangesOnly,
++                    Returns);
+ 
+   // Set the linakage and visibility late as CloneFunctionInto has some implicit
+   // requirements.
+diff --git a/llvm/lib/Transforms/Utils/CloneFunction.cpp b/llvm/lib/Transforms/Utils/CloneFunction.cpp
+index a953ba5c6b14..dd3d535850bc 100644
+--- a/llvm/lib/Transforms/Utils/CloneFunction.cpp
++++ b/llvm/lib/Transforms/Utils/CloneFunction.cpp
+@@ -83,8 +83,8 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB, ValueToValueMapTy &VMap,
+ //
+ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+                              ValueToValueMapTy &VMap,
+-                             bool ModuleLevelChanges,
+-                             SmallVectorImpl<ReturnInst*> &Returns,
++                             CloneFunctionChangeType Changes,
++                             SmallVectorImpl<ReturnInst *> &Returns,
+                              const char *NameSuffix, ClonedCodeInfo *CodeInfo,
+                              ValueMapTypeRemapper *TypeMapper,
+                              ValueMaterializer *Materializer) {
+@@ -95,6 +95,8 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+     assert(VMap.count(&I) && "No mapping from source argument specified!");
+ #endif
+ 
++  bool ModuleLevelChanges = Changes > CloneFunctionChangeType::LocalChangesOnly;
++
+   // Copy all attributes other than those stored in the AttributeList.  We need
+   // to remap the parameter indices of the AttributeList.
+   AttributeList NewAttrs = NewFunc->getAttributes();
+@@ -123,21 +125,37 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+       AttributeList::get(NewFunc->getContext(), OldAttrs.getFnAttributes(),
+                          OldAttrs.getRetAttributes(), NewArgAttrs));
+ 
+-  bool MustCloneSP =
+-      OldFunc->getParent() && OldFunc->getParent() == NewFunc->getParent();
+-  DISubprogram *SP = OldFunc->getSubprogram();
+-  if (SP) {
+-    assert(!MustCloneSP || ModuleLevelChanges);
+-    // Add mappings for some DebugInfo nodes that we don't want duplicated
+-    // even if they're distinct.
+-    auto &MD = VMap.MD();
+-    MD[SP->getUnit()].reset(SP->getUnit());
+-    MD[SP->getType()].reset(SP->getType());
+-    MD[SP->getFile()].reset(SP->getFile());
+-    // If we're not cloning into the same module, no need to clone the
+-    // subprogram
+-    if (!MustCloneSP)
+-      MD[SP].reset(SP);
++  // When we remap instructions within the same module, we want to avoid
++  // duplicating inlined DISubprograms, so record all subprograms we find as we
++  // duplicate instructions and then freeze them in the MD map. We also record
++  // information about dbg.value and dbg.declare to avoid duplicating the
++  // types.
++  Optional<DebugInfoFinder> DIFinder;
++
++  // Track the subprogram attachment that needs to be cloned to fine-tune the
++  // mapping within the same module.
++  DISubprogram *SPClonedWithinModule = nullptr;
++  if (Changes < CloneFunctionChangeType::DifferentModule) {
++    assert((NewFunc->getParent() == nullptr ||
++            NewFunc->getParent() == OldFunc->getParent()) &&
++           "Expected NewFunc to have the same parent, or no parent");
++
++    // Need to find subprograms, types, and compile units.
++    DIFinder.emplace();
++
++    SPClonedWithinModule = OldFunc->getSubprogram();
++  } else {
++    assert((NewFunc->getParent() == nullptr ||
++            NewFunc->getParent() != OldFunc->getParent()) &&
++           "Set SameModule to true if the new function is in the same module");
++
++    if (Changes == CloneFunctionChangeType::DifferentModule) {
++      assert(NewFunc->getParent() &&
++             "Need parent of new function to maintain debug info invariants");
++
++      // Need to find all the compile units.
++      DIFinder.emplace();
++    }
+   }
+ 
+   // Everything else beyond this point deals with function instructions,
+@@ -145,13 +163,6 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+   if (OldFunc->isDeclaration())
+     return;
+ 
+-  // When we remap instructions, we want to avoid duplicating inlined
+-  // DISubprograms, so record all subprograms we find as we duplicate
+-  // instructions and then freeze them in the MD map.
+-  // We also record information about dbg.value and dbg.declare to avoid
+-  // duplicating the types.
+-  DebugInfoFinder DIFinder;
+-
+   // Loop over all of the basic blocks in the function, cloning them as
+   // appropriate.  Note that we save BE this way in order to handle cloning of
+   // recursive functions into themselves.
+@@ -161,7 +172,7 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+ 
+     // Create a new basic block and copy instructions into it!
+     BasicBlock *CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo,
+-                                      ModuleLevelChanges ? &DIFinder : nullptr);
++                                      DIFinder ? &*DIFinder : nullptr);
+ 
+     // Add basic block mapping.
+     VMap[&BB] = CBB;
+@@ -183,15 +194,38 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+       Returns.push_back(RI);
+   }
+ 
+-  for (DISubprogram *ISP : DIFinder.subprograms())
+-    if (ISP != SP)
+-      VMap.MD()[ISP].reset(ISP);
++  if (Changes < CloneFunctionChangeType::DifferentModule &&
++      (SPClonedWithinModule || DIFinder->subprogram_count() > 0)) {
++    // Turn on module-level changes, since we need to clone (some of) the
++    // debug info metadata.
++    //
++    // FIXME: Metadata effectively owned by a function should be made
++    // local, and only that local metadata should be cloned.
++    ModuleLevelChanges = true;
++
++    auto mapToSelfIfNew = [&VMap](MDNode *N) {
++      // Avoid clobbering an existing mapping.
++      (void)VMap.MD().try_emplace(N, N);
++    };
++
++    // Avoid cloning what the subprogram references.
++    if (SPClonedWithinModule) {
++      mapToSelfIfNew(SPClonedWithinModule->getUnit());
++      mapToSelfIfNew(SPClonedWithinModule->getType());
++      mapToSelfIfNew(SPClonedWithinModule->getFile());
++    }
++
++    // Avoid cloning other subprograms, compile units, and types.
++    for (DISubprogram *ISP : DIFinder->subprograms())
++      if (ISP != SPClonedWithinModule)
++        mapToSelfIfNew(ISP);
+ 
+-  for (DICompileUnit *CU : DIFinder.compile_units())
+-    VMap.MD()[CU].reset(CU);
++    for (DICompileUnit *CU : DIFinder->compile_units())
++      mapToSelfIfNew(CU);
+ 
+-  for (DIType *Type : DIFinder.types())
+-    VMap.MD()[Type].reset(Type);
++    for (DIType *Type : DIFinder->types())
++      mapToSelfIfNew(Type);
++  }
+ 
+   // Duplicate the metadata that is attached to the cloned function.
+   // Subprograms/CUs/types that were already mapped to themselves won't be
+@@ -218,19 +252,33 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+                        ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
+                        TypeMapper, Materializer);
+ 
+-  // Register all DICompileUnits of the old parent module in the new parent module
+-  auto* OldModule = OldFunc->getParent();
++  // Only update !llvm.dbg.cu for DifferentModule (not CloneModule). In the
++  // same module, the compile unit will already be listed (or not). When
++  // cloning a module, CloneModule() will handle creating the named metadata.
++  if (Changes != CloneFunctionChangeType::DifferentModule)
++    return;
++
++  // Update !llvm.dbg.cu with compile units added to the new module if this
++  // function is being cloned in isolation.
++  //
++  // FIXME: This is making global / module-level changes, which doesn't seem
++  // like the right encapsulation  Consider dropping the requirement to update
++  // !llvm.dbg.cu (either obsoleting the node, or restricting it to
++  // non-discardable compile units) instead of discovering compile units by
++  // visiting the metadata attached to global values, which would allow this
++  // code to be deleted. Alternatively, perhaps give responsibility for this
++  // update to CloneFunctionInto's callers.
+   auto* NewModule = NewFunc->getParent();
+-  if (OldModule && NewModule && OldModule != NewModule && DIFinder.compile_unit_count()) {
+-    auto* NMD = NewModule->getOrInsertNamedMetadata("llvm.dbg.cu");
+-    // Avoid multiple insertions of the same DICompileUnit to NMD.
+-    SmallPtrSet<const void*, 8> Visited;
+-    for (auto* Operand : NMD->operands())
+-      Visited.insert(Operand);
+-    for (auto* Unit : DIFinder.compile_units())
+-      // VMap.MD()[Unit] == Unit
+-      if (Visited.insert(Unit).second)
+-        NMD->addOperand(Unit);
++  auto *NMD = NewModule->getOrInsertNamedMetadata("llvm.dbg.cu");
++  // Avoid multiple insertions of the same DICompileUnit to NMD.
++  SmallPtrSet<const void *, 8> Visited;
++  for (auto *Operand : NMD->operands())
++    Visited.insert(Operand);
++  for (auto *Unit : DIFinder->compile_units()) {
++    MDNode *MappedUnit =
++        MapMetadata(Unit, VMap, RF_None, TypeMapper, Materializer);
++    if (Visited.insert(MappedUnit).second)
++      NMD->addOperand(MappedUnit);
+   }
+ }
+ 
+@@ -269,8 +317,8 @@ Function *llvm::CloneFunction(Function *F, ValueToValueMapTy &VMap,
+     }
+ 
+   SmallVector<ReturnInst*, 8> Returns;  // Ignore returns cloned.
+-  CloneFunctionInto(NewF, F, VMap, F->getSubprogram() != nullptr, Returns, "",
+-                    CodeInfo);
++  CloneFunctionInto(NewF, F, VMap, CloneFunctionChangeType::LocalChangesOnly,
++                    Returns, "", CodeInfo);
+ 
+   return NewF;
+ }
+diff --git a/llvm/lib/Transforms/Utils/CloneModule.cpp b/llvm/lib/Transforms/Utils/CloneModule.cpp
+index 487cd4eae957..eb226b9b246d 100644
+--- a/llvm/lib/Transforms/Utils/CloneModule.cpp
++++ b/llvm/lib/Transforms/Utils/CloneModule.cpp
+@@ -120,13 +120,8 @@ std::unique_ptr<Module> llvm::CloneModule(
+ 
+     SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
+     G.getAllMetadata(MDs);
+-
+-    // FIXME: Stop using RF_ReuseAndMutateDistinctMDs here, since it's unsound
+-    // to mutate metadata that is still referenced by the source module unless
+-    // the source is about to be discarded (see IRMover for a valid use).
+     for (auto MD : MDs)
+-      GV->addMetadata(MD.first, *MapMetadata(MD.second, VMap,
+-                                             RF_ReuseAndMutateDistinctMDs));
++      GV->addMetadata(MD.first, *MapMetadata(MD.second, VMap));
+ 
+     if (G.isDeclaration())
+       continue;
+@@ -165,7 +160,8 @@ std::unique_ptr<Module> llvm::CloneModule(
+     }
+ 
+     SmallVector<ReturnInst *, 8> Returns; // Ignore returns cloned.
+-    CloneFunctionInto(F, &I, VMap, /*ModuleLevelChanges=*/true, Returns);
++    CloneFunctionInto(F, &I, VMap, CloneFunctionChangeType::ClonedModule,
++                      Returns);
+ 
+     if (I.hasPersonalityFn())
+       F->setPersonalityFn(MapValue(I.getPersonalityFn(), VMap));
+@@ -185,25 +181,13 @@ std::unique_ptr<Module> llvm::CloneModule(
+   }
+ 
+   // And named metadata....
+-  const auto* LLVM_DBG_CU = M.getNamedMetadata("llvm.dbg.cu");
+   for (Module::const_named_metadata_iterator I = M.named_metadata_begin(),
+                                              E = M.named_metadata_end();
+        I != E; ++I) {
+     const NamedMDNode &NMD = *I;
+     NamedMDNode *NewNMD = New->getOrInsertNamedMetadata(NMD.getName());
+-    if (&NMD == LLVM_DBG_CU) {
+-      // Do not insert duplicate operands.
+-      SmallPtrSet<const void*, 8> Visited;
+-      for (const auto* Operand : NewNMD->operands())
+-        Visited.insert(Operand);
+-      for (const auto* Operand : NMD.operands()) {
+-        auto* MappedOperand = MapMetadata(Operand, VMap);
+-        if (Visited.insert(MappedOperand).second)
+-          NewNMD->addOperand(MappedOperand);
+-      }
+-    } else
+-      for (unsigned i = 0, e = NMD.getNumOperands(); i != e; ++i)
+-        NewNMD->addOperand(MapMetadata(NMD.getOperand(i), VMap));
++    for (unsigned i = 0, e = NMD.getNumOperands(); i != e; ++i)
++      NewNMD->addOperand(MapMetadata(NMD.getOperand(i), VMap));
+   }
+ 
+   return New;
+diff --git a/llvm/unittests/Transforms/Utils/CloningTest.cpp b/llvm/unittests/Transforms/Utils/CloningTest.cpp
+index 016e772c2257..6bab80215c0b 100644
+--- a/llvm/unittests/Transforms/Utils/CloningTest.cpp
++++ b/llvm/unittests/Transforms/Utils/CloningTest.cpp
+@@ -177,7 +177,8 @@ TEST_F(CloneInstruction, Attributes) {
+   ValueToValueMapTy VMap;
+   VMap[A] = UndefValue::get(A->getType());
+ 
+-  CloneFunctionInto(F2, F1, VMap, false, Returns);
++  CloneFunctionInto(F2, F1, VMap, CloneFunctionChangeType::LocalChangesOnly,
++                    Returns);
+   EXPECT_FALSE(F2->arg_begin()->hasNoCaptureAttr());
+ 
+   delete F1;
+@@ -200,7 +201,8 @@ TEST_F(CloneInstruction, CallingConvention) {
+   ValueToValueMapTy VMap;
+   VMap[&*F1->arg_begin()] = &*F2->arg_begin();
+ 
+-  CloneFunctionInto(F2, F1, VMap, false, Returns);
++  CloneFunctionInto(F2, F1, VMap, CloneFunctionChangeType::LocalChangesOnly,
++                    Returns);
+   EXPECT_EQ(CallingConv::Cold, F2->getCallingConv());
+ 
+   delete F1;
+@@ -663,6 +665,28 @@ static int GetDICompileUnitCount(const Module& M) {
+   return 0;
+ }
+ 
++static bool haveCompileUnitsInCommon(const Module &LHS, const Module &RHS) {
++  const NamedMDNode *LHSCUs = LHS.getNamedMetadata("llvm.dbg.cu");
++  if (!LHSCUs)
++    return false;
++
++  const NamedMDNode *RHSCUs = RHS.getNamedMetadata("llvm.dbg.cu");
++  if (!RHSCUs)
++    return false;
++
++  SmallPtrSet<const MDNode *, 8> Found;
++  for (int I = 0, E = LHSCUs->getNumOperands(); I != E; ++I)
++    if (const MDNode *N = LHSCUs->getOperand(I))
++      Found.insert(N);
++
++  for (int I = 0, E = RHSCUs->getNumOperands(); I != E; ++I)
++    if (const MDNode *N = RHSCUs->getOperand(I))
++      if (Found.count(N))
++        return true;
++
++  return false;
++}
++
+ TEST(CloneFunction, CloneEmptyFunction) {
+   StringRef ImplAssembly = R"(
+     define void @foo() {
+@@ -684,7 +708,8 @@ TEST(CloneFunction, CloneEmptyFunction) {
+   ValueToValueMapTy VMap;
+   SmallVector<ReturnInst *, 8> Returns;
+   ClonedCodeInfo CCI;
+-  CloneFunctionInto(ImplFunction, DeclFunction, VMap, true, Returns, "", &CCI);
++  CloneFunctionInto(ImplFunction, DeclFunction, VMap,
++                    CloneFunctionChangeType::GlobalChanges, Returns, "", &CCI);
+ 
+   EXPECT_FALSE(verifyModule(*ImplModule, &errs()));
+   EXPECT_FALSE(CCI.ContainsCalls);
+@@ -715,7 +740,8 @@ TEST(CloneFunction, CloneFunctionWithInalloca) {
+   ValueToValueMapTy VMap;
+   SmallVector<ReturnInst *, 8> Returns;
+   ClonedCodeInfo CCI;
+-  CloneFunctionInto(DeclFunction, ImplFunction, VMap, true, Returns, "", &CCI);
++  CloneFunctionInto(DeclFunction, ImplFunction, VMap,
++                    CloneFunctionChangeType::GlobalChanges, Returns, "", &CCI);
+ 
+   EXPECT_FALSE(verifyModule(*ImplModule, &errs()));
+   EXPECT_TRUE(CCI.ContainsCalls);
+@@ -764,7 +790,8 @@ TEST(CloneFunction, CloneFunctionWithSubprograms) {
+   ValueToValueMapTy VMap;
+   SmallVector<ReturnInst *, 8> Returns;
+   ClonedCodeInfo CCI;
+-  CloneFunctionInto(NewFunc, OldFunc, VMap, true, Returns, "", &CCI);
++  CloneFunctionInto(NewFunc, OldFunc, VMap,
++                    CloneFunctionChangeType::GlobalChanges, Returns, "", &CCI);
+ 
+   // This fails if the scopes in the llvm.dbg.declare variable and location
+   // aren't the same.
+@@ -812,12 +839,14 @@ TEST(CloneFunction, CloneFunctionToDifferentModule) {
+   VMap[ImplFunction] = DeclFunction;
+   // No args to map
+   SmallVector<ReturnInst*, 8> Returns;
+-  CloneFunctionInto(DeclFunction, ImplFunction, VMap, true, Returns);
++  CloneFunctionInto(DeclFunction, ImplFunction, VMap,
++                    CloneFunctionChangeType::DifferentModule, Returns);
+ 
+   EXPECT_FALSE(verifyModule(*ImplModule, &errs()));
+   EXPECT_FALSE(verifyModule(*DeclModule, &errs()));
+-  // DICompileUnit !2 shall be inserted into DeclModule.
++  // DICompileUnit !2 shall be cloned into DeclModule.
+   EXPECT_TRUE(GetDICompileUnitCount(*DeclModule) == 1);
++  EXPECT_FALSE(haveCompileUnitsInCommon(*ImplModule, *DeclModule));
+ }
+ 
+ class CloneModule : public ::testing::Test {
+@@ -840,6 +869,16 @@ protected:
+     GV->addMetadata(LLVMContext::MD_type, *MDNode::get(C, {}));
+     GV->setComdat(CD);
+ 
++    {
++      // Add an empty compile unit first that isn't otherwise referenced, to
++      // confirm that compile units get cloned in the correct order.
++      DIBuilder EmptyBuilder(*OldM);
++      auto *File = EmptyBuilder.createFile("empty.c", "/file/dir/");
++      (void)EmptyBuilder.createCompileUnit(dwarf::DW_LANG_C99, File,
++                                           "EmptyUnit", false, "", 0);
++      EmptyBuilder.finalize();
++    }
++
+     DIBuilder DBuilder(*OldM);
+     IRBuilder<> IBuilder(C);
+ 
+@@ -894,6 +933,10 @@ protected:
+ };
+ 
+ TEST_F(CloneModule, Verify) {
++  // Confirm the old module is (still) valid.
++  EXPECT_FALSE(verifyModule(*OldM));
++
++  // Check the new module.
+   EXPECT_FALSE(verifyModule(*NewM));
+ }
+ 
+@@ -944,10 +987,19 @@ TEST_F(CloneModule, CompileUnit) {
+   // Find DICompileUnit listed in llvm.dbg.cu
+   auto *NMD = NewM->getNamedMetadata("llvm.dbg.cu");
+   EXPECT_TRUE(NMD != nullptr);
+-  EXPECT_EQ(NMD->getNumOperands(), 1U);
++  EXPECT_EQ(NMD->getNumOperands(), 2U);
++  EXPECT_FALSE(haveCompileUnitsInCommon(*OldM, *NewM));
++
++  // Check that the empty CU is first, even though it's not referenced except
++  // from named metadata.
++  DICompileUnit *EmptyCU = dyn_cast<llvm::DICompileUnit>(NMD->getOperand(0));
++  EXPECT_TRUE(EmptyCU != nullptr);
++  EXPECT_EQ("EmptyUnit", EmptyCU->getProducer());
+ 
+-  DICompileUnit *CU = dyn_cast<llvm::DICompileUnit>(NMD->getOperand(0));
++  // Get the interesting CU.
++  DICompileUnit *CU = dyn_cast<llvm::DICompileUnit>(NMD->getOperand(1));
+   EXPECT_TRUE(CU != nullptr);
++  EXPECT_EQ("CloneModule", CU->getProducer());
+ 
+   // Assert this CU is consistent with the cloned function debug info
+   DISubprogram *SP = NewM->getFunction("f")->getSubprogram();

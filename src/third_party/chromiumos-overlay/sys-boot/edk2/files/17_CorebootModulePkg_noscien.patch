@@ -1,0 +1,222 @@
+From daf1dc7ac79365e90ea0e617468df6bc66f7c728 Mon Sep 17 00:00:00 2001
+From: Benjamin You <benjamin.you@intel.com>
+Date: Mon, 4 Jun 2018 11:23:21 +0800
+Subject: [PATCH] UPSTREAM: CorebootModulePkg/CbSupportDxe: Remove SCI_EN
+ setting
+
+Current implemenation sets PM1_CNT.SCI_EN bit at ReadyToBoot event.
+However, this should not be done because this causes OS to skip triggering
+FADT.SMI_CMD, which leads to the functions implemented in the SMI
+handler being omitted.
+
+This issue was identified by Matt Delco <delco@google.com>.
+
+The fix does the following:
+- The SCI_EN bit setting is removed from CbSupportDxe driver.
+- Some additional checks are added in CbParseFadtInfo() in CbParseLib.c to
+  output some error message and ASSERT (FALSE) if ALL of the following
+  conditions are met:
+  1) HARDWARE_REDUCED_ACPI is not set;
+  2) SMI_CMD field is zero;
+  3) SCI_EN bit is zero;
+  which indicates the ACPI enabling status is inconsistent: SCI is not
+  enabled but the ACPI table does not provide a means to enable it through
+  FADT->SMI_CMD. This may cause issues in OS.
+
+Cc: Maurice Ma <maurice.ma@intel.com>
+Cc: Prince Agyeman <prince.agyeman@intel.com>
+Cc: Matt Delco <delco@google.com>
+Contributed-under: TianoCore Contribution Agreement 1.0
+Signed-off-by: Benjamin You <benjamin.you@intel.com>
+Reviewed-by: Maurice Ma <maurice.ma@intel.com>
+Reviewed-by: Matt Delco <delco@google.com>
+
+BUG=None
+TEST=Build and Boot
+
+(cherry picked from commit 271d8cd7df0c346f19803938d98fe7cbb7b63be4)
+Signed-off-by: Matt Delco <delco@chromium.org>
+Change-Id: Id4de3c3c08d6ffeb6e57bfcc0836b090dc73179d
+---
+ CorebootModulePkg/CbSupportDxe/CbSupportDxe.c | 51 -------------------
+ .../CbSupportDxe/CbSupportDxe.inf             |  1 -
+ .../Library/CbParseLib/CbParseLib.c           | 34 +++++++++++++
+ .../Library/CbParseLib/CbParseLib.inf         |  3 +-
+ 4 files changed, 36 insertions(+), 53 deletions(-)
+ mode change 100755 => 100644 CorebootModulePkg/CbSupportDxe/CbSupportDxe.c
+
+diff --git a/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c b/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c
+old mode 100755
+new mode 100644
+index 24bacf815c..bcc27d3a09
+--- a/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c
++++ b/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c
+@@ -14,7 +14,6 @@
+ **/
+ #include "CbSupportDxe.h"
+ 
+-UINTN mPmCtrlReg = 0;
+ /**
+   Reserve MMIO/IO resource in GCD
+ 
+@@ -86,31 +85,6 @@ CbReserveResourceInGcd (
+   return Status;
+ }
+ 
+-/**
+-  Notification function of EVT_GROUP_READY_TO_BOOT event group.
+-
+-  This is a notification function registered on EVT_GROUP_READY_TO_BOOT event group.
+-  When the Boot Manager is about to load and execute a boot option, it reclaims variable
+-  storage if free size is below the threshold.
+-
+-  @param  Event        Event whose notification function is being invoked.
+-  @param  Context      Pointer to the notification function's context.
+-
+-**/
+-VOID
+-EFIAPI
+-OnReadyToBoot (
+-  IN  EFI_EVENT  Event,
+-  IN  VOID       *Context
+-  )
+-{
+-  //
+-  // Enable SCI
+-  //
+-  IoOr16 (mPmCtrlReg, BIT0);
+-
+-  DEBUG ((EFI_D_ERROR, "Enable SCI bit at 0x%lx before boot\n", (UINT64)mPmCtrlReg));
+-}
+ 
+ /**
+   Main entry for the Coreboot Support DXE module.
+@@ -130,10 +104,8 @@ CbDxeEntryPoint (
+   )
+ {
+   EFI_STATUS Status;
+-  EFI_EVENT  ReadyToBootEvent;
+   EFI_HOB_GUID_TYPE  *GuidHob;
+   SYSTEM_TABLE_INFO  *pSystemTableInfo;
+-  ACPI_BOARD_INFO    *pAcpiBoardInfo;
+   FRAME_BUFFER_INFO  *FbInfo;
+ 
+   Status = EFI_SUCCESS;
+@@ -174,16 +146,6 @@ CbDxeEntryPoint (
+     ASSERT_EFI_ERROR (Status);
+   }
+ 
+-  //
+-  // Find the acpi board information guid hob
+-  //
+-  GuidHob = GetFirstGuidHob (&gUefiAcpiBoardInfoGuid);
+-  ASSERT (GuidHob != NULL);
+-  pAcpiBoardInfo = (ACPI_BOARD_INFO *)GET_GUID_HOB_DATA (GuidHob);
+-
+-  mPmCtrlReg = (UINTN)pAcpiBoardInfo->PmCtrlRegBase;
+-  DEBUG ((EFI_D_ERROR, "PmCtrlReg at 0x%lx\n", (UINT64)mPmCtrlReg));
+-
+   //
+   // Find the frame buffer information and update PCDs
+   //
+@@ -200,19 +162,6 @@ CbDxeEntryPoint (
+     ASSERT_EFI_ERROR (Status);
+   }
+ 
+-  //
+-  // Register callback on the ready to boot event
+-  // in order to enable SCI
+-  //
+-  ReadyToBootEvent = NULL;
+-  Status = EfiCreateEventReadyToBootEx (
+-                    TPL_CALLBACK,
+-                    OnReadyToBoot,
+-                    NULL,
+-                    &ReadyToBootEvent
+-                    );
+-  ASSERT_EFI_ERROR (Status);
+-
+   return EFI_SUCCESS;
+ }
+ 
+diff --git a/CorebootModulePkg/CbSupportDxe/CbSupportDxe.inf b/CorebootModulePkg/CbSupportDxe/CbSupportDxe.inf
+index 99245183ea..15b0dac774 100644
+--- a/CorebootModulePkg/CbSupportDxe/CbSupportDxe.inf
++++ b/CorebootModulePkg/CbSupportDxe/CbSupportDxe.inf
+@@ -46,7 +46,6 @@
+   DebugLib
+   BaseMemoryLib
+   UefiLib
+-  IoLib
+   HobLib
+ 
+ [Guids]
+diff --git a/CorebootModulePkg/Library/CbParseLib/CbParseLib.c b/CorebootModulePkg/Library/CbParseLib/CbParseLib.c
+index 0909b0f492..da227dea5e 100644
+--- a/CorebootModulePkg/Library/CbParseLib/CbParseLib.c
++++ b/CorebootModulePkg/Library/CbParseLib/CbParseLib.c
+@@ -18,6 +18,7 @@
+ #include <Library/BaseMemoryLib.h>
+ #include <Library/DebugLib.h>
+ #include <Library/PcdLib.h>
++#include <Library/IoLib.h>
+ #include <Library/CbParseLib.h>
+ 
+ #include <IndustryStandard/Acpi.h>
+@@ -477,6 +478,39 @@ CbParseFadtInfo (
+         ASSERT(Fadt->Pm1aEvtBlk != 0);
+         ASSERT(Fadt->Gpe0Blk != 0);
+ 
++        DEBUG_CODE_BEGIN ();
++          BOOLEAN    SciEnabled;
++
++          //
++          // Check the consistency of SCI enabling
++          //
++
++          //
++          // Get SCI_EN value
++          //
++          if (Fadt->Pm1CntLen == 4) {
++            SciEnabled = (IoRead32 (Fadt->Pm1aCntBlk) & BIT0)? TRUE : FALSE;
++          } else {
++            //
++            // if (Pm1CntLen == 2), use 16 bit IO read;
++            // if (Pm1CntLen != 2 && Pm1CntLen != 4), use 16 bit IO read as a fallback
++            //
++            SciEnabled = (IoRead16 (Fadt->Pm1aCntBlk) & BIT0)? TRUE : FALSE;
++          }
++
++          if (!(Fadt->Flags & EFI_ACPI_5_0_HW_REDUCED_ACPI) &&
++              (Fadt->SmiCmd == 0) &&
++              !SciEnabled) {
++            //
++            // The ACPI enabling status is inconsistent: SCI is not enabled but ACPI
++            // table does not provide a means to enable it through FADT->SmiCmd
++            //
++            DEBUG ((DEBUG_ERROR, "ERROR: The ACPI enabling status is inconsistent: SCI is not"
++              " enabled but the ACPI table does not provide a means to enable it through FADT->SmiCmd."
++              " This may cause issues in OS.\n"));
++            ASSERT (FALSE);
++          }
++        DEBUG_CODE_END ();
+         return RETURN_SUCCESS;
+       }
+     }
+diff --git a/CorebootModulePkg/Library/CbParseLib/CbParseLib.inf b/CorebootModulePkg/Library/CbParseLib/CbParseLib.inf
+index d7146a415b..25b847946c 100644
+--- a/CorebootModulePkg/Library/CbParseLib/CbParseLib.inf
++++ b/CorebootModulePkg/Library/CbParseLib/CbParseLib.inf
+@@ -37,7 +37,8 @@
+ [LibraryClasses]
+   BaseLib
+   BaseMemoryLib
+-  DebugLib
++  IoLib
++  DebugLib
+   PcdLib
+ 
+ [Pcd]    
+-- 
+2.19.0.rc2.392.g5ba43deb5a-goog
+

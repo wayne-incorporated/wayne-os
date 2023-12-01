@@ -1,0 +1,38 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+executable("executor-delegate") {
+  sources = [
+    "delegate_impl.cc",
+    "delegate_main.cc",
+  ]
+  assert_no_deps = [
+    "//diagnostics/cros_healthd:*",
+    "//diagnostics/cros_healthd/event/*",
+    "//diagnostics/cros_healthd/executor/*",
+    "//diagnostics/cros_healthd/fetchers/*",
+    "//diagnostics/cros_healthd/minijail/*",
+    "//diagnostics/cros_healthd/network/*",
+    "//diagnostics/cros_healthd/network_diagnostics/*",
+    "//diagnostics/cros_healthd/process/*",
+    "//diagnostics/cros_healthd/routines/*",
+    "//diagnostics/cros_healthd/system/*",
+    "//diagnostics/cros_healthd/utils/*",
+    "//diagnostics/cros_healthd/welco_ec/*",
+  ]
+  install_path = "/usr/libexec/diagnostics"
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libdrm",
+    "libec",
+    "libmojo",
+  ]
+  deps = [
+    "//diagnostics/cros_healthd/delegate/fetchers",
+    "//diagnostics/cros_healthd/delegate/routines",
+    "//diagnostics/cros_healthd/delegate/utils",
+    "//diagnostics/cros_healthd/mojom:cros_healthd_executor_mojo_bindings",
+  ]
+}

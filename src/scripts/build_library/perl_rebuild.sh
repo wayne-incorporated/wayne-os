@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2017 The Chromium OS Authors. All rights reserved.
+# Copyright 2017 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 # Usage: simply run `perl_rebuild.sh` inside chroot without any argument.
 
 SCRIPT_ROOT="$(readlink -f "$(dirname "$0")/..")"
+# shellcheck source=../common.sh
 . "${SCRIPT_ROOT}/common.sh" || exit 1
 
 perl_rebuild() {
@@ -28,6 +29,7 @@ perl_rebuild() {
       sudo qmerge -Uyq "${pkgs[@]}"
     fi
     sudo perl-cleaner --all -- --quiet
+    sudo find /usr/lib*/perl5/vendor_perl -type d -empty -delete
   fi
 }
 

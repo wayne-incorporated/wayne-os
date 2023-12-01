@@ -1,0 +1,56 @@
+#
+# Copyright 2021 The ChromiumOS Authors
+#
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+audio-common: &audio_common
+  $cras-root: "/etc/cras"
+  $ucm-root: "/usr/share/alsa/ucm"
+  $card1: "avs_max98357a"
+  $card2: "avs_da7219"
+  $card3: "avs_dmic"
+  $card4: "hdaudioB0D2"
+  # Both source/target path for cras files.
+  # Generally set to device name or 'common'
+  $cras: "{{$device-name}}"
+  $ucm: "1mic" # Default
+  $ucm-device: "common"
+  $ucm-target-suffix: ""
+  $ucm-suffix-path: "/{{$ucm}}"
+  cras-config-dir: "{{$cras}}"
+  ucm-suffix: "{{$ucm}}{{$ucm-target-suffix}}"
+  $cras-source: "{{cras-config-dir}}/audio/cras-config"
+  $cras-dest: "{{$cras-root}}/{{cras-config-dir}}"
+  $ucm-source1: "{{$ucm-device}}/audio/ucm-config{{$ucm-suffix-path}}/{{$card1}}"
+  $ucm-source2: "{{$ucm-device}}/audio/ucm-config{{$ucm-suffix-path}}/{{$card2}}"
+  $ucm-source3: "{{$ucm-device}}/audio/ucm-config{{$ucm-suffix-path}}/{{$card3}}"
+  $ucm-source4: "{{$ucm-device}}/audio/ucm-config{{$ucm-suffix-path}}/{{$card4}}"
+  $ucm-dest1: "{{$ucm-root}}/{{$card1}}.{{ucm-suffix}}"
+  $ucm-dest2: "{{$ucm-root}}/{{$card2}}.{{ucm-suffix}}"
+  $ucm-dest3: "{{$ucm-root}}/{{$card3}}.{{ucm-suffix}}"
+  $ucm-dest4: "{{$ucm-root}}/{{$card4}}.{{ucm-suffix}}"
+  files:
+    - source: "{{$cras-source}}/{{$card1}}"
+      destination: "{{$cras-dest}}/{{$card1}}"
+    - source: "{{$cras-source}}/{{$card2}}"
+      destination: "{{$cras-dest}}/{{$card2}}"
+    - source: "{{$cras-source}}/dsp.ini"
+      destination: "{{$cras-dest}}/dsp.ini"
+    - source: "{{$ucm-source1}}/HiFi"
+      destination: "{{$ucm-dest1}}/HiFi"
+    - source: "{{$ucm-source1}}/{{$card1}}.conf"
+      destination: "{{$ucm-dest1}}/{{$card1}}.{{ucm-suffix}}.conf"
+    - source: "{{$ucm-source2}}/HiFi"
+      destination: "{{$ucm-dest2}}/HiFi"
+    - source: "{{$ucm-source2}}/{{$card2}}.conf"
+      destination: "{{$ucm-dest2}}/{{$card2}}.{{ucm-suffix}}.conf"
+    - source: "{{$ucm-source3}}/HiFi"
+      destination: "{{$ucm-dest3}}/HiFi"
+    - source: "{{$ucm-source3}}/{{$card3}}.conf"
+      destination: "{{$ucm-dest3}}/{{$card3}}.{{ucm-suffix}}.conf"
+    - source: "{{$ucm-source4}}/HiFi"
+      destination: "{{$ucm-dest4}}/HiFi"
+    - source: "{{$ucm-source4}}/{{$card4}}.conf"
+      destination: "{{$ucm-dest4}}/{{$card4}}.{{ucm-suffix}}.conf"
+

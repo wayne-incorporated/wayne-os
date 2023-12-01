@@ -1,0 +1,102 @@
+commit 6d33362dafb66b3af4717990d9a06450ec13f367
+Author: Jordan Rupprecht <rupprecht@google.com>
+Date:   Tue Jun 15 07:55:23 2021 -0700
+
+    [libcxx][atomic] Fix failure mapping in compare_exchange_{strong,weak}.
+    
+    https://eel.is/c++draft/atomics.types.operations#23 says: ... the value of failure is order except that a value of `memory_order::acq_rel` shall be replaced by the value `memory_order::acquire` and a value of `memory_order::release` shall be replaced by the value `memory_order::relaxed`.
+    
+    This failure mapping is only handled for `_LIBCPP_HAS_GCC_ATOMIC_IMP`. We are seeing bad code generation for `compare_exchange_strong(cmp, 1, std::memory_order_acq_rel)` when using libc++ in place of libstdc++: https://godbolt.org/z/v3onrrq4G.
+    
+    This was caught by tsan tests after D99434, `[TSAN] Honor failure memory orders in AtomicCAS`, but appears to be an issue in non-tsan code.
+    
+    Reviewed By: ldionne, dvyukov
+    
+    Differential Revision: https://reviews.llvm.org/D103846
+
+diff --git a/libcxx/include/atomic b/libcxx/include/atomic
+index 2f47f6b17b2a..90bed4f94766 100644
+--- a/libcxx/include/atomic
++++ b/libcxx/include/atomic
+@@ -1017,26 +1017,33 @@ _Tp __cxx_atomic_exchange(__cxx_atomic_base_impl<_Tp> * __a, _Tp __value, memory
+     return __c11_atomic_exchange(&__a->__a_value, __value, static_cast<__memory_order_underlying_t>(__order));
+ }
+ 
++_LIBCPP_INLINE_VISIBILITY inline _LIBCPP_CONSTEXPR memory_order __to_failure_order(memory_order __order) {
++  // Avoid switch statement to make this a constexpr.
++  return __order == memory_order_release ? memory_order_relaxed:
++         (__order == memory_order_acq_rel ? memory_order_acquire:
++             __order);
++}
++
+ template<class _Tp>
+ _LIBCPP_INLINE_VISIBILITY
+ bool __cxx_atomic_compare_exchange_strong(__cxx_atomic_base_impl<_Tp> volatile* __a, _Tp* __expected, _Tp __value, memory_order __success, memory_order __failure) _NOEXCEPT {
+-    return __c11_atomic_compare_exchange_strong(&__a->__a_value, __expected, __value, static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__failure));
++    return __c11_atomic_compare_exchange_strong(&__a->__a_value, __expected, __value, static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__to_failure_order(__failure)));
+ }
+ template<class _Tp>
+ _LIBCPP_INLINE_VISIBILITY
+ bool __cxx_atomic_compare_exchange_strong(__cxx_atomic_base_impl<_Tp> * __a, _Tp* __expected, _Tp __value, memory_order __success, memory_order __failure) _NOEXCEPT {
+-    return __c11_atomic_compare_exchange_strong(&__a->__a_value, __expected, __value, static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__failure));
++    return __c11_atomic_compare_exchange_strong(&__a->__a_value, __expected, __value, static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__to_failure_order(__failure)));
+ }
+ 
+ template<class _Tp>
+ _LIBCPP_INLINE_VISIBILITY
+ bool __cxx_atomic_compare_exchange_weak(__cxx_atomic_base_impl<_Tp> volatile* __a, _Tp* __expected, _Tp __value, memory_order __success, memory_order __failure) _NOEXCEPT {
+-    return __c11_atomic_compare_exchange_weak(&__a->__a_value, __expected, __value, static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__failure));
++    return __c11_atomic_compare_exchange_weak(&__a->__a_value, __expected, __value, static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__to_failure_order(__failure)));
+ }
+ template<class _Tp>
+ _LIBCPP_INLINE_VISIBILITY
+ bool __cxx_atomic_compare_exchange_weak(__cxx_atomic_base_impl<_Tp> * __a, _Tp* __expected, _Tp __value, memory_order __success, memory_order __failure) _NOEXCEPT {
+-    return __c11_atomic_compare_exchange_weak(&__a->__a_value, __expected, __value,  static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__failure));
++    return __c11_atomic_compare_exchange_weak(&__a->__a_value, __expected, __value,  static_cast<__memory_order_underlying_t>(__success), static_cast<__memory_order_underlying_t>(__to_failure_order(__failure)));
+ }
+ 
+ template<class _Tp>
+diff --git a/libcxx/test/std/atomics/atomics.general/replace_failure_order_codegen.sh.cpp b/libcxx/test/std/atomics/atomics.general/replace_failure_order_codegen.sh.cpp
+new file mode 100644
+index 000000000000..a4e9e447f2a3
+--- /dev/null
++++ b/libcxx/test/std/atomics/atomics.general/replace_failure_order_codegen.sh.cpp
+@@ -0,0 +1,38 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// REQUIRES: clang
++// UNSUPPORTED: libcpp-has-no-threads
++
++// Adding "-fsanitize=thread" directly causes many platforms to fail (because
++// they don't support tsan), and causes other sanitizer builds to fail (e.g.
++// asan and tsan don't mix). Instead, require the tsan feature.
++// REQUIRES: tsan
++
++// This test verifies behavior specified by [atomics.types.operations.req]/21:
++//
++//     When only one memory_order argument is supplied, the value of success is
++//     order, and the value of failure is order except that a value of
++//     memory_order_acq_rel shall be replaced by the value memory_order_acquire
++//     and a value of memory_order_release shall be replaced by the value
++//     memory_order_relaxed.
++//
++// This test mirrors replace_failure_order.pass.cpp. However, we also want to
++// verify the codegen is correct. This verifies a bug where memory_order_acq_rel
++// was not being replaced with memory_order_acquire in external
++// TSAN-instrumented tests.
++
++// RUN: %{cxx} -c %s %{flags} %{compile_flags} -O2 -stdlib=libc++ -S -emit-llvm -o %t.ll
++
++#include <atomic>
++
++// Note: libc++ tests do not use on FileCheck.
++// RUN: grep -E "call i32 @__tsan_atomic32_compare_exchange_val\(.*, i32 1, i32 4, i32 2\)" %t.ll
++bool strong_memory_order_acq_rel(std::atomic<int>* a, int cmp) {
++  return a->compare_exchange_strong(cmp, 1, std::memory_order_acq_rel);
++}

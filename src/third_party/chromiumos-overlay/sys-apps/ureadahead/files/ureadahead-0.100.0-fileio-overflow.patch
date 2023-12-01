@@ -1,0 +1,56 @@
+This patch adds fixes for 1 and 4 in chromium:216504
+1) adds O_NOFOLLOW tag to file open tags
+2) checks for negative overflows in num_paths while reading pack file
+
+--- a/src/pack.c
++++ b/src/pack.c
+@@ -383,7 +383,7 @@ write_pack (const char *filename,
+ 	/* Open the file, making sure we truncate it and give it a
+ 	 * sane mode
+ 	 */
+-	fd = open (filename, O_WRONLY | O_CREAT | O_TRUNC, 0600);
++	fd = open (filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+ 	if (fd < 0)
+ 		nih_return_system_error (-1);
+
+@@ -662,14 +662,16 @@ do_readahead (PackFile *file,
+ 	if (get_value (AT_FDCWD, "/proc/sys/fs/nr_open", &nr_open) < 0)
+ 		return -1;
+
+-	if ((size_t)(nr_open - 10) < file->num_paths) {
+-		file->num_paths = nr_open - 10;
++	int limit_increase = (nr_open < 10)? nr_open : 10;
++
++	if ((size_t)(nr_open - limit_increase) < file->num_paths) {
++		file->num_paths = nr_open - limit_increase;
+ 		nih_info ("Truncating to first %zu paths", file->num_paths);
+ 	}
+
+ 	/* Adjust our resource limits */
+-	nofile.rlim_cur = 10 + file->num_paths;
+-	nofile.rlim_max = 10 + file->num_paths;
++	nofile.rlim_cur = limit_increase + file->num_paths;
++	nofile.rlim_max = limit_increase + file->num_paths;
+
+ 	if (setrlimit (RLIMIT_NOFILE, &nofile) < 0)
+ 		nih_return_system_error (-1);
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -138,7 +138,7 @@ trace (int daemonise,
+ 	size_t              num_cpus = 0;
+
+ 	/* Mount debugfs if not already mounted */
+-	dfd = open (PATH_DEBUGFS "/tracing", O_RDONLY | O_NOATIME);
++	dfd = open (PATH_DEBUGFS "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
+ 	if (dfd < 0) {
+ 		if (errno != ENOENT)
+ 			nih_return_system_error (-1);
+@@ -146,7 +146,7 @@ trace (int daemonise,
+ 		if (mount ("none", PATH_DEBUGFS_TMP, "debugfs", 0, NULL) < 0)
+ 			nih_return_system_error (-1);
+
+-		dfd = open (PATH_DEBUGFS_TMP "/tracing", O_RDONLY | O_NOATIME);
++		dfd = open (PATH_DEBUGFS_TMP "/tracing", O_NOFOLLOW | O_RDONLY | O_NOATIME);
+ 		if (dfd < 0) {
+ 			nih_error_raise_system ();
+ 			umount (PATH_DEBUGFS_TMP);

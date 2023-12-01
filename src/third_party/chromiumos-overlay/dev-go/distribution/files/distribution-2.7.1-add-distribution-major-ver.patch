@@ -1,0 +1,41 @@
+From c689bdb8393173ea0797acc9004e3701996c72cf Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Sat, 16 Apr 2022 00:16:20 +0300
+Subject: [PATCH] distribution: add module major version
+
+Upstream docker does not yet support Go modules but in ChromeOS
+we want to enable modules across the tree. Doing this is
+relatively straightforward in projects, we just need to
+update the import paths to respect module requirements.
+
+The main requirement docker upstream does not respect is
+adding the major version of dependencies as suffixes in
+the import paths. For github.com/docker/distribution the
+major version suffix is v2.
+
+Fixing all docker code to properly support modules is a
+much bigger effort, but this is enough to get ChromeOS
+working. This patch should be dropped when docker finally
+supports modules.
+
+Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.com>
+---
+ reference/normalize.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/github.com/docker/distribution/v2/reference/normalize.go b/src/github.com/docker/distribution/v2/reference/normalize.go
+index 2d71fc5e..730e196a 100644
+--- a/src/github.com/docker/distribution/v2/reference/normalize.go
++++ b/src/github.com/docker/distribution/v2/reference/normalize.go
+@@ -5,7 +5,7 @@ import (
+ 	"fmt"
+ 	"strings"
+ 
+-	"github.com/docker/distribution/digestset"
++	"github.com/docker/distribution/v2/digestset"
+ 	"github.com/opencontainers/go-digest"
+ )
+ 
+-- 
+2.35.1
+

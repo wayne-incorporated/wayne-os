@@ -1,0 +1,82 @@
+commit 4559864897500193d2812cea7b66dc8daba0b836
+Author: Alex Richardson <alexrichardson@google.com>
+Date:   Mon Jun 20 15:44:57 2022 +0100
+
+    [libc++] Fix __regex_word value when using newlib/picolibc
+    
+    The ctype mask for newlib/picolibc is fully saturated, so __regex_word
+    has to overlap with one of the values. This commit uses the same workaround
+    as bionic did (uint16_t for char_class_type inside regex_traits). It
+    should be possible to have libc++ provide the default rune table instead,
+    but that will require a new mechanism to detect newlib inside __config
+    since the header defining the newlib/picolibc macros has not been included
+    yet inside __config. Doing it this way also avoids duplicating the ctype
+    table for newlib, reducing the global data size.
+    
+    Differential Revision: https://reviews.llvm.org/D138195
+
+diff --git a/libcxx/docs/ReleaseNotes.rst b/libcxx/docs/ReleaseNotes.rst
+index 584eed4c7ab7..aac5d500e503 100644
+--- a/libcxx/docs/ReleaseNotes.rst
++++ b/libcxx/docs/ReleaseNotes.rst
+@@ -130,6 +130,11 @@ ABI Affecting Changes
+   This ABI break only affects users that compile with ``-ffreestanding``, and only for ``atomic<T>`` where ``T``
+   is a non-builtin type that could be lockfree on the platform. See https://llvm.org/D133377 for more details.
+ 
++- When building libc++ against newlib/picolibc, the type of ``regex_type_traits::char_class_type`` was changed to
++  ``uint16_t`` since all values of ``ctype_base::mask`` are taken. This is technically an ABI break, but including
++  ``<regex> `` has triggered a ``static_assert`` failure since libc++ 14, so it is unlikely that this causes
++   problems for existing users.
++
+ Build System Changes
+ --------------------
+ - Support for ``libcxx``, ``libcxxabi`` and ``libunwind`` in ``LLVM_ENABLE_PROJECTS`` has officially
+diff --git a/libcxx/include/__locale b/libcxx/include/__locale
+index 242de1ad1a71..e02724c862e2 100644
+--- a/libcxx/include/__locale
++++ b/libcxx/include/__locale
+@@ -512,7 +512,8 @@ public:
+     static const mask punct  = _P;
+     static const mask xdigit = _X | _N;
+     static const mask blank  = _B;
+-    static const mask __regex_word = 0x80;
++    // mask is already fully saturated, use a different type in regex_type_traits.
++    static const unsigned short __regex_word = 0x100;
+ # define _LIBCPP_CTYPE_MASK_IS_COMPOSITE_PRINT
+ # define _LIBCPP_CTYPE_MASK_IS_COMPOSITE_ALPHA
+ # define _LIBCPP_CTYPE_MASK_IS_COMPOSITE_XDIGIT
+@@ -551,7 +552,8 @@ public:
+ 
+     _LIBCPP_INLINE_VISIBILITY ctype_base() {}
+ 
+-    static_assert((__regex_word & ~(space | print | cntrl | upper | lower | alpha | digit | punct | xdigit | blank)) == __regex_word,
++    static_assert((__regex_word & ~(std::make_unsigned<mask>::type)(space | print | cntrl | upper | lower | alpha |
++                                                                    digit | punct | xdigit | blank)) == __regex_word,
+                   "__regex_word can't overlap other bits");
+ };
+ 
+diff --git a/libcxx/include/regex b/libcxx/include/regex
+index 3c3a2e4a7948..f35197339ba9 100644
+--- a/libcxx/include/regex
++++ b/libcxx/include/regex
+@@ -1026,7 +1026,7 @@ public:
+     typedef _CharT                  char_type;
+     typedef basic_string<char_type> string_type;
+     typedef locale                  locale_type;
+-#ifdef __BIONIC__
++#if defined(__BIONIC__) || defined(_NEWLIB_VERSION)
+     // Originally bionic's ctype_base used its own ctype masks because the
+     // builtin ctype implementation wasn't in libc++ yet. Bionic's ctype mask
+     // was only 8 bits wide and already saturated, so it used a wider type here
+@@ -1035,6 +1035,11 @@ public:
+     // implementation, but this was not updated to match. Since then Android has
+     // needed to maintain a stable libc++ ABI, and this can't be changed without
+     // an ABI break.
++    // We also need this workaround for newlib since _NEWLIB_VERSION is not
++    // defined yet inside __config, so we can't set the
++    // _LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE macro. Additionally, newlib is
++    // often used for space constrained environments, so it makes sense not to
++    // duplicate the ctype table.
+     typedef uint16_t char_class_type;
+ #else
+     typedef ctype_base::mask        char_class_type;

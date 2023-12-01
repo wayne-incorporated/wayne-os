@@ -1,0 +1,27 @@
+commit 5d397b8e6dfd4165e4120bd2f18007756ed7a2a9
+Author: Gwendal Grignou <gwendal@chromium.org>
+Date:   Wed Nov 18 21:52:21 2020 -0800
+
+    Allowlist illuminance channel
+
+    Since libiio is unable to identify simple attributes as channel,
+    (see https://github.com/analogdevicesinc/libiio/issues/25),
+    add in_illuminance for iioservice to support light sensors like
+    acpi_als or cros_ec_light.
+
+    Signed-off-by: Gwendal Grignou <gwendal@chromium.org>
+
+diff --git a/local.c b/local.c
+index f7533fa..5b28573 100644
+--- a/local.c
++++ b/local.c
+@@ -1152,6 +1152,9 @@ static bool is_channel(const char *attr, bool strict)
+ 	char *ptr = NULL;
+ 	if (!strncmp(attr, "in_timestamp_", sizeof("in_timestamp_") - 1))
+ 		return true;
++	if (!strncmp(attr, "in_illuminance_", sizeof("in_illuminance_") - 1))
++		return true;
++
+ 	if (!strncmp(attr, "in_", 3))
+ 		ptr = strchr(attr + 3, '_');
+ 	else if (!strncmp(attr, "out_", 4))

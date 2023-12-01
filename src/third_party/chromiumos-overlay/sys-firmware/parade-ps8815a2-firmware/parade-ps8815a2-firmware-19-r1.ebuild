@@ -1,0 +1,1 @@
+parade-ps8815a2-firmware-19.ebuild

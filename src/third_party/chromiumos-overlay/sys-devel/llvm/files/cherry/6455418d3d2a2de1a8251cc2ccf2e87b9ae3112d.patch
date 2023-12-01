@@ -1,0 +1,27 @@
+commit 6455418d3d2a2de1a8251cc2ccf2e87b9ae3112d
+Author: Stephen Hines <srhines@google.com>
+Date:   Fri Jun 11 02:07:59 2021 -0700
+
+    [compiler-rt] [builtins] [AArch64] Add missing AArch64 data synchronization barrier (dsb) to __clear_cache
+    
+    https://developer.arm.com/documentation/den0024/a/Caches/Cache-maintenance
+    covers how to properly clear caches on AArch64, and the builtin
+    implementation was missing a `dsb ish` after clearing the icache for the
+    selected range.
+    
+    Reviewed By: kristof.beyls
+    
+    Differential Revision: https://reviews.llvm.org/D104094
+
+diff --git a/compiler-rt/lib/builtins/clear_cache.c b/compiler-rt/lib/builtins/clear_cache.c
+index 5a443ddd4b03..0284cb699f74 100644
+--- a/compiler-rt/lib/builtins/clear_cache.c
++++ b/compiler-rt/lib/builtins/clear_cache.c
+@@ -126,6 +126,7 @@ void __clear_cache(void *start, void *end) {
+          addr += icache_line_size)
+       __asm __volatile("ic ivau, %0" ::"r"(addr));
+   }
++  __asm __volatile("dsb ish");
+   __asm __volatile("isb sy");
+ #elif defined(__powerpc64__)
+   const size_t line_size = 32;

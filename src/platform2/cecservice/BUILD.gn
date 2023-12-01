@@ -1,0 +1,93 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":cecservice",
+    ":cecservice-adaptors",
+    ":install_minijail_conf",
+    ":libcecservice",
+  ]
+  if (use.test) {
+    deps += [ ":cecservice_testrunner" ]
+  }
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "minijail/cecservice.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+    "libminijail",
+    "libudev",
+  ]
+}
+
+config("target_defaults") {
+  configs = [ ":target_defaults_pkg_deps" ]
+  defines = []
+  if (use.cfm) {
+    defines += [ "CECSERVICE_OSD_NAME=\"Meet HW\"" ]
+  } else {
+    defines += [ "CECSERVICE_OSD_NAME=\"Chrome OS\"" ]
+  }
+}
+
+executable("cecservice") {
+  configs += [ ":target_defaults" ]
+  sources = [ "main.cc" ]
+  deps = [
+    ":cecservice-adaptors",
+    ":libcecservice",
+  ]
+}
+
+static_library("libcecservice") {
+  configs += [ ":target_defaults" ]
+  sources = [
+    "cec_device.cc",
+    "cec_fd.cc",
+    "cec_manager.cc",
+    "cecservice_dbus_adaptor.cc",
+    "udev.cc",
+  ]
+}
+
+generate_dbus_adaptors("cecservice-adaptors") {
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/cecservice/dbus_adaptors"
+  sources = [ "dbus_bindings/org.chromium.CecService.xml" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("cecservice_testrunner") {
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    sources = [
+      "cec_device_test.cc",
+      "cec_manager_test.cc",
+    ]
+    deps = [
+      ":libcecservice",
+      "//common-mk/testrunner",
+    ]
+  }
+}

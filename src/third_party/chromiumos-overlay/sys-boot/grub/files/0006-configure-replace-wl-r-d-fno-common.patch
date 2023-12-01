@@ -1,0 +1,140 @@
+From b16257b51bc6b58b47b016d3f88f6bd1c6b39dcd Mon Sep 17 00:00:00 2001
+From: Fangrui Song <maskray@google.com>
+Date: Fri, 11 Feb 2022 10:13:23 -0800
+Subject: configure: Replace -Wl,-r,-d with -Wl,-r and add -fno-common
+
+In GNU ld and ld.lld, -d is used with -r to allocate space to COMMON symbols.
+This behavior is presumably to work around legacy projects which inspect
+relocatable output by themselves and do not handle COMMON symbols. The GRUB
+does not do this.
+
+See https://github.com/llvm/llvm-project/issues/53660
+-d is quite useless and ld.lld 15.0.0 will make -d no-op.
+
+COMMON symbols have special symbol resolution semantics which can cause surprise
+(see https://maskray.me/blog/2022-02-06-all-about-common-symbols). GCC<10 and
+Clang<11 defaulted to -fcommon. Just use -fno-common to avoid COMMON symbols.
+
+Signed-off-by: Fangrui Song <maskray@google.com>
+Reviewed-by: Daniel Kiper <daniel.kiper@oracle.com>
+---
+ acinclude.m4                |  2 +-
+ conf/Makefile.common        |  2 +-
+ configure.ac                |  6 +++---
+ grub-core/Makefile.core.def | 20 ++++++++++----------
+ grub-core/genmod.sh.in      |  4 ++--
+ 5 files changed, 17 insertions(+), 17 deletions(-)
+
+diff --git a/acinclude.m4 b/acinclude.m4
+index 6e14bb5..fa7840f 100644
+--- a/acinclude.m4
++++ b/acinclude.m4
+@@ -430,7 +430,7 @@ link_nopie_needed=no]
+ AC_MSG_CHECKING([whether linker needs disabling of PIE to work])
+ AC_LANG_CONFTEST([AC_LANG_SOURCE([[]])])
+ 
+-[if eval "$ac_compile -Wl,-r,-d -nostdlib -Werror -o conftest.o" 2> /dev/null; then]
++[if eval "$ac_compile -Wl,-r -nostdlib -Werror -o conftest.o" 2> /dev/null; then]
+   AC_MSG_RESULT([no])
+   [# Should we clear up other files as well, having called `AC_LANG_CONFTEST'?
+   rm -f conftest.o
+diff --git a/conf/Makefile.common b/conf/Makefile.common
+index b19b98e..b343a03 100644
+--- a/conf/Makefile.common
++++ b/conf/Makefile.common
+@@ -41,7 +41,7 @@ CCASFLAGS_KERNEL = $(CCASFLAGS_CPU) $(CCASFLAGS_PLATFORM)
+ STRIPFLAGS_KERNEL = -R .rel.dyn -R .reginfo -R .note -R .comment -R .drectve -R .note.gnu.gold-version -R .MIPS.abiflags -R .ARM.exidx
+ 
+ CFLAGS_MODULE = $(CFLAGS_PLATFORM) -ffreestanding
+-LDFLAGS_MODULE = $(LDFLAGS_PLATFORM) -nostdlib $(TARGET_LDFLAGS_OLDMAGIC) -Wl,-r,-d
++LDFLAGS_MODULE = $(LDFLAGS_PLATFORM) -nostdlib $(TARGET_LDFLAGS_OLDMAGIC) -Wl,-r
+ CPPFLAGS_MODULE = $(CPPFLAGS_CPU) $(CPPFLAGS_PLATFORM)
+ CCASFLAGS_MODULE = $(CCASFLAGS_CPU) $(CCASFLAGS_PLATFORM)
+ 
+diff --git a/configure.ac b/configure.ac
+index 5c01af0..d1eaafe 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -85,9 +85,9 @@ fi
+ 
+ # Enable support for "restrict" keyword and other
+ # features from gnu99 C language standard.
+-BUILD_CFLAGS="-std=gnu99 $BUILD_CFLAGS"
+-HOST_CFLAGS="-std=gnu99 $HOST_CFLAGS"
+-TARGET_CFLAGS="-std=gnu99 $TARGET_CFLAGS"
++BUILD_CFLAGS="-std=gnu99 -fno-common $BUILD_CFLAGS"
++HOST_CFLAGS="-std=gnu99 -fno-common $HOST_CFLAGS"
++TARGET_CFLAGS="-std=gnu99 -fno-common $TARGET_CFLAGS"
+ 
+ # Default HOST_CPPFLAGS
+ HOST_CPPFLAGS="$HOST_CPPFLAGS -Wall -W"
+diff --git a/grub-core/Makefile.core.def b/grub-core/Makefile.core.def
+index 8022e1c..ac00cc8 100644
+--- a/grub-core/Makefile.core.def
++++ b/grub-core/Makefile.core.def
+@@ -49,26 +49,26 @@ kernel = {
+ 
+   nostrip = emu;
+ 
+-  emu_ldflags              = '-Wl,-r,-d';
+-  i386_efi_ldflags         = '-Wl,-r,-d';
++  emu_ldflags              = '-Wl,-r';
++  i386_efi_ldflags         = '-Wl,-r';
+   i386_efi_stripflags      = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version';
+-  x86_64_efi_ldflags       = '-Wl,-r,-d';
++  x86_64_efi_ldflags       = '-Wl,-r';
+   x86_64_efi_stripflags    = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version';
+ 
+   ia64_efi_cflags = '-fno-builtin -fpic -minline-int-divide-max-throughput';
+-  ia64_efi_ldflags = '-Wl,-r,-d';
++  ia64_efi_ldflags = '-Wl,-r';
+   ia64_efi_stripflags = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version';
+ 
+-  arm_efi_ldflags          = '-Wl,-r,-d';
++  arm_efi_ldflags          = '-Wl,-r';
+   arm_efi_stripflags       = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version';
+ 
+-  arm64_efi_ldflags          = '-Wl,-r,-d';
++  arm64_efi_ldflags          = '-Wl,-r';
+   arm64_efi_stripflags       = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version -R .eh_frame';
+ 
+-  riscv32_efi_ldflags      = '-Wl,-r,-d';
++  riscv32_efi_ldflags      = '-Wl,-r';
+   riscv32_efi_stripflags   = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version -R .eh_frame';
+ 
+-  riscv64_efi_ldflags      = '-Wl,-r,-d';
++  riscv64_efi_ldflags      = '-Wl,-r';
+   riscv64_efi_stripflags   = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version -R .eh_frame';
+ 
+   i386_pc_ldflags          = '$(TARGET_IMG_LDFLAGS)';
+@@ -98,9 +98,9 @@ kernel = {
+   i386_qemu_cppflags     = '-DGRUB_BOOT_MACHINE_LINK_ADDR=$(GRUB_BOOT_MACHINE_LINK_ADDR)';
+   emu_cflags = '$(CFLAGS_GNULIB)';
+   emu_cppflags = '$(CPPFLAGS_GNULIB)';
+-  arm_uboot_ldflags       = '-Wl,-r,-d';
++  arm_uboot_ldflags       = '-Wl,-r';
+   arm_uboot_stripflags    = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version';
+-  arm_coreboot_ldflags       = '-Wl,-r,-d';
++  arm_coreboot_ldflags       = '-Wl,-r';
+   arm_coreboot_stripflags    = '--strip-unneeded -K start -R .note -R .comment -R .note.gnu.gold-version';
+ 
+   i386_pc_startup = kern/i386/pc/startup.S;
+diff --git a/grub-core/genmod.sh.in b/grub-core/genmod.sh.in
+index 1250589..e57c4d9 100644
+--- a/grub-core/genmod.sh.in
++++ b/grub-core/genmod.sh.in
+@@ -83,9 +83,9 @@ else
+     for dep in $deps; do echo "char moddep_$dep[] __attribute__ ((section(\"_moddeps, _moddeps\"))) = \"$dep\";" >>$t2; done
+ 
+     if test -n "$deps"; then
+-	@TARGET_CC@ @TARGET_LDFLAGS@ -ffreestanding -nostdlib -o $tmpfile2 $t1 $t2 $tmpfile -Wl,-r,-d
++	@TARGET_CC@ @TARGET_LDFLAGS@ -ffreestanding -nostdlib -o $tmpfile2 $t1 $t2 $tmpfile -Wl,-r
+     else
+-	@TARGET_CC@ @TARGET_LDFLAGS@ -ffreestanding -nostdlib -o $tmpfile2 $t1 $tmpfile -Wl,-r,-d
++	@TARGET_CC@ @TARGET_LDFLAGS@ -ffreestanding -nostdlib -o $tmpfile2 $t1 $tmpfile -Wl,-r
+     fi
+     rm -f $t1 $t2 $tmpfile
+     mv $tmpfile2 $tmpfile
+-- 
+cgit v1.1
+

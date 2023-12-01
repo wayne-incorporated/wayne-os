@@ -1,0 +1,83 @@
+From c1e6058d3305e1f9e2727a68a2bfbb9b74ddd3ab Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?St=C3=A9phane=20Graber?= <stgraber@ubuntu.com>
+Date: Thu, 6 Dec 2012 23:54:24 +0000
+Subject: [PATCH 3/3] Update test_method too
+
+---
+ .../test_method_object_function_no_input.c    | 24 ++++++++++---------
+ .../test_method_object_function_standard.c    | 24 ++++++++++---------
+ 2 files changed, 26 insertions(+), 22 deletions(-)
+
+diff --git a/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c b/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c
+index d873702..857470a 100644
+--- a/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c
++++ b/nih-dbus-tool/tests/expected/test_method_object_function_no_input.c
+@@ -88,17 +88,19 @@ my_com_netsplit_Nih_Test_Method_method (NihDBusObject * object,
+ 			goto enomem;
+ 		}
+ 
+-		for (size_t output_i = 0; output[output_i]; output_i++) {
+-			const char *output_element;
+-
+-			output_element = output[output_i];
+-
+-			/* Marshal a char * onto the message */
+-			if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
+-				dbus_message_iter_abandon_container (&iter, &output_iter);
+-				dbus_message_unref (reply);
+-				reply = NULL;
+-				goto enomem;
++		if (output) {
++			for (size_t output_i = 0; output[output_i]; output_i++) {
++				const char *output_element;
++
++				output_element = output[output_i];
++
++				/* Marshal a char * onto the message */
++				if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
++					dbus_message_iter_abandon_container (&iter, &output_iter);
++					dbus_message_unref (reply);
++					reply = NULL;
++					goto enomem;
++				}
+ 			}
+ 		}
+ 
+diff --git a/nih-dbus-tool/tests/expected/test_method_object_function_standard.c b/nih-dbus-tool/tests/expected/test_method_object_function_standard.c
+index d7f982d..9a1a0be 100644
+--- a/nih-dbus-tool/tests/expected/test_method_object_function_standard.c
++++ b/nih-dbus-tool/tests/expected/test_method_object_function_standard.c
+@@ -136,17 +136,19 @@ my_com_netsplit_Nih_Test_Method_method (NihDBusObject * object,
+ 			goto enomem;
+ 		}
+ 
+-		for (size_t output_i = 0; output[output_i]; output_i++) {
+-			const char *output_element;
+-
+-			output_element = output[output_i];
+-
+-			/* Marshal a char * onto the message */
+-			if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
+-				dbus_message_iter_abandon_container (&iter, &output_iter);
+-				dbus_message_unref (reply);
+-				reply = NULL;
+-				goto enomem;
++		if (output) {
++			for (size_t output_i = 0; output[output_i]; output_i++) {
++				const char *output_element;
++
++				output_element = output[output_i];
++
++				/* Marshal a char * onto the message */
++				if (! dbus_message_iter_append_basic (&output_iter, DBUS_TYPE_STRING, &output_element)) {
++					dbus_message_iter_abandon_container (&iter, &output_iter);
++					dbus_message_unref (reply);
++					reply = NULL;
++					goto enomem;
++				}
+ 			}
+ 		}
+ 
+-- 
+2.36.1.476.g0c4daa206d-goog
+

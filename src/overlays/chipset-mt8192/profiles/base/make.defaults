@@ -1,0 +1,63 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+CHROMEOS_KERNEL_SPLITCONFIG="chromiumos-mediatek"
+CHROMEOS_KERNEL_ARCH="arm64"
+
+# MT8192 has 4 Cortex-A55 and 4 Cortex-A76.
+# Note that the compiler may or may not support tuning for our big.LITTLE
+# combination, so for simplicity we tune the code against the little cores,
+# which is not perfect but should give us good enough tuning granularity.
+# TODO(b/244126739): Use cortex-a76.cortex-a55 when the compiler is upgraded
+# and supports that.
+BOARD_COMPILER_FLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a55 -mfpu=crypto-neon-fp-armv8 -mfloat-abi=hard -ftree-vectorize"
+
+# TODO(gbiv): Porting -mtune may be interesting, but clang seems to currently
+# entirely ignore this flag for ARM (notably: not aarch64) builds.
+BOARD_RUSTFLAGS="-Ctarget-feature=+armv8-a,+crc"
+
+# Initial value just for style purposes.
+USE=""
+
+# Use hardware FPU instead of software
+USE="${USE} hardfp"
+# Support for neon-vfpv3
+USE="${USE} neon"
+
+# For the device tree installation
+USE="${USE} device_tree"
+
+# use kernel 5.4
+USE="${USE} kernel-5_4"
+
+# Enable VMs
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Enables WebGL rendering
+USE="${USE} drm_atomic"
+
+# Set raster thread number=2
+USE="${USE} big_little"
+
+# Mali drivers require this
+USE="${USE} gpu_sandbox_start_early"
+
+# Turn on the video cards this board uses.
+VIDEO_CARDS="mediatek"
+
+# MT8192 minigbm
+USE="${USE} minigbm_platform_mt8192"
+
+# Use V4L2 codec
+USE="${USE} v4l2_codec"
+
+# Enable GpuMemoryBuffers backed by dma-bufs.
+USE="${USE} native_gpu_memory_buffers"
+
+# Create kernel built-in workaround firmware for Mali-G57.
+# See Mali Valhall release note for detail.
+USE="${USE} builtin_fw_mali_g57"
+
+# Enable fscrypt v2 usage on 5.4+
+USE="${USE} direncription_allow_v2"

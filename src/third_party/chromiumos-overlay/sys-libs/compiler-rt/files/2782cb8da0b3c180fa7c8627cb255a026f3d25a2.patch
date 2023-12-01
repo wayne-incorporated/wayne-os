@@ -1,0 +1,30 @@
+commit 2782cb8da0b3c180fa7c8627cb255a026f3d25a2
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Tue Oct 19 12:53:51 2021 -0700
+
+    libfuzzer: All building libfuzzer for ARM32
+    
+    We need libfuzzer libraries on Arm32 so that we can fuzz
+    Arm32 binaries on Linux (Chrome OS). Android already
+    allows Arm32 for libfuzzer.
+    
+    Reviewed By: morehouse
+    
+    Differential Revision: https://reviews.llvm.org/D112091
+---
+ compiler-rt/cmake/Modules/AllSupportedArchDefs.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/compiler-rt/cmake/Modules/AllSupportedArchDefs.cmake b/compiler-rt/cmake/Modules/AllSupportedArchDefs.cmake
+index 86fa3bb5527f..9a96202c72d4 100644
+--- a/compiler-rt/cmake/Modules/AllSupportedArchDefs.cmake
++++ b/compiler-rt/cmake/Modules/AllSupportedArchDefs.cmake
+@@ -38,7 +38,7 @@ else()
+ endif()
+ 
+ if(OS_NAME MATCHES "Linux")
+-  set(ALL_FUZZER_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM64} ${S390X})
++  set(ALL_FUZZER_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64} ${S390X})
+ elseif (OS_NAME MATCHES "Windows")
+   set(ALL_FUZZER_SUPPORTED_ARCH ${X86} ${X86_64})
+ elseif(OS_NAME MATCHES "Android")

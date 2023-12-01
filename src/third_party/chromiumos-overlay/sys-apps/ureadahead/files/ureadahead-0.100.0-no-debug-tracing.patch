@@ -1,0 +1,142 @@
+Author: Alan Ding <alanding@google.com>
+Date:   Fri Mar 19 12:43:00 2021 -0700
+
+    ureadahead: Allow disable debug tracing
+    
+    Adds command line option: --no-debug-tracing (off by default).
+    Provide flag to disable tracing with tracing/events/fs/* and start them
+    in init instead since such events can be never allowed while enforcing
+    SELinux on debugfs_tracing_debug security context for non-init process.
+    
+    There is no functional effect if option is not used.
+
+diff --git a/src/trace.c b/src/trace.c
+index dd1c585..854a570 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -122,7 +122,8 @@ trace (int daemonise,
+        const char *filename_to_replace,
+        const char *pack_file,
+        const char *path_prefix_filter,
+-       const PathPrefixOption *path_prefix)
++       const PathPrefixOption *path_prefix,
++       int debug_tracing)
+ {
+ 	int                 dfd;
+ 	FILE                *fp;
+@@ -182,21 +183,23 @@ trace (int daemonise,
+ 		num_cpus = 1;
+ 
+ 	/* Enable tracing of open() syscalls */
+-	if (set_value (dfd, "events/fs/do_sys_open/enable",
+-		       TRUE, &old_sys_open_enabled) < 0)
+-		goto error;
+- 	if (set_value (dfd, "events/fs/open_exec/enable",
+-		       TRUE, &old_open_exec_enabled) < 0)
+-		goto error;
+- 	if (set_value (dfd, "events/fs/uselib/enable",
+-		       TRUE, &old_uselib_enabled) < 0) {
+-		NihError *err;
++	if (debug_tracing) {
++		if (set_value (dfd, "events/fs/do_sys_open/enable",
++			       TRUE, &old_sys_open_enabled) < 0)
++			goto error;
++ 		if (set_value (dfd, "events/fs/open_exec/enable",
++			       TRUE, &old_open_exec_enabled) < 0)
++			goto error;
++ 		if (set_value (dfd, "events/fs/uselib/enable",
++			       TRUE, &old_uselib_enabled) < 0) {
++			NihError *err;
+ 
+-		err = nih_error_get ();
+-		nih_debug ("Missing uselib tracing: %s", err->message);
+-		nih_free (err);
++			err = nih_error_get ();
++			nih_debug ("Missing uselib tracing: %s", err->message);
++			nih_free (err);
+ 
+-		old_uselib_enabled = -1;
++			old_uselib_enabled = -1;
++		}
+ 	}
+ 	if (set_value (dfd, "buffer_size_kb", 8192/num_cpus, &old_buffer_size_kb) < 0)
+ 		goto error;
+@@ -240,16 +243,18 @@ trace (int daemonise,
+ 	if (set_value (dfd, "tracing_on",
+ 		       old_tracing_enabled, NULL) < 0)
+ 		goto error;
+-	if (old_uselib_enabled >= 0)
+-		if (set_value (dfd, "events/fs/uselib/enable",
+-			       old_uselib_enabled, NULL) < 0)
++	if (debug_tracing) {
++		if (old_uselib_enabled >= 0)
++			if (set_value (dfd, "events/fs/uselib/enable",
++				       old_uselib_enabled, NULL) < 0)
++				goto error;
++		if (set_value (dfd, "events/fs/open_exec/enable",
++			       old_open_exec_enabled, NULL) < 0)
+ 			goto error;
+-	if (set_value (dfd, "events/fs/open_exec/enable",
+-		       old_open_exec_enabled, NULL) < 0)
+-		goto error;
+-	if (set_value (dfd, "events/fs/do_sys_open/enable",
+-		       old_sys_open_enabled, NULL) < 0)
+-		goto error;
++		if (set_value (dfd, "events/fs/do_sys_open/enable",
++			       old_sys_open_enabled, NULL) < 0)
++			goto error;
++	}
+ 
+ 	/* Be nicer */
+ 	if (nice (15))
+diff --git a/src/trace.h b/src/trace.h
+index 16af782..f809cc6 100644
+--- a/src/trace.h
++++ b/src/trace.h
+@@ -37,7 +37,8 @@ int trace (int daemonise, int timeout,
+            const char *filename_to_replace,
+            const char *pack_file,  /* May be null */
+            const char *path_prefix_filter,  /* May be null */
+-           const PathPrefixOption *path_prefix);
++           const PathPrefixOption *path_prefix,
++           int debug_tracing);
+ 
+ NIH_END_EXTERN
+ 
+diff --git a/src/ureadahead.c b/src/ureadahead.c
+index 066bfff..d1bf5a1 100644
+--- a/src/ureadahead.c
++++ b/src/ureadahead.c
+@@ -110,6 +110,14 @@ static char *pack_file = NULL;
+  */
+ static char *path_prefix_filter = NULL;
+ 
++/**
++ * no_debug_tracing:
++ *
++ * Provide flag to disable tracing with tracing/events/fs/* and start them in
++ * init instead since such events can be never allowed while enforcing SELinux.
++ */
++static int no_debug_tracing = FALSE;
++
+ static int
+ path_prefix_option (NihOption  *option,
+                     const char *arg)
+@@ -211,6 +219,8 @@ static NihOption options[] = {
+ 	  NULL, "PREFIX_FILTER", &path_prefix_filter, dup_string_handler },
+ 	{ 0, "pack-file", N_("Path of the pack file to use"),
+ 	  NULL, "PACK_FILE", &pack_file, dup_string_handler },
++	{ 0, "no-debug-tracing", N_("do not enable debug tracing events"),
++	  NULL, NULL, &no_debug_tracing, NULL },
+ 
+ 	NIH_OPTION_LAST
+ };
+@@ -301,7 +311,7 @@ main (int   argc,
+ 
+ 	/* Trace to generate new pack files */
+ 	if (trace (daemonise, timeout, filename, pack_file,
+-		   path_prefix_filter, &path_prefix) < 0) {
++		   path_prefix_filter, &path_prefix, (no_debug_tracing == FALSE)) < 0) {
+ 		NihError *err;
+ 
+ 		err = nih_error_get ();

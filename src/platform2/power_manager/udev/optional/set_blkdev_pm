@@ -1,0 +1,60 @@
+#!/bin/sh
+
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This script configures power management for the SATA internal device.
+# It is executed at boot time and whenever power is plugged or unplugged
+# (through udev).
+#
+# If supported by the block device APM (Advanced Power Management) is enabled,
+# otherwise the standby timeout of the device is configured. The specific
+# settings vary depending on whether the device runs on battery or AC.
+
+if dump_power_status | grep -q 'line_power_connected 1'; then
+  on_ac="1"
+else
+  on_ac="0"
+fi
+
+. /usr/share/misc/chromeos-common.sh || exit 1
+
+dev_node="$(rootdev -s -d)"
+dev_type="$(get_device_type "${dev_node}")"
+[ "${dev_type}" = "ATA" ] || exit 0
+
+if hdparm -B "${dev_node}" | grep -q 'APM_level.*=.*not supported'; then
+  has_apm="0"
+else
+  has_apm="1"
+fi
+
+# Skip APM for SanDisk SSDs, it is too aggressive (b/35524329)
+dev_sysfs="/sys/block/${dev_node##*/}"
+if grep -q "SanDisk.*SSD" "${dev_sysfs}/device/model"; then
+  has_apm="0"
+fi
+
+if [ "${has_apm}" = "1" ]; then
+  if [ "${on_ac}" = "1" ]; then
+    # max performance
+    apm_level=254
+  else
+    # max power savings
+    apm_level=1
+  fi
+
+  hdparm -B "${apm_level}" "${dev_node}"
+else
+  # APM not supported
+  if [ "${on_ac}" = "1" ]; then
+    # set standby timeout to 2h
+    standby_timeout=244
+  else
+    # set standby timeout to 5s
+    standby_timeout=1
+  fi
+
+  hdparm -S "${standby_timeout}" "${dev_node}"
+fi

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,11 @@
 
 #include "login_manager/init_daemon_controller.h"
 
+namespace base {
+class TimeDelta;
+class ScopedDBusError;
+}
+
 namespace login_manager {
 
 class MockInitDaemonController : public InitDaemonController {
@@ -26,6 +31,15 @@ class MockInitDaemonController : public InitDaemonController {
               (const std::string&,
                const std::vector<std::string>&,
                TriggerMode),
+              (override));
+
+  MOCK_METHOD(std::unique_ptr<dbus::Response>,
+              TriggerImpulseWithTimeoutAndError,
+              (const std::string&,
+               const std::vector<std::string>&,
+               TriggerMode,
+               base::TimeDelta timeout,
+               dbus::ScopedDBusError* error),
               (override));
 };
 

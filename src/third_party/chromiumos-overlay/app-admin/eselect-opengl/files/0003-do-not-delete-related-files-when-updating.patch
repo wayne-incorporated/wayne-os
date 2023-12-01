@@ -1,0 +1,27 @@
+https://bugs.gentoo.org/508708
+
+From 5e9ab47750803bd39bba51806885020e1cede43e Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@gentoo.org>
+Date: Fri, 25 Apr 2014 13:38:34 -0400
+Subject: [PATCH 3/4] do not delete related files when updating
+
+---
+ opengl.eselect | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/opengl.eselect b/opengl.eselect
+index 111412f..1b72c18 100644
+--- a/opengl.eselect
++++ b/opengl.eselect
+@@ -72,7 +72,7 @@ upgrade_file() {
+ 	filename=$(basename "${file}")
+ 
+ 	if [[ -f ${filename} || ( -L ${filename} && ! -e ${filename} ) ]] ; then
+-		rm -f "${filename}"* || die -q "Failed to delete ${workdir}/${filename}"
++		rm -f "${filename}" || die -q "Failed to delete ${workdir}/${filename}"
+ 	fi
+ 
+ 	#echo "DEBUG: ln -s \"${linkfile}\" \"${filename}\""
+-- 
+1.9.2
+

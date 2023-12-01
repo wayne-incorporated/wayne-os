@@ -1,0 +1,1 @@
+chromeos-bsp-kalista-0.0.1.ebuild

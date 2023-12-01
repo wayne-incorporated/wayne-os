@@ -1,0 +1,261 @@
+From 03e05aeebc524c0ea235317a14ed1bfc2abfd146 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 2 May 2023 02:28:35 +0900
+Subject: [PATCH 2/2] udev: add USB revision in ID_PATH
+
+xHCI host controller may register two (or more?) USB root hubs for USB
+2.0 and USB 3.0, and devices under the hubs may have same ID_PATH.
+So, to avoid the conflict, let's introduce ID_PATH_WITH_USB_REVISION
+that includes the USB revision.
+
+Closes #19406.
+---
+ rules/60-persistent-alsa.rules         |  3 +-
+ rules/60-persistent-input.rules        | 13 ++--
+ rules/60-persistent-storage-tape.rules |  6 +-
+ rules/60-persistent-storage.rules      |  2 +
+ rules/60-persistent-v4l.rules          |  6 +-
+ rules/60-serial.rules                  |  6 +-
+ src/udev/udev-builtin-path_id.c        | 94 +++++++++++++++++++++++++-
+ 7 files changed, 117 insertions(+), 13 deletions(-)
+
+diff --git a/rules/60-persistent-alsa.rules b/rules/60-persistent-alsa.rules
+index 8154e2dbb5..466ab1c151 100644
+--- a/rules/60-persistent-alsa.rules
++++ b/rules/60-persistent-alsa.rules
+@@ -9,6 +9,7 @@ ENV{ID_SERIAL}=="?*", ENV{ID_USB_INTERFACE_NUM}=="?*", SYMLINK+="snd/by-id/$env{
+ ENV{ID_SERIAL}=="?*", ENV{ID_USB_INTERFACE_NUM}=="", SYMLINK+="snd/by-id/$env{ID_BUS}-$env{ID_SERIAL}"
+ 
+ IMPORT{builtin}="path_id"
+-ENV{ID_PATH}=="?*", SYMLINK+="snd/by-path/$env{ID_PATH}"
++ENV{ID_PATH}=="?*",                   SYMLINK+="snd/by-path/$env{ID_PATH}"
++ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="snd/by-path/$env{ID_PATH_WITH_USB_REVISION}"
+ 
+ LABEL="persistent_alsa_end"
+diff --git a/rules/60-persistent-input.rules b/rules/60-persistent-input.rules
+index 0e33e68384..f87ab79ee7 100644
+--- a/rules/60-persistent-input.rules
++++ b/rules/60-persistent-input.rules
+@@ -28,11 +28,14 @@ SUBSYSTEMS=="usb", ENV{ID_BUS}=="?*", KERNEL=="event*", ENV{.INPUT_CLASS}=="", A
+   SYMLINK+="input/by-id/$env{ID_BUS}-$env{ID_SERIAL}-event-if$attr{bInterfaceNumber}"
+ 
+ # by-path
+-SUBSYSTEMS=="pci|usb|platform|acpi", IMPORT{builtin}="path_id"
+-ENV{ID_PATH}=="?*", KERNEL=="mouse*|js*", ENV{.INPUT_CLASS}=="?*", SYMLINK+="input/by-path/$env{ID_PATH}-$env{.INPUT_CLASS}"
+-ENV{ID_PATH}=="?*", KERNEL=="event*", ENV{.INPUT_CLASS}=="?*", SYMLINK+="input/by-path/$env{ID_PATH}-event-$env{.INPUT_CLASS}"
+-# allow empty class for platform and usb devices; platform supports only a single interface that way
+-SUBSYSTEMS=="usb|platform", ENV{ID_PATH}=="?*", KERNEL=="event*", ENV{.INPUT_CLASS}=="", \
++ENV{.INPUT_CLASS}=="?*", KERNEL=="mouse*|js*", ENV{ID_PATH}=="?*",                   SYMLINK+="input/by-path/$env{ID_PATH}-$env{.INPUT_CLASS}"
++ENV{.INPUT_CLASS}=="?*", KERNEL=="mouse*|js*", ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="input/by-path/$env{ID_PATH_WITH_USB_REVISION}-$env{.INPUT_CLASS}"
++ENV{.INPUT_CLASS}=="?*", KERNEL=="event*",     ENV{ID_PATH}=="?*",                   SYMLINK+="input/by-path/$env{ID_PATH}-event-$env{.INPUT_CLASS}"
++ENV{.INPUT_CLASS}=="?*", KERNEL=="event*",     ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="input/by-path/$env{ID_PATH_WITH_USB_REVISION}-event-$env{.INPUT_CLASS}"
++# allow empty class for platform, usb and i2c devices; platform supports only a single interface that way
++SUBSYSTEMS=="usb|platform|i2c", KERNEL=="event*", ENV{.INPUT_CLASS}=="", ENV{ID_PATH}=="?*", \
+   SYMLINK+="input/by-path/$env{ID_PATH}-event"
++SUBSYSTEMS=="usb|platform|i2c", KERNEL=="event*", ENV{.INPUT_CLASS}=="", ENV{ID_PATH_WITH_USB_REVISION}=="?*", \
++  SYMLINK+="input/by-path/$env{ID_PATH_WITH_USB_REVISION}-event"
+ 
+ LABEL="persistent_input_end"
+diff --git a/rules/60-persistent-storage-tape.rules b/rules/60-persistent-storage-tape.rules
+index f2eabd92a8..6a11067440 100644
+--- a/rules/60-persistent-storage-tape.rules
++++ b/rules/60-persistent-storage-tape.rules
+@@ -19,7 +19,9 @@ KERNEL=="nst*[0-9]", ENV{ID_SERIAL}=="?*", SYMLINK+="tape/by-id/$env{ID_BUS}-$en
+ 
+ # by-path (parent device path)
+ KERNEL=="st*[0-9]|nst*[0-9]", IMPORT{builtin}="path_id"
+-KERNEL=="st*[0-9]", ENV{ID_PATH}=="?*", SYMLINK+="tape/by-path/$env{ID_PATH}"
+-KERNEL=="nst*[0-9]", ENV{ID_PATH}=="?*", SYMLINK+="tape/by-path/$env{ID_PATH}-nst"
++KERNEL=="st*[0-9]",  ENV{ID_PATH}=="?*",                   SYMLINK+="tape/by-path/$env{ID_PATH}"
++KERNEL=="st*[0-9]",  ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="tape/by-path/$env{ID_PATH_WITH_USB_REVISION}"
++KERNEL=="nst*[0-9]", ENV{ID_PATH}=="?*",                   SYMLINK+="tape/by-path/$env{ID_PATH}-nst"
++KERNEL=="nst*[0-9]", ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="tape/by-path/$env{ID_PATH_WITH_USB_REVISION}-nst"
+ 
+ LABEL="persistent_storage_tape_end"
+diff --git a/rules/60-persistent-storage.rules b/rules/60-persistent-storage.rules
+index 0b14bb4a11..cc1b16a6d2 100644
+--- a/rules/60-persistent-storage.rules
++++ b/rules/60-persistent-storage.rules
+@@ -53,7 +53,9 @@ KERNEL=="msblk[0-9]p[0-9]|mspblk[0-9]p[0-9]", ENV{ID_NAME}=="?*", ENV{ID_SERIAL}
+ # by-path
+ ENV{DEVTYPE}=="disk", DEVPATH!="*/virtual/*", IMPORT{builtin}="path_id"
+ ENV{DEVTYPE}=="disk", ENV{ID_PATH}=="?*", SYMLINK+="disk/by-path/$env{ID_PATH}"
++ENV{DEVTYPE}=="disk", ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="disk/by-path/$env{ID_PATH_WITH_USB_REVISION}"
+ ENV{DEVTYPE}=="partition", ENV{ID_PATH}=="?*", SYMLINK+="disk/by-path/$env{ID_PATH}-part%n"
++ENV{DEVTYPE}=="partition", ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="disk/by-path/$env{ID_PATH_WITH_USB_REVISION}-part%n"
+ 
+ # probe filesystem metadata of optical drives which have a media inserted
+ KERNEL=="sr*", ENV{DISK_EJECT_REQUEST}!="?*", ENV{ID_CDROM_MEDIA_TRACK_COUNT_DATA}=="?*", ENV{ID_CDROM_MEDIA_SESSION_LAST_OFFSET}=="?*", \
+diff --git a/rules/60-persistent-v4l.rules b/rules/60-persistent-v4l.rules
+index 93c5ee8c27..071650a45b 100644
+--- a/rules/60-persistent-v4l.rules
++++ b/rules/60-persistent-v4l.rules
+@@ -14,7 +14,9 @@ TEST!="index", GOTO="persistent_v4l_end"
+ ATTR{index}!="?*", GOTO="persistent_v4l_end"
+ 
+ IMPORT{builtin}="path_id"
+-ENV{ID_PATH}=="?*", KERNEL=="video*|vbi*", SYMLINK+="v4l/by-path/$env{ID_PATH}-video-index$attr{index}"
+-ENV{ID_PATH}=="?*", KERNEL=="audio*", SYMLINK+="v4l/by-path/$env{ID_PATH}-audio-index$attr{index}"
++KERNEL=="video*|vbi*", ENV{ID_PATH}=="?*",                   SYMLINK+="v4l/by-path/$env{ID_PATH}-video-index$attr{index}"
++KERNEL=="video*|vbi*", ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="v4l/by-path/$env{ID_PATH_WITH_USB_REVISION}-video-index$attr{index}"
++KERNEL=="audio*",      ENV{ID_PATH}=="?*",                   SYMLINK+="v4l/by-path/$env{ID_PATH}-audio-index$attr{index}"
++KERNEL=="audio*",      ENV{ID_PATH_WITH_USB_REVISION}=="?*", SYMLINK+="v4l/by-path/$env{ID_PATH_WITH_USB_REVISION}-audio-index$attr{index}"
+ 
+ LABEL="persistent_v4l_end"
+diff --git a/rules/60-serial.rules b/rules/60-serial.rules
+index f303e27fd5..b8aa6b3403 100644
+--- a/rules/60-serial.rules
++++ b/rules/60-serial.rules
+@@ -13,8 +13,10 @@ KERNEL!="ttyUSB[0-9]*|ttyACM[0-9]*", GOTO="serial_end"
+ SUBSYSTEMS=="usb-serial", ENV{.ID_PORT}="$attr{port_number}"
+ 
+ IMPORT{builtin}="path_id"
+-ENV{ID_PATH}=="?*", ENV{.ID_PORT}=="", SYMLINK+="serial/by-path/$env{ID_PATH}"
+-ENV{ID_PATH}=="?*", ENV{.ID_PORT}=="?*", SYMLINK+="serial/by-path/$env{ID_PATH}-port$env{.ID_PORT}"
++ENV{ID_PATH}=="?*",                   ENV{.ID_PORT}=="",   SYMLINK+="serial/by-path/$env{ID_PATH}"
++ENV{ID_PATH_WITH_USB_REVISION}=="?*", ENV{.ID_PORT}=="",   SYMLINK+="serial/by-path/$env{ID_PATH_WITH_USB_REVISION}"
++ENV{ID_PATH}=="?*",                   ENV{.ID_PORT}=="?*", SYMLINK+="serial/by-path/$env{ID_PATH}-port$env{.ID_PORT}"
++ENV{ID_PATH_WITH_USB_REVISION}=="?*", ENV{.ID_PORT}=="?*", SYMLINK+="serial/by-path/$env{ID_PATH_WITH_USB_REVISION}-port$env{.ID_PORT}"
+ 
+ IMPORT{builtin}="usb_id"
+ ENV{ID_SERIAL}=="", GOTO="serial_end"
+diff --git a/src/udev/udev-builtin-path_id.c b/src/udev/udev-builtin-path_id.c
+index aac0fcbd72..66eb40c2b1 100644
+--- a/src/udev/udev-builtin-path_id.c
++++ b/src/udev/udev-builtin-path_id.c
+@@ -29,6 +29,7 @@
+ #include <errno.h>
+ #include <dirent.h>
+ #include <getopt.h>
++#include <linux/usb/ch11.h>
+ 
+ #include "udev.h"
+ 
+@@ -535,10 +536,53 @@ static void handle_scsi_tape(struct udev_device *dev, char **path) {
+                 path_prepend(path, "st%c", name[2]);
+ }
+ 
++static int get_usb_revision(struct udev_device *dev) {
++        uint8_t protocol;
++        const char *s;
++        int r;
++
++        assert(dev);
++
++        /* Returns usb revision 1, 2, or 3. */
++
++        s = udev_device_get_sysattr_value(dev, "bDeviceProtocol");
++        if (!s)
++                return r;
++
++        r = safe_atou8(s, &protocol);
++        if (r < 0)
++                return r;
++
++        switch (protocol) {
++        case USB_HUB_PR_HS_NO_TT: /* Full speed hub (USB1) or Hi-speed hub without TT (USB2) */
++
++                /* See speed_show() in drivers/usb/core/sysfs.c of the kernel. */
++                s = udev_device_get_sysattr_value(dev, "speed");
++                if (!s)
++                        return r;
++
++                if (streq(s, "480"))
++                        return 2;
++
++                return 1;
++
++        case USB_HUB_PR_HS_SINGLE_TT: /* Hi-speed hub with single TT */
++        case USB_HUB_PR_HS_MULTI_TT: /* Hi-speed hub with multiple TT */
++                return 2;
++
++        case USB_HUB_PR_SS: /* Super speed hub */
++                return 3;
++
++        default:
++                return -EPROTONOSUPPORT;
++        }
++}
++
+ static struct udev_device *handle_usb(struct udev_device *parent, char **path) {
+         const char *devtype;
+         const char *str;
+         const char *port;
++        int r;
+ 
+         devtype = udev_device_get_devtype(parent);
+         if (devtype == NULL)
+@@ -553,7 +597,26 @@ static struct udev_device *handle_usb(struct udev_device *parent, char **path) {
+         port++;
+ 
+         parent = skip_subsystem(parent, "usb");
+-        path_prepend(path, "usb-0:%s", port);
++        if (!parent)
++                return NULL;
++
++        /* USB host number may change across reboots (and probably even without reboot). The part after USB
++         * host number is determined by device topology and so does not change. Hence, drop the host number
++         * and always use '0' instead.
++         *
++         * xHCI host controllers may register two (or more?) USB root hubs for USB 2.0 and USB 3.0, and the
++         * sysname, whose host number replaced with 0, of a device under the hubs may conflict with others.
++         * To avoid the conflict, let's include the USB revision of the root hub to the PATH_ID.
++         * See issue https://github.com/systemd/systemd/issues/19406 for more details. */
++        r = get_usb_revision(parent);
++        if (r < 0) {
++                log_debug_errno(r, "Failed to get the USB revision number, ignoring: %m");
++                path_prepend(path, "usb-0:%s", port);
++        } else {
++                assert(r > 0);
++                path_prepend(path, "usbv%i-0:%s", r, port);
++        }
++
+         return parent;
+ }
+ 
+@@ -597,6 +660,33 @@ out:
+         return parent;
+ }
+ 
++static void add_id_with_usb_revision(struct udev_device *dev, bool test, char *path) {
++        char *p;
++        int r;
++
++        assert(dev);
++        assert(path);
++
++        /* When the path contains the USB revision, let's adds ID_PATH_WITH_USB_REVISION property and
++         * drop the version specifier for later use. */
++        p = strstr(path, "-usbv");
++        if (!p)
++                return;
++        p += strlen("-usbv");
++
++        if (!(p[0] >= '0' && p[0] <= '9'))
++                return;
++        if (p[1] != '-')
++                return;
++
++        r = udev_builtin_add_property(dev, test, "ID_PATH_WITH_USB_REVISION", path);
++        if (r < 0)
++                log_debug_errno(r, "Failed to add ID_PATH_WITH_USB_REVISION property, ignoring: %m");
++
++        /* Drop the USB revision specifier for backward compatibility. */
++        memmove(p - 1, p + 1, strlen(p + 1) + 1);
++}
++
+ static void add_id_tag(struct udev_device *dev, bool test, const char *path) {
+         char tag[UTIL_NAME_SIZE];
+         size_t i = 0;
+@@ -719,6 +809,8 @@ static int builtin_path_id(struct udev_device *dev, int argc, char *argv[], bool
+ 
+ out:
+         if (path != NULL) {
++                add_id_with_usb_revision(dev, test, path);
++
+                 r = udev_builtin_add_property(dev, test, "ID_PATH", path);
+                 if (r < 0)
+                         log_debug_errno(r, "Failed to add ID_PATH property, ignoring: %m");
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

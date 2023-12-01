@@ -1,0 +1,64 @@
+From 1f1e981bae1b21893ae18e56c1577771d70cd303 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fran=C3=A7ois=20Degros?= <fdegros@chromium.org>
+Date: Wed, 2 Nov 2022 14:30:06 +1100
+Subject: [PATCH] Mark internal types used in ntfs packets as unaligned
+
+These types are used everywhere in packed structs and the source code
+freely takes addresses of these types. Clang crashes because it assumes
+that the types are aligned.
+
+https://crbug.com/739958
+---
+ include/ntfs-3g/types.h | 29 +++++++++++++++++------------
+ 1 file changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/include/ntfs-3g/types.h b/include/ntfs-3g/types.h
+index 43d91b20..21cf2751 100644
+--- a/include/ntfs-3g/types.h
++++ b/include/ntfs-3g/types.h
+@@ -44,25 +44,30 @@ typedef int16_t s16;
+ typedef int32_t s32;
+ typedef int64_t s64;
+ 
+-typedef u16 le16;
+-typedef u32 le32;
+-typedef u64 le64;
++/*
++ * The source code takes the addresses of these types.
++ * The types should be marked unaligned as they are used in packed
++ * structures to avoid crashes on ARM32.
++ */
++typedef __attribute__((__aligned__(1))) u16 le16;
++typedef __attribute__((__aligned__(1))) u32 le32;
++typedef __attribute__((__aligned__(1))) u64 le64;
+ 
+-typedef u16 be16;
+-typedef u32 be32;
+-typedef u64 be64;
++typedef __attribute__((__aligned__(1))) u16 be16;
++typedef __attribute__((__aligned__(1))) u32 be32;
++typedef __attribute__((__aligned__(1))) u64 be64;
+ 
+ /*
+  * Declare s{l,b}e{16,32,64} to be unsigned because we do not want sign
+  * extension on BE architectures.
+  */
+-typedef u16 sle16;
+-typedef u32 sle32;
+-typedef u64 sle64;
++typedef __attribute__((__aligned__(1))) u16 sle16;
++typedef __attribute__((__aligned__(1))) u32 sle32;
++typedef __attribute__((__aligned__(1))) u64 sle64;
+ 
+-typedef u16 sbe16;
+-typedef u32 sbe32;
+-typedef u64 sbe64;
++typedef __attribute__((__aligned__(1))) u16 sbe16;
++typedef __attribute__((__aligned__(1))) u32 sbe32;
++typedef __attribute__((__aligned__(1))) u64 sbe64;
+ 
+ typedef le16 ntfschar;			/* 2-byte Unicode character type. */
+ #define UCHAR_T_SIZE_BITS 1
+-- 
+2.38.1.273.g43a17bfeac-goog
+

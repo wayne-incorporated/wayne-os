@@ -1,0 +1,135 @@
+commit f457863ae345d2635026501f5383e0e625869639
+Author: Fangrui Song <i@maskray.me>
+Date:   Fri Feb 4 13:20:49 2022 -0800
+
+    [ELF] Support REL-format R_AARCH64_NONE relocation
+    
+    -fprofile-use=/-fprofile-sample-use= compiles may produce REL-format
+    .rel.llvm.call-graph-profile even if the prevailing format is RELA on AArch64.
+    Add R_AARCH64_NONE to getImplicitAddend to fix this linker error:
+    
+    ```
+    ld.lld: error: internal linker error: cannot read addend for relocation R_AARCH64_NONE
+    PLEASE submit a bug report to https://crbug.com and run tools/clang/scripts/process_crashreports.py (only works inside Google) which will upload a report and include the crash backtrace.
+    ```
+
+diff --git a/lld/ELF/Arch/AArch64.cpp b/lld/ELF/Arch/AArch64.cpp
+index 5789bc935b63..9e857d590684 100644
+--- a/lld/ELF/Arch/AArch64.cpp
++++ b/lld/ELF/Arch/AArch64.cpp
+@@ -197,6 +197,8 @@ int64_t AArch64::getImplicitAddend(const uint8_t *buf, RelType type) const {
+   switch (type) {
+   case R_AARCH64_TLSDESC:
+     return read64(buf + 8);
++  case R_AARCH64_NONE:
++    return 0;
+   default:
+     internalLinkerError(getErrorLocation(buf),
+                         "cannot read addend for relocation " + toString(type));
+diff --git a/lld/test/ELF/relocation-none-aarch64.s b/lld/test/ELF/relocation-none-aarch64.s
+deleted file mode 100644
+index 7783c127cf86..000000000000
+--- a/lld/test/ELF/relocation-none-aarch64.s
++++ /dev/null
+@@ -1,26 +0,0 @@
+-# REQUIRES: aarch64
+-
+-# RUN: llvm-mc -filetype=obj -triple=aarch64-linux-musl %s -o %t.o
+-# RUN: ld.lld --gc-sections %t.o -o %t
+-# RUN: llvm-readelf -S -r %t | FileCheck %s
+-
+-# Test that we discard R_AARCH64_NONE, but respect the references it creates
+-# among sections.
+-
+-# CHECK: .data
+-# CHECK: There are no relocations in this file.
+-
+-# RUN: ld.lld -r %t.o -o %t
+-# RUN: llvm-readobj -r %t | FileCheck --check-prefix=RELOC %s
+-
+-# RELOC:      Section ({{.*}}) .rela.text {
+-# RELOC-NEXT:   0x0 R_AARCH64_NONE .data 0x0
+-# RELOC-NEXT: }
+-
+-.globl _start
+-_start:
+-  ret
+-  .reloc 0, R_AARCH64_NONE, .data
+-
+-.data
+-  .long 0
+diff --git a/lld/test/ELF/relocation-none-aarch64.test b/lld/test/ELF/relocation-none-aarch64.test
+new file mode 100644
+index 000000000000..0147085021f7
+--- /dev/null
++++ b/lld/test/ELF/relocation-none-aarch64.test
+@@ -0,0 +1,69 @@
++# REQUIRES: aarch64
++# RUN: yaml2obj %s -o %t.o
++# RUN: ld.lld --gc-sections %t.o -o %t
++# RUN: llvm-readelf -S -r %t | FileCheck %s
++
++## Test that we discard R_AARCH64_NONE, but respect the references it creates
++## among sections.
++
++# CHECK: .data
++# CHECK: There are no relocations in this file.
++
++# RUN: ld.lld -r %t.o -o %t
++# RUN: llvm-readobj -r %t | FileCheck --check-prefix=RELOC %s
++
++## Both REL and RELA are supported. .rel.llvm.call-graph-profile uses REL even
++## if the prevailing format is RELA.
++# RELOC:      Section ({{.*}}) .rela.text {
++# RELOC-NEXT:   0x0 R_AARCH64_NONE .data 0x0
++# RELOC-NEXT: }
++# RELOC:      Section ({{.*}}) .rel.nonalloc1 {
++# RELOC-NEXT:   0x0 R_AARCH64_NONE .data
++# RELOC-NEXT: }
++# RELOC:      Section ({{.*}}) .rela.nonalloc2 {
++# RELOC-NEXT:   0x0 R_AARCH64_NONE .data 0x0
++# RELOC-NEXT: }
++
++--- !ELF
++FileHeader:
++  Class:           ELFCLASS64
++  Data:            ELFDATA2LSB
++  Type:            ET_REL
++  Machine:         EM_AARCH64
++Sections:
++  - Name:            .text
++    Type:            SHT_PROGBITS
++    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
++  - Name:            .data
++    Type:            SHT_PROGBITS
++    Flags:           [ SHF_WRITE, SHF_ALLOC ]
++  - Name:            .nonalloc1
++    Type:            SHT_PROGBITS
++  - Name:            .nonalloc2
++    Type:            SHT_PROGBITS
++  - Name:            .rela.text
++    Type:            SHT_RELA
++    Info:            .text
++    Relocations:
++      - Symbol:          .data
++        Type:            R_AARCH64_NONE
++  - Name:            .rel.nonalloc1
++    Type:            SHT_REL
++    Info:            .nonalloc1
++    Relocations:
++      - Symbol:          .data
++        Type:            R_AARCH64_NONE
++  - Name:            .rela.nonalloc2
++    Type:            SHT_RELA
++    Info:            .nonalloc2
++    Relocations:
++      - Symbol:          .data
++        Type:            R_AARCH64_NONE
++Symbols:
++  - Name:            .data
++    Type:            STT_SECTION
++    Section:         .data
++  - Name:            _start
++    Section:         .text
++    Binding:         STB_GLOBAL
++...

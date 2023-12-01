@@ -1,0 +1,77 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":bootstat",
+    ":install_bootstat_headers",
+    ":install_bootstat_sbin_scripts",
+    ":install_bootstat_summary",
+    ":libbootstat",
+  ]
+  if (use.test) {
+    deps += [ ":libbootstat_unittests" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+shared_library("libbootstat") {
+  sources = [ "bootstat_log.cc" ]
+  install_path = "lib"
+  configs += [ ":target_defaults" ]
+  libs = [ "rootdev" ]
+}
+
+executable("bootstat") {
+  sources = [ "bootstat.cc" ]
+  install_path = "sbin"
+  configs += [ ":target_defaults" ]
+  deps = [ ":libbootstat" ]
+}
+
+install_config("install_bootstat_sbin_scripts") {
+  sources = [
+    "bootstat_archive",
+    "bootstat_get_last",
+  ]
+  install_path = "/usr/sbin"
+  type = "executable"
+}
+
+install_config("install_bootstat_summary") {
+  sources = [ "bootstat_summary" ]
+  install_path = "/usr/bin"
+  type = "executable"
+}
+
+install_config("install_bootstat_headers") {
+  sources = [ "bootstat.h" ]
+  install_path = "/usr/include/metrics"
+}
+
+if (use.test) {
+  executable("libbootstat_unittests") {
+    # Do not use libbootstat shared library for test, as we'd have to export a
+    # good number of symbols that normal API users do not require.
+    sources = [
+      "bootstat_log.cc",
+      "bootstat_test.cc",
+    ]
+    libs = [ "rootdev" ]
+    configs += [
+      ":target_defaults",
+      "//common-mk:test",
+    ]
+    run_test = true
+    deps = [ "//common-mk/testrunner" ]
+  }
+}

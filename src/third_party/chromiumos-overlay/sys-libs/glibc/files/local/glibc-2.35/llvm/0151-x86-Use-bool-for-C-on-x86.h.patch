@@ -1,0 +1,52 @@
+From ed60400fbadf6914d25c402f6240d97282f35d12 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 31 Mar 2022 10:40:02 -0300
+Subject: [PATCH 151/163] x86: Use bool for C++ on x86.h
+
+Not all compilers define C99 _Bool type on C++ mode.
+---
+ misc/sys/cdefs.h               | 7 +++++++
+ sysdeps/x86/sys/platform/x86.h | 4 ++--
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/misc/sys/cdefs.h b/misc/sys/cdefs.h
+index d98f8885c1..7a95d93703 100644
+--- a/misc/sys/cdefs.h
++++ b/misc/sys/cdefs.h
+@@ -871,4 +871,11 @@ _Static_assert (0, "IEEE 128-bits long double requires redirection on this platf
+ # define __attribute_noclone__ /* Ignore.  */
+ #endif
+ 
++/* Not all compiles support _Bool type in C++.  */
++#ifdef	__cplusplus
++# define __BOOLEAN bool
++#else
++# define __BOOLEAN _Bool
++#endif
++
+ #endif	 /* sys/cdefs.h */
+diff --git a/sysdeps/x86/sys/platform/x86.h b/sysdeps/x86/sys/platform/x86.h
+index 17f6a1446f..e504c6b4bf 100644
+--- a/sysdeps/x86/sys/platform/x86.h
++++ b/sysdeps/x86/sys/platform/x86.h
+@@ -29,7 +29,7 @@ __BEGIN_DECLS
+ extern const struct cpuid_feature *__x86_get_cpuid_feature_leaf (unsigned int)
+      __attribute__ ((pure));
+ 
+-static __inline__ _Bool
++static __inline__ __BOOLEAN
+ x86_cpu_present (unsigned int __index)
+ {
+   const struct cpuid_feature *__ptr = __x86_get_cpuid_feature_leaf
+@@ -42,7 +42,7 @@ x86_cpu_present (unsigned int __index)
+   return __ptr->cpuid_array[__reg] & (1 << __bit);
+ }
+ 
+-static __inline__ _Bool
++static __inline__ __BOOLEAN
+ x86_cpu_active (unsigned int __index)
+ {
+   const struct cpuid_feature *__ptr = __x86_get_cpuid_feature_leaf
+-- 
+2.37.2
+

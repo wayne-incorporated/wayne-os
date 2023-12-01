@@ -1,0 +1,30 @@
+TFLite inference accuracy evaluation tools store output metrics into protobuf
+output files. com_google_protobuf is provided within systemlibs, but target
+cc_toolchain is needed by building protobuf files which is missed in systemlibs.
+
+diff --git a/third_party/systemlibs/protobuf.BUILD b/third_party/systemlibs/protobuf.BUILD
+index 4d05ab28..093f92b0 100644
+--- a/third_party/systemlibs/protobuf.BUILD
++++ b/third_party/systemlibs/protobuf.BUILD
+@@ -5,6 +5,7 @@ load(
+     "proto_gen",
+     "py_proto_library",
+ )
++load("@rules_proto//proto:defs.bzl", "proto_lang_toolchain", "proto_library")
+
+ licenses(["notice"])
+
+@@ -111,3 +112,13 @@ py_library(
+     visibility = ["//visibility:public"],
+     deps = [dep + "_proto" for dep in proto[1][1]],
+ ) for proto in WELL_KNOWN_PROTO_MAP.items()]
++
++
++proto_lang_toolchain(
++    name = "cc_toolchain",
++    blacklisted_protos = [proto + "_proto" for proto in WELL_KNOWN_PROTO_MAP.keys()],
++    command_line = "--cpp_out=$(OUT)",
++    runtime = ":protobuf",
++    visibility = ["//visibility:public"],
++)
++

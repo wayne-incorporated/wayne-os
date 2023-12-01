@@ -1,0 +1,1 @@
+wireless-regdb-20220606.ebuild

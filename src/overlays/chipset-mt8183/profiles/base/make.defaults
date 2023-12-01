@@ -1,0 +1,59 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+CHROMEOS_KERNEL_SPLITCONFIG="chromiumos-mediatek"
+CHROMEOS_KERNEL_ARCH="arm64"
+
+# MT8183 has 4 Cortex-A53 and 4 Cortex-A73.
+BOARD_COMPILER_FLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a73.cortex-a53 -mfpu=crypto-neon-fp-armv8 -mfloat-abi=hard -ftree-vectorize"
+
+# TODO(gbiv): Porting -mtune may be interesting, but clang seems to currently
+# entirely ignore this flag for ARM (notably: not aarch64) builds.
+BOARD_RUSTFLAGS="-Ctarget-feature=+armv8-a,+crc"
+
+# Initial value just for style purposes.
+USE=""
+
+# Use hardware FPU instead of software
+USE="${USE} hardfp"
+# Support for neon-vfpv3
+USE="${USE} neon"
+
+# For the device tree installation
+USE="${USE} device_tree"
+
+# use kernel 4.19
+USE="${USE} kernel-4_19"
+# Uncomment to use upstream kernel with upstream graphics stack
+#USE="${USE} kernel-upstream"
+
+# Enable Crostini VMs
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Enables WebGL rendering
+USE="${USE} drm_atomic"
+
+# Set raster thread number=2
+USE="${USE} big_little"
+
+# Mali drivers require this
+USE="${USE} gpu_sandbox_start_early"
+
+# Turn on the video cards this board uses.
+VIDEO_CARDS="mediatek"
+
+# MT8183 minigbm
+USE="${USE} minigbm_platform_mt8183"
+
+# Enable HW codecs using V4L2 API.
+USE="${USE} v4l2_codec"
+
+# Enable GpuMemoryBuffers backed by dma-bufs.
+USE="${USE} native_gpu_memory_buffers"
+
+# Use legacy pre-Groot UI for initramfs and init script screens.
+USE="${USE} legacy_firmware_ui"
+
+# Enable Downloadable Content (DLC) Test
+USE="${USE} dlc_test"

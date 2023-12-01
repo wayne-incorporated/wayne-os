@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
 #include <base/logging.h>
+#include <brillo/files/file_util.h>
 #include <crypto/nss_key_util.h>
 #include <crypto/nss_util.h>
 #include <crypto/nss_util_internal.h>
@@ -42,7 +43,7 @@ class PolicyKeyTest : public ::testing::Test {
 
   void TearDown() override {}
 
-  void StartUnowned() { base::DeleteFile(tmpfile_); }
+  void StartUnowned() { brillo::DeleteFile(tmpfile_); }
 
   static std::unique_ptr<crypto::RSAPrivateKey> CreateRSAPrivateKey(
       PK11SlotInfo* slot, uint16_t num_bits) {
@@ -206,7 +207,8 @@ TEST_F(PolicyKeyTest, SignVerify) {
   const std::vector<uint8_t> data = StringToBlob("whatever");
   std::vector<uint8_t> signature;
   EXPECT_TRUE(nss->Sign(data, pair.get(), &signature));
-  EXPECT_TRUE(key.Verify(data, signature));
+  EXPECT_TRUE(
+      key.Verify(data, signature, crypto::SignatureVerifier::RSA_PKCS1_SHA1));
 }
 
 TEST_F(PolicyKeyTest, RotateKey) {
@@ -245,7 +247,8 @@ TEST_F(PolicyKeyTest, RotateKey) {
 
   std::vector<uint8_t> signature;
   ASSERT_TRUE(nss->Sign(new_export, pair.get(), &signature));
-  ASSERT_TRUE(key2.Rotate(new_export, signature));
+  ASSERT_TRUE(key2.Rotate(new_export, signature,
+                          crypto::SignatureVerifier::RSA_PKCS1_SHA1));
   ASSERT_TRUE(key2.Persist());
 }
 

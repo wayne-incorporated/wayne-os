@@ -1,0 +1,180 @@
+# Copyright 2009 The ChromiumOS Authors
+# Distributed under the terms of the GNU General Public License v2
+
+app-accessibility/brltty	-beeper -contracted-braille -doc -fm -gpm -java -learn-mode -midi -ncurses -ocaml -pcm -speech -tcl -X
+app-admin/logrotate	-cron
+app-admin/rsyslog	-gcrypt -ssl -zlib
+app-benchmarks/i7z	-X
+app-editors/nano	-unicode
+app-editors/qemacs	-X
+app-editors/vim		-crypt -X minimal
+app-editors/vim-core    minimal
+
+# We don't use network functionality in bash, and since we ship it in a release
+# image, we'd prefer that attack surface simply not exist.
+app-shells/bash		-net
+# Drop this once we audit code to make sure we aren't using `echo -n` or `echo -e`.
+app-shells/dash	vanilla
+app-text/poppler	cairo
+app-text/tessdata_fast  osd
+app-text/tesseract      -doc jpeg -opencl -openmp png -static-libs tiff -training -webp
+dev-cpp/glog		gflags
+dev-db/sqlite		-extensions
+# Disable Segger J-Link for building openocd-0.10.0. We currently
+# don't use J-Link. It requires upgrading libjaylink, which is not yet
+# supported by official Gentoo portage repository.
+dev-embedded/openocd	-jlink
+dev-lang/perl		gdbm
+dev-lang/python		gdbm -sqlite
+dev-libs/dbus-glib	tools
+dev-libs/elfutils	-utils
+dev-libs/expat		-unicode
+dev-libs/glib		-doc
+dev-libs/libjcat        pkcs7
+dev-libs/libp11         -bindist
+# Readline is used by pcretest which we don't use.
+# zlib/bzip2 are only used by pcregrep which we don't use.
+dev-libs/libpcre	-bzip2 -readline -zlib
+# JIT uses mmap(..., PROT_WRITE | PROT_EXEC, ...)
+dev-libs/libpcre2	-bzip2 -jit -readline -zlib
+dev-libs/leveldb	-tcmalloc
+dev-libs/nss		-utils
+dev-libs/opencryptoki	tpmtok
+dev-libs/opensc	-pcsc-lite ctapi
+dev-libs/openssl	pkcs11 -tls-heartbeat
+dev-python/pygobject	-cairo
+dev-util/dialog		-unicode minimal
+dev-util/perf		-audit -doc -demangle -tui -ncurses -perl -python -slang -unwind
+chromeos-base/chromeos-chrome   build_tests
+chromeos-base/debugd    cfi thinlto
+chromeos-base/nsswitch	zeroconf
+media-gfx/imagemagick	jpeg png svg tiff xml
+# Disable all SANE backends that don't support USB,
+# plus additional backends that metrics indicate have no users.
+media-gfx/sane-backends -sane_backends_abaton -sane_backends_agfafocus -sane_backends_apple -sane_backends_artec -sane_backends_artec_eplus48u -sane_backends_as6e -sane_backends_avision -sane_backends_bh -sane_backends_canon -sane_backends_canon630u -sane_backends_canon_lide70 -sane_backends_cardscan -sane_backends_coolscan -sane_backends_coolscan2 -sane_backends_coolscan3 -sane_backends_dc210 -sane_backends_dc240 -sane_backends_dc25 -sane_backends_dell1600n_net -sane_backends_dmc -sane_backends_epjitsu -sane_backends_epson -sane_backends_gt68xx -sane_backends_hp3500 -sane_backends_hp4200 -sane_backends_hp5400 -sane_backends_hpljm1005 -sane_backends_hs2p -sane_backends_hpsj5s -sane_backends_ibm -sane_backends_kodak -sane_backends_kvs1025 -sane_backends_kvs20xx -sane_backends_kvs40xx -sane_backends_leo -sane_backends_ma1509 -sane_backends_magicolor -sane_backends_matsushita -sane_backends_microtek -sane_backends_microtek2 -sane_backends_mustek -sane_backends_mustek_pp -sane_backends_mustek_usb -sane_backends_mustek_usb2 -sane_backends_nec -sane_backends_net -sane_backends_niash -sane_backends_p5 -sane_backends_pie -sane_backends_plustek -sane_backends_plustek_pp -sane_backends_qcam -sane_backends_ricoh -sane_backends_rts8891 -sane_backends_s9036 -sane_backends_sceptre -sane_backends_sharp -sane_backends_sm3600 -sane_backends_sm3840 -sane_backends_sp15c -sane_backends_st400 -sane_backends_stv680 -sane_backends_tamarack -sane_backends_teco1 -sane_backends_teco2 -sane_backends_teco3 -sane_backends_u12 -sane_backends_umax -sane_backends_umax1220u -sane_backends_umax_pp
+media-gfx/zbar		-gtk -imagemagick jpeg python -qt4 threads -v4l -X -xv
+media-libs/freeimage	jpeg png
+# TODO(derat): Unset glib for harfbuzz if/when pango is no longer needed:
+# http://crbug.com/691477
+media-libs/harfbuzz	-cairo -introspection
+media-libs/leptonica    zlib -gif jpeg  -jpeg2k png -static-libs -test tiff -utils -webp
+media-libs/libdvdread	-css
+media-libs/libsndfile	minimal
+# disabled in profiles/default/linux/package.use
+media-libs/mesa		gallium classic shared-glapi gles2 egl -gbm
+media-libs/opencv	-gtk python png jpeg -tiff v4l
+media-libs/openh264	utils
+media-libs/waffle	gbm
+media-plugins/live      -ssl
+media-sound/sox		alsa ogg
+# Libvpx is required for video recording using the vnc2video go module.
+# Libdrm is required for go/chrome-os-capture-ffmpeg
+media-video/ffmpeg vpx libdrm openssl
+media-video/mplayer	cpudetection fbcon -encode -ass -a52 -cdio -dirac -dts -dv -dvd -dvdnav -enca -faac -faad -live -quicktime -mp3 -rar -real -speex -schroedinger -theora -tremor -toolame -twolame -vorbis -xscreensaver -x264 -xv -xvid
+net-analyzer/tcpdump	-chroot
+net-dns/avahi-daemon	zeroconf
+net-dns/dnsmasq		script
+net-firewall/iptables	conntrack
+net-fs/samba		ads acl gnutls ldap winbind -addc -addns -ceph -cluster -gpg -pam -perl -python -test
+# C++ library of gnutls uses exceptions, which breaks with -fno-exceptions flag.
+# Clients don't need the C++ library anyway, so disabling it...
+net-libs/gnutls	-cxx
+net-libs/glib-networking -gnome -libproxy
+# We want HTTPS support in web server based on libmicrohttpd.
+# Also |messages| is for enabling POST processor in the library.
+net-libs/libmicrohttpd	ssl messages
+net-libs/libsoup	-ssl
+# Disable boost.asio in net-libs/nghttp2 (b/172893124).
+net-libs/nghttp2	-cxx
+net-misc/curl		adns -ftp -imap kerberos -pop3 -progress-meter -smtp -tftp
+net-misc/dhcpcd		crash
+net-misc/iperf		threads
+# arping is used by some wifi autotests.
+# tracepath is exposed to the user via crosh.
+net-misc/iputils	arping tracepath
+net-misc/ntp		caps
+net-misc/openssh	-hpn -X
+net-vpn/openvpn		pkcs11
+net-vpn/strongswan	cisco nat-transport -strongswan_plugins_unity pkcs11 eap -pam
+net-vpn/wireguard-tools	-wg-quick
+net-nds/openldap	minimal -cxx
+net-print/cups		-dbus zeroconf upstart
+net-print/cups-filters	-dbus -pclm -pdf -zeroconf
+net-print/hplip		minimal
+# squid requires gnutls 3.1.5 for ssl, default it to off until newer gnutls is available
+net-proxy/squid		-ssl
+net-proxy/tsocks	tordns
+# No support for bluetooth printing.
+net-wireless/bluez	-cups
+net-wireless/wpa_supplicant-cros	dbus debug -readline smartcard
+# Build only TF lite to save disk space.
+sci-libs/tensorflow	-python minimal
+chromeos-base/tensorflow-internal	-python minimal
+sys-apps/busybox	-pam -selinux
+sys-apps/baselayout	-auto_seed_etc_files
+sys-apps/coreutils	multicall
+sys-apps/dbus		-X
+sys-apps/fwupd		-gpg -man pkcs7 synaptics thunderbolt
+sys-apps/hwdata		-net -usb
+sys-apps/mawk		forced-sandbox
+sys-apps/sed		forced-sandbox
+sys-apps/smartmontools	minimal -daemon -update-drivedb
+sys-apps/systemd-tmpfiles selinux
+sys-apps/systemd-utils -boot selinux -udev
+sys-apps/usbguard	-dbus
+sys-apps/util-linux     -unicode -udev
+# pam_unix: empty password is not OK
+sys-auth/pambase	-nullok
+sys-block/fio		aio
+sys-block/parted	device-mapper
+sys-devel/bc		forced-sandbox
+sys-devel/clang		-multitarget
+sys-devel/llvm		-multitarget -ncurses
+sys-fs/cryptsetup	-argon2
+sys-fs/lvm2		-lvm1 -readline -static thin lvm
+sys-fs/mtools		-X
+sys-fs/ntfs3g		-crypt external-fuse ntfsprogs -suid
+sys-fs/squashfs-tools	lzo lz4 lzma zstd
+sys-fs/udev		-devfs-compat -rule_generator hwdb acl
+sys-kernel/chromeos-kernel-4_4 -llvm_ias
+sys-kernel/chromeos-kernel-4_14 -llvm_ias
+sys-kernel/chromeos-kernel-experimental -llvm_ias
+sys-kernel/chromeos-kernel-next -llvm_ias
+sys-kernel/linux-firmware	linux_firmware_keyspan_usb
+
+# We use the chromeos-base/nsswitch package to provide nsswitch.conf.
+sys-libs/glibc -nsswitch
+
+# We disable berkdb in general, but we need gdbm to provide the API.
+sys-libs/gdbm		berkdb
+sys-libs/ldb		ldap -python -lmdb
+# Use pcre2 rather than pcre as everything else has moved.
+sys-libs/libselinux	pcre2
+sys-libs/ncurses	-cxx -unicode tinfo
+# Readline requires the unicode flag to match sys-libs/ncurses.
+sys-libs/readline	-unicode
+sys-libs/talloc		-python
+sys-libs/timezone-data	zic-slim
+sys-libs/tdb		-python
+sys-libs/tevent		-python
+sys-libs/zlib		static-libs
+sys-power/powertop	-unicode
+sys-process/htop	-unicode
+sys-process/procps	-unicode
+x11-apps/igt-gpu-tools	tests
+x11-apps/xinit		minimal
+x11-base/xorg-server	-suid
+x11-libs/libdrm		libkms
+x11-libs/libdrm-tests	libkms
+x11-libs/cairo		-opengl
+x11-libs/libva		egl
+# Need png for color font support. bzip2 is not used. It's only for X11 *pcf.bz2
+# that we don't have.
+media-libs/freetype	png -bzip2
+
+# We don't need Python in these packages, so save some space.
+dev-libs/boost -python
+sys-apps/flashmap -python
+
+# We do not need udev rules in this package.
+dev-util/android-tools -udev

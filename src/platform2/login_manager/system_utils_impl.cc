@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,6 +40,7 @@
 #include <base/threading/platform_thread.h>
 #include <base/time/time.h>
 #include <brillo/file_utils.h>
+#include <brillo/files/file_util.h>
 #include <brillo/process/process.h>
 #include <brillo/userdb_utils.h>
 #include <chromeos/dbus/service_constants.h>
@@ -231,7 +232,7 @@ pid_t SystemUtilsImpl::Wait(pid_t child_spec,
     if (base::TimeTicks::Now() - start > timeout)
       return 0;
 
-    base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(10));
+    base::PlatformThread::Sleep(base::Milliseconds(10));
   }
 }
 
@@ -289,7 +290,7 @@ bool SystemUtilsImpl::RemoveFile(const base::FilePath& filename) {
   const base::FilePath filename_in_base_dir = PutInsideBaseDir(filename);
   if (base::DirectoryExists(filename_in_base_dir))
     return false;
-  return base::DeleteFile(filename_in_base_dir);
+  return brillo::DeleteFile(filename_in_base_dir);
 }
 
 bool SystemUtilsImpl::AtomicFileWrite(const base::FilePath& filename,

@@ -1,0 +1,217 @@
+From 5735e58434c8bce363d13f9826a84825d6abc261 Mon Sep 17 00:00:00 2001
+From: Brian Norris <briannorris@chromium.org>
+Date: Tue, 17 Nov 2020 19:39:34 -0800
+Subject: [PATCH] iw: util: factor out HE capability parser
+
+We're going to use this for scan parsing.
+
+Signed-off-by: Brian Norris <briannorris@chromium.org>
+Link: https://lore.kernel.org/r/20201118033936.3667788-3-briannorris@chromium.org
+Signed-off-by: Johannes Berg <johannes.berg@intel.com>
+---
+ util.c | 144 ++++++++++++++++++++++++++++++++-------------------------
+ 1 file changed, 80 insertions(+), 64 deletions(-)
+
+diff --git a/util.c b/util.c
+index 3f1b787b8cbc..cb694378d3e8 100644
+--- a/util.c
++++ b/util.c
+@@ -989,19 +989,11 @@ void print_vht_info(__u32 capa, const __u8 *mcs)
+ 	printf("\t\tVHT TX highest supported: %d Mbps\n", tmp & 0x1fff);
+ }
+ 
+-void print_he_info(struct nlattr *nl_iftype)
++static void __print_he_capa(const __u16 *mac_cap,
++			    const __u16 *phy_cap,
++			    const __u16 *mcs_set, size_t mcs_len,
++			    const __u8 *ppet, int ppet_len)
+ {
+-	struct nlattr *tb[NL80211_BAND_IFTYPE_ATTR_MAX + 1];
+-	struct nlattr *tb_flags[NL80211_IFTYPE_MAX + 1];
+-	char *iftypes[NUM_NL80211_IFTYPES] = {
+-		"Unspec", "Adhoc", "Station", "AP", "AP/VLAN", "WDS", "Monitor",
+-		"Mesh", "P2P/Client", "P2P/Go", "P2P/Device", "OCB", "NAN",
+-	};
+-	__u16 mac_cap[3] = { 0 };
+-	__u16 phy_cap[6] = { 0 };
+-	__u16 mcs_set[6] = { 0 };
+-	__u8 ppet[25] = { 0 };
+-	size_t len;
+ 	int i;
+ 
+ 	#define PRINT_HE_CAP(_var, _idx, _bit, _str) \
+@@ -1022,30 +1014,6 @@ void print_he_info(struct nlattr *nl_iftype)
+ 	#define PRINT_HE_PHY_CAP0(_idx, _bit, ...) PRINT_HE_CAP(phy_cap, _idx, _bit + 8, __VA_ARGS__)
+ 	#define PRINT_HE_PHY_CAP_MASK(...) PRINT_HE_CAP_MASK(phy_cap, __VA_ARGS__)
+ 
+-	nla_parse(tb, NL80211_BAND_IFTYPE_ATTR_MAX,
+-		  nla_data(nl_iftype), nla_len(nl_iftype), NULL);
+-
+-	if (!tb[NL80211_BAND_IFTYPE_ATTR_IFTYPES])
+-		return;
+-
+-	if (nla_parse_nested(tb_flags, NL80211_IFTYPE_MAX,
+-			     tb[NL80211_BAND_IFTYPE_ATTR_IFTYPES], NULL))
+-		return;
+-
+-	printf("\t\tHE Iftypes:");
+-	for (i = 0; i < NUM_NL80211_IFTYPES; i++)
+-		if (nla_get_flag(tb_flags[i]) && iftypes[i])
+-			printf(" %s", iftypes[i]);
+-	printf("\n");
+-
+-	if (tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MAC]) {
+-		len = nla_len(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MAC]);
+-		if (len > sizeof(mac_cap))
+-			len = sizeof(mac_cap);
+-		memcpy(mac_cap,
+-		       nla_data(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MAC]),
+-		       len);
+-	}
+ 	printf("\t\t\tHE MAC Capabilities (0x");
+ 	for (i = 0; i < 3; i++)
+ 		printf("%04x", mac_cap[i]);
+@@ -1086,15 +1054,6 @@ void print_he_info(struct nlattr *nl_iftype)
+ 	PRINT_HE_MAC_CAP(2, 11, "UL 2x996-Tone RU");
+ 	PRINT_HE_MAC_CAP(2, 12, "OM Control UL MU Data Disable RX");
+ 
+-	if (tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PHY]) {
+-		len = nla_len(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PHY]);
+-
+-		if (len > sizeof(phy_cap) - 1)
+-			len = sizeof(phy_cap) - 1;
+-		memcpy(&((__u8 *)phy_cap)[1],
+-		       nla_data(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PHY]),
+-		       len);
+-	}
+ 	printf("\t\t\tHE PHY Capabilities: (0x");
+ 	for (i = 0; i < 11; i++)
+ 		printf("%02x", ((__u8 *)phy_cap)[i + 1]);
+@@ -1165,15 +1124,6 @@ void print_he_info(struct nlattr *nl_iftype)
+ 	PRINT_HE_PHY_CAP(5, 4, "RX Full BW SU Using HE MU PPDU with Compression SIGB");
+ 	PRINT_HE_PHY_CAP(5, 5, "RX Full BW SU Using HE MU PPDU with Non-Compression SIGB");
+ 
+-	if (tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MCS_SET]) {
+-		len = nla_len(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MCS_SET]);
+-		if (len > sizeof(mcs_set))
+-			len = sizeof(mcs_set);
+-		memcpy(mcs_set,
+-		       nla_data(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MCS_SET]),
+-		       len);
+-	}
+-
+ 	for (i = 0; i < 3; i++) {
+ 		__u8 phy_cap_support[] = { BIT(1) | BIT(2), BIT(3), BIT(4) };
+ 		char *bw[] = { "<= 80", "160", "80+80" };
+@@ -1182,6 +1132,10 @@ void print_he_info(struct nlattr *nl_iftype)
+ 		if ((phy_cap[0] & (phy_cap_support[i] << 8)) == 0)
+ 			continue;
+ 
++		/* Supports more, but overflow? Abort. */
++		if ((i * 2 + 2) * sizeof(mcs_set[0]) >= mcs_len)
++			return;
++
+ 		for (j = 0; j < 2; j++) {
+ 			int k;
+ 			printf("\t\t\tHE %s MCS and NSS set %s MHz\n", j ? "TX" : "RX", bw[i]);
+@@ -1199,7 +1153,76 @@ void print_he_info(struct nlattr *nl_iftype)
+ 		}
+ 	}
+ 
+-	len = 0;
++	if (ppet_len && (phy_cap[3] & BIT(15))) {
++		printf("\t\t\tPPE Threshold ");
++		for (i = 0; i < ppet_len; i++)
++			if (ppet[i])
++				printf("0x%02x ", ppet[i]);
++		printf("\n");
++	}
++}
++
++void print_he_info(struct nlattr *nl_iftype)
++{
++	struct nlattr *tb[NL80211_BAND_IFTYPE_ATTR_MAX + 1];
++	struct nlattr *tb_flags[NL80211_IFTYPE_MAX + 1];
++	char *iftypes[NUM_NL80211_IFTYPES] = {
++		"Unspec", "Adhoc", "Station", "AP", "AP/VLAN", "WDS", "Monitor",
++		"Mesh", "P2P/Client", "P2P/Go", "P2P/Device", "OCB", "NAN",
++	};
++	__u16 mac_cap[3] = { 0 };
++	__u16 phy_cap[6] = { 0 };
++	__u16 mcs_set[6] = { 0 };
++	__u8 ppet[25] = { 0 };
++	size_t len;
++	int i;
++	int mcs_len = 0, ppet_len = 0;
++
++	nla_parse(tb, NL80211_BAND_IFTYPE_ATTR_MAX,
++		  nla_data(nl_iftype), nla_len(nl_iftype), NULL);
++
++	if (!tb[NL80211_BAND_IFTYPE_ATTR_IFTYPES])
++		return;
++
++	if (nla_parse_nested(tb_flags, NL80211_IFTYPE_MAX,
++			     tb[NL80211_BAND_IFTYPE_ATTR_IFTYPES], NULL))
++		return;
++
++	printf("\t\tHE Iftypes:");
++	for (i = 0; i < NUM_NL80211_IFTYPES; i++)
++		if (nla_get_flag(tb_flags[i]) && iftypes[i])
++			printf(" %s", iftypes[i]);
++	printf("\n");
++
++	if (tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MAC]) {
++		len = nla_len(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MAC]);
++		if (len > sizeof(mac_cap))
++			len = sizeof(mac_cap);
++		memcpy(mac_cap,
++		       nla_data(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MAC]),
++		       len);
++	}
++
++	if (tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PHY]) {
++		len = nla_len(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PHY]);
++
++		if (len > sizeof(phy_cap) - 1)
++			len = sizeof(phy_cap) - 1;
++		memcpy(&((__u8 *)phy_cap)[1],
++		       nla_data(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PHY]),
++		       len);
++	}
++
++	if (tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MCS_SET]) {
++		len = nla_len(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MCS_SET]);
++		if (len > sizeof(mcs_set))
++			len = sizeof(mcs_set);
++		memcpy(mcs_set,
++		       nla_data(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_MCS_SET]),
++		       len);
++		mcs_len = len;
++	}
++
+ 	if (tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PPE]) {
+ 		len = nla_len(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PPE]);
+ 		if (len > sizeof(ppet))
+@@ -1207,17 +1230,10 @@ void print_he_info(struct nlattr *nl_iftype)
+ 		memcpy(ppet,
+ 		       nla_data(tb[NL80211_BAND_IFTYPE_ATTR_HE_CAP_PPE]),
+ 		       len);
++		ppet_len = len;
+ 	}
+ 
+-	if (len && (phy_cap[3] & BIT(15))) {
+-		size_t i;
+-
+-		printf("\t\t\tPPE Threshold ");
+-		for (i = 0; i < len; i++)
+-			if (ppet[i])
+-				printf("0x%02x ", ppet[i]);
+-		printf("\n");
+-	}
++	__print_he_capa(mac_cap, phy_cap, mcs_set, mcs_len, ppet, ppet_len);
+ }
+ 
+ void iw_hexdump(const char *prefix, const __u8 *buf, size_t size)
+-- 
+2.30.0.365.g02bc693789-goog
+

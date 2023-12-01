@@ -1,0 +1,115 @@
+commit c5c329ce249ee792358d49dbcd045e018348dfe6
+Author: Benjamin Gordon <bmgordon@chromium.org>
+Date:   Thu Mar 9 10:35:49 2023 -0700
+
+    epsonds: Give names to group options
+    
+    The group options currently do not have names set.  Since only the title
+    is supposed to be valid for group options, this isn't a violation of
+    the SANE standard.  Regardless, it causes scanimage (and maybe other
+    frontends) to skip them.  Add empty name values so that they can be
+    processed properly.
+    
+    Before:
+    Options specific to device `epsonds:net:n.n.n.n':
+      Standard:
+        --source Flatbed|ADF Front|ADF Duplex [Flatbed]
+            Selects the scan source (such as a document-feeder).
+        --mode Lineart|Gray|Color [Color]
+            Selects the scan mode (e.g., lineart, monochrome, or color).
+        --depth 1|8bit [8]
+            Number of bits per sample, typical values are 1 for "line-art" and 8
+            for multibit scans.
+        --resolution 75|150|300|600|1200dpi [75]
+            Sets the resolution of the scanned image.
+        -l 0..215.9mm [0]
+            Top-left x position of scan area.
+        -t 0..297.18mm [0]
+            Top-left y position of scan area.
+        -x 0..215.9mm [215.9]
+            Width of scan-area.
+        -y 0..297.18mm [297.18]
+            Height of scan-area.
+        --eject [inactive]
+            Eject the sheet in the ADF
+        --load [inactive]
+            Load a sheet in the ADF
+        --adf-skew[=(yes|no)] [inactive]
+            Enables ADF skew correction
+        --adf-crp[=(yes|no)] [inactive]
+            Enables ADF auto cropping
+    
+    After:
+    Options specific to device `epsonds:net:n.n.n.n':
+      Standard:
+        --source Flatbed|ADF Front|ADF Duplex [Flatbed]
+            Selects the scan source (such as a document-feeder).
+        --mode Lineart|Gray|Color [Color]
+            Selects the scan mode (e.g., lineart, monochrome, or color).
+        --depth 1|8bit [8]
+            Number of bits per sample, typical values are 1 for "line-art" and 8
+            for multibit scans.
+        --resolution 75|150|300|600|1200dpi [75]
+            Sets the resolution of the scanned image.
+      Geometry:
+        -l 0..215.9mm [0]
+            Top-left x position of scan area.
+        -t 0..297.18mm [0]
+            Top-left y position of scan area.
+        -x 0..215.9mm [215.9]
+            Width of scan-area.
+        -y 0..297.18mm [297.18]
+            Height of scan-area.
+      Optional equipment:
+        --eject [inactive]
+            Eject the sheet in the ADF
+        --load [inactive]
+            Load a sheet in the ADF
+        --adf-skew[=(yes|no)] [inactive]
+            Enables ADF skew correction
+        --adf-crp[=(yes|no)] [inactive]
+            Enables ADF auto cropping
+
+diff --git a/backend/epsonds.c b/backend/epsonds.c
+index 5d35859cb..b177c2339 100644
+--- a/backend/epsonds.c
++++ b/backend/epsonds.c
+@@ -1971,6 +1971,7 @@ init_options(epsonds_scanner *s)
+ 	}
+ 
+ 	/* "Geometry" group: */
++	s->opt[OPT_GEOMETRY_GROUP].name = "";
+ 	s->opt[OPT_GEOMETRY_GROUP].title = SANE_I18N("Geometry");
+ 	s->opt[OPT_GEOMETRY_GROUP].desc = "";
+ 	s->opt[OPT_GEOMETRY_GROUP].type = SANE_TYPE_GROUP;
+@@ -2020,6 +2021,7 @@ init_options(epsonds_scanner *s)
+ 	s->val[OPT_BR_Y].w = s->hw->y_range->max;
+ 
+ 	/* "Optional equipment" group: */
++	s->opt[OPT_EQU_GROUP].name = "";
+ 	s->opt[OPT_EQU_GROUP].title = SANE_I18N("Optional equipment");
+ 	s->opt[OPT_EQU_GROUP].desc = "";
+ 	s->opt[OPT_EQU_GROUP].type = SANE_TYPE_GROUP;
+
+commit 12ef54b087e596b11d3f71461a60f674915f8bcf
+Author: Benjamin Gordon <bmgordon@chromium.org>
+Date:   Thu Mar 9 10:20:51 2023 -0700
+
+    epsonds: Allow querying OPT_ADF_CRP
+    
+    The OPT_ADF_CRP (adf-crp) option is detectable from the hardware and is
+    settable as an option, but can't be queried.  This appears to just be an
+    oversight, so add it to the list of handled options.
+
+diff --git a/backend/epsonds.c b/backend/epsonds.c
+index 72d01d8a7..5d35859cb 100644
+--- a/backend/epsonds.c
++++ b/backend/epsonds.c
+@@ -2263,6 +2263,7 @@ getvalue(SANE_Handle handle, SANE_Int option, void *value)
+ 	case OPT_BR_Y:
+ 	case OPT_DEPTH:
+ 	case OPT_ADF_SKEW:
++	case OPT_ADF_CRP:
+ 		*((SANE_Word *) value) = sval->w;
+ 		break;
+ 

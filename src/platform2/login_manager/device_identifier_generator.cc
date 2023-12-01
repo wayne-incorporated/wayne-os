@@ -1,13 +1,14 @@
-// Copyright 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "login_manager/device_identifier_generator.h"
 
 #include <iterator>
+#include <utility>
 
-#include <base/bind.h>
-#include <base/callback_helpers.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback_helpers.h>
 #include <base/logging.h>
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_split.h>
@@ -136,35 +137,32 @@ bool DeviceIdentifierGenerator::InitMachineInfo(
   ComputeKeys(&state_keys);
   std::vector<StateKeyCallback> callbacks;
   callbacks.swap(pending_callbacks_);
-  for (std::vector<StateKeyCallback>::const_iterator callback(
-           callbacks.begin());
-       callback != callbacks.end(); ++callback) {
-    callback->Run(state_keys);
+  for (auto& callback : callbacks) {
+    std::move(callback).Run(state_keys);
   }
 
   // Fire all pending psm device active secret callbacks.
   std::string derived_secret;
   DerivePsmDeviceActiveSecret(&derived_secret);
-  for (std::vector<PsmDeviceActiveSecretCallback>::const_iterator callback(
-           pending_psm_device_secret_callbacks_.begin());
-       callback != pending_psm_device_secret_callbacks_.end(); ++callback) {
-    callback->Run(derived_secret);
+  std::vector<PsmDeviceActiveSecretCallback> psm_device_secret_callbacks;
+  psm_device_secret_callbacks.swap(pending_psm_device_secret_callbacks_);
+  for (auto& callback : psm_device_secret_callbacks) {
+    std::move(callback).Run(derived_secret);
   }
 
   return !stable_device_secret_.empty() ||
          (!machine_serial_number_.empty() && !disk_serial_number_.empty());
 }
 
-void DeviceIdentifierGenerator::RequestStateKeys(
-    const StateKeyCallback& callback) {
+void DeviceIdentifierGenerator::RequestStateKeys(StateKeyCallback callback) {
   if (!machine_info_available_) {
-    pending_callbacks_.push_back(callback);
+    pending_callbacks_.push_back(std::move(callback));
     return;
   }
 
   std::vector<std::vector<uint8_t>> state_keys;
   ComputeKeys(&state_keys);
-  callback.Run(state_keys);
+  std::move(callback).Run(state_keys);
 }
 
 void DeviceIdentifierGenerator::ComputeKeys(
@@ -228,21 +226,30 @@ void DeviceIdentifierGenerator::ComputeKeys(
   } else {
     // Can't compute keys, signaled by empty |state_keys| vector.
     LOG(WARNING) << "No device identifiers available, no state keys generated";
-    metrics_->SendStateKeyGenerationStatus(
-        LoginMetrics::STATE_KEY_STATUS_MISSING_IDENTIFIERS);
+    if (machine_serial_number_.empty() && disk_serial_number_.empty()) {
+      metrics_->SendStateKeyGenerationStatus(
+          LoginMetrics::STATE_KEY_STATUS_MISSING_ALL_IDENTIFIERS);
+    } else if (machine_serial_number_.empty()) {
+      metrics_->SendStateKeyGenerationStatus(
+          LoginMetrics::STATE_KEY_STATUS_MISSING_MACHINE_SERIAL_NUMBER);
+    } else {
+      DCHECK(disk_serial_number_.empty());
+      metrics_->SendStateKeyGenerationStatus(
+          LoginMetrics::STATE_KEY_STATUS_MISSING_DISK_SERIAL_NUMBER);
+    }
   }
 }
 
 void DeviceIdentifierGenerator::RequestPsmDeviceActiveSecret(
-    const PsmDeviceActiveSecretCallback& callback) {
+    PsmDeviceActiveSecretCallback callback) {
   if (!machine_info_available_) {
-    pending_psm_device_secret_callbacks_.push_back(callback);
+    pending_psm_device_secret_callbacks_.push_back(std::move(callback));
     return;
   }
 
   std::string derived_secret;
   DerivePsmDeviceActiveSecret(&derived_secret);
-  callback.Run(derived_secret);
+  std::move(callback).Run(derived_secret);
 }
 
 void DeviceIdentifierGenerator::DerivePsmDeviceActiveSecret(

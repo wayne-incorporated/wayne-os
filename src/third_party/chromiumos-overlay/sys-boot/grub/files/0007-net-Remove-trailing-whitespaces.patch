@@ -1,0 +1,680 @@
+From e453a4a64392a41bc7b37f890aceb358112d1687 Mon Sep 17 00:00:00 2001
+From: Elyes Haouas <ehaouas@noos.fr>
+Date: Fri, 4 Mar 2022 07:42:06 +0100
+Subject: [PATCH] net: Remove trailing whitespaces
+
+Signed-off-by: Elyes Haouas <ehaouas@noos.fr>
+Reviewed-by: Daniel Kiper <daniel.kiper@oracle.com>
+---
+ grub-core/net/bootp.c                  |  4 +--
+ grub-core/net/dns.c                    | 10 +++---
+ grub-core/net/drivers/efi/efinet.c     |  2 +-
+ grub-core/net/drivers/emu/emunet.c     |  8 ++---
+ grub-core/net/drivers/i386/pc/pxe.c    |  4 +--
+ grub-core/net/drivers/ieee1275/ofnet.c |  2 +-
+ grub-core/net/drivers/uboot/ubootnet.c |  2 +-
+ grub-core/net/ethernet.c               |  2 +-
+ grub-core/net/http.c                   | 10 +++---
+ grub-core/net/icmp6.c                  | 12 ++++----
+ grub-core/net/ip.c                     | 14 ++++-----
+ grub-core/net/net.c                    | 42 +++++++++++++-------------
+ grub-core/net/tcp.c                    | 14 ++++-----
+ grub-core/net/tftp.c                   |  4 +--
+ grub-core/net/udp.c                    |  4 +--
+ 15 files changed, 67 insertions(+), 67 deletions(-)
+
+diff --git a/grub-core/net/bootp.c b/grub-core/net/bootp.c
+index 6fb562702..8dc14794d 100644
+--- a/grub-core/net/bootp.c
++++ b/grub-core/net/bootp.c
+@@ -416,7 +416,7 @@ grub_net_configure_by_dhcp_ack (const char *name,
+   opt = find_dhcp_option (bp, size, GRUB_NET_BOOTP_EXTENSIONS_PATH, &opt_len);
+   if (opt && opt_len)
+     grub_env_set_net_property (name, "extensionspath", (const char *) opt, opt_len);
+-  
++
+   opt = find_dhcp_option (bp, size, GRUB_NET_BOOTP_CLIENT_ID, &opt_len);
+   if (opt && opt_len)
+     grub_env_set_net_property (name, "clientid", (const char *) opt, opt_len);
+@@ -825,7 +825,7 @@ grub_cmd_bootp (struct grub_command *cmd __attribute__ ((unused)),
+ 	return grub_errno;
+       }
+     ifaces[j].address.type = GRUB_NET_NETWORK_LEVEL_PROTOCOL_DHCP_RECV;
+-    grub_memcpy (&ifaces[j].hwaddress, &card->default_address, 
++    grub_memcpy (&ifaces[j].hwaddress, &card->default_address,
+ 		 sizeof (ifaces[j].hwaddress));
+     ifaces[j].dhcp_tmo = ifaces[j].dhcp_tmo_left = 1;
+     j++;
+diff --git a/grub-core/net/dns.c b/grub-core/net/dns.c
+index 906ec7d67..27c5f4142 100644
+--- a/grub-core/net/dns.c
++++ b/grub-core/net/dns.c
+@@ -174,7 +174,7 @@ check_name_real (const grub_uint8_t *name_at, const grub_uint8_t *head,
+ 	}
+       if (readable_ptr && grub_memcmp (ptr + 1, readable_ptr, *ptr) != 0)
+ 	return 0;
+-      if (grub_memchr (ptr + 1, 0, *ptr) 
++      if (grub_memchr (ptr + 1, 0, *ptr)
+ 	  || grub_memchr (ptr + 1, '.', *ptr))
+ 	return 0;
+       if (readable_ptr)
+@@ -232,7 +232,7 @@ enum
+     DNS_CLASS_AAAA = 28
+   };
+ 
+-static grub_err_t 
++static grub_err_t
+ recv_hook (grub_net_udp_socket_t sock __attribute__ ((unused)),
+ 	   struct grub_net_buff *nb,
+ 	   void *data_)
+@@ -261,7 +261,7 @@ recv_hook (grub_net_udp_socket_t sock __attribute__ ((unused)),
+       grub_netbuff_free (nb);
+       return GRUB_ERR_NONE;
+     }
+-  
++
+   if (head->id != data->id)
+     {
+       grub_netbuff_free (nb);
+@@ -615,7 +615,7 @@ grub_net_dns_lookup (const char *name,
+   grub_netbuff_free (nb);
+   for (j = 0; j < send_servers; j++)
+     grub_net_udp_close (sockets[j]);
+-  
++
+   grub_free (sockets);
+ 
+   if (*data.naddresses)
+@@ -623,7 +623,7 @@ grub_net_dns_lookup (const char *name,
+   if (data.dns_err)
+     return grub_error (GRUB_ERR_NET_NO_DOMAIN,
+ 		       N_("no DNS record found"));
+-    
++
+   if (err)
+     {
+       grub_errno = err;
+diff --git a/grub-core/net/drivers/efi/efinet.c b/grub-core/net/drivers/efi/efinet.c
+index 381c138db..24aabdab6 100644
+--- a/grub-core/net/drivers/efi/efinet.c
++++ b/grub-core/net/drivers/efi/efinet.c
+@@ -406,7 +406,7 @@ GRUB_MOD_FINI(efinet)
+ {
+   struct grub_net_card *card, *next;
+ 
+-  FOR_NET_CARDS_SAFE (card, next) 
++  FOR_NET_CARDS_SAFE (card, next)
+     if (card->driver == &efidriver)
+       grub_net_card_unregister (card);
+ }
+diff --git a/grub-core/net/drivers/emu/emunet.c b/grub-core/net/drivers/emu/emunet.c
+index b19492086..5f311d40f 100644
+--- a/grub-core/net/drivers/emu/emunet.c
++++ b/grub-core/net/drivers/emu/emunet.c
+@@ -25,21 +25,21 @@
+ 
+ GRUB_MOD_LICENSE ("GPLv3+");
+ 
+-static grub_err_t 
++static grub_err_t
+ send_card_buffer (struct grub_net_card *dev __attribute__ ((unused)),
+ 		  struct grub_net_buff *pack);
+ 
+ static struct grub_net_buff *
+ get_card_packet (struct grub_net_card *dev __attribute__ ((unused)));
+ 
+-static struct grub_net_card_driver emudriver = 
++static struct grub_net_card_driver emudriver =
+   {
+     .name = "emu",
+     .send = send_card_buffer,
+     .recv = get_card_packet
+   };
+ 
+-static struct grub_net_card emucard = 
++static struct grub_net_card emucard =
+   {
+     .name = "emu0",
+     .driver = &emudriver,
+@@ -51,7 +51,7 @@ static struct grub_net_card emucard =
+     .flags = 0
+   };
+ 
+-static grub_err_t 
++static grub_err_t
+ send_card_buffer (struct grub_net_card *dev __attribute__ ((unused)),
+ 		  struct grub_net_buff *pack)
+ {
+diff --git a/grub-core/net/drivers/i386/pc/pxe.c b/grub-core/net/drivers/i386/pc/pxe.c
+index 3f4152d03..997010cf1 100644
+--- a/grub-core/net/drivers/i386/pc/pxe.c
++++ b/grub-core/net/drivers/i386/pc/pxe.c
+@@ -248,7 +248,7 @@ grub_pxe_recv (struct grub_net_card *dev __attribute__ ((unused)))
+   return buf;
+ }
+ 
+-static grub_err_t 
++static grub_err_t
+ grub_pxe_send (struct grub_net_card *dev __attribute__ ((unused)),
+ 	       struct grub_net_buff *pack)
+ {
+@@ -295,7 +295,7 @@ grub_pxe_open (struct grub_net_card *dev __attribute__ ((unused)))
+   if (ou->status)
+     return grub_error (GRUB_ERR_IO, "can't open UNDI");
+   return GRUB_ERR_NONE;
+-} 
++}
+ 
+ struct grub_net_card_driver grub_pxe_card_driver =
+ {
+diff --git a/grub-core/net/drivers/ieee1275/ofnet.c b/grub-core/net/drivers/ieee1275/ofnet.c
+index 8f0386602..8c8398948 100644
+--- a/grub-core/net/drivers/ieee1275/ofnet.c
++++ b/grub-core/net/drivers/ieee1275/ofnet.c
+@@ -546,7 +546,7 @@ GRUB_MOD_FINI(ofnet)
+ {
+   struct grub_net_card *card, *next;
+ 
+-  FOR_NET_CARDS_SAFE (card, next) 
++  FOR_NET_CARDS_SAFE (card, next)
+     if (card->driver && grub_strcmp (card->driver->name, "ofnet") == 0)
+       grub_net_card_unregister (card);
+   grub_ieee1275_net_config = 0;
+diff --git a/grub-core/net/drivers/uboot/ubootnet.c b/grub-core/net/drivers/uboot/ubootnet.c
+index 056052e40..b9d5a0cd4 100644
+--- a/grub-core/net/drivers/uboot/ubootnet.c
++++ b/grub-core/net/drivers/uboot/ubootnet.c
+@@ -155,7 +155,7 @@ GRUB_MOD_FINI (ubootnet)
+ {
+   struct grub_net_card *card, *next;
+ 
+-  FOR_NET_CARDS_SAFE (card, next) 
++  FOR_NET_CARDS_SAFE (card, next)
+     if (card->driver && grub_strcmp (card->driver->name, "ubnet") == 0)
+       grub_net_card_unregister (card);
+ }
+diff --git a/grub-core/net/ethernet.c b/grub-core/net/ethernet.c
+index a9906338c..707bbb12c 100644
+--- a/grub-core/net/ethernet.c
++++ b/grub-core/net/ethernet.c
+@@ -45,7 +45,7 @@ struct llchdr
+ 
+ struct snaphdr
+ {
+-  grub_uint8_t oui[3]; 
++  grub_uint8_t oui[3];
+   grub_uint16_t type;
+ } GRUB_PACKED;
+ 
+diff --git a/grub-core/net/http.c b/grub-core/net/http.c
+index 69e533b7e..8d6c62c76 100644
+--- a/grub-core/net/http.c
++++ b/grub-core/net/http.c
+@@ -145,7 +145,7 @@ parse_line (grub_file_t file, http_data_t data, char *ptr, grub_size_t len)
+       return GRUB_ERR_NONE;
+     }
+ 
+-  return GRUB_ERR_NONE;  
++  return GRUB_ERR_NONE;
+ }
+ 
+ static void
+@@ -205,7 +205,7 @@ http_receive (grub_net_tcp_socket_t sock __attribute__ ((unused)),
+ 	      grub_net_tcp_close (data->sock, GRUB_NET_TCP_ABORT);
+ 	      return grub_errno;
+ 	    }
+-	      
++
+ 	  data->current_line = t;
+ 	  grub_memcpy (data->current_line + data->current_line_len,
+ 		       nb->data, ptr - (char *) nb->data);
+@@ -261,7 +261,7 @@ http_receive (grub_net_tcp_socket_t sock __attribute__ ((unused)),
+ 	{
+ 	  grub_netbuff_free (nb);
+ 	  return GRUB_ERR_NONE;
+-	} 
++	}
+       err = grub_netbuff_pull (nb, ptr - (char *) nb->data);
+       if (err)
+ 	{
+@@ -370,7 +370,7 @@ http_establish (struct grub_file *file, grub_off_t offset, int initial)
+ 	       grub_strlen (file->device->net->server));
+ 
+   ptr = nb->tail;
+-  err = grub_netbuff_put (nb, 
++  err = grub_netbuff_put (nb,
+ 			  sizeof ("\r\nUser-Agent: " PACKAGE_STRING "\r\n")
+ 			  - 1);
+   if (err)
+@@ -578,7 +578,7 @@ http_packets_pulled (struct grub_file *file)
+   return 0;
+ }
+ 
+-static struct grub_net_app_protocol grub_http_protocol = 
++static struct grub_net_app_protocol grub_http_protocol =
+   {
+     .name = "http",
+     .open = http_open,
+diff --git a/grub-core/net/icmp6.c b/grub-core/net/icmp6.c
+index 2cbd95dce..986d57b01 100644
+--- a/grub-core/net/icmp6.c
++++ b/grub-core/net/icmp6.c
+@@ -225,7 +225,7 @@ grub_net_recv_icmp6_packet (struct grub_net_buff *nb,
+ 	    if (ohdr->len == 0 || ptr + 8 * ohdr->len > nb->tail)
+ 	      {
+ 		grub_netbuff_free (nb);
+-		return GRUB_ERR_NONE; 
++		return GRUB_ERR_NONE;
+ 	      }
+ 	    if (ohdr->type == OPTION_SOURCE_LINK_LAYER_ADDRESS
+ 		&& ohdr->len == 1)
+@@ -329,7 +329,7 @@ grub_net_recv_icmp6_packet (struct grub_net_buff *nb,
+ 	    if (ohdr->len == 0 || ptr + 8 * ohdr->len > nb->tail)
+ 	      {
+ 		grub_netbuff_free (nb);
+-		return GRUB_ERR_NONE; 
++		return GRUB_ERR_NONE;
+ 	      }
+ 	    if (ohdr->type == OPTION_TARGET_LINK_LAYER_ADDRESS
+ 		&& ohdr->len == 1)
+@@ -378,7 +378,7 @@ grub_net_recv_icmp6_packet (struct grub_net_buff *nb,
+ 	    if (ohdr->len == 0 || ptr + 8 * ohdr->len > nb->tail)
+ 	      {
+ 		grub_netbuff_free (nb);
+-		return GRUB_ERR_NONE; 
++		return GRUB_ERR_NONE;
+ 	      }
+ 	    if (ohdr->type == OPTION_SOURCE_LINK_LAYER_ADDRESS
+ 		&& ohdr->len == 1)
+@@ -448,7 +448,7 @@ grub_net_recv_icmp6_packet (struct grub_net_buff *nb,
+ 			  grub_errno = GRUB_ERR_NONE;
+ 			  continue;
+ 			}
+-		      inf = grub_net_add_addr (name, 
++		      inf = grub_net_add_addr (name,
+ 					       card, &addr,
+ 					       &slaac->address, 0);
+ 		      if (!route_inf)
+@@ -523,7 +523,7 @@ grub_net_icmp6_send_request (struct grub_net_network_level_interface *inf,
+   multicast.ipv6[1] = (grub_be_to_cpu64_compile_time (0x01ff000000ULL)
+ 		       | (proto_addr->ipv6[1]
+ 			  & grub_be_to_cpu64_compile_time (0xffffff)));
+-  
++
+   err = grub_net_link_layer_resolve (inf, &multicast, &ll_multicast);
+   if (err)
+     return err;
+@@ -555,7 +555,7 @@ grub_net_icmp6_send_request (struct grub_net_network_level_interface *inf,
+   ohdr = (struct option_header *) nb->data;
+   ohdr->type = OPTION_SOURCE_LINK_LAYER_ADDRESS;
+   ohdr->len = 1;
+-  err = grub_netbuff_push (nb, sizeof (*sol));  
++  err = grub_netbuff_push (nb, sizeof (*sol));
+   if (err)
+     goto fail;
+ 
+diff --git a/grub-core/net/ip.c b/grub-core/net/ip.c
+index ea5edf8f1..e3d62e97f 100644
+--- a/grub-core/net/ip.c
++++ b/grub-core/net/ip.c
+@@ -157,7 +157,7 @@ send_fragmented (struct grub_net_network_level_interface * inf,
+       iph->service = 0;
+       iph->len = grub_cpu_to_be16 (len + sizeof (struct iphdr));
+       iph->ident = grub_cpu_to_be16 (id);
+-      iph->frags = grub_cpu_to_be16 (off | (((grub_ssize_t) len 
++      iph->frags = grub_cpu_to_be16 (off | (((grub_ssize_t) len
+ 					     == nb->tail - nb->data)
+ 					    ? 0 : MORE_FRAGMENTS));
+       iph->ttl = 0xff;
+@@ -254,7 +254,7 @@ handle_dgram (struct grub_net_buff *nb,
+ 	    if (expected != chk)
+ 	      {
+ 		grub_dprintf ("net", "Invalid UDP checksum. "
+-			      "Expected %x, got %x\n", 
++			      "Expected %x, got %x\n",
+ 			      grub_be_to_cpu16 (expected),
+ 			      grub_be_to_cpu16 (chk));
+ 		grub_netbuff_free (nb);
+@@ -271,7 +271,7 @@ handle_dgram (struct grub_net_buff *nb,
+ 	  }
+ 
+ 	bootp = (const struct grub_net_bootp_packet *) nb->data;
+-	
++
+ 	FOR_NET_NETWORK_LEVEL_INTERFACES (inf)
+ 	  if (inf->card == card
+ 	      && inf->address.type == GRUB_NET_NETWORK_LEVEL_PROTOCOL_DHCP_RECV
+@@ -314,7 +314,7 @@ handle_dgram (struct grub_net_buff *nb,
+ 	&& hwaddress->type == GRUB_NET_LINK_LEVEL_PROTOCOL_ETHERNET
+ 	&& hwaddress->mac[0] == 0x33 && hwaddress->mac[1] == 0x33
+ 	&& hwaddress->mac[2] == 0xff
+-	&& hwaddress->mac[3] == ((grub_be_to_cpu64 (inf->address.ipv6[1]) 
++	&& hwaddress->mac[3] == ((grub_be_to_cpu64 (inf->address.ipv6[1])
+ 				  >> 16) & 0xff)
+ 	&& hwaddress->mac[4] == ((grub_be_to_cpu64 (inf->address.ipv6[1])
+ 				  >> 8) & 0xff)
+@@ -325,7 +325,7 @@ handle_dgram (struct grub_net_buff *nb,
+ 	break;
+       }
+   }
+- 
++
+   if (!inf && !(dest->type == GRUB_NET_NETWORK_LEVEL_PROTOCOL_IPV6
+ 		&& dest->ipv6[0] == grub_be_to_cpu64_compile_time (0xff02ULL
+ 								   << 48)
+@@ -439,7 +439,7 @@ grub_net_recv_ip4_packets (struct grub_net_buff *nb,
+       }
+     if (actual_size < expected_size)
+       {
+-	grub_dprintf ("net", "Cut IP packet actual: %" PRIuGRUB_SIZE 
++	grub_dprintf ("net", "Cut IP packet actual: %" PRIuGRUB_SIZE
+ 		      ", expected %" PRIuGRUB_SIZE "\n", actual_size,
+ 		      expected_size);
+ 	grub_netbuff_free (nb);
+@@ -701,7 +701,7 @@ grub_net_recv_ip6_packets (struct grub_net_buff *nb,
+       }
+     if (actual_size < expected_size)
+       {
+-	grub_dprintf ("net", "Cut IP packet actual: %" PRIuGRUB_SIZE 
++	grub_dprintf ("net", "Cut IP packet actual: %" PRIuGRUB_SIZE
+ 		      ", expected %" PRIuGRUB_SIZE "\n", actual_size,
+ 		      expected_size);
+ 	grub_netbuff_free (nb);
+diff --git a/grub-core/net/net.c b/grub-core/net/net.c
+index 4d3eb5c1a..1b0e34601 100644
+--- a/grub-core/net/net.c
++++ b/grub-core/net/net.c
+@@ -60,7 +60,7 @@ link_layer_find_entry (const grub_net_network_level_address_t *proto,
+     return NULL;
+   for (i = 0; i < LINK_LAYER_CACHE_SIZE; i++)
+     {
+-      if (card->link_layer_table[i].avail == 1 
++      if (card->link_layer_table[i].avail == 1
+ 	  && grub_net_addr_cmp (&card->link_layer_table[i].nl_address,
+ 				proto) == 0)
+ 	return &card->link_layer_table[i];
+@@ -180,7 +180,7 @@ grub_net_link_layer_resolve (struct grub_net_network_level_interface *inf,
+       *hw_addr = entry->ll_address;
+       return GRUB_ERR_NONE;
+     }
+-  return grub_error (GRUB_ERR_TIMEOUT, 
++  return grub_error (GRUB_ERR_TIMEOUT,
+ 		     N_("timeout: could not resolve hardware address"));
+ }
+ 
+@@ -237,7 +237,7 @@ static void
+ grub_net_network_level_interface_register (struct grub_net_network_level_interface *inter);
+ 
+ static struct grub_net_network_level_interface *
+-grub_net_add_addr_real (char *name, 
++grub_net_add_addr_real (char *name,
+ 			struct grub_net_card *card,
+ 			const grub_net_network_level_address_t *addr,
+ 			const grub_net_link_level_address_t *hwaddress,
+@@ -263,7 +263,7 @@ grub_net_add_addr_real (char *name,
+ }
+ 
+ struct grub_net_network_level_interface *
+-grub_net_add_addr (const char *name, 
++grub_net_add_addr (const char *name,
+ 		   struct grub_net_card *card,
+ 		   const grub_net_network_level_address_t *addr,
+ 		   const grub_net_link_level_address_t *hwaddress,
+@@ -271,7 +271,7 @@ grub_net_add_addr (const char *name,
+ {
+   char *name_dup = grub_strdup (name);
+   struct grub_net_network_level_interface *ret;
+- 
++
+   if (!name_dup)
+     return NULL;
+   ret = grub_net_add_addr_real (name_dup, card, addr, hwaddress, flags);
+@@ -513,7 +513,7 @@ match_net (const grub_net_network_level_netaddress_t *net,
+ 	    mask[0] = 0xffffffffffffffffULL << (64 - net->ipv6.masksize);
+ 	    mask[1] = 0;
+ 	  }
+-	else 
++	else
+ 	  {
+ 	    mask[0] = 0xffffffffffffffffULL;
+ 	    mask[1] = 0xffffffffffffffffULL << (128 - net->ipv6.masksize);
+@@ -712,7 +712,7 @@ grub_cmd_deladdr (struct grub_command *cmd __attribute__ ((unused)),
+   grub_free (inter->name);
+   grub_free (inter);
+ 
+-  return GRUB_ERR_NONE;  
++  return GRUB_ERR_NONE;
+ }
+ 
+ void
+@@ -733,14 +733,14 @@ grub_net_addr_to_str (const grub_net_network_level_address_t *target, char *buf)
+ 	  {
+ 	    grub_snprintf (ptr, 6, "%" PRIxGRUB_UINT64_T ":",
+ 			   (n >> (48 - 16 * i)) & 0xffff);
+-	    ptr += grub_strlen (ptr); 
++	    ptr += grub_strlen (ptr);
+ 	  }
+ 	n  = grub_be_to_cpu64 (target->ipv6[1]);
+ 	for (i = 0; i < 3; i++)
+ 	  {
+ 	    grub_snprintf (ptr, 6, "%" PRIxGRUB_UINT64_T ":",
+ 			   (n >> (48 - 16 * i)) & 0xffff);
+-	    ptr += grub_strlen (ptr); 
++	    ptr += grub_strlen (ptr);
+ 	  }
+ 	grub_snprintf (ptr, 5, "%" PRIxGRUB_UINT64_T, n & 0xffff);
+ 	return;
+@@ -928,7 +928,7 @@ grub_net_network_level_interface_register (struct grub_net_network_level_interfa
+       return;
+     for (ptr = name; *ptr; ptr++)
+       if (*ptr == ':')
+-	*ptr = '_';    
++	*ptr = '_';
+     grub_env_set (name, buf);
+     grub_register_variable_hook (name, 0, hwaddr_set_env);
+     grub_env_export (name);
+@@ -945,7 +945,7 @@ grub_net_network_level_interface_register (struct grub_net_network_level_interfa
+       return;
+     for (ptr = name; *ptr; ptr++)
+       if (*ptr == ':')
+-	*ptr = '_';    
++	*ptr = '_';
+     grub_env_set (name, buf);
+     grub_register_variable_hook (name, 0, addr_set_env);
+     grub_env_export (name);
+@@ -1020,12 +1020,12 @@ grub_cmd_addaddr (struct grub_command *cmd __attribute__ ((unused)),
+ 
+   if (argc != 3)
+     return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("three arguments expected"));
+-  
++
+   FOR_NET_CARDS (card)
+     if (grub_strcmp (card->name, args[1]) == 0)
+       break;
+   if (card == NULL)
+-    return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("card not found")); 
++    return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("card not found"));
+ 
+   err = grub_net_resolve_address (args[2], &addr);
+   if (err)
+@@ -1055,7 +1055,7 @@ grub_cmd_delroute (struct grub_command *cmd __attribute__ ((unused)),
+ 
+   if (argc != 1)
+     return grub_error (GRUB_ERR_BAD_ARGUMENT, N_("one argument expected"));
+-  
++
+   for (prev = &grub_net_routes, route = *prev; route; prev = &((*prev)->next),
+ 	 route = *prev)
+     if (grub_strcmp (route->name, args[0]) == 0)
+@@ -1136,7 +1136,7 @@ grub_cmd_addroute (struct grub_command *cmd __attribute__ ((unused)),
+ 		       N_("three arguments expected"));
+ 
+   grub_net_resolve_net_address  (args[1], &target);
+-  
++
+   if (grub_strcmp (args[2], "gw") == 0 && argc >= 4)
+     {
+       grub_err_t err;
+@@ -1216,10 +1216,10 @@ grub_cmd_listroutes (struct grub_command *cmd __attribute__ ((unused)),
+     if (route->is_gateway)
+       {
+ 	grub_printf ("gw ");
+-	print_address (&route->gw);	
++	print_address (&route->gw);
+       }
+     else
+-      grub_printf ("%s", route->interface->name);      
++      grub_printf ("%s", route->interface->name);
+     grub_printf ("\n");
+   }
+   return GRUB_ERR_NONE;
+@@ -1302,7 +1302,7 @@ grub_net_open_real (const char *name)
+       grub_error (GRUB_ERR_NET_BAD_ADDRESS,
+ 		  N_("no server is specified"));
+       return NULL;
+-    }  
++    }
+ 
+   for (try = 0; try < 2; try++)
+     {
+@@ -1493,7 +1493,7 @@ receive_packets (struct grub_net_card *card, int *stop_condition)
+   while (received < 100)
+     {
+       /* Maybe should be better have a fixed number of packets for each card
+-	 and just mark them as used and not used.  */ 
++	 and just mark them as used and not used.  */
+       struct grub_net_buff *nb;
+ 
+       if (received > 10 && stop_condition && *stop_condition)
+@@ -1654,7 +1654,7 @@ have_ahead (struct grub_file *file)
+   return ret;
+ }
+ 
+-static grub_err_t 
++static grub_err_t
+ grub_net_seek_real (struct grub_file *file, grub_off_t offset)
+ {
+   if (offset == file->device->net->offset)
+@@ -1724,7 +1724,7 @@ static grub_err_t
+ grub_net_fini_hw (int noreturn __attribute__ ((unused)))
+ {
+   struct grub_net_card *card;
+-  FOR_NET_CARDS (card) 
++  FOR_NET_CARDS (card)
+     if (card->opened)
+       {
+ 	if (card->driver->close)
+diff --git a/grub-core/net/tcp.c b/grub-core/net/tcp.c
+index e8ad34b84..200460121 100644
+--- a/grub-core/net/tcp.c
++++ b/grub-core/net/tcp.c
+@@ -376,7 +376,7 @@ grub_net_tcp_retransmit (void)
+ 
+ 	if (unack->last_try > limit_time)
+ 	  continue;
+-	
++
+ 	if (unack->try_count > TCP_RETRANSMISSION_COUNT)
+ 	  {
+ 	    error (sock);
+@@ -581,7 +581,7 @@ grub_net_tcp_open (char *server,
+       grub_error (GRUB_ERR_BUG, "not an IP address");
+       return NULL;
+     }
+- 
++
+   err = grub_net_route_address (addr, &gateway, &inf);
+   if (err)
+     return NULL;
+@@ -592,7 +592,7 @@ grub_net_tcp_open (char *server,
+ 
+   socket = grub_zalloc (sizeof (*socket));
+   if (socket == NULL)
+-    return NULL; 
++    return NULL;
+ 
+   socket->out_port = out_port;
+   socket->inf = inf;
+@@ -657,7 +657,7 @@ grub_net_tcp_open (char *server,
+     {
+       int j;
+       nb->data = nbd;
+-      err = grub_net_send_ip_packet (socket->inf, &(socket->out_nla), 
++      err = grub_net_send_ip_packet (socket->inf, &(socket->out_nla),
+ 				     &(socket->ll_target_addr), nb,
+ 				     GRUB_NET_IP_TCP);
+       if (err)
+@@ -667,7 +667,7 @@ grub_net_tcp_open (char *server,
+ 	  grub_netbuff_free (nb);
+ 	  return NULL;
+ 	}
+-      for (j = 0; (j < TCP_SYN_RETRANSMISSION_TIMEOUT / 50 
++      for (j = 0; (j < TCP_SYN_RETRANSMISSION_TIMEOUT / 50
+ 		   && !socket->established); j++)
+ 	grub_net_poll_cards (50, &socket->established);
+       if (socket->established)
+@@ -956,7 +956,7 @@ grub_net_recv_tcp_packet (struct grub_net_buff *nb,
+       if (sock->fin_hook && just_closed)
+ 	sock->fin_hook (sock, sock->hook_data);
+     }
+-	
++
+     return GRUB_ERR_NONE;
+   }
+   if (grub_be_to_cpu16 (tcph->flags) & TCP_SYN)
+@@ -971,7 +971,7 @@ grub_net_recv_tcp_packet (struct grub_net_buff *nb,
+ 	sock = grub_zalloc (sizeof (*sock));
+ 	if (sock == NULL)
+ 	  return grub_errno;
+-	
++
+ 	sock->out_port = grub_be_to_cpu16 (tcph->src);
+ 	sock->in_port = grub_be_to_cpu16 (tcph->dst);
+ 	sock->inf = inf;
+diff --git a/grub-core/net/tftp.c b/grub-core/net/tftp.c
+index 7f44b30f5..ebbafe7a1 100644
+--- a/grub-core/net/tftp.c
++++ b/grub-core/net/tftp.c
+@@ -157,7 +157,7 @@ tftp_receive (grub_net_udp_socket_t sock __attribute__ ((unused)),
+     {
+     case TFTP_OACK:
+       data->block_size = TFTP_DEFAULTSIZE_PACKET;
+-      data->have_oack = 1; 
++      data->have_oack = 1;
+       for (ptr = nb->data + sizeof (tftph->opcode); ptr < nb->tail;)
+ 	{
+ 	  if (grub_memcmp (ptr, "tsize\0", sizeof ("tsize\0") - 1) == 0)
+@@ -460,7 +460,7 @@ tftp_packets_pulled (struct grub_file *file)
+   return ack (data, data->block);
+ }
+ 
+-static struct grub_net_app_protocol grub_tftp_protocol = 
++static struct grub_net_app_protocol grub_tftp_protocol =
+   {
+     .name = "tftp",
+     .open = tftp_open,
+diff --git a/grub-core/net/udp.c b/grub-core/net/udp.c
+index df7fb95e7..91e2a017a 100644
+--- a/grub-core/net/udp.c
++++ b/grub-core/net/udp.c
+@@ -79,7 +79,7 @@ grub_net_udp_open (grub_net_network_level_address_t addr,
+       grub_error (GRUB_ERR_BUG, "not an IP address");
+       return NULL;
+     }
+- 
++
+   err = grub_net_route_address (addr, &gateway, &inf);
+   if (err)
+     return NULL;
+@@ -90,7 +90,7 @@ grub_net_udp_open (grub_net_network_level_address_t addr,
+ 
+   socket = grub_zalloc (sizeof (*socket));
+   if (socket == NULL)
+-    return NULL; 
++    return NULL;
+ 
+   socket->out_port = out_port;
+   socket->inf = inf;
+-- 
+2.36.1.476.g0c4daa206d-goog
+

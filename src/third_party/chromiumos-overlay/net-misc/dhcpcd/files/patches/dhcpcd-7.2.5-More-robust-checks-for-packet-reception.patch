@@ -1,0 +1,104 @@
+From b30a0b2a83e3a0e24a76d956c8b8051cbdea7947 Mon Sep 17 00:00:00 2001
+From: Andrzej Ostruszka <amo@semihalf.com>
+Date: Thu, 4 Nov 2021 10:05:05 +0000
+Subject: [PATCH] More robust checks for packet reception
+
+In ChromeOS dhcpcd is being used with "fortified" string functions and
+there are being observed crashes in arp_read() (memcpy related).  This
+is most probably from bpf_read() (arp_packet() seems to be clean) so
+let's rework checks there to be more robust (maybe even paranoid).
+---
+ src/arp.c      |  2 +-
+ src/dhcp.c     |  2 +-
+ src/if-linux.c | 43 ++++++++++++++++++++++++-------------------
+ 3 files changed, 26 insertions(+), 21 deletions(-)
+
+diff --git a/src/arp.c b/src/arp.c
+index 601b0a64..a323a9cc 100644
+--- a/src/arp.c
++++ b/src/arp.c
+@@ -235,7 +235,7 @@ arp_read(void *arg)
+ 	while (!(state->bpf_flags & BPF_EOF)) {
+ 		bytes = bpf_read(ifp, state->bpf_fd, buf, sizeof(buf),
+ 				 &state->bpf_flags);
+-		if (bytes == -1) {
++		if (bytes < 0) {
+ 			logerr("%s: %s", __func__, ifp->name);
+ 			arp_close(ifp);
+ 			break;
+diff --git a/src/dhcp.c b/src/dhcp.c
+index ac339a6a..cedb950b 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -3842,7 +3842,7 @@ dhcp_readpacket(void *arg)
+ 	while (!(state->bpf_flags & BPF_EOF)) {
+ 		bytes = bpf_read(ifp, state->bpf_fd, buf, sizeof(buf),
+ 				 &state->bpf_flags);
+-		if (bytes == -1) {
++		if (bytes < 0) {
+ 			if (state->state != DHS_NONE) {
+ 				logerr("%s: %s", __func__, ifp->name);
+ 				dhcp_close(ifp);
+diff --git a/src/if-linux.c b/src/if-linux.c
+index d0f982e1..a7998442 100644
+--- a/src/if-linux.c
++++ b/src/if-linux.c
+@@ -1418,31 +1418,36 @@ bpf_read(struct interface *ifp, int s, void *data, size_t len,
+ #endif
+ 
+ 	bytes = recvmsg(s, &msg, 0);
+-	if (bytes == -1)
+-		return -1;
++	if (bytes <= 0)
++		return bytes;
++
++	if (msg.msg_flags != 0)
++		logwarn("%s: non-zero recv flags = %d", __func__, msg.msg_flags);
+ 	*flags |= BPF_EOF; /* We only ever read one packet. */
+ 	*flags &= ~BPF_PARTIALCSUM;
+-	if (bytes) {
+-		ssize_t fl = (ssize_t)bpf_frame_header_len(ifp);
+ 
+-		bytes -= fl;
+-		if ((size_t)bytes > len)
+-			bytes = (ssize_t)len;
+-		memcpy(data, state->buffer + fl, (size_t)bytes);
++	ssize_t fl = (ssize_t)bpf_frame_header_len(ifp);
++	if (bytes < fl) {
++		logwarn("%s: packet too short = %zd", __func__, bytes);
++		return 0;
++	}
++	bytes -= fl;
++	if ((size_t)bytes > len)
++		bytes = (ssize_t)len;
++	memcpy(data, state->buffer + fl, (size_t)bytes);
+ #ifdef PACKET_AUXDATA
+-		for (cmsg = CMSG_FIRSTHDR(&msg);
+-		     cmsg;
+-		     cmsg = CMSG_NXTHDR(&msg, cmsg))
+-		{
+-			if (cmsg->cmsg_level == SOL_PACKET &&
+-			    cmsg->cmsg_type == PACKET_AUXDATA) {
+-				aux = (void *)CMSG_DATA(cmsg);
+-				if (aux->tp_status & TP_STATUS_CSUMNOTREADY)
+-					*flags |= BPF_PARTIALCSUM;
+-			}
++	for (cmsg = CMSG_FIRSTHDR(&msg);
++	     cmsg;
++	     cmsg = CMSG_NXTHDR(&msg, cmsg))
++	{
++		if (cmsg->cmsg_level == SOL_PACKET &&
++		    cmsg->cmsg_type == PACKET_AUXDATA) {
++			aux = (void *)CMSG_DATA(cmsg);
++			if (aux->tp_status & TP_STATUS_CSUMNOTREADY)
++				*flags |= BPF_PARTIALCSUM;
+ 		}
+-#endif
+ 	}
++#endif
+ 	return bytes;
+ }
+ 
+-- 
+2.34.0.rc0.344.g81b53c2807-goog
+

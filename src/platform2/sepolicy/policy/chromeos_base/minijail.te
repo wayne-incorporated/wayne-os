@@ -1,0 +1,54 @@
+type minijail, cros_miscdomain, chromeos_domain, domain, minijail_domain;
+
+permissive minijail;
+
+
+r_dir_file(minijail_domain, cros_passwd_file)
+
+#TODO(fqj): init boot-update-firmware.conf didn't enter minijail.
+domain_auto_trans(cros_init, cros_minijail_exec, minijail)
+domain_auto_trans(cros_init_scripts, cros_minijail_exec, minijail)
+
+minijail_static_uses_tmpfile(minijail, minijail)
+minijail_mounts(minijail, , cros_minijail_minijail_tmp_file, cros_var_log)
+minijail_mountdev(minijail, cros_minijail_minijail_tmp_file)
+minijail_seccomp(minijail)
+minijail_netns_new(minijail)
+minijail_chroot(minijail)
+minijail_rlimit(minijail)
+log_writer(minijail)
+use_init_fd(minijail)
+
+allow minijail cros_init_scripts:fifo_file { write ioctl };
+
+domain_auto_trans({
+cros_init
+cros_init_scripts
+cros_init_scripts_domain
+frecon
+cros_ssh_session
+-minijail_executor_domain
+}, cros_minijail_exec, minijail)
+
+auditallow {
+frecon
+} cros_minijail_exec:file execute;
+
+neverallow {
+chromeos_domain
+-minijail
+-minijail_executor_domain
+-cros_init
+-cros_init_scripts
+-cros_init_scripts_domain
+-cros_debugd
+-cros_debugd_minijail
+-frecon
+-cros_ssh_session
+-cros_tpm2_simulator
+-cros_tpm2_simulator_minijail
+} cros_minijail_exec:file execute;
+
+dev_only(`
+auditallow minijail tmpfs:dir create_file_perms;
+')

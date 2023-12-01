@@ -1,0 +1,22 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+shared_library("libandroidxml") {
+  sources = [
+    "android_binary_xml_tokenizer.cc",
+    "android_xml_util.cc",
+  ]
+  defines = [
+    "COMPONENT_BUILD",
+    "IS_LIBANDROIDXML_IMPL",
+    "USE_ARCVM=${use.arcvm}",
+  ]
+  pkg_deps = [ "libchrome" ]
+}
+
+executable("arc-packages-xml-reader") {
+  sources = [ "arc_packages_xml_reader_main.cc" ]
+  deps = [ ":libandroidxml" ]
+  pkg_deps = [ "libchrome" ]
+}

@@ -1,0 +1,45 @@
+From 31540ba1e058a8bb43080c8174cff12906d0a1d1 Mon Sep 17 00:00:00 2001
+From: Caroline Tice <cmtice@google.com>
+Date: Fri, 19 Jan 2018 11:35:09 -0800
+Subject: [PATCH] Fix emutls.c to not leak pthread keys.
+
+[Adrian Ratiu: forward port to GCC 10.2.0]
+
+Bug:b/71814577
+Test:Built toolchain w/change and successfully tested building both platform and kernel images with new toolchain for marlin (pixel) device.
+Change-Id: Ia0c6944ce1d78b5bd57d65f705a3f7a59c944202
+---
+ libgcc/emutls.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/libgcc/emutls.c b/libgcc/emutls.c
+index f8012f6d8d5..9d23fb7c1f5 100644
+--- a/libgcc/emutls.c
++++ b/libgcc/emutls.c
+@@ -60,6 +60,7 @@ static __gthread_mutex_t emutls_mutex = __GTHREAD_MUTEX_INIT;
+ static __gthread_mutex_t emutls_mutex;
+ #endif
+ static __gthread_key_t emutls_key;
++static int emutls_key_created = 0;
+ static pointer emutls_size;
+ 
+ static void
+@@ -86,6 +87,15 @@ emutls_init (void)
+ #endif
+   if (__gthread_key_create (&emutls_key, emutls_destroy) != 0)
+     abort ();
++  emutls_key_created = 1;
++}
++
++__attribute__((destructor))
++static void
++unregister_emutls_key (void)
++{
++  if (emutls_key_created)
++    __gthread_key_delete (emutls_key);
+ }
+ #endif
+ 
+-- 
+2.30.0
+

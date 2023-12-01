@@ -1,0 +1,139 @@
+#!/bin/bash
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Installs a booted refvm image to the internal disk.
+set -eux -o pipefail
+
+# Save stdout and stderr
+exec 4>&1
+exec 5>&2
+
+# Split output between stdout for interactive use and the console for tests.
+exec 3> >(awk '{print "install-refvm: " $0}' > /dev/console)
+exec > >(tee --ignore-interrupts /proc/self/fd/3)
+exec 2> >(tee --ignore-interrupts /proc/self/fd/3 >&2)
+
+echo "Installing reference VM..."
+
+DISK_CONFIG_TEMPLATE="/usr/local/share/refvm/disk_config.tpl"
+TMPDIR="/run/refvm"
+TARGET="${TMPDIR}/target"
+mkdir -p "${TMPDIR}"
+export TMPDIR
+
+interactive=true
+if dmidecode -t 11 -q | grep -q refvm:noninteractive=true; then
+  interactive=false
+fi
+
+success=false
+
+end_install() {
+  # Cleanup
+  if [[ -e "/dev/${src_vg}/root-snap" ]]; then
+    lvremove -y "/dev/${src_vg}/root-snap"
+  fi
+  journalctl --flush
+  umount -q /etc/lvm || true
+
+  if [[ "${success}" == true ]]; then
+    echo "Installation successful."
+  else
+    echo "Installation failed."
+  fi
+
+  if [[ "${interactive}" == true && "${success}" == false ]]; then
+    echo "Starting a shell for debugging."
+    exec bash >&4 2>&5
+  fi
+
+  if [[ "${interactive}" == true ]]; then
+    read -r -p "Press ENTER to shut down the installer."
+  fi
+
+  systemctl poweroff
+
+  # Close pipes and wait for the processes handling logs to exit
+  exec 1>&-
+  exec 2>&-
+  exec 3>&-
+  wait
+}
+trap end_install EXIT
+
+# Avoid logging to disk during installation.
+journalctl --relinquish-var
+
+src_vg="$(vgs -o vg_name --noheadings | tr -d ' ')"
+
+# If the root LV is mounted rw, take a snapshot of it so the filesystem can be
+# copied in a consistent state.
+declare src_lv
+if [[ "$(mount | grep 'on / ' | cut -d ' ' -f 6 | tr -d '()' | cut -d , -f 1)" \
+  == "rw" ]]; then
+  lvcreate -s -l +100%FREE -n root-snap "${src_vg}/root"
+  src_lv="root-snap"
+else
+  src_lv="root"
+  # LVM tools wants to write to /etc/lvm, so give it a tmpfs.
+  mount -t tmpfs tmp /etc/lvm
+fi
+
+dst_vg="refvm_$(date --utc +%Y%m%d_%H%M%S)"
+sed -e "s/{{ vg_name }}/${dst_vg}/g" "${DISK_CONFIG_TEMPLATE}" > \
+  "${TMPDIR}/disk_config"
+
+# Install to the first blank device.
+install_device=""
+for dev in /dev/vd?; do
+  if ! blkid "${dev}" > /dev/null; then
+    echo "Installing to ${dev}."
+    install_device="${dev}"
+    break
+  fi
+done
+
+if [[ -z "${install_device}" ]]; then
+  echo "No install destination found."
+  exit 1
+fi
+
+SS_IGNORE_VG="${src_vg}" setup-storage -X -f "${TMPDIR}/disk_config" \
+  -D "$(basename "${install_device}")" -L "${TMPDIR}/fai"
+declare ROOT_PARTITION BOOT_PARTITION ESP_DEVICE
+# shellcheck disable=SC1091
+source "${TMPDIR}/fai/disk_var.sh"
+
+# Copy the rootfs snapshot and update its UUID.
+e2image -a -r "/dev/${src_vg}/${src_lv}" "/dev/${dst_vg}/root"
+e2fsck -y "/dev/${dst_vg}/root"
+# cat forces tune2fs to run non-interactively.
+tune2fs -U "${ROOT_PARTITION:5}" "/dev/${dst_vg}/root" | cat
+
+mkdir -p "${TARGET}"
+mount "${ROOT_PARTITION}" "${TARGET}"
+# Install the dst fstab.
+cp "${TMPDIR}/fai/fstab" "${TARGET}/etc/fstab"
+
+mount "${BOOT_PARTITION}" "${TARGET}/boot"
+# Copy the boot partition. Trailing slash for the source is important.
+rsync -ax /boot/ "${TARGET}/boot/"
+
+# Mount other filesystems needed for chroot.
+mount "${ESP_DEVICE}" "${TARGET}/boot/efi"
+mount --bind /dev "${TARGET}/dev"
+mount --bind /dev/pts "${TARGET}/dev/pts"
+mount -t proc proc "${TARGET}/proc"
+mount -t sysfs sysfs "${TARGET}/sys"
+mount -t efivarfs efivarfs "${TARGET}/sys/firmware/efi/efivars"
+
+# Install the boot loader and regenerate initrd.
+chroot "${TARGET}" grub-install --uefi-secure-boot
+chroot "${TARGET}" update-grub
+chroot "${TARGET}" update-initramfs -u
+
+umount -R "${TARGET}"
+
+success=true

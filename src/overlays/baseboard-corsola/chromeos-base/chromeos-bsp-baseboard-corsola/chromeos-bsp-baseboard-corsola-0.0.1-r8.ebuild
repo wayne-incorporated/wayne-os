@@ -1,0 +1,1 @@
+chromeos-bsp-baseboard-corsola-0.0.1.ebuild

@@ -1,0 +1,20 @@
+In simple-chrome, clang is a shell wrapper, it calls clang.elf, which is the
+real binary, then, clang.elf calls clang.elf itself. It is the last invocation
+"clang.elf -> clang.elf" that breaks, because direct calls to clang.elf misses
+all environment setup in clang wrapper. Fix this by calling to clang wrapper
+instead of clang.elf binary.
+
+diff --git a/clang/tools/driver/driver.cpp b/clang/tools/driver/driver.cpp
+index c3a3aab066ac..d1a4194a52f5 100644
+--- a/clang/tools/driver/driver.cpp
++++ b/clang/tools/driver/driver.cpp
+@@ -457,6 +457,9 @@ int main(int Argc, const char **Argv) {
+   }
+ 
+   std::string Path = GetExecutablePath(Args[0], CanonicalPrefixes);
++  size_t PathLen = Path.length();
++  if (PathLen > 4 && Path.substr(PathLen - 4) == ".elf")
++    Path = Path.substr(0, PathLen - 4);
+ 
+   // Whether the cc1 tool should be called inside the current process, or if we
+   // should spawn a new clang subprocess (old behavior).

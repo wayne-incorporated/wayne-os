@@ -1,0 +1,1 @@
+chromeos-kernel-upstream-999.6.0_rc4.ebuild

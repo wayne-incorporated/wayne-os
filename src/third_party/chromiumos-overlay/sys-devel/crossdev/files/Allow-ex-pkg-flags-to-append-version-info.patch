@@ -1,0 +1,33 @@
+From 36fc566c7738fe0f1ba4a947b5403fb4139ddf5b Mon Sep 17 00:00:00 2001
+From: Jordan R Abrahams-Whitehead <ajordanr@google.com>
+Date: Tue, 4 Apr 2023 21:36:08 +0000
+Subject: [PATCH] Allow --ex-pkg flags to append version info
+
+At present, --ex-pkg flags always install the [latest] version.
+However, sometimes one may want to install [stable] if possible.
+
+This CL sets extra packages to use whatever the $DEFAULT_VER is set
+to (which is configured via --stable/-S).
+---
+ crossdev | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/crossdev b/crossdev
+index befce40..46f6b59 100755
+--- a/crossdev
++++ b/crossdev
+@@ -950,6 +950,11 @@ if [[ ${LPKG} == "newlib" && ${LVER} == "[stable]" ]]; then
+ 	LVER="[latest]"
+ fi
+ 
++# Configure --ex-pkg entry versions, based on DEFAULT_VER.
++for _ in "${XPKG[@]}"; do
++	XVERS+=( "${DEFAULT_VER}" )
++done
++
+ show_target_cfg() {
+ 	local pkgs crosspkgs=()
+ 
+-- 
+2.40.0.577.gac1e443424-goog
+

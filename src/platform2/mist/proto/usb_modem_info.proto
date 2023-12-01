@@ -1,0 +1,33 @@
+// Copyright 2013 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+
+package mist;
+
+message UsbId {
+  uint32 vendor_id = 1;
+  uint32 product_id = 2;
+}
+
+message UsbModemInfo {
+  // Initial USB vendor and product ID of the modem when it is in the mass
+  // storage mode.
+  UsbId initial_usb_id = 1;
+  // A list of possible final USB vendor and product IDs of the modem after
+  // it has switched to the modem mode.
+  repeated UsbId final_usb_id = 2;
+  // A list of USB messages, in form of hexadecimal strings, to send to the
+  // mass storage interface of the modem in order to switch the modem to the
+  // modem mode.
+  repeated string usb_message = 3;
+  // If true, a response is expected from the mass storage interface after
+  // sending each USB message to the interface.
+  bool expect_response = 4;
+  // Initial delay, in milliseconds, that mist should wait before starting
+  // the modem switch operation.
+  uint32 initial_delay_ms = 5;
+  // If true, perform an initial USB port reset to reinitialize the device.
+  bool initial_reset = 6;
+}

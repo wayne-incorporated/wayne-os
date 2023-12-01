@@ -1,0 +1,40 @@
+From b7bd8c5243f683d0f3d25ca2f0af8a4027dd6d29 Mon Sep 17 00:00:00 2001
+From: Ted Brandston <tbrandston@google.com>
+Date: Wed, 3 Mar 2021 13:19:05 -0500
+Subject: [PATCH] Directly apply elf architechture where it's needed
+
+The core of the problem seems to be in syslinux/mk/embedded.mk, where
+`-m elf_${ARCH}` is appended to LD. I generally think of LD as being for the
+executable and LDFLAGS as being for the arguments, but that's not what they
+chose to do here. When we use the tc-export version and pass it in via LD,
+that overwrites both the linker to use and the `-m` argument. The added patch
+adds the `-m elf_${ARCH}` arg directly where it's needed in memdisk.
+---
+ memdisk/Makefile | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/memdisk/Makefile b/memdisk/Makefile
+index e6557d8..e4b0a2c 100644
+--- a/memdisk/Makefile
++++ b/memdisk/Makefile
+@@ -78,14 +78,14 @@ memdisk16.o: memdisk16.asm
+ 	$(NASM) -f bin $(NASMOPT) $(NFLAGS) $(NINCLUDE) -o $@ -l $*.lst $<
+ 
+ memdisk_%.o: memdisk_%.bin
+-	$(LD) -r -b binary -o $@ $<
++	$(LD) -m elf_$(ARCH) -r -b binary -o $@ $<
+ 
+ memdisk16.elf: $(OBJS16)
+-	$(LD) -Ttext 0 -o $@ $^
++	$(LD) -m elf_$(ARCH) -Ttext 0 -o $@ $^
+ 
+ #memdisk32.elf: memdisk.ld $(OBJS32)
+ memdisk32.elf: $(ARCH)/memdisk.ld $(OBJS32)
+-	$(LD) -o $@ -T $^
++	$(LD) -m elf_$(ARCH) -o $@ -T $^
+ 
+ %.bin: %.elf
+ 	$(OBJCOPY) -O binary $< $@
+-- 
+2.30.1.766.gb4fecdf3b7-goog
+

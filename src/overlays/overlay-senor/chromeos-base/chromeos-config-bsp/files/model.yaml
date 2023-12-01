@@ -1,0 +1,28 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+base-config: &base_config
+  name: "{{$device-name}}"
+  identity:
+    platform-name: "Trogdor"
+    frid: "{{$fw-name}}"
+  firmware:
+    build-targets:
+      bmpblk: "senor"
+      coreboot: "{{$coreboot-build-name}}"
+      ec: "{{$ec-build-name}}"
+      depthcharge: "senor"
+      libpayload: "senor"
+  test-label: "{{$device-name}}"
+
+chromeos:
+  devices:
+    - $device-name: "senor"
+      $fw-name: "Google_Senor"
+      $coreboot-build-name: "senor"
+      $ec-build-name: "senor"
+      skus:
+        - $sku-id: 0
+          config:
+            <<: *base_config

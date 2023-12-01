@@ -1,0 +1,121 @@
+commit 2a41b31fcdfcb67ab7038fc2ffb606fd50b83a84
+Author: Nathan Chancellor <natechancellor@gmail.com>
+Date:   Sat Mar 7 16:37:44 2020 -0800
+
+    [Sema] Add -Wpointer-to-enum-cast and -Wvoid-pointer-to-enum-cast
+    
+    GCC does not warn on casts from pointers to enumerators, while clang
+    currently does: https://godbolt.org/z/3DFDVG
+    
+    This causes a bunch of extra warnings in the Linux kernel, where
+    certain structs contain a void pointer to avoid using a gigantic
+    union for all of the various types of driver data, such as
+    versions.
+    
+    Add a diagnostic that allows certain projects like the kernel to
+    disable the warning just for enums, which allows those projects to
+    keep full compatibility with GCC but keeps the intention of treating
+    casts to integers and enumerators the same by default so that other
+    projects have the opportunity to catch issues not noticed before (or
+    follow suite and disable the warning).
+    
+    Link: https://github.com/ClangBuiltLinux/linux/issues/887
+    
+    Reviewed By: rjmccall
+    
+    Differential Revision: https://reviews.llvm.org/D75758
+
+diff --git a/clang/include/clang/Basic/DiagnosticGroups.td b/clang/include/clang/Basic/DiagnosticGroups.td
+index 6c79ea59173..ae3f882dd91 100644
+--- a/clang/include/clang/Basic/DiagnosticGroups.td
++++ b/clang/include/clang/Basic/DiagnosticGroups.td
+@@ -838,9 +838,13 @@ def IncompatibleExceptionSpec : DiagGroup<"incompatible-exception-spec">;
+ def IntToVoidPointerCast : DiagGroup<"int-to-void-pointer-cast">;
+ def IntToPointerCast : DiagGroup<"int-to-pointer-cast",
+                                  [IntToVoidPointerCast]>;
+-def VoidPointerToIntCast : DiagGroup<"void-pointer-to-int-cast">;
++def VoidPointerToEnumCast : DiagGroup<"void-pointer-to-enum-cast">;
++def VoidPointerToIntCast : DiagGroup<"void-pointer-to-int-cast",
++                                     [VoidPointerToEnumCast]>;
++def PointerToEnumCast : DiagGroup<"pointer-to-enum-cast",
++                                  [VoidPointerToEnumCast]>;
+ def PointerToIntCast : DiagGroup<"pointer-to-int-cast",
+-                                 [VoidPointerToIntCast]>;
++                                 [PointerToEnumCast, VoidPointerToIntCast]>;
+ 
+ def Move : DiagGroup<"move", [
+     PessimizingMove,
+diff --git a/clang/include/clang/Basic/DiagnosticSemaKinds.td b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+index 181341fed78..b0338c44cca 100644
+--- a/clang/include/clang/Basic/DiagnosticSemaKinds.td
++++ b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+@@ -3668,9 +3668,15 @@ def warn_int_to_void_pointer_cast : Warning<
+ def warn_pointer_to_int_cast : Warning<
+   "cast to smaller integer type %1 from %0">,
+   InGroup<PointerToIntCast>;
++def warn_pointer_to_enum_cast : Warning<
++  warn_pointer_to_int_cast.Text>,
++  InGroup<PointerToEnumCast>;
+ def warn_void_pointer_to_int_cast : Warning<
+   "cast to smaller integer type %1 from %0">,
+   InGroup<VoidPointerToIntCast>;
++def warn_void_pointer_to_enum_cast : Warning<
++  warn_void_pointer_to_int_cast.Text>,
++  InGroup<VoidPointerToEnumCast>;
+ def ext_ms_pointer_to_int_cast : ExtWarn<
+   "cast to smaller integer type %1 from %0 is a Microsoft extension">,
+ InGroup<MicrosoftCast>;
+diff --git a/clang/lib/Sema/SemaCast.cpp b/clang/lib/Sema/SemaCast.cpp
+index 17d07c57a41..8edff2439e0 100644
+--- a/clang/lib/Sema/SemaCast.cpp
++++ b/clang/lib/Sema/SemaCast.cpp
+@@ -2777,11 +2777,16 @@ void CastOperation::CheckCStyleCast() {
+       // If the result cannot be represented in the integer type, the behavior
+       // is undefined. The result need not be in the range of values of any
+       // integer type.
+-      unsigned Diag = Self.getLangOpts().MicrosoftExt
+-                          ? diag::ext_ms_pointer_to_int_cast
+-                          : SrcType->isVoidPointerType()
+-                                ? diag::warn_void_pointer_to_int_cast
+-                                : diag::warn_pointer_to_int_cast;
++      unsigned Diag;
++      if (Self.getLangOpts().MicrosoftExt)
++        Diag = diag::ext_ms_pointer_to_int_cast;
++      else if (SrcType->isVoidPointerType())
++        Diag = DestType->isEnumeralType() ? diag::warn_void_pointer_to_enum_cast
++                                          : diag::warn_void_pointer_to_int_cast;
++      else if (DestType->isEnumeralType())
++        Diag = diag::warn_pointer_to_enum_cast;
++      else
++        Diag = diag::warn_pointer_to_int_cast;
+       Self.Diag(OpRange.getBegin(), Diag) << SrcType << DestType << OpRange;
+     }
+   }
+diff --git a/clang/test/Sema/cast.c b/clang/test/Sema/cast.c
+index 0c4fc7d129f..2335f219807 100644
+--- a/clang/test/Sema/cast.c
++++ b/clang/test/Sema/cast.c
+@@ -186,3 +186,23 @@ void *intToPointerCast2(X x) {
+ void *intToPointerCast3() {
+   return (void*)(1 + 3);
+ }
++
++void voidPointerToEnumCast(VoidPtr v) {
++  (void)(X) v; // expected-warning{{cast to smaller integer type 'X' from 'VoidPtr' (aka 'void *')}}
++  // Test that casts to void* can be controlled separately
++  // from other -Wpointer-to-enum-cast warnings.
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wvoid-pointer-to-enum-cast"
++  (void)(X) v; // no-warning
++#pragma clang diagnostic pop
++}
++
++void pointerToEnumCast(CharPtr v) {
++  (void)(X) v; // expected-warning{{cast to smaller integer type 'X' from 'CharPtr' (aka 'char *')}}
++  // Test that casts to void* can be controlled separately
++  // from other -Wpointer-to-enum-cast warnings.
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wvoid-pointer-to-enum-cast"
++  (void)(X) v; // expected-warning{{cast to smaller integer type 'X' from 'CharPtr' (aka 'char *')}}
++#pragma clang diagnostic pop
++}

@@ -1,0 +1,34 @@
+From bcc65fb491ca6e83e1ea300f4462a2f56d0b5937 Mon Sep 17 00:00:00 2001
+From: Colin Cross <ccross@google.com>
+Date: Thu, 3 Mar 2022 22:17:15 -0800
+Subject: [PATCH] Pass through more LIBCXX_* variables  to libfuzzer's custom
+ lib++
+
+Pass LIBCXX_HAS_PTHREAD_LIB, LIBCXX_HAS_RT_LIB  and LIBCXXABI_HAS_PTHREAD_LIB
+through to the custom lib++ builds so that libfuzzer  doesn't end up with a .deplibs section that
+links against those libraries when the variables are set to false.
+
+Reviewed By: phosek
+
+Differential Revision: https://reviews.llvm.org/D120946
+---
+ compiler-rt/cmake/Modules/AddCompilerRT.cmake | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/compiler-rt/cmake/Modules/AddCompilerRT.cmake b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+index ebabaf186751..0d6dd8f500ce 100644
+--- a/compiler-rt/cmake/Modules/AddCompilerRT.cmake
++++ b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+@@ -602,6 +602,9 @@ macro(add_custom_libcxx name prefix)
+     CMAKE_READELF
+     CMAKE_SYSROOT
+     LIBCXX_HAS_MUSL_LIBC
++    LIBCXX_HAS_PTHREAD_LIB
++    LIBCXX_HAS_RT_LIB
++    LIBCXXABI_HAS_PTHREAD_LIB
+     PYTHON_EXECUTABLE
+     Python3_EXECUTABLE
+     Python2_EXECUTABLE
+-- 
+2.35.1.723.g4982287a31-goog
+

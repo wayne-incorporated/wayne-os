@@ -1,0 +1,829 @@
+commit a6d9730f403afa8b591f278101996ecca9ad2dd2
+Author: Hans Wennborg <hans@hanshq.net>
+Date:   Wed Apr 12 13:28:25 2023 +0200
+
+    Revert "Move "auto-init" instructions to the dominator of their users"
+    
+    This could also move initialization of sret args, causing actually
+    initialized parts of such return values to be uninitialized. See
+    discussion on the code review.
+    
+    > As a result of -ftrivial-auto-var-init, clang generates instructions to
+    > set alloca'd memory to a given pattern, right after the allocation site.
+    > In some cases, this (somehow costly) operation could be delayed, leading
+    > to conditional execution in some cases.
+    >
+    > This is not an uncommon situation: it happens ~500 times on the cPython
+    > code base, and much more on the LLVM codebase. The benefit greatly
+    > varies on the execution path, but it should not regress on performance.
+    >
+    > This is a recommit of cca01008cc31a891d0ec70aff2201b25d05d8f1b with
+    > MemorySSA update fixes.
+    >
+    > Differential Revision: https://reviews.llvm.org/D137707
+    
+    This reverts commit 50b2a113db197a97f60ad2aace8b7382dc9b8c31
+    and follow-up commit ad9ad3735c4821ff4651fab7537a75b8f0bb60f8.
+
+diff --git a/llvm/include/llvm/Transforms/Utils/MoveAutoInit.h b/llvm/include/llvm/Transforms/Utils/MoveAutoInit.h
+deleted file mode 100644
+index 980b55f46f11..000000000000
+--- a/llvm/include/llvm/Transforms/Utils/MoveAutoInit.h
++++ /dev/null
+@@ -1,29 +0,0 @@
+-//===- MoveAutoInit.h - Move insts marked as auto-init Pass --*- C++ -*-======//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-//
+-// This pass moves instructions marked as auto-init closer to their use if
+-// profitable, generally because it moves them under a guard, potentially
+-// skipping the overhead of the auto-init under some execution paths.
+-//
+-//
+-//===----------------------------------------------------------------------===//
+-
+-#ifndef LLVM_TRANSFORMS_UTILS_MOVEAUTOINIT_H
+-#define LLVM_TRANSFORMS_UTILS_MOVEAUTOINIT_H
+-
+-#include "llvm/IR/PassManager.h"
+-
+-namespace llvm {
+-
+-class MoveAutoInitPass : public PassInfoMixin<MoveAutoInitPass> {
+-public:
+-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+-};
+-} // end namespace llvm
+-
+-#endif // LLVM_TRANSFORMS_UTILS_MOVEAUTOINIT_H
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index ebfd5374e2bc..a04f8bbaa5dc 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -247,7 +247,6 @@
+ #include "llvm/Transforms/Utils/LowerSwitch.h"
+ #include "llvm/Transforms/Utils/Mem2Reg.h"
+ #include "llvm/Transforms/Utils/MetaRenamer.h"
+-#include "llvm/Transforms/Utils/MoveAutoInit.h"
+ #include "llvm/Transforms/Utils/NameAnonGlobals.h"
+ #include "llvm/Transforms/Utils/PredicateInfo.h"
+ #include "llvm/Transforms/Utils/RelLookupTableConverter.h"
+diff --git a/llvm/lib/Passes/PassBuilderPipelines.cpp b/llvm/lib/Passes/PassBuilderPipelines.cpp
+index fce249973a0a..fe6d0ba09862 100644
+--- a/llvm/lib/Passes/PassBuilderPipelines.cpp
++++ b/llvm/lib/Passes/PassBuilderPipelines.cpp
+@@ -125,7 +125,6 @@
+ #include "llvm/Transforms/Utils/InjectTLIMappings.h"
+ #include "llvm/Transforms/Utils/LibCallsShrinkWrap.h"
+ #include "llvm/Transforms/Utils/Mem2Reg.h"
+-#include "llvm/Transforms/Utils/MoveAutoInit.h"
+ #include "llvm/Transforms/Utils/NameAnonGlobals.h"
+ #include "llvm/Transforms/Utils/RelLookupTableConverter.h"
+ #include "llvm/Transforms/Utils/SimplifyCFGOptions.h"
+@@ -656,8 +655,6 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
+   FPM.addPass(MemCpyOptPass());
+ 
+   FPM.addPass(DSEPass());
+-  FPM.addPass(MoveAutoInitPass());
+-
+   FPM.addPass(createFunctionToLoopPassAdaptor(
+       LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                /*AllowSpeculation=*/true),
+@@ -1802,7 +1799,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
+ 
+   // Nuke dead stores.
+   MainFPM.addPass(DSEPass());
+-  MainFPM.addPass(MoveAutoInitPass());
+   MainFPM.addPass(MergedLoadStoreMotionPass());
+ 
+   LoopPassManager LPM;
+diff --git a/llvm/lib/Passes/PassRegistry.def b/llvm/lib/Passes/PassRegistry.def
+index 2c6294130aed..82592a1ee9b5 100644
+--- a/llvm/lib/Passes/PassRegistry.def
++++ b/llvm/lib/Passes/PassRegistry.def
+@@ -333,7 +333,6 @@ FUNCTION_PASS("mem2reg", PromotePass())
+ FUNCTION_PASS("memcpyopt", MemCpyOptPass())
+ FUNCTION_PASS("mergeicmps", MergeICmpsPass())
+ FUNCTION_PASS("mergereturn", UnifyFunctionExitNodesPass())
+-FUNCTION_PASS("move-auto-init", MoveAutoInitPass())
+ FUNCTION_PASS("nary-reassociate", NaryReassociatePass())
+ FUNCTION_PASS("newgvn", NewGVNPass())
+ FUNCTION_PASS("jump-threading", JumpThreadingPass())
+diff --git a/llvm/lib/Transforms/Utils/CMakeLists.txt b/llvm/lib/Transforms/Utils/CMakeLists.txt
+index a870071f3f64..6663ce6c4b0a 100644
+--- a/llvm/lib/Transforms/Utils/CMakeLists.txt
++++ b/llvm/lib/Transforms/Utils/CMakeLists.txt
+@@ -58,7 +58,6 @@ add_llvm_component_library(LLVMTransformUtils
+   MetaRenamer.cpp
+   MisExpect.cpp
+   ModuleUtils.cpp
+-  MoveAutoInit.cpp
+   NameAnonGlobals.cpp
+   PredicateInfo.cpp
+   PromoteMemoryToRegister.cpp
+diff --git a/llvm/lib/Transforms/Utils/MoveAutoInit.cpp b/llvm/lib/Transforms/Utils/MoveAutoInit.cpp
+deleted file mode 100644
+index 2c38adba57c2..000000000000
+--- a/llvm/lib/Transforms/Utils/MoveAutoInit.cpp
++++ /dev/null
+@@ -1,221 +0,0 @@
+-//===-- MoveAutoInit.cpp - move auto-init inst closer to their use site----===//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-//
+-// This pass moves instruction maked as auto-init closer to the basic block that
+-// use it, eventually removing it from some control path of the function.
+-//
+-//===----------------------------------------------------------------------===//
+-
+-#include "llvm/Transforms/Utils/MoveAutoInit.h"
+-#include "llvm/ADT/STLExtras.h"
+-#include "llvm/ADT/Statistic.h"
+-#include "llvm/ADT/StringSet.h"
+-#include "llvm/Analysis/MemorySSA.h"
+-#include "llvm/Analysis/MemorySSAUpdater.h"
+-#include "llvm/IR/DebugInfo.h"
+-#include "llvm/IR/Dominators.h"
+-#include "llvm/IR/IRBuilder.h"
+-#include "llvm/IR/Instructions.h"
+-#include "llvm/IR/IntrinsicInst.h"
+-#include "llvm/Support/CommandLine.h"
+-#include "llvm/Transforms/Utils.h"
+-#include "llvm/Transforms/Utils/LoopUtils.h"
+-
+-using namespace llvm;
+-
+-#define DEBUG_TYPE "move-auto-init"
+-
+-STATISTIC(NumMoved, "Number of instructions moved");
+-
+-static cl::opt<unsigned> MoveAutoInitThreshold(
+-    "move-auto-init-threshold", cl::Hidden, cl::init(128),
+-    cl::desc("Maximum instructions to analyze per moved initialization"));
+-
+-static bool hasAutoInitMetadata(const Instruction &I) {
+-  return I.hasMetadata(LLVMContext::MD_annotation) &&
+-         any_of(I.getMetadata(LLVMContext::MD_annotation)->operands(),
+-                [](const MDOperand &Op) {
+-                  return cast<MDString>(Op.get())->getString() == "auto-init";
+-                });
+-}
+-
+-/// Finds a BasicBlock in the CFG where instruction `I` can be moved to while
+-/// not changing the Memory SSA ordering and being guarded by at least one
+-/// condition.
+-static BasicBlock *usersDominator(Instruction *I, DominatorTree &DT,
+-                                  MemorySSA &MSSA) {
+-  BasicBlock *CurrentDominator = nullptr;
+-  MemoryLocation ML;
+-  if (auto *MI = dyn_cast<MemIntrinsic>(I))
+-    ML = MemoryLocation::getForDest(MI);
+-  else if (auto *SI = dyn_cast<StoreInst>(I))
+-    ML = MemoryLocation::get(SI);
+-  else
+-    assert(false && "memory location set");
+-
+-  MemoryUseOrDef &IMA = *MSSA.getMemoryAccess(I);
+-  BatchAAResults AA(MSSA.getAA());
+-
+-  SmallPtrSet<MemoryAccess *, 8> Visited;
+-
+-  auto AsMemoryAccess = [](User *U) { return cast<MemoryAccess>(U); };
+-  SmallVector<MemoryAccess *> WorkList(map_range(IMA.users(), AsMemoryAccess));
+-
+-  while (!WorkList.empty()) {
+-    MemoryAccess *MA = WorkList.pop_back_val();
+-    if (!Visited.insert(MA).second)
+-      continue;
+-
+-    if (Visited.size() > MoveAutoInitThreshold)
+-      return nullptr;
+-
+-    bool FoundClobberingUser = false;
+-    if (auto *M = dyn_cast<MemoryUseOrDef>(MA)) {
+-      Instruction *MI = M->getMemoryInst();
+-
+-      // If this memory instruction may not clobber `I`, we can skip it.
+-      // LifetimeEnd is a valid user, but we do not want it in the user
+-      // dominator.
+-      if (AA.getModRefInfo(MI, ML) != ModRefInfo::NoModRef &&
+-          !MI->isLifetimeStartOrEnd() && MI != I) {
+-        FoundClobberingUser = true;
+-        CurrentDominator = CurrentDominator
+-                               ? DT.findNearestCommonDominator(CurrentDominator,
+-                                                               MI->getParent())
+-                               : MI->getParent();
+-      }
+-    }
+-    if (!FoundClobberingUser) {
+-      auto UsersAsMemoryAccesses = map_range(MA->users(), AsMemoryAccess);
+-      append_range(WorkList, UsersAsMemoryAccesses);
+-    }
+-  }
+-  return CurrentDominator;
+-}
+-
+-static bool runMoveAutoInit(Function &F, DominatorTree &DT, MemorySSA &MSSA) {
+-  BasicBlock &EntryBB = F.getEntryBlock();
+-  SmallVector<std::pair<Instruction *, BasicBlock *>> JobList;
+-
+-  //
+-  // Compute movable instructions.
+-  //
+-  for (Instruction &I : EntryBB) {
+-    if (!hasAutoInitMetadata(I))
+-      continue;
+-
+-    if (I.isVolatile())
+-      continue;
+-
+-    BasicBlock *UsersDominator = usersDominator(&I, DT, MSSA);
+-    if (!UsersDominator)
+-      continue;
+-
+-    if (UsersDominator == &EntryBB)
+-      continue;
+-
+-    // Traverse the CFG to detect cycles `UsersDominator` would be part of.
+-    SmallPtrSet<BasicBlock *, 8> TransitiveSuccessors;
+-    SmallVector<BasicBlock *> WorkList(successors(UsersDominator));
+-    bool HasCycle = false;
+-    while (!WorkList.empty()) {
+-      BasicBlock *CurrBB = WorkList.pop_back_val();
+-      if (CurrBB == UsersDominator)
+-        // No early exit because we want to compute the full set of transitive
+-        // successors.
+-        HasCycle = true;
+-      for (BasicBlock *Successor : successors(CurrBB)) {
+-        if (!TransitiveSuccessors.insert(Successor).second)
+-          continue;
+-        WorkList.push_back(Successor);
+-      }
+-    }
+-
+-    // Don't insert if that could create multiple execution of I,
+-    // but we can insert it in the non back-edge predecessors, if it exists.
+-    if (HasCycle) {
+-      BasicBlock *UsersDominatorHead = UsersDominator;
+-      while (BasicBlock *UniquePredecessor =
+-                 UsersDominatorHead->getUniquePredecessor())
+-        UsersDominatorHead = UniquePredecessor;
+-
+-      if (UsersDominatorHead == &EntryBB)
+-        continue;
+-
+-      BasicBlock *DominatingPredecessor = nullptr;
+-      for (BasicBlock *Pred : predecessors(UsersDominatorHead)) {
+-        // If one of the predecessor of the dominator also transitively is a
+-        // successor, moving to the dominator would do the inverse of loop
+-        // hoisting, and we don't want that.
+-        if (TransitiveSuccessors.count(Pred))
+-          continue;
+-
+-        DominatingPredecessor =
+-            DominatingPredecessor
+-                ? DT.findNearestCommonDominator(DominatingPredecessor, Pred)
+-                : Pred;
+-      }
+-
+-      if (!DominatingPredecessor || DominatingPredecessor == &EntryBB)
+-        continue;
+-
+-      UsersDominator = DominatingPredecessor;
+-    }
+-
+-    // CatchSwitchInst blocks can only have one instruction, so they are not
+-    // good candidates for insertion.
+-    while (isa<CatchSwitchInst>(UsersDominator->getFirstInsertionPt())) {
+-      for (BasicBlock *Pred : predecessors(UsersDominator))
+-        UsersDominator = DT.findNearestCommonDominator(UsersDominator, Pred);
+-    }
+-
+-    // We finally found a place where I can be moved while not introducing extra
+-    // execution, and guarded by at least one condition.
+-    if (UsersDominator != &EntryBB)
+-      JobList.emplace_back(&I, UsersDominator);
+-  }
+-
+-  //
+-  // Perform the actual substitution.
+-  //
+-  if (JobList.empty())
+-    return false;
+-
+-  MemorySSAUpdater MSSAU(&MSSA);
+-
+-  // Reverse insertion to respect relative order between instructions:
+-  // if two instructions are moved from the same BB to the same BB, we insert
+-  // the second one in the front, then the first on top of it.
+-  for (auto &Job : reverse(JobList)) {
+-    Job.first->moveBefore(&*Job.second->getFirstInsertionPt());
+-    MSSAU.moveToPlace(MSSA.getMemoryAccess(Job.first), Job.first->getParent(),
+-                      MemorySSA::InsertionPlace::Beginning);
+-  }
+-
+-  if (VerifyMemorySSA)
+-    MSSA.verifyMemorySSA();
+-
+-  NumMoved += JobList.size();
+-
+-  return true;
+-}
+-
+-PreservedAnalyses MoveAutoInitPass::run(Function &F,
+-                                        FunctionAnalysisManager &AM) {
+-
+-  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+-  auto &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
+-  if (!runMoveAutoInit(F, DT, MSSA))
+-    return PreservedAnalyses::all();
+-
+-  PreservedAnalyses PA;
+-  PA.preserve<DominatorTreeAnalysis>();
+-  PA.preserve<MemorySSAAnalysis>();
+-  PA.preserveSet<CFGAnalyses>();
+-  return PA;
+-}
+diff --git a/llvm/test/Other/new-pm-defaults.ll b/llvm/test/Other/new-pm-defaults.ll
+index 7347b3626e52..9f46f1916ca2 100644
+--- a/llvm/test/Other/new-pm-defaults.ll
++++ b/llvm/test/Other/new-pm-defaults.ll
+@@ -206,7 +206,6 @@
+ ; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass
+ ; CHECK-O23SZ-NEXT: Running pass: LICMPass
+diff --git a/llvm/test/Other/new-pm-lto-defaults.ll b/llvm/test/Other/new-pm-lto-defaults.ll
+index 2f8cfd2a5d41..d794794de11d 100644
+--- a/llvm/test/Other/new-pm-lto-defaults.ll
++++ b/llvm/test/Other/new-pm-lto-defaults.ll
+@@ -108,7 +108,6 @@
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass on foo
+ ; CHECK-O23SZ-NEXT: Running analysis: PostDominatorTreeAnalysis on foo
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: MergedLoadStoreMotionPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass on foo
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll
+index 1fa850c524c4..9a28cb1d5802 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll
+@@ -149,7 +149,6 @@
+ ; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass
+ ; CHECK-O23SZ-NEXT: Running pass: LICMPass on loop
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+index 751fe31661b2..0bb8bb8830fa 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+@@ -136,7 +136,6 @@
+ ; CHECK-O-NEXT: Running pass: ADCEPass
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass
+ ; CHECK-O23SZ-NEXT: Running pass: LICMPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+index 4421cbdf81c1..d24afcc698eb 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+@@ -143,7 +143,6 @@
+ ; CHECK-O-NEXT: Running pass: ADCEPass
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass
+ ; CHECK-O23SZ-NEXT: Running pass: LICMPass
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
+index fde723a7fe1a..b9aa75daa6e5 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
+@@ -147,7 +147,6 @@
+ ; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass
+ ; CHECK-O23SZ-NEXT: Running pass: LICMPass on loop
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
+index d2d07a3f1a4a..ea0fc0947648 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
+@@ -172,7 +172,6 @@
+ ; CHECK-O-NEXT: Running pass: ADCEPass
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass
+ ; CHECK-O23SZ-NEXT: Running pass: LICMPass
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
+index 957cfc68f2e8..9b8f22918362 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
+@@ -137,7 +137,6 @@
+ ; CHECK-O-NEXT: Running pass: ADCEPass
+ ; CHECK-O23SZ-NEXT: Running pass: MemCpyOptPass
+ ; CHECK-O23SZ-NEXT: Running pass: DSEPass
+-; CHECK-O23SZ-NEXT: Running pass: MoveAutoInitPass on foo
+ ; CHECK-O23SZ-NEXT: Running pass: LoopSimplifyPass
+ ; CHECK-O23SZ-NEXT: Running pass: LCSSAPass
+ ; CHECK-O23SZ-NEXT: Running pass: LICMPass
+diff --git a/llvm/test/Transforms/MoveAutoInit/branch.ll b/llvm/test/Transforms/MoveAutoInit/branch.ll
+deleted file mode 100644
+index 6c51e33c8c8e..000000000000
+--- a/llvm/test/Transforms/MoveAutoInit/branch.ll
++++ /dev/null
+@@ -1,41 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+-; RUN: opt < %s -S -passes='move-auto-init' -verify-memoryssa | FileCheck %s
+-
+-@__const.foo.buffer = private unnamed_addr constant [8 x i32] [i32 -1431655766, i32 -1431655766, i32 -1431655766, i32 -1431655766, i32 -1431655766, i32 -1431655766, i32 -1431655766, i32 -1431655766], align 16
+-
+-define void @foo(i32 %x) {
+-; CHECK-LABEL: @foo(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[BUFFER:%.*]] = alloca [8 x i32], align 16
+-; CHECK-NEXT:    [[TOBOOL:%.*]] = icmp ne i32 [[X:%.*]], 0
+-; CHECK-NEXT:    br i1 [[TOBOOL]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+-; CHECK:       if.then:
+-; CHECK-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 16 [[BUFFER]], ptr align 16 @__const.foo.buffer, i64 32, i1 false), !annotation !0
+-; CHECK-NEXT:    call void @dump(ptr [[BUFFER]])
+-; CHECK-NEXT:    br label [[IF_END]]
+-; CHECK:       if.end:
+-; CHECK-NEXT:    ret void
+-;
+-
+-entry:
+-  %buffer = alloca [8 x i32], align 16
+-  call void @llvm.memcpy.p0.p0.i64(ptr align 16 %buffer, ptr align 16 @__const.foo.buffer, i64 32, i1 false), !annotation !0
+-  %tobool = icmp ne i32 %x, 0
+-  br i1 %tobool, label %if.then, label %if.end
+-
+-if.then:                                          ; preds = %entry
+-  call void @dump(ptr %buffer)
+-  br label %if.end
+-
+-if.end:                                           ; preds = %if.then, %entry
+-  ret void
+-}
+-
+-
+-
+-declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
+-
+-declare void @dump(ptr)
+-
+-!0 = !{!"auto-init"}
+-
+diff --git a/llvm/test/Transforms/MoveAutoInit/clobber.ll b/llvm/test/Transforms/MoveAutoInit/clobber.ll
+deleted file mode 100644
+index 0d70d85119f5..000000000000
+--- a/llvm/test/Transforms/MoveAutoInit/clobber.ll
++++ /dev/null
+@@ -1,100 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+-; Checks that move-auto-init can move instruction passed unclobbering memory
+-; instructions.
+-; RUN: opt < %s -S -passes='move-auto-init' -verify-memoryssa | FileCheck %s
+-
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-
+-define i32 @foo(i32 noundef %0, i32 noundef %1, i32 noundef %2) #0 {
+-; CHECK-LABEL: @foo(
+-; CHECK-NEXT:    [[TMP4:%.*]] = alloca [100 x i8], align 16
+-; CHECK-NEXT:    [[TMP5:%.*]] = alloca [2 x i8], align 1
+-; CHECK-NEXT:    [[TMP6:%.*]] = getelementptr inbounds [100 x i8], ptr [[TMP4]], i64 0, i64 0
+-; CHECK-NEXT:    call void @llvm.lifetime.start.p0(i64 100, ptr nonnull [[TMP6]]) #[[ATTR3:[0-9]+]]
+-; CHECK-NEXT:    [[TMP7:%.*]] = getelementptr inbounds [2 x i8], ptr [[TMP5]], i64 0, i64 0
+-; CHECK-NEXT:    call void @llvm.lifetime.start.p0(i64 2, ptr nonnull [[TMP7]]) #[[ATTR3]]
+-; CHECK-NEXT:    [[TMP8:%.*]] = getelementptr inbounds [2 x i8], ptr [[TMP5]], i64 0, i64 1
+-; CHECK-NEXT:    [[TMP9:%.*]] = icmp eq i32 [[TMP1:%.*]], 0
+-; CHECK-NEXT:    br i1 [[TMP9]], label [[TMP15:%.*]], label [[TMP10:%.*]]
+-; CHECK:       10:
+-; CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr noundef nonnull align 16 dereferenceable(100) [[TMP6]], i8 -86, i64 100, i1 false), !annotation !0
+-; CHECK-NEXT:    [[TMP11:%.*]] = sext i32 [[TMP0:%.*]] to i64
+-; CHECK-NEXT:    [[TMP12:%.*]] = getelementptr inbounds [100 x i8], ptr [[TMP4]], i64 0, i64 [[TMP11]]
+-; CHECK-NEXT:    store i8 12, ptr [[TMP12]], align 1
+-; CHECK-NEXT:    [[TMP13:%.*]] = load i8, ptr [[TMP6]], align 16
+-; CHECK-NEXT:    [[TMP14:%.*]] = sext i8 [[TMP13]] to i32
+-; CHECK-NEXT:    br label [[TMP22:%.*]]
+-; CHECK:       15:
+-; CHECK-NEXT:    [[TMP16:%.*]] = icmp eq i32 [[TMP2:%.*]], 0
+-; CHECK-NEXT:    br i1 [[TMP16]], label [[TMP22]], label [[TMP17:%.*]]
+-; CHECK:       17:
+-; CHECK-NEXT:    store i8 -86, ptr [[TMP7]], align 1, !annotation !0
+-; CHECK-NEXT:    store i8 -86, ptr [[TMP8]], align 1, !annotation !0
+-; CHECK-NEXT:    [[TMP18:%.*]] = sext i32 [[TMP0]] to i64
+-; CHECK-NEXT:    [[TMP19:%.*]] = getelementptr inbounds [2 x i8], ptr [[TMP5]], i64 0, i64 [[TMP18]]
+-; CHECK-NEXT:    store i8 12, ptr [[TMP19]], align 1
+-; CHECK-NEXT:    [[TMP20:%.*]] = load i8, ptr [[TMP7]], align 1
+-; CHECK-NEXT:    [[TMP21:%.*]] = sext i8 [[TMP20]] to i32
+-; CHECK-NEXT:    br label [[TMP22]]
+-; CHECK:       22:
+-; CHECK-NEXT:    [[TMP23:%.*]] = phi i32 [ [[TMP14]], [[TMP10]] ], [ [[TMP21]], [[TMP17]] ], [ 0, [[TMP15]] ]
+-; CHECK-NEXT:    call void @llvm.lifetime.end.p0(i64 2, ptr nonnull [[TMP7]]) #[[ATTR3]]
+-; CHECK-NEXT:    call void @llvm.lifetime.end.p0(i64 100, ptr nonnull [[TMP6]]) #[[ATTR3]]
+-; CHECK-NEXT:    ret i32 [[TMP23]]
+-;
+-
+-  %4 = alloca [100 x i8], align 16
+-  %5 = alloca [2 x i8], align 1
+-  %6 = getelementptr inbounds [100 x i8], [100 x i8]* %4, i64 0, i64 0
+-  call void @llvm.lifetime.start.p0i8(i64 100, i8* nonnull %6) #3
+-  ; This memset must move.
+-  call void @llvm.memset.p0i8.i64(i8* noundef nonnull align 16 dereferenceable(100) %6, i8 -86, i64 100, i1 false), !annotation !0
+-  %7 = getelementptr inbounds [2 x i8], [2 x i8]* %5, i64 0, i64 0
+-  call void @llvm.lifetime.start.p0i8(i64 2, i8* nonnull %7) #3
+-  ; This store must move.
+-  store i8 -86, i8* %7, align 1, !annotation !0
+-  %8 = getelementptr inbounds [2 x i8], [2 x i8]* %5, i64 0, i64 1
+-  ; This store must move.
+-  store i8 -86, i8* %8, align 1, !annotation !0
+-  %9 = icmp eq i32 %1, 0
+-  br i1 %9, label %15, label %10
+-
+-10:
+-  %11 = sext i32 %0 to i64
+-  %12 = getelementptr inbounds [100 x i8], [100 x i8]* %4, i64 0, i64 %11
+-  store i8 12, i8* %12, align 1
+-  %13 = load i8, i8* %6, align 16
+-  %14 = sext i8 %13 to i32
+-  br label %22
+-
+-15:
+-  %16 = icmp eq i32 %2, 0
+-  br i1 %16, label %22, label %17
+-
+-17:
+-  %18 = sext i32 %0 to i64
+-  %19 = getelementptr inbounds [2 x i8], [2 x i8]* %5, i64 0, i64 %18
+-  store i8 12, i8* %19, align 1
+-  %20 = load i8, i8* %7, align 1
+-  %21 = sext i8 %20 to i32
+-  br label %22
+-
+-22:
+-  %23 = phi i32 [ %14, %10 ], [ %21, %17 ], [ 0, %15 ]
+-  call void @llvm.lifetime.end.p0i8(i64 2, i8* nonnull %7) #3
+-  call void @llvm.lifetime.end.p0i8(i64 100, i8* nonnull %6) #3
+-  ret i32 %23
+-}
+-
+-declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture) #1
+-
+-declare void @llvm.memset.p0i8.i64(i8* nocapture writeonly, i8, i64, i1 immarg) #2
+-
+-declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture) #1
+-
+-attributes #0 = { mustprogress nofree nosync nounwind readnone uwtable willreturn }
+-attributes #1 = { argmemonly mustprogress nofree nosync nounwind willreturn }
+-attributes #2 = { argmemonly mustprogress nofree nounwind willreturn writeonly }
+-attributes #3 = { nounwind }
+-
+-!0 = !{!"auto-init"}
+diff --git a/llvm/test/Transforms/MoveAutoInit/fence.ll b/llvm/test/Transforms/MoveAutoInit/fence.ll
+deleted file mode 100644
+index bce9c136942e..000000000000
+--- a/llvm/test/Transforms/MoveAutoInit/fence.ll
++++ /dev/null
+@@ -1,70 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+-; RUN: opt < %s -S -passes='move-auto-init' -verify-memoryssa | FileCheck %s
+-
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-
+-; In that case, the store to %val happens before the fence and cannot go past
+-; it.
+-define void @foo(i32 %x) {
+-; CHECK-LABEL: @foo(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[VAL:%.*]] = alloca i32, align 4
+-; CHECK-NEXT:    store i32 -1431655766, ptr [[VAL]], align 4, !annotation !0
+-; CHECK-NEXT:    [[TOBOOL:%.*]] = icmp ne i32 [[X:%.*]], 0
+-; CHECK-NEXT:    fence acquire
+-; CHECK-NEXT:    br i1 [[TOBOOL]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+-; CHECK:       if.then:
+-; CHECK-NEXT:    call void @dump(ptr [[VAL]])
+-; CHECK-NEXT:    br label [[IF_END]]
+-; CHECK:       if.end:
+-; CHECK-NEXT:    ret void
+-;
+-entry:
+-  %val = alloca i32, align 4
+-  store i32 -1431655766, ptr %val, align 4, !annotation !0
+-  %tobool = icmp ne i32 %x, 0
+-  fence acquire
+-  br i1 %tobool, label %if.then, label %if.end
+-
+-if.then:                                          ; preds = %entry
+-  call void @dump(ptr %val)
+-  br label %if.end
+-
+-if.end:                                           ; preds = %if.then, %entry
+-  ret void
+-}
+-
+-; In that case, the store to %val happens after the fence and it is moved within
+-; the true branch as expected.
+-define void @bar(i32 %x) {
+-; CHECK-LABEL: @bar(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[VAL:%.*]] = alloca i32, align 4
+-; CHECK-NEXT:    [[TOBOOL:%.*]] = icmp ne i32 [[X:%.*]], 0
+-; CHECK-NEXT:    fence acquire
+-; CHECK-NEXT:    br i1 [[TOBOOL]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+-; CHECK:       if.then:
+-; CHECK-NEXT:    store i32 -1431655766, ptr [[VAL]], align 4, !annotation !0
+-; CHECK-NEXT:    call void @dump(ptr [[VAL]])
+-; CHECK-NEXT:    br label [[IF_END]]
+-; CHECK:       if.end:
+-; CHECK-NEXT:    ret void
+-;
+-entry:
+-  %val = alloca i32, align 4
+-  %tobool = icmp ne i32 %x, 0
+-  fence acquire
+-  store i32 -1431655766, ptr %val, align 4, !annotation !0
+-  br i1 %tobool, label %if.then, label %if.end
+-
+-if.then:                                          ; preds = %entry
+-  call void @dump(ptr %val)
+-  br label %if.end
+-
+-if.end:                                           ; preds = %if.then, %entry
+-  ret void
+-}
+-
+-declare void @dump(ptr)
+-
+-!0 = !{!"auto-init"}
+diff --git a/llvm/test/Transforms/MoveAutoInit/loop.ll b/llvm/test/Transforms/MoveAutoInit/loop.ll
+deleted file mode 100644
+index 71153e58f4e3..000000000000
+--- a/llvm/test/Transforms/MoveAutoInit/loop.ll
++++ /dev/null
+@@ -1,102 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+-; RUN: opt < %s -S -passes='move-auto-init' -verify-memoryssa | FileCheck %s
+-
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-
+-define void @foo(i32 %x) {
+-; CHECK-LABEL: @foo(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[BUFFER:%.*]] = alloca [80 x i32], align 16
+-; CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 16 [[BUFFER]], i8 -86, i64 320, i1 false), !annotation !0
+-; CHECK-NEXT:    br label [[DO_BODY:%.*]]
+-; CHECK:       do.body:
+-; CHECK-NEXT:    [[X_ADDR_0:%.*]] = phi i32 [ [[X:%.*]], [[ENTRY:%.*]] ], [ [[DEC:%.*]], [[DO_COND:%.*]] ]
+-; CHECK-NEXT:    [[ARRAYIDX:%.*]] = getelementptr inbounds [80 x i32], ptr [[BUFFER]], i64 0, i64 0
+-; CHECK-NEXT:    call void @dump(ptr [[ARRAYIDX]])
+-; CHECK-NEXT:    br label [[DO_COND]]
+-; CHECK:       do.cond:
+-; CHECK-NEXT:    [[DEC]] = add nsw i32 [[X_ADDR_0]], -1
+-; CHECK-NEXT:    [[TOBOOL:%.*]] = icmp ne i32 [[X_ADDR_0]], 0
+-; CHECK-NEXT:    br i1 [[TOBOOL]], label [[DO_BODY]], label [[DO_END:%.*]]
+-; CHECK:       do.end:
+-; CHECK-NEXT:    ret void
+-;
+-
+-entry:
+-  %buffer = alloca [80 x i32], align 16
+-  call void @llvm.memset.p0.i64(ptr align 16 %buffer, i8 -86, i64 320, i1 false), !annotation !0
+-  br label %do.body
+-
+-do.body:                                          ; preds = %do.cond, %entry
+-  %x.addr.0 = phi i32 [ %x, %entry ], [ %dec, %do.cond ]
+-  %arrayidx = getelementptr inbounds [80 x i32], ptr %buffer, i64 0, i64 0
+-  call void @dump(ptr %arrayidx)
+-  br label %do.cond
+-
+-do.cond:                                          ; preds = %do.body
+-  %dec = add nsw i32 %x.addr.0, -1
+-  %tobool = icmp ne i32 %x.addr.0, 0
+-  br i1 %tobool, label %do.body, label %do.end
+-
+-do.end:                                           ; preds = %do.cond
+-  ret void
+-}
+-
+-declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)
+-
+-declare void @dump(ptr )
+-
+-define void @bar(i32 %x, i32 %y) {
+-; CHECK-LABEL: @bar(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[BUFFER:%.*]] = alloca [80 x i32], align 16
+-; CHECK-NEXT:    [[TOBOOL:%.*]] = icmp ne i32 [[Y:%.*]], 0
+-; CHECK-NEXT:    br i1 [[TOBOOL]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+-; CHECK:       if.then:
+-; CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 16 [[BUFFER]], i8 -86, i64 320, i1 false), !annotation !0
+-; CHECK-NEXT:    [[ADD:%.*]] = add nsw i32 [[X:%.*]], [[Y]]
+-; CHECK-NEXT:    br label [[DO_BODY:%.*]]
+-; CHECK:       do.body:
+-; CHECK-NEXT:    [[X_ADDR_0:%.*]] = phi i32 [ [[ADD]], [[IF_THEN]] ], [ [[DEC:%.*]], [[DO_COND:%.*]] ]
+-; CHECK-NEXT:    [[ARRAYIDX:%.*]] = getelementptr inbounds [80 x i32], ptr [[BUFFER]], i64 0, i64 0
+-; CHECK-NEXT:    call void @dump(ptr [[ARRAYIDX]])
+-; CHECK-NEXT:    br label [[DO_COND]]
+-; CHECK:       do.cond:
+-; CHECK-NEXT:    [[DEC]] = add nsw i32 [[X_ADDR_0]], -1
+-; CHECK-NEXT:    [[TOBOOL1:%.*]] = icmp ne i32 [[X_ADDR_0]], 0
+-; CHECK-NEXT:    br i1 [[TOBOOL1]], label [[DO_BODY]], label [[DO_END:%.*]]
+-; CHECK:       do.end:
+-; CHECK-NEXT:    br label [[IF_END]]
+-; CHECK:       if.end:
+-; CHECK-NEXT:    ret void
+-;
+-
+-entry:
+-  %buffer = alloca [80 x i32], align 16
+-  call void @llvm.memset.p0.i64(ptr align 16 %buffer, i8 -86, i64 320, i1 false), !annotation !0
+-  %tobool = icmp ne i32 %y, 0
+-  br i1 %tobool, label %if.then, label %if.end
+-
+-if.then:                                          ; preds = %entry
+-  %add = add nsw i32 %x, %y
+-  br label %do.body
+-
+-do.body:                                          ; preds = %do.cond, %if.then
+-  %x.addr.0 = phi i32 [ %add, %if.then ], [ %dec, %do.cond ]
+-  %arrayidx = getelementptr inbounds [80 x i32], ptr %buffer, i64 0, i64 0
+-  call void @dump(ptr %arrayidx)
+-  br label %do.cond
+-
+-do.cond:                                          ; preds = %do.body
+-  %dec = add nsw i32 %x.addr.0, -1
+-  %tobool1 = icmp ne i32 %x.addr.0, 0
+-  br i1 %tobool1, label %do.body, label %do.end
+-
+-do.end:                                           ; preds = %do.cond
+-  br label %if.end
+-
+-if.end:                                           ; preds = %do.end, %entry
+-  ret void
+-}
+-
+-!0 = !{!"auto-init"}
+diff --git a/llvm/test/Transforms/MoveAutoInit/scalar.ll b/llvm/test/Transforms/MoveAutoInit/scalar.ll
+deleted file mode 100644
+index 6929aebc58eb..000000000000
+--- a/llvm/test/Transforms/MoveAutoInit/scalar.ll
++++ /dev/null
+@@ -1,36 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+-; RUN: opt < %s -S -passes='move-auto-init' -verify-memoryssa | FileCheck %s
+-
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-
+-define void @foo(i32 %x) {
+-; CHECK-LABEL: @foo(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[VAL:%.*]] = alloca i32, align 4
+-; CHECK-NEXT:    [[TOBOOL:%.*]] = icmp ne i32 [[X:%.*]], 0
+-; CHECK-NEXT:    br i1 [[TOBOOL]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+-; CHECK:       if.then:
+-; CHECK-NEXT:    store i32 -1431655766, ptr [[VAL]], align 4, !annotation !0
+-; CHECK-NEXT:    call void @dump(ptr [[VAL]])
+-; CHECK-NEXT:    br label [[IF_END]]
+-; CHECK:       if.end:
+-; CHECK-NEXT:    ret void
+-;
+-
+-entry:
+-  %val = alloca i32, align 4
+-  store i32 -1431655766, ptr %val, align 4, !annotation !0
+-  %tobool = icmp ne i32 %x, 0
+-  br i1 %tobool, label %if.then, label %if.end
+-
+-if.then:                                          ; preds = %entry
+-  call void @dump(ptr %val)
+-  br label %if.end
+-
+-if.end:                                           ; preds = %if.then, %entry
+-  ret void
+-}
+-
+-declare void @dump(ptr)
+-
+-!0 = !{!"auto-init"}

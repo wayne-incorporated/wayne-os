@@ -1,0 +1,55 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+description   "Run the shill network connection manager"
+author        "chromium-os-dev@chromium.org"
+
+# shill termination may take more than 5s (the default kill timeout) in some
+# cases (e.g. it needs to disconnect a cellular modem from the network). A
+# longer kill timeout is used to ensure that shill terminates properly in most
+# cases. Also, stop shill on "starting pre-shutdown" so its exiting blocks the
+# chromeos_shutdown script from running (jobs that "stop on stopping
+# boot-services" may still be running in parallel with chromeos_shutdown if
+# they do not exit quickly).
+start on @expected_started_services@
+stop on starting pre-shutdown
+kill timeout 10
+respawn
+expect fork
+
+# Default parameters to be overridden by upstart configuration.
+env SHILL_LOG_LEVEL=
+env SHILL_LOG_SCOPES=
+# Disable noisy libchrome and libbrillo VLOGs by default
+env SHILL_LOG_VMODULES="object_proxy=0,dbus_object=0,bus=0"
+env ALLOWED_DEVICES=
+env BLOCKED_DEVICES=
+
+# Hook for mod_for_test_scripts/100setupTestingInterface.
+env SHILL_TEST_DEVICES=""
+
+# Allow the parameters to be overridden by upstart commands and events.
+import ALLOWED_DEVICES
+import BLOCKED_DEVICES
+import SHILL_LOG_LEVEL
+import SHILL_LOG_SCOPES
+import SHILL_LOG_VMODULES
+import SHILL_TEST_DEVICES
+
+# Make shill killable, because if it has a leak it's better to
+# restart it than to OOM-panic.
+oom score -100
+# Let the daemon crash if it grows too much.  "as" is "address space" (vm size).
+# Each extra thread (i.e., except for the main one) may take 8MB (stack) + 64MB
+# (malloc arena) and currently shill may have 4 extra threads at most, so set
+# the value to ~500MB here. Note that the shill code we care about here is
+# single-threaded, but the libs that shill is using may start some threads by
+# themselves (e.g., libbase, libchaps). Also see b/268424208.
+limit as 500000000 unlimited
+
+pre-start exec /usr/share/cros/init/shill-pre-start.sh
+
+post-stop exec bootstat shill-stop
+
+exec /usr/share/cros/init/shill.sh

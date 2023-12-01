@@ -1,0 +1,37 @@
+From 2ba67b1029eb54c727beb34e2ecf37d86db8dc00 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 1 Apr 2022 16:54:55 -0300
+Subject: [PATCH 158/163] math: Do not use __builtin_fpclassify on clang
+
+It does not handle pseudo normal numbers.
+---
+ math/math.h | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/math/math.h b/math/math.h
+index ce830ac1fa..678102402c 100644
+--- a/math/math.h
++++ b/math/math.h
+@@ -955,8 +955,7 @@ enum
+    the __SUPPORT_SNAN__ check may be skipped for those versions.  */
+ 
+ /* Return number of classification appropriate for X.  */
+-# if ((__GNUC_PREREQ (4,4) && !defined __SUPPORT_SNAN__)		      \
+-      || __glibc_clang_prereq (2,8))					      \
++# if ((__GNUC_PREREQ (4,4) && !defined __SUPPORT_SNAN__))		      \
+      && (!defined __OPTIMIZE_SIZE__ || defined __cplusplus)
+      /* The check for __cplusplus allows the use of the builtin, even
+ 	when optimization for size is on.  This is provided for
+@@ -997,8 +996,7 @@ enum
+ # endif
+ 
+ /* Return nonzero value if X is neither zero, subnormal, Inf, nor NaN.  */
+-# if (__GNUC_PREREQ (4,4) && !defined __SUPPORT_SNAN__) \
+-     || __glibc_clang_prereq (2,8)
++# if (__GNUC_PREREQ (4,4) && !defined __SUPPORT_SNAN__)
+ #  define isnormal(x) __builtin_isnormal (x)
+ # else
+ #  define isnormal(x) (fpclassify (x) == FP_NORMAL)
+-- 
+2.37.2
+

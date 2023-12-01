@@ -1,0 +1,59 @@
+From fd21846dd32b9b11202bd8b540391836a7c22c69 Mon Sep 17 00:00:00 2001
+From: renchenglei <chenglei.ren@intel.com>
+Date: Thu, 12 Sep 2019 13:45:31 +0800
+Subject: [PATCH] BACKPORT: egl/android: Enable HAL_PIXEL_FORMAT_RGBA_1010102
+ format
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The patch adds support for HAL_PIXEL_FORMAT_RGBA_1010102 on
+Android platform.
+
+Fixes android.media.cts.DecoderTest#testVp9HdrStaticMetadata
+which failed in egl due to "Unsupported native buffer format 0x2b"
+on Android.
+
+Reviewed-by: Tapani Pälli <tapani.palli@intel.com>
+Signed-off-by: Chenglei Ren <chenglei.ren@intel.com>
+(cherry picked from commit e2485bb02392f81cb9e24d8a3466cd6a2ba8d73a)
+
+Conflicts:Retained FOURCC return values
+	src/egl/drivers/dri2/platform_android.c
+
+Change-Id: I165bf01850c750dc4e435a39c6ad625c5cd0c187
+---
+ src/egl/drivers/dri2/platform_android.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index b975c4c34cf..e67d7fa3099 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -114,6 +114,7 @@ get_format_bpp(int native)
+        */
+    case HAL_PIXEL_FORMAT_RGBX_8888:
+    case HAL_PIXEL_FORMAT_BGRA_8888:
++   case HAL_PIXEL_FORMAT_RGBA_1010102:
+       bpp = 4;
+       break;
+    case HAL_PIXEL_FORMAT_RGB_565:
+@@ -141,6 +142,7 @@ static int get_fourcc(int native)
+        */
+    case HAL_PIXEL_FORMAT_RGBX_8888: return __DRI_IMAGE_FOURCC_XBGR8888;
+    case HAL_PIXEL_FORMAT_RGBA_FP16: return __DRI_IMAGE_FOURCC_ABGR16161616F;
++   case HAL_PIXEL_FORMAT_RGBA_1010102: return __DRI_IMAGE_FOURCC_ABGR2101010;
+    default:
+       _eglLog(_EGL_WARNING, "unsupported native buffer format 0x%x", native);
+    }
+@@ -160,6 +162,7 @@ static int get_format(int format)
+        */
+    case HAL_PIXEL_FORMAT_RGBX_8888: return __DRI_IMAGE_FORMAT_XBGR8888;
+    case HAL_PIXEL_FORMAT_RGBA_FP16: return __DRI_IMAGE_FORMAT_ABGR16161616F;
++   case HAL_PIXEL_FORMAT_RGBA_1010102: return __DRI_IMAGE_FORMAT_ABGR2101010;
+    default:
+       _eglLog(_EGL_WARNING, "unsupported native buffer format 0x%x", format);
+    }
+-- 
+2.21.0
+

@@ -1,0 +1,61 @@
+commit 5c3fc5093aaf7d9422459d295eb4eb769abcbaa4
+Author: Kamlesh Kumar <kamleshbhalui@gmail.com>
+Date:   Wed Mar 3 04:32:47 2021 +0530
+
+    [libunwind] [risc-v] This patch is for fixing
+    immediate build failure when Cross Unwinding enabled.
+    Follow up patch will cleanup some Macros handling.
+    
+    Differential Revision: https://reviews.llvm.org/D97762
+
+diff --git a/libunwind/src/Registers.hpp b/libunwind/src/Registers.hpp
+index 1d23f97aedfb..aea84cc22721 100644
+--- a/libunwind/src/Registers.hpp
++++ b/libunwind/src/Registers.hpp
+@@ -3731,26 +3731,35 @@ inline const char *Registers_hexagon::getRegisterName(int regNum) {
+ /// Registers_riscv holds the register state of a thread in a RISC-V
+ /// process.
+ 
+-# if __riscv_xlen == 32
++// This check makes it safe when LIBUNWIND_ENABLE_CROSS_UNWINDING enabled.
++# ifdef __riscv
++#  if __riscv_xlen == 32
+ typedef uint32_t reg_t;
+-# elif __riscv_xlen == 64
++#  elif __riscv_xlen == 64
+ typedef uint64_t reg_t;
+-# else
+-#  error "Unsupported __riscv_xlen"
+-# endif
++#  else
++#   error "Unsupported __riscv_xlen"
++#  endif
+ 
+-# if defined(__riscv_flen)
+-#  if __riscv_flen == 64
++#  if defined(__riscv_flen)
++#   if __riscv_flen == 64
+ typedef double fp_t;
+-#  elif __riscv_flen == 32
++#   elif __riscv_flen == 32
+ typedef float fp_t;
++#   else
++#    error "Unsupported __riscv_flen"
++#   endif
+ #  else
+-#   error "Unsupported __riscv_flen"
++// This is just for supressing undeclared error of fp_t.
++typedef double fp_t;
+ #  endif
+ # else
+-// This is just for supressing undeclared error of fp_t.
++// Use Max possible width when cross unwinding
++typedef uint64_t reg_t;
+ typedef double fp_t;
+-# endif
++# define __riscv_xlen 64
++# define __riscv_flen 64
++#endif
+ 
+ /// Registers_riscv holds the register state of a thread.
+ class _LIBUNWIND_HIDDEN Registers_riscv {

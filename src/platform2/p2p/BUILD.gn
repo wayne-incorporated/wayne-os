@@ -1,0 +1,280 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":libp2p-client",
+    ":libp2p-http-server",
+    ":libp2p-server",
+    ":libp2p-util",
+    ":p2p-client",
+    ":p2p-http-server",
+    ":p2p-server",
+  ]
+  if (use.test) {
+    deps += [
+      ":libp2p-testutil",
+      ":p2p-client-unittests",
+      ":p2p-common-unittests",
+      ":p2p-http-server-unittests",
+      ":p2p-server-unittests",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":p2p_http_server_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  cflags_cc = [ "-fno-strict-aliasing" ]
+  ldflags = [ "-Wl,--gc-sections" ]
+  cflags = [
+    "-ffunction-sections",
+    "-Wextra",
+
+    # Restore overridden flag by -Wextra.
+    "-Wno-unused-parameter",
+
+    # To allow { 0 } initializations.
+    "-Wno-missing-field-initializers",
+  ]
+
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+pkg_config("libp2p-util_dependent_config") {
+  pkg_deps = [
+    "glib-2.0",
+    "gobject-2.0",
+  ]
+}
+
+# common utils.
+static_library("libp2p-util") {
+  sources = [
+    "common/clock.cc",
+    "common/server_message.cc",
+    "common/util.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  all_dependent_configs = [ ":libp2p-util_dependent_config" ]
+  libs = [ "rt" ]
+}
+
+pkg_config("libp2p-client_dependent_config") {
+  pkg_deps = [
+    "avahi-client",
+    "avahi-glib",
+    "glib-2.0",
+    "gobject-2.0",
+    "libmetrics",
+  ]
+}
+
+# p2p-client
+static_library("libp2p-client") {
+  sources = [
+    "client/peer_selector.cc",
+    "client/service_finder.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  all_dependent_configs = [ ":libp2p-client_dependent_config" ]
+}
+
+executable("p2p-client") {
+  sources = [ "client/main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":libp2p-client",
+    ":libp2p-util",
+  ]
+}
+
+pkg_config("libp2p-server_dependent_config") {
+  pkg_deps = [
+    "avahi-client",
+    "avahi-glib",
+    "gio-2.0",
+    "gio-unix-2.0",
+    "glib-2.0",
+    "gobject-2.0",
+    "libmetrics",
+  ]
+}
+
+# p2p-server
+static_library("libp2p-server") {
+  sources = [
+    "server/file_watcher.cc",
+    "server/http_server.cc",
+    "server/peer_update_manager.cc",
+    "server/service_publisher.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  all_dependent_configs = [ ":libp2p-server_dependent_config" ]
+}
+
+executable("p2p-server") {
+  sources = [ "server/main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":libp2p-server",
+    ":libp2p-util",
+  ]
+}
+
+pkg_config("libp2p-http-server_dependent_config") {
+  pkg_deps = [
+    "avahi-client",
+    "avahi-glib",
+    "glib-2.0",
+    "libmetrics",
+  ]
+}
+
+# p2p-http-server
+static_library("libp2p-http-server") {
+  sources = [
+    "http_server/connection_delegate.cc",
+    "http_server/server.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  all_dependent_configs = [ ":libp2p-http-server_dependent_config" ]
+  libs = [ "attr" ]
+}
+
+executable("p2p-http-server") {
+  sources = [ "http_server/main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":libp2p-http-server",
+    ":libp2p-util",
+  ]
+}
+
+# Test only.
+if (use.test) {
+  pkg_config("libp2p-testutil_dependent_config") {
+    pkg_deps = [
+      "gobject-2.0",
+      "libchrome-test",
+    ]
+  }
+
+  # common test-utils.
+  static_library("libp2p-testutil") {
+    sources = [ "common/testutil.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    all_dependent_configs = [ ":libp2p-testutil_dependent_config" ]
+  }
+
+  # common tests
+  executable("p2p-common-unittests") {
+    sources = [
+      "common/server_message_test.cc",
+      "common/struct_serializer_test.cc",
+      "common/testutil_test.cc",
+    ]
+    configs += [
+      # This config should be at the top.
+      # TODO(crbug.com/887845): Remove this after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libp2p-testutil",
+      ":libp2p-util",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  # p2p-client tests
+  executable("p2p-client-unittests") {
+    sources = [
+      "client/fake_service_finder.cc",
+      "client/peer_selector_test.cc",
+    ]
+    configs += [
+      # This config should be at the top.
+      # TODO(crbug.com/887845): Remove this after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libp2p-client",
+      ":libp2p-testutil",
+      ":libp2p-util",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  # p2p-server tests
+  executable("p2p-server-unittests") {
+    sources = [
+      "server/file_watcher_test.cc",
+      "server/http_server_test.cc",
+      "server/peer_update_manager_test.cc",
+    ]
+    configs += [
+      # This config should be at the top.
+      # TODO(crbug.com/887845): Remove this after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libp2p-server",
+      ":libp2p-testutil",
+      ":libp2p-util",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  # p2p-http-server tests
+  executable("p2p-http-server-unittests") {
+    sources = [
+      "http_server/connection_delegate_test.cc",
+      "http_server/server_test.cc",
+    ]
+    configs += [
+      # This config should be at the top.
+      # TODO(crbug.com/887845): Remove this after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libp2p-http-server",
+      ":libp2p-testutil",
+      ":libp2p-util",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+# Fuzzer only.
+if (use.fuzzer) {
+  pkg_config("p2p_http_server_fuzzer_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  # p2p-http-server fuzzer
+  executable("p2p_http_server_fuzzer") {
+    sources = [ "fuzzers/p2p_http_server_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":p2p_http_server_fuzzer_config",
+    ]
+    deps = [
+      ":libp2p-server",
+      ":libp2p-util",
+    ]
+  }
+}

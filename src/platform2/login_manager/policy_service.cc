@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,11 @@
 #include <string>
 #include <utility>
 
-#include <base/bind.h>
-#include <base/callback.h>
 #include <base/check.h>
 #include <base/check_op.h>
 #include <base/files/file_enumerator.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback.h>
 #include <base/location.h>
 #include <base/logging.h>
 #include <base/notreached.h>
@@ -23,6 +23,7 @@
 #include <chromeos/dbus/service_constants.h>
 
 #include "bindings/device_management_backend.pb.h"
+#include "crypto/signature_verifier.h"
 #include "login_manager/blob_util.h"
 #include "login_manager/dbus_util.h"
 #include "login_manager/nss_util.h"
@@ -76,48 +77,22 @@ PolicyService::~PolicyService() = default;
 bool PolicyService::Store(const PolicyNamespace& ns,
                           const std::vector<uint8_t>& policy_blob,
                           int key_flags,
-                          SignatureCheck signature_check,
-                          const Completion& completion) {
+                          Completion completion) {
   em::PolicyFetchResponse policy;
   if (!policy.ParseFromArray(policy_blob.data(), policy_blob.size()) ||
       !policy.has_policy_data()) {
-    completion.Run(CREATE_ERROR_AND_LOG(dbus_error::kSigDecodeFail,
-                                        "Unable to parse policy protobuf."));
+    std::move(completion)
+        .Run(CREATE_ERROR_AND_LOG(dbus_error::kSigDecodeFail,
+                                  "Unable to parse policy protobuf."));
     return false;
   }
 
-  return StorePolicy(ns, policy, key_flags, signature_check, completion);
+  return StorePolicy(ns, policy, key_flags, std::move(completion));
 }
 
 bool PolicyService::Retrieve(const PolicyNamespace& ns,
                              std::vector<uint8_t>* policy_blob) {
   *policy_blob = SerializeAsBlob(GetOrCreateStore(ns)->Get());
-  return true;
-}
-
-bool PolicyService::Delete(const PolicyNamespace& ns,
-                           SignatureCheck signature_check) {
-  // Don't delete Chrome user or device policy.
-  if (!IsComponentDomain(ns.first)) {
-    LOG(ERROR) << "Deletion only allowed for component policy.";
-    return false;
-  }
-
-  // Don't delete signed policy.
-  if (signature_check != SignatureCheck::kDisabled) {
-    LOG(ERROR) << "Deletion of signed policy not allowed.";
-    return false;
-  }
-
-  // Delete file on disk if it exists.
-  if (!GetOrCreateStore(ns)->Delete()) {
-    LOG(ERROR) << "Failed to delete store.";
-    return false;
-  }
-
-  // Delete store.
-  policy_stores_.erase(ns);
-
   return true;
 }
 
@@ -157,15 +132,10 @@ std::vector<std::string> PolicyService::ListComponentIds(PolicyDomain domain) {
 }
 
 void PolicyService::PersistPolicy(const PolicyNamespace& ns,
-                                  const Completion& completion) {
+                                  Completion completion) {
   const bool success = GetOrCreateStore(ns)->Persist();
-  OnPolicyPersisted(completion,
+  OnPolicyPersisted(std::move(completion),
                     success ? dbus_error::kNone : dbus_error::kSigEncodeFail);
-}
-
-void PolicyService::PersistAllPolicy() {
-  for (const auto& kv : policy_stores_)
-    kv.second->Persist();
 }
 
 PolicyStore* PolicyService::GetOrCreateStore(const PolicyNamespace& ns) {
@@ -192,30 +162,10 @@ void PolicyService::SetStoreForTesting(const PolicyNamespace& ns,
   policy_stores_[ns] = std::move(store);
 }
 
-void PolicyService::PostPersistKeyTask() {
-  brillo::MessageLoop::current()->PostTask(
-      FROM_HERE,
-      base::Bind(&PolicyService::PersistKey, weak_ptr_factory_.GetWeakPtr()));
-}
-
-void PolicyService::PostPersistPolicyTask(const PolicyNamespace& ns,
-                                          const Completion& completion) {
-  brillo::MessageLoop::current()->PostTask(
-      FROM_HERE, base::Bind(&PolicyService::PersistPolicy,
-                            weak_ptr_factory_.GetWeakPtr(), ns, completion));
-}
-
 bool PolicyService::StorePolicy(const PolicyNamespace& ns,
                                 const em::PolicyFetchResponse& policy,
                                 int key_flags,
-                                SignatureCheck signature_check,
-                                const Completion& completion) {
-  if (signature_check == SignatureCheck::kDisabled) {
-    GetOrCreateStore(ns)->Set(policy);
-    PostPersistPolicyTask(ns, completion);
-    return true;
-  }
-
+                                Completion completion) {
   // Determine if the policy has pushed a new owner key and, if so, set it.
   if (policy.has_new_public_key() && !key()->Equals(policy.new_public_key())) {
     // The policy contains a new key, and it is different from |key_|.
@@ -227,7 +177,8 @@ bool PolicyService::StorePolicy(const PolicyNamespace& ns,
         // Graceful key rotation.
         LOG(INFO) << "Attempting policy key rotation.";
         installed =
-            key()->Rotate(der, StringToBlob(policy.new_public_key_signature()));
+            key()->Rotate(der, StringToBlob(policy.new_public_key_signature()),
+                          crypto::SignatureVerifier::RSA_PKCS1_SHA1);
       }
     } else if (key_flags & KEY_INSTALL_NEW) {
       LOG(INFO) << "Attempting to install new policy key.";
@@ -239,25 +190,28 @@ bool PolicyService::StorePolicy(const PolicyNamespace& ns,
     }
 
     if (!installed) {
-      completion.Run(CREATE_ERROR_AND_LOG(dbus_error::kPubkeySetIllegal,
-                                          "Failed to install policy key!"));
+      std::move(completion)
+          .Run(CREATE_ERROR_AND_LOG(dbus_error::kPubkeySetIllegal,
+                                    "Failed to install policy key!"));
       return false;
     }
 
     // If here, need to persist the key just loaded into memory to disk.
-    PostPersistKeyTask();
+    PersistKey();
   }
 
   // Validate signature on policy and persist to disk.
   if (!key()->Verify(StringToBlob(policy.policy_data()),
-                     StringToBlob(policy.policy_data_signature()))) {
-    completion.Run(CREATE_ERROR_AND_LOG(dbus_error::kVerifyFail,
-                                        "Signature could not be verified."));
+                     StringToBlob(policy.policy_data_signature()),
+                     crypto::SignatureVerifier::RSA_PKCS1_SHA1)) {
+    std::move(completion)
+        .Run(CREATE_ERROR_AND_LOG(dbus_error::kVerifyFail,
+                                  "Signature could not be verified."));
     return false;
   }
 
   GetOrCreateStore(ns)->Set(policy);
-  PostPersistPolicyTask(ns, completion);
+  PersistPolicy(ns, std::move(completion));
   return true;
 }
 
@@ -270,7 +224,7 @@ void PolicyService::OnKeyPersisted(bool status) {
     delegate_->OnKeyPersisted(status);
 }
 
-void PolicyService::OnPolicyPersisted(const Completion& completion,
+void PolicyService::OnPolicyPersisted(Completion completion,
                                       const std::string& dbus_error_code) {
   brillo::ErrorPtr error;
   if (dbus_error_code != dbus_error::kNone) {
@@ -280,7 +234,7 @@ void PolicyService::OnPolicyPersisted(const Completion& completion,
   }
 
   if (!completion.is_null())
-    completion.Run(std::move(error));
+    std::move(completion).Run(std::move(error));
   else
     error.reset();
 

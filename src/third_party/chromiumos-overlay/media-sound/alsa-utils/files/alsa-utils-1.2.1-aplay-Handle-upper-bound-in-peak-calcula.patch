@@ -1,0 +1,29 @@
+From 2efe124c31360cf0156dd0e5e7cdd52d1346a5c0 Mon Sep 17 00:00:00 2001
+From: Takashi Iwai <tiwai@suse.de>
+Date: Tue, 24 Aug 2021 10:00:26 +0200
+Subject: [PATCH 3/5] aplay: Handle upper bound in peak calculations
+
+Make sure that the calculated max_peak[] won't go beyond the sample
+max resolution.
+
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+---
+ aplay/aplay.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/aplay/aplay.c b/aplay/aplay.c
+index 2543de5..a51a37b 100644
+--- a/aplay/aplay.c
++++ b/aplay/aplay.c
+@@ -1898,6 +1898,8 @@ static void compute_max_peak(u_char *data, size_t samples)
+ 		max = 0x7fffffff;
+ 
+ 	for (c = 0; c < ichans; c++) {
++		if (max_peak[c] > max)
++			max_peak[c] = max;
+ 		if (bits_per_sample > 16)
+ 			perc[c] = max_peak[c] / (max / 100);
+ 		else
+-- 
+2.33.0.259.gc128427fd7-goog
+

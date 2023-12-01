@@ -1,0 +1,140 @@
+commit 68945a8686708c6e4c74b9aeb231b8c4e1731181
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Wed Feb 10 10:45:12 2021 -0800
+
+    [Thumb2] support `movs pc, lr` alias for `subs pc, lr, #0`/`eret`
+    
+    This is used by the Linux kernel built with CONFIG_THUMB2_KERNEL.
+    
+    Because different operands are not permitted to `movs`, the diagnostics now provide multiple suggestions along the lines of using a non-pc destination operand or lr source operand.
+    
+    Forked from D95586.
+    
+    Signed-off-by: Nick Desaulniers <ndesaulniers@google.com>
+    
+    Reviewed By: DavidSpickett
+    
+    Differential Revision: https://reviews.llvm.org/D96304
+
+diff --git a/llvm/lib/Target/ARM/ARMInstrThumb2.td b/llvm/lib/Target/ARM/ARMInstrThumb2.td
+index 5642cab32e7c..b70d66869b06 100644
+--- a/llvm/lib/Target/ARM/ARMInstrThumb2.td
++++ b/llvm/lib/Target/ARM/ARMInstrThumb2.td
+@@ -4145,6 +4145,18 @@ def t2SUBS_PC_LR : T2I <(outs), (ins imm0_255:$imm), NoItinerary,
+   let Inst{7-0} = imm;
+ }
+ 
++// B9.3.19 SUBS PC, LR (Thumb)
++// In the Thumb instruction set, MOVS{<c>}{<q>} PC, LR is a pseudo-instruction
++// for SUBS{<c>}{<q>} PC, LR, #0.
++def : t2InstAlias<"movs${p}\tpc, lr", (t2SUBS_PC_LR 0, pred:$p)>;
++def : t2InstAlias<"movs${p}.w\tpc, lr", (t2SUBS_PC_LR 0, pred:$p)>;
++
++// ERET - Return from exception in Hypervisor mode.
++// B9.3.3, B9.3.20: ERET is an alias for "SUBS PC, LR, #0" in an implementation that
++// includes virtualization extensions.
++def t2ERET : InstAlias<"eret${p}", (t2SUBS_PC_LR 0, pred:$p), 1>,
++             Requires<[IsThumb2, HasVirtualization]>;
++
+ // Hypervisor Call is a system instruction.
+ let isCall = 1 in {
+ def t2HVC : T2XI <(outs), (ins imm0_65535:$imm16), IIC_Br, "hvc.w\t$imm16", []>,
+@@ -4160,12 +4172,6 @@ def t2HVC : T2XI <(outs), (ins imm0_65535:$imm16), IIC_Br, "hvc.w\t$imm16", []>,
+ // Alias for HVC without the ".w" optional width specifier
+ def : t2InstAlias<"hvc\t$imm16", (t2HVC imm0_65535:$imm16)>;
+ 
+-// ERET - Return from exception in Hypervisor mode.
+-// B9.3.3, B9.3.20: ERET is an alias for "SUBS PC, LR, #0" in an implementation that
+-// includes virtualization extensions.
+-def t2ERET : InstAlias<"eret${p}", (t2SUBS_PC_LR 0, pred:$p), 1>,
+-             Requires<[IsThumb2, HasVirtualization]>;
+-
+ //===----------------------------------------------------------------------===//
+ // Non-Instruction Patterns
+ //
+diff --git a/llvm/test/MC/ARM/lsl-zero-errors.s b/llvm/test/MC/ARM/lsl-zero-errors.s
+index ad39470a4a50..e021aa9eb986 100644
+--- a/llvm/test/MC/ARM/lsl-zero-errors.s
++++ b/llvm/test/MC/ARM/lsl-zero-errors.s
+@@ -72,9 +72,11 @@
+ // CHECK-THUMBV7: note: operand must be a register in range [r0, r12] or r14
+ // CHECK-THUMBV8: note: operand must be a register in range [r0, r14]
+ 
+-// CHECK-THUMBV7: error: operand must be a register in range [r0, r12] or r14
+-// CHECK-THUMBV8: error: operand must be a register in range [r0, r14]
++// CHECK-NONARM: error: invalid instruction, any one of the following would fix this:
+ // CHECK-NONARM-NEXT: movs pc, r0, lsl #0
++// CHECK-THUMBV7: note: operand must be a register in range [r0, r12] or r14
++// CHECK-THUMBV8: note: operand must be a register in range [r0, r14]
++// CHECK-NONARM: note: invalid operand for instruction
+ 
+ // CHECK-NONARM: error: invalid instruction, any one of the following would fix this:
+ // CHECK-NONARM-NEXT: movs r0, pc, lsl #0
+@@ -82,9 +84,11 @@
+ // CHECK-NONARM: note: invalid operand for instruction
+ // CHECK-NONARM: note: invalid operand for instruction
+ 
+-// CHECK-THUMBV7: error: operand must be a register in range [r0, r12] or r14
+-// CHECK-THUMBV8: error: operand must be a register in range [r0, r14]
++// CHECK-NONARM: error: invalid instruction, any one of the following would fix this:
+ // CHECK-NONARM-NEXT: movs pc, pc, lsl #0
++// CHECK-THUMBV7: note: operand must be a register in range [r0, r12] or r14
++// CHECK-THUMBV8: note: operand must be a register in range [r0, r14]
++// CHECK-NONARM: note: invalid operand for instruction
+ 
+ // CHECK-ARM: mov pc, r0                @ encoding: [0x00,0xf0,0xa0,0xe1]
+ // CHECK-ARM: mov r0, pc                @ encoding: [0x0f,0x00,0xa0,0xe1]
+diff --git a/llvm/test/MC/ARM/thumb-mov.s b/llvm/test/MC/ARM/thumb-mov.s
+index 5ceb0082dddc..6f662f3ee2c7 100644
+--- a/llvm/test/MC/ARM/thumb-mov.s
++++ b/llvm/test/MC/ARM/thumb-mov.s
+@@ -13,13 +13,15 @@
+         movs pc, r0
+         movs r0, pc
+         movs pc, pc
+-// CHECK: error: operand must be a register in range [r0, r14]
++// CHECK: error: invalid instruction, any one of the following would fix this:
+ // CHECK-NEXT: movs pc, r0
+ // CHECK: note: operand must be a register in range [r0, r14]
+-// CHECK-NEXT: movs r0, pc
+ // CHECK: note: invalid operand for instruction
++// CHECK: error: invalid instruction, any one of the following would fix this:
+ // CHECK-NEXT: movs r0, pc
+-// CHECK: error: invalid instruction
++// CHECK: note: operand must be a register in range [r0, r14]
++// CHECK: note: invalid operand for instruction
++// CHECK: error: invalid operand for instruction
+ // CHECK-NEXT: movs pc, pc
+ 
+         // mov.w selects t2MOVr
+@@ -39,13 +41,15 @@
+         movs.w pc, r0
+         movs.w r0, pc
+         movs.w pc, pc
+-// CHECK: error: operand must be a register in range [r0, r14]
++// CHECK: error: invalid instruction, any one of the following would fix this:
+ // CHECK-NEXT: movs.w pc, r0
+ // CHECK: note: operand must be a register in range [r0, r14]
+-// CHECK-NEXT: movs.w r0, pc
+ // CHECK: note: invalid operand for instruction
++// CHECK: error: invalid instruction, any one of the following would fix this:
+ // CHECK-NEXT: movs.w r0, pc
+-// CHECK: error: invalid instruction
++// CHECK: note: operand must be a register in range [r0, r14]
++// CHECK: note: invalid operand for instruction
++// CHECK: error: invalid operand for instruction
+ // CHECK-NEXT: movs.w pc, pc
+ 
+ 
+@@ -104,3 +108,11 @@
+         mov.w r0, sp
+ // CHECK: mov.w sp, r0                @ encoding: [0x4f,0xea,0x00,0x0d]
+ // CHECK: mov.w r0, sp                @ encoding: [0x4f,0xea,0x0d,0x00]
++
++        // `movs pc, lr` is an alias for `subs pc, lr, #0`/`eret`.
++        movs   pc, lr
++        movs.w pc, lr
++// CHECK-V7: subs pc, lr, #0             @ encoding: [0xde,0xf3,0x00,0x8f]
++// CHECK-V7: subs pc, lr, #0             @ encoding: [0xde,0xf3,0x00,0x8f]
++// CHECK-V8: eret                        @ encoding: [0xde,0xf3,0x00,0x8f]
++// CHECK-V8: eret                        @ encoding: [0xde,0xf3,0x00,0x8f]

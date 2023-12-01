@@ -1,0 +1,434 @@
+From ffc36b6dc1b9247f05242ede57e5bd679bae376c Mon Sep 17 00:00:00 2001
+From: Marcin Wojtas <mw@semihalf.com>
+Date: Tue, 7 Feb 2023 18:11:53 +0200
+Subject: [PATCH 08/10] Remove from contrib directory all drivers with
+ undefined, unclear or forbidden licenses. Configuration files were adjusted
+ accordingly.
+
+Updated to enable the npdl driver.
+---
+ configure.ac        |  10 +-
+ contrib/contrib.mak | 342 +-------------------------------------------
+ 2 files changed, 6 insertions(+), 346 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index bb578250c..6c7dc17a6 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2611,14 +2611,14 @@ HP_DEVS='cdj500 djet500 djet500c dnj650c cljet5pr deskjet laserjet ljetplus ljet
+ PCLXL_DEVS='pxlmono pxlcolor'
+ EPSON_DEVS='eps9high eps9mid epson epsonc escp lp8000 lq850 photoex st800 stcolor alc1900 alc2000 alc4000 alc4100 alc8500 alc8600 alc9100 lp3000c lp8000c lp8200c lp8300c lp8500c lp8800c lp9000c lp9200c lp9500c lp9800c lps6500 epl2050 epl2050p epl2120 epl2500 epl2750 epl5800 epl5900 epl6100 epl6200 lp1800 lp1900 lp2200 lp2400 lp2500 lp7500 lp7700 lp7900 lp8100 lp8300f lp8400f lp8600 lp8600f lp8700 lp8900 lp9000b lp9100 lp9200b lp9300 lp9400 lp9600 lp9600s lps4500 eplcolor eplmono'
+ CANON_DEVS='bj10e bj200 bjc600 bjc800 lbp8 lips3 bjcmono bjcgray bjccmyk bjccolor'
+-LEXMARK_DEVS='lxm5700m lxm3200 lex2050 lex3200 lex5700 lex7000'
++LEXMARK_DEVS='lxm5700m lxm3200'
+ BROTHER_DEVS='hl7x0 hl1240 hl1250'
+ APPLE_DEVS='appledmp iwhi iwlo iwlq'
+ IBM_DEVS='ibmpro jetp3852'
+-OKI_DEVS='oki182 okiibm oki4w'
+-JAPAN_DEVS='lips4 lips4v ljet4pjl lj4dithp dj505j picty180 lips2p bjc880j pr201 pr150 pr1000 pr1000_4 jj100 bj10v bj10vh mj700v2c mj500c mj6000c mj8000c fmpr fmlbp ml600 lbp310 lbp320 md50Mono md50Eco md1xMono escpage lp2000 npdl rpdl'
+-MISC_PDEVS='uniprint ap3250 atx23 atx24 atx38 itk24i itk38 coslw2p coslwxl declj250 fs600 imagen lj250 m8510 necp6 oce9050 r4081 sj48 tek4696 t4693d2 t4693d4 t4693d8 dl2100 la50 la70 la75 la75plus ln03 xes md2k md5k gdi samsunggdi'
+-OPVP_DEVS='opvp oprp'
++OKI_DEVS='oki182 okiibm'
++JAPAN_DEVS='lips4 lips4v ljet4pjl lj4dithp dj505j picty180 lips2p bjc880j npdl'
++MISC_PDEVS='uniprint ap3250 atx23 atx24 atx38 itk24i itk38 coslw2p coslwxl declj250 fs600 imagen lj250 m8510 necp6 oce9050 r4081 sj48 tek4696 t4693d2 t4693d4 t4693d8'
++OPVP_DEVS=''
+ 
+ ETS_HALFTONING_DEVS='rinkj'
+ 
+diff --git a/contrib/contrib.mak b/contrib/contrib.mak
+index d7965dc9e..46ac6e885 100644
+--- a/contrib/contrib.mak
++++ b/contrib/contrib.mak
+@@ -283,25 +283,6 @@ $(DD)chp2200.dev : $(cdeskjet8_) $(DD)page.dev \
+ 	$(SETPDEV2) $(DD)chp2200 $(cdeskjet8_)
+ 
+ 
+-### ---------------- The Samsung SmartGDI laser printer devices --------- ###
+-### Note : this driver is used by Samsung SmartGDI compatible printers.   ###
+-###
+-
+-GDIMONO=$(DEVOBJ)gdevgdi.$(OBJ) $(HPPCL)
+-
+-$(DD)gdi.dev : $(GDIMONO) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)gdi $(GDIMONO)
+-
+-$(DD)samsunggdi.dev : $(GDIMONO) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)samsunggdi $(GDIMONO)
+-
+-$(DEVOBJ)gdevgdi.$(OBJ) : $(CONTRIBSRC)gdevgdi.c $(PDEVH) $(gdevpcl_h) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevgdi.$(OBJ) $(C_) $(CONTRIBSRC)gdevgdi.c
+-
+-
+ ### ---------------- The Brother HL-1240/HL-1250 printers --------------- ###
+ ### These printers are ljet4-compatible, plus support for source tray     ###
+ ### selection and special 1200x600 dpi mode.                              ###
+@@ -322,51 +303,6 @@ $(DEVOBJ)gdevhl12.$(OBJ) : $(CONTRIBSRC)gdevhl12.c $(PDEVH) $(gdevdljm_h) \
+ 	$(DEVCC) $(DEVO_)gdevhl12.$(OBJ) $(C_) $(CONTRIBSRC)gdevhl12.c
+ 
+ 
+-### -------- The DEC LN03/DL2100/LA50/LA70/LA75 printer devices -------- ###
+-
+-ln03_=$(DEVOBJ)gdevln03.$(OBJ)
+-
+-# Author: Ulrich Mueller (ulm@vsnhd1.cern.ch)
+-# Printer: DEC LN03
+-$(DD)ln03.dev : $(ln03_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)ln03 $(ln03_)
+-
+-# Author: Nick Brown (nick.brown@coe.int)
+-# Printer: DEClaser 2100
+-$(DD)dl2100.dev : $(ln03_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)dl2100 $(ln03_)
+-
+-# Author: Ian MacPhedran (macphed@dvinci.USask.CA)
+-# Printer: DEC LA50
+-$(DD)la50.dev : $(ln03_) $(DD)page.dev \
+-                          $(CONTDEV)  $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)la50 $(ln03_)
+-
+-# Author: Bruce Lowekamp (lowekamp@csugrad.cs.vt.edu)
+-# Printer: DEC LA70
+-$(DD)la70.dev : $(ln03_) $(DD)page.dev \
+-                         $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)la70 $(ln03_)
+-
+-# Author: Ian MacPhedran (macphed@dvinci.USask.CA)
+-# Printer: DEC LA75
+-$(DD)la75.dev : $(ln03_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)la75 $(ln03_)
+-
+-# Author: Andre' Beck (Andre_Beck@IRS.Inf.TU-Dresden.de)
+-# Printer: DEC LA75plus
+-$(DD)la75plus.dev : $(ln03_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)la75plus $(ln03_)
+-
+-$(DEVOBJ)gdevln03.$(OBJ) : $(CONTRIBSRC)gdevln03.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevln03.$(OBJ) $(C_) $(CONTRIBSRC)gdevln03.c
+-
+-
+ ### -------------------------- EPSON Page/Color -------------------------- ###
+ ###
+ ###
+@@ -589,33 +525,6 @@ $(DD)eplmono.dev: $(escv_) $(DD)page.dev \
+                            $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+ 	$(SETPDEV) $(DD)eplmono $(escv_)
+ 
+-# ------ The Lexmark 5700 and 7000 devices ------ #
+-
+-lex7000_=$(DEVOBJ)gdevlx7.$(OBJ)
+-$(DD)lex7000.dev : $(lex7000_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)lex7000 $(lex7000_)
+-
+-lex5700_=$(DEVOBJ)gdevlx7.$(OBJ)
+-$(DD)lex5700.dev : $(lex5700_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)lex5700 $(lex5700_)
+-
+-lex3200_=$(DEVOBJ)gdevlx7.$(OBJ)
+-$(DD)lex3200.dev : $(lex3200_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)lex3200 $(lex3200_)
+-
+-lex2050_=$(DEVOBJ)gdevlx7.$(OBJ)
+-$(DD)lex2050.dev : $(lex2050_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)lex2050 $(lex2050_)
+-
+-$(DEVOBJ)gdevlx7.$(OBJ) : $(CONTRIBSRC)gdevlx7.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevlx7.$(OBJ) $(C_) $(CONTRIBSRC)gdevlx7.c
+-
+-
+ ### ----------- Lexmark 3200 device ------------ ###
+ 
+ lxm3200_=$(DEVOBJ)gdevlx32.$(OBJ)
+@@ -678,37 +587,6 @@ $(DD)bjc880j.dev : $(lipsr_) $(DD)page.dev \
+ 	$(SETPDEV) $(DD)bjc880j $(lipsr_)
+ 
+ 
+-### ------------ ALPS MD series printer devices ------------ ###
+-
+-md2k_=$(DEVOBJ)gdevmd2k.$(OBJ)
+-
+-$(DD)md2k.dev : $(md2k_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)md2k $(md2k_)
+-
+-$(DD)md5k.dev : $(md2k_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)md5k $(md2k_)
+-
+-$(DEVOBJ)gdevmd2k.$(OBJ) : $(CONTRIBSRC)gdevmd2k.c $(PDEVH) $(gsparam_h) \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevmd2k.$(OBJ) $(C_) $(CONTRIBSRC)gdevmd2k.c
+-
+-
+-### ----------------- The Okidata OkiPage 4w+ device ------------------- ###
+-
+-oki4w_=$(DEVOBJ)gdevop4w.$(OBJ)
+-$(DD)oki4w.dev : $(oki4w_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)oki4w $(oki4w_)
+-
+-# Author: Ivan Schreter (ivan@shadow.sk)
+-# Printer: Okidata OkiPage 4w+
+-$(DEVOBJ)gdevop4w.$(OBJ) : $(CONTRIBSRC)gdevop4w.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevop4w.$(OBJ) $(C_) $(CONTRIBSRC)gdevop4w.c
+-
+-
+ ### ---------------- OpenPrinting Vector Printer Driver ---------------- ###
+ ###                                                                      ###
+ OPVP_DIR=$(CONTRIBSRC)opvp
+@@ -1007,19 +885,6 @@ pcl3-install:
+ 	$(INSTALL_PROGRAM) $(BINDIR)$(D)pcl3opts$(XE) $(DESTDIR)$(bindir)
+ 
+ 
+-### ----------------- The Xerox XES printer device --------------------- ###
+-
+-xes_=$(DEVOBJ)gdevxes.$(OBJ)
+-$(DD)xes.dev : $(xes_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)xes $(xes_)
+-
+-# Author: Peter Flass (flass@lbdrscs.bitnet)
+-# Printer: Xerox XES (2700, 3700, 4045, etc.)
+-$(DEVOBJ)gdevxes.$(OBJ) : $(CONTRIBSRC)gdevxes.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevxes.$(OBJ) $(C_) $(CONTRIBSRC)gdevxes.c
+-
+ #########################################################################
+ ### --------------------Japanese printer addons --------------------- ###
+ #########################################################################
+@@ -1027,140 +892,6 @@ $(DEVOBJ)gdevxes.$(OBJ) : $(CONTRIBSRC)gdevxes.c $(PDEVH) \
+ JAPDIR=$(CONTRIBSRC)japanese
+ JAPSRC=$(JAPDIR)$(D)
+ 
+-### ----------------- The NEC PC-PR201 printer device ----------------- ###
+-
+-pr201_=$(DEVOBJ)gdevp201.$(OBJ) $(DEVOBJ)gdevprn.$(OBJ)
+-
+-$(DD)pr201.dev : $(pr201_) $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)pr201 $(pr201_)
+-
+-$(DD)pr150.dev : $(pr201_) $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)pr150 $(pr201_)
+-
+-$(DD)pr1000.dev : $(pr201_) $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)pr1000 $(pr201_)
+-
+-$(DD)pr1000_4.dev : $(pr201_) $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)pr1000_4 $(pr201_)
+-
+-$(DEVOBJ)gdevp201.$(OBJ) : $(JAPSRC)gdevp201.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevp201.$(OBJ) $(C_) $(JAPSRC)gdevp201.c
+-
+-### ----------------- The Star JJ-100 printer device ----------------- ###
+-
+-jj100_=$(DEVOBJ)gdevj100.$(OBJ) $(DEVOBJ)gdevprn.$(OBJ)
+-
+-$(DD)jj100.dev : $(jj100_) $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)jj100 $(jj100_)
+-
+-$(DEVOBJ)gdevj100.$(OBJ) : $(JAPSRC)gdevj100.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(O_)$@ $(C_) $(JAPSRC)gdevj100.c
+-
+-### ----------------- The Canon BubbleJet BJ10v device ----------------- ###
+-
+-bj10v_=$(DEVOBJ)gdev10v.$(OBJ) $(DEVOBJ)gdevprn.$(OBJ)
+-
+-$(DD)bj10v.dev : $(bj10v_) \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)bj10v $(bj10v_)
+-
+-$(DD)bj10vh.dev : $(bj10v_) \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)bj10vh $(bj10v_)
+-
+-# Uncomment the following line if you are using MS-DOS on PC9801 series.
+-
+-$(DEVOBJ)gdev10v.$(OBJ) : $(JAPSRC)gdev10v.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(O_)$@ $(C_) $(JAPSRC)gdev10v.c
+-#	$(DEVCC) -DPC9801 $(O_)$@ $(C_) $(JAPSRC)gdev10v.c
+-
+-
+-##
+-## EPSON MachJet driver
+-##
+-
+-mj700v2c_=$(DEVOBJ)gdevmjc.$(OBJ) $(HPPCL)
+-
+-$(DEVOBJ)gdevmjc.$(OBJ) : $(JAPSRC)gdevmjc.c $(JAPSRC)gdevmjc.h $(PDEVH) $(gdevpcl_h) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) -DA4 $(DEVO_)gdevmjc.$(OBJ) $(C_) $(JAPSRC)gdevmjc.c
+-
+-$(DD)mj700v2c.dev : $(mj700v2c_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)mj700v2c $(mj700v2c_)
+-
+-$(DD)mj500c.dev : $(mj700v2c_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)mj500c $(mj700v2c_)
+-
+-$(DD)mj6000c.dev : $(mj700v2c_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)mj6000c $(mj700v2c_)
+-
+-$(DD)mj8000c.dev : $(mj700v2c_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)mj8000c $(mj700v2c_)
+-
+-### ----------------- The Fujitsu FMPR printer device ----------------- ###
+-
+-fmpr_=$(DEVOBJ)gdevfmpr.$(OBJ) $(DEVOBJ)gdevprn.$(OBJ)
+-
+-$(DD)fmpr.dev : $(fmpr_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)fmpr $(fmpr_)
+-
+-$(DEVOBJ)gdevfmpr.$(OBJ) : $(JAPSRC)gdevfmpr.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevfmpr.$(OBJ) $(C_) $(JAPSRC)gdevfmpr.c
+-
+-### --------------- The Fujitsu FMLBP-2xx printer device --------------- ###
+-
+-fmlbp_=$(DEVOBJ)gdevfmlbp.$(OBJ) $(DEVOBJ)gdevprn.$(OBJ)
+-
+-$(DD)fmlbp.dev : $(fmlbp_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)fmlbp $(fmlbp_)
+-
+-$(DEVOBJ)gdevfmlbp.$(OBJ) : $(JAPSRC)gdevfmlbp.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) -DFMLBP_NOADJUST_MARGIN $(O_)$@ $(C_) $(JAPSRC)gdevfmlbp.c
+-
+-### ------ The OKI MICROLINE620CL (IPL) printer device ------- ###
+-#
+-#  by N.Tagawa
+-#
+-#  $Id: gdevml6.mak,v 1.2 1998/03/16 13:32:33 tagawa Exp $
+-#
+-
+-ml6_=$(DEVOBJ)gdevml6.$(OBJ) $(DEVOBJ)gdevprn.$(OBJ)
+-
+-$(DD)ml600.dev : $(ml6_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)ml600 $(ml6_)
+-
+-$(DEVOBJ)gdevml6.$(OBJ) : $(JAPSRC)gdevml6.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(O_)$@ $(C_) $(JAPSRC)gdevml6.c
+-
+-
+-#----------------------------------------------------------------------#
+-
+-lbp3x0_=$(DEVOBJ)gdevlbp3.$(OBJ)
+-
+-$(DD)lbp310.dev :$(lbp3x0_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)lbp310 $(lbp3x0_)
+-
+-$(DD)lbp320.dev :$(lbp3x0_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)lbp320 $(lbp3x0_)
+-
+-$(DEVOBJ)gdevlbp3.$(OBJ) : $(JAPSRC)gdevlbp3.c $(PDEVH)
+-	$(DEVCC) $(O_)$@ $(C_) $(JAPSRC)gdevlbp3.c
+-
+ ### --- The NEC NPDL language printer device ------ ###
+ 
+ npdl_=$(DEVOBJ)gdevnpdl.$(OBJ) $(DEVOBJ)gdevlprn.$(OBJ)
+@@ -1173,77 +904,6 @@ $(DD)npdl.dev : $(npdl_) $(DD)page.dev \
+                            $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+ 	$(SETPDEV) $(DD)npdl $(npdl_)
+ 
+-### ------- EPSON ESC/Page printer device ----------------- ###
+-
+-escpage_=$(DEVOBJ)gdevespg.$(OBJ) $(DEVOBJ)gdevlprn.$(OBJ) $(DEVOBJ)gdevlips.$(OBJ)
+-
+-$(DEVOBJ)gdevespg.$(OBJ) : $(JAPSRC)gdevespg.c $(LIPS_SRC)gdevlprn.h $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) -DA4 $(DEVO_)gdevespg.$(OBJ) $(LIPS_OPT) $(C_) $(JAPSRC)gdevespg.c
+-
+-$(DD)escpage.dev : $(escpage_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)escpage $(escpage_)
+-
+-$(DD)lp2000.dev : $(escpage_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)lp2000 $(escpage_)
+-
+-### --- The RICOH RPDL language printer device ------ ###
+-
+-rpdl_=$(DEVOBJ)gdevrpdl.$(OBJ) $(DEVOBJ)gdevlprn.$(OBJ)
+-$(DEVOBJ)gdevrpdl.$(OBJ) : $(JAPSRC)gdevrpdl.c $(LIPS_SRC)gdevlprn.h $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(DEVO_)gdevrpdl.$(OBJ) $(LIPS_OPT) $(C_) $(JAPSRC)gdevrpdl.c
+-
+-$(DD)rpdl.dev : $(rpdl_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)rpdl $(rpdl_)
+-
+-### ---------- RICOH RPDL IV(600dpi) printer devices ---------- ###
+-#rpdl_=$(DEVOBJ)gdevrpdl.$(OBJ)
+-#$(DEVOBJ)gdevrpdl.$(OBJ) : $(JAPSRC)gdevrpdl.c \
+-#                           $(CONTRIB_MAK) $(MAKEDIRS)
+-#	$(DEVCC) $(DEVO_)gdevrpdl.$(OBJ) $(C_) $(JAPSRC)gdevrpdl.c
+-#
+-#$(DD)nx100f.dev : $(rpdl_) $(DD)page.dev \
+-#                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-#	$(SETPDEV2) $(DD)nx100f $(rpdl_)
+-#
+-#$(DD)nx100v.dev : $(rpdl_) $(DD)page.dev \
+-#                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-#	$(SETPDEV2) $(DD)nx100v $(rpdl_)
+-
+-### ------------ The ALPS Micro Dry printer devices ------------ ###
+-
+-alps_=$(DEVOBJ)gdevalps.$(OBJ)
+-
+-$(DD)md50Mono.dev : $(alps_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)md50Mono $(alps_)
+-
+-$(DD)md50Eco.dev : $(alps_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)md50Eco $(alps_)
+-
+-$(DD)md1xMono.dev : $(alps_) $(DD)page.dev \
+-                           $(CONTDEV) $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(SETPDEV) $(DD)md1xMono $(alps_)
+-
+-$(DEVOBJ)gdevalps.$(OBJ) : $(JAPSRC)gdevalps.c $(PDEVH) \
+-                           $(CONTRIB_MAK) $(MAKEDIRS)
+-	$(DEVCC) $(O_)$@ $(C_) $(JAPSRC)gdevalps.c
+-
+-#########################################################################
+-#########################################################################
+-
+-### ----------------- Additional .upp files ---------------- ###
+-
+-extra-upp-install: install-libdata
+-	for f in $(CONTRIBSRC)uniprint$(D)*.upp; do \
+-	    $(INSTALL_DATA) $$f $(DESTDIR)$(gsdatadir)$(D)lib || exit 1; \
+-	done
+-
+ ### ------------ Build/Install special features ------------ ###
+ 
+-install-contrib-extras: extra-upp-install
++install-contrib-extras:
+-- 
+2.39.1
+

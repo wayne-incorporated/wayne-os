@@ -1,0 +1,64 @@
+From 54bbbe191b7e02f0cf239831e1a3cefb479fa731 Mon Sep 17 00:00:00 2001
+From: David Ruth <druth@chromium.org>
+Date: Wed, 31 May 2023 15:18:21 +0000
+Subject: [PATCH] Invalidate cache when session is removed.
+
+Before this change invalid cached handles for keys and certificates may
+be returned when all session handles are invalid.
+
+This change clears cached items associated with a slot when no more
+valid sessions exist.
+---
+ src/p11_slot.c | 22 +++++++++++++++-------
+ 1 file changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/src/p11_slot.c b/src/p11_slot.c
+index ceae5a3..9496d18 100644
+--- a/src/p11_slot.c
++++ b/src/p11_slot.c
+@@ -119,6 +119,14 @@ int pkcs11_open_session(PKCS11_SLOT_private *slot, int rw)
+ 	return 0;
+ }
+ 
++
++static void pkcs11_wipe_cache(PKCS11_SLOT_private *slot)
++{
++	pkcs11_destroy_keys(slot, CKO_PRIVATE_KEY);
++	pkcs11_destroy_keys(slot, CKO_PUBLIC_KEY);
++	pkcs11_destroy_certs(slot);
++}
++
+ int pkcs11_get_session(PKCS11_SLOT_private * slot, int rw, CK_SESSION_HANDLE *sessionp)
+ {
+ 	PKCS11_CTX_private *ctx = slot->ctx;
+@@ -146,6 +154,13 @@ int pkcs11_get_session(PKCS11_SLOT_private * slot, int rw, CK_SESSION_HANDLE *se
+ 			} else {
+ 				/* Forget this session */
+ 				slot->num_sessions--;
++				if (slot->num_sessions == 0) {
++					/* Object handles are valid across
++					   sessions, so the cache should only be
++					   cleared when there are no valid
++					   sessions.*/
++					pkcs11_wipe_cache(slot);
++				}
+ 				continue;
+ 			}
+ 		}
+@@ -247,13 +262,6 @@ int pkcs11_reload_slot(PKCS11_SLOT_private *slot)
+ 	return 0;
+ }
+ 
+-static void pkcs11_wipe_cache(PKCS11_SLOT_private *slot)
+-{
+-	pkcs11_destroy_keys(slot, CKO_PRIVATE_KEY);
+-	pkcs11_destroy_keys(slot, CKO_PUBLIC_KEY);
+-	pkcs11_destroy_certs(slot);
+-}
+-
+ /*
+  * Log out
+  */
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

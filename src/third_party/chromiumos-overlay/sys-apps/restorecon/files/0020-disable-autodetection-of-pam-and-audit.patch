@@ -1,0 +1,49 @@
+diff -ur policycoreutils-2.7.orig/newrole/Makefile policycoreutils-2.7/newrole/Makefile
+--- policycoreutils-2.7.orig/newrole/Makefile	2017-08-04 22:31:00.000000000 +0900
++++ policycoreutils-2.7/newrole/Makefile	2018-08-27 12:29:24.219491619 +0900
+@@ -4,8 +4,8 @@
+ MANDIR ?= $(PREFIX)/share/man
+ ETCDIR ?= $(DESTDIR)/etc
+ LOCALEDIR = /usr/share/locale
+-PAMH ?= $(shell test -f /usr/include/security/pam_appl.h && echo y)
+-AUDITH ?= $(shell test -f /usr/include/libaudit.h && echo y)
++PAMH ?= no
++AUDITH ?= no
+ # Enable capabilities to permit newrole to generate audit records.
+ # This will make newrole a setuid root program.
+ # The capabilities used are: CAP_AUDIT_WRITE.
+@@ -49,7 +49,7 @@
+ 	IS_SUID=y
+ endif
+ ifeq ($(IS_SUID),y)
+-	MODE := 4555
++	MODE := 0555
+ 	override LDLIBS += -lcap-ng
+ else
+ 	MODE := 0555
+diff -ur policycoreutils-2.7.orig/run_init/Makefile policycoreutils-2.7/run_init/Makefile
+--- policycoreutils-2.7.orig/run_init/Makefile	2017-08-04 22:31:00.000000000 +0900
++++ policycoreutils-2.7/run_init/Makefile	2018-08-27 12:29:59.242706873 +0900
+@@ -5,8 +5,8 @@
+ MANDIR ?= $(PREFIX)/share/man
+ ETCDIR ?= $(DESTDIR)/etc
+ LOCALEDIR ?= /usr/share/locale
+-PAMH ?= $(shell test -f /usr/include/security/pam_appl.h && echo y)
+-AUDITH ?= $(shell test -f /usr/include/libaudit.h && echo y)
++PAMH ?= no
++AUDITH ?= no
+ 
+ CFLAGS ?= -Werror -Wall -W
+ override CFLAGS += -DUSE_NLS -DLOCALEDIR="\"$(LOCALEDIR)\"" -DPACKAGE="\"policycoreutils\""
+diff -ur policycoreutils-2.7.orig/setfiles/Makefile policycoreutils-2.7/setfiles/Makefile
+--- policycoreutils-2.7.orig/setfiles/Makefile	2017-08-04 22:31:00.000000000 +0900
++++ policycoreutils-2.7/setfiles/Makefile	2018-08-27 12:30:24.242129497 +0900
+@@ -3,7 +3,7 @@
+ SBINDIR ?= $(DESTDIR)/sbin
+ MANDIR = $(PREFIX)/share/man
+ LIBDIR ?= $(PREFIX)/lib
+-AUDITH ?= $(shell test -f /usr/include/libaudit.h && echo y)
++AUDITH ?= no
+ 
+ ABORT_ON_ERRORS=$(shell grep "^\#define ABORT_ON_ERRORS" setfiles.c | awk -S '{ print $$3 }')
+ 

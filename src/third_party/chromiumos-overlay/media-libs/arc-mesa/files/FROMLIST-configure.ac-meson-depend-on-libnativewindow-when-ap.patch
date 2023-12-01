@@ -1,0 +1,83 @@
+From b07086104533060b833f5d70200dae3c0da6ff7d Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Fri, 15 Mar 2019 10:08:45 -0700
+Subject: [PATCH] configure.ac / meson: depend on libnativewindow when
+ appropriate
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+libnativewindow is only available on O or greater, and it's
+required for some features.
+
+Reviewed-by: Tapani Pälli <tapani.palli@intel.com>
+---
+ configure.ac      | 13 ++++++++++++-
+ meson.build       |  3 +++
+ meson_options.txt |  8 ++++++++
+ 3 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/configure.ac b/configure.ac
+index 073ffc508d5..78d5967a437 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1574,6 +1574,12 @@ if test "x$enable_libglvnd" = xyes -a "x$EGL_LIB_SUFFIX" != x; then
+     AC_MSG_ERROR([EGL lib suffix can't be used with libglvnd])
+ fi
+ 
++AC_ARG_WITH([platform-sdk-version],
++  [AS_HELP_STRING([--with-platform-sdk-version@<:@=NAME@:>@],
++    [specify Android platform SDK version @<:@default=none@:>@])],
++  [platform_sdk_version=$withval],
++  [platform_sdk_version=""])
++
+ dnl
+ dnl Mangled Mesa support
+ dnl
+@@ -1908,7 +1914,12 @@ for plat in $platforms; do
+         ;;
+ 
+     android)
+-        PKG_CHECK_MODULES([ANDROID], [cutils hardware sync])
++        if test -n "$platform_sdk_version" && test "$platform_sdk_version" -ge 26; then
++            PKG_CHECK_MODULES([ANDROID], [cutils hardware nativewindow sync])
++        else
++            PKG_CHECK_MODULES([ANDROID], [cutils hardware sync])
++        fi
++
+         if test -n "$with_gallium_drivers"; then
+             PKG_CHECK_MODULES([BACKTRACE], [backtrace])
+         fi
+diff --git a/meson.build b/meson.build
+index 7b337755544..715c966c679 100644
+--- a/meson.build
++++ b/meson.build
+@@ -726,6 +726,9 @@ if with_platform_android
+     dependency('hardware'),
+     dependency('sync'),
+   ]
++  if get_option('platform-sdk-version') >= 26
++    dep_android += dependency('nativewindow')
++  endif
+   pre_args += '-DHAVE_ANDROID_PLATFORM'
+ endif
+ if with_platform_haiku
+diff --git a/meson_options.txt b/meson_options.txt
+index 45faa341e79..5c063054ca1 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -347,3 +347,11 @@ option(
+   value : '',
+   description : 'Suffix to append to GLES library names.  Default: none.'
+ )
++option(
++  'platform-sdk-version',
++  type : 'integer',
++  min : 25,
++  max : 28,
++  value : 25,
++  description : 'Android Platform SDK version. Default: Nougat version.'
++)
+-- 
+2.22.0.709.g102302147b-goog
+

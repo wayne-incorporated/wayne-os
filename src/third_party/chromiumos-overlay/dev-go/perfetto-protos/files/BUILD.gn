@@ -1,0 +1,24 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":trace_processor-goprotos",
+    ":trace_config-goprotos",
+  ]
+}
+
+goproto_library("trace_processor-goprotos") {
+  proto_in_dir = "../aosp/external/perfetto/protos/perfetto/metrics"
+  proto_out_dir = "go/src/android.googlesource.com/platform/external/perfetto/protos/perfetto/metrics"
+  sources = [ "${proto_in_dir}/perfetto_merged_metrics.proto" ]
+}
+
+goproto_library("trace_config-goprotos") {
+  proto_in_dir = "../aosp/external/perfetto/protos/perfetto/trace"
+  proto_out_dir = "go/src/android.googlesource.com/platform/external/perfetto/protos/perfetto/trace"
+  sources = [ "${proto_in_dir}/perfetto_trace.proto" ]
+}

@@ -1,0 +1,108 @@
+From: Piotr Pawliczek <pawliczek@chromium.org>
+
+Always use tempbuffer instead of the input buffer, even if numpix equals
+AdjustedInputWidth, to prevent said input buffer from overflowing because
+AdjustedInputWidth >= InputWidth.
+
+--- a/prnt/hpcups/Halftoner.cpp
++++ b/prnt/hpcups/Halftoner.cpp
+@@ -141,22 +141,19 @@ Halftoner::Halftoner
+         }
+     }
+ 
+-    if (OutputWidth[K] > AdjustedInputWidth)
+     // need to expand input data (easier than expanding bit-pixels after) on K row
++    tempBuffer = (BYTE*) new BYTE[(OutputWidth[K])];
++    if (tempBuffer == NULL)
+     {
+-        tempBuffer = (BYTE*) new BYTE[(OutputWidth[K])];
+-        if (tempBuffer == NULL)
++        goto MemoryError;
++    }
++    if (EndPlane > Y)
++    {
++        tempBuffer2 = (BYTE*) new BYTE[(OutputWidth[K])];
++        if (tempBuffer2 == NULL)
+         {
+             goto MemoryError;
+         }
+-        if (EndPlane > Y)
+-        {
+-            tempBuffer2 = (BYTE*) new BYTE[(OutputWidth[K])];
+-            if (tempBuffer2 == NULL)
+-            {
+-                goto MemoryError;
+-            }
+-        }
+     }
+ 
+     Restart();  // this zeroes buffers and sets nextraster counter
+@@ -485,21 +482,13 @@ bool Halftoner::Process
+ 
+         for (i=StartPlane; i <= EndPlane; i++)
+         {
+-            if (OutputWidth[i] > AdjustedInputWidth)
+-            {
+-                memset(tempBuffer, 0, OutputWidth[i]);  // clear it out because outwidth might be
+-                                                        // > factor*inwidth due to roundoff
+-                memcpy(tempBuffer,pbyInputKRGBRaster->rasterdata[COLORTYPE_COLOR],InputWidth);
+-                int factor = NumRows[i] * ResBoost;
+-                PixelMultiply(tempBuffer, InputWidth, factor);
+-                input=tempBuffer;
+-                numpix = OutputWidth[i];
+-            }
+-            else
+-            {
+-                input=pbyInputKRGBRaster->rasterdata[COLORTYPE_COLOR];
+-                numpix = AdjustedInputWidth;
+-            }
++            memset(tempBuffer, 0, OutputWidth[i]);  // clear it out because outwidth might be
++                                                    // > factor*inwidth due to roundoff
++            memcpy(tempBuffer,pbyInputKRGBRaster->rasterdata[COLORTYPE_COLOR],InputWidth);
++            int factor = NumRows[i] * ResBoost;
++            PixelMultiply(tempBuffer, InputWidth, factor);
++            input=tempBuffer;
++            numpix = OutputWidth[i];
+ 
+             fDitherParms[i].fNumPix = numpix;
+             fDitherParms[i].fInput = input;
+@@ -560,33 +549,20 @@ bool Halftoner::Process
+     if (pbyInputKRGBRaster->rasterdata[COLORTYPE_BLACK])
+     {
+         int factor = 1;
+-        if (OutputWidth[K] > AdjustedInputWidth)
+-        {
+-            memset(tempBuffer, 0, OutputWidth[K]);
+-            memcpy(tempBuffer,pbyInputKRGBRaster->rasterdata[COLORTYPE_BLACK],pbyInputKRGBRaster->rastersize[COLORTYPE_BLACK]);
++        memset(tempBuffer, 0, OutputWidth[K]);
++        memcpy(tempBuffer,pbyInputKRGBRaster->rasterdata[COLORTYPE_BLACK],pbyInputKRGBRaster->rastersize[COLORTYPE_BLACK]);
+ 
+-            factor = NumRows[K] * ResBoost;
+-            PixelMultiply(tempBuffer, pbyInputKRGBRaster->rastersize[COLORTYPE_BLACK], factor);
+-        }
++        factor = NumRows[K] * ResBoost;
++        PixelMultiply(tempBuffer, pbyInputKRGBRaster->rastersize[COLORTYPE_BLACK], factor);
+ 
+         //  Convert 8bit per pixel data into 1 bit per pixel data
+         memset(originalKData, 0, (pbyInputKRGBRaster->rastersize[COLORTYPE_BLACK] * factor +7)/8);
+         int curBit = 0x80, curByte = 0;
+         for (int i=0; i<pbyInputKRGBRaster->rastersize[COLORTYPE_BLACK] * factor; i++)
+         {
+-            if (OutputWidth[K] > AdjustedInputWidth)
+-            {
+-                if (tempBuffer[i])
+-                {
+-                    originalKData[curByte] |= curBit;
+-                }
+-            }
+-            else
++            if (tempBuffer[i])
+             {
+-                if (pbyInputKRGBRaster->rasterdata[COLORTYPE_BLACK][i])
+-                {
+-                    originalKData[curByte] |= curBit;
+-                }
++                originalKData[curByte] |= curBit;
+             }
+             if (curBit == 0x01)
+             {

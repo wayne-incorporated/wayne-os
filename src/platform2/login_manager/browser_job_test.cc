@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -17,8 +19,6 @@
 
 #include <base/command_line.h>
 #include <base/logging.h>
-#include <base/optional.h>
-#include <base/stl_util.h>
 #include <base/strings/string_util.h>
 #include <chromeos/switches/chrome_switches.h>
 #include <gmock/gmock.h>
@@ -101,11 +101,10 @@ const char BrowserJobTest::kHash[] = "fake_hash";
 const char BrowserJobTest::kChromeMountNamespacePath[] = "mnt_chrome";
 
 void BrowserJobTest::SetUp() {
-  argv_ = std::vector<std::string>(kArgv,
-                                   kArgv + base::size(BrowserJobTest::kArgv));
+  argv_.assign(std::begin(kArgv), std::end(kArgv));
   job_.reset(new BrowserJob(
       argv_, env_, &checker_, &metrics_, &utils_,
-      BrowserJob::Config{false, false, base::nullopt},
+      BrowserJob::Config{false, false, std::nullopt},
       std::make_unique<login_manager::Subprocess>(getuid(), &utils_)));
 }
 
@@ -135,7 +134,7 @@ TEST_F(BrowserJobTest, AbortAndKillAll) {
   EXPECT_CALL(metrics_, RecordStats(_)).Times(AnyNumber());
 
   ASSERT_TRUE(job_->RunInBackground());
-  job_->AbortAndKillAll(base::TimeDelta::FromSeconds(3));
+  job_->AbortAndKillAll(base::Seconds(3));
 }
 
 TEST_F(BrowserJobTest, AbortAndKillAll_AlreadyGone) {
@@ -154,7 +153,7 @@ TEST_F(BrowserJobTest, AbortAndKillAll_AlreadyGone) {
   EXPECT_CALL(metrics_, RecordStats(_)).Times(AnyNumber());
 
   ASSERT_TRUE(job_->RunInBackground());
-  job_->AbortAndKillAll(base::TimeDelta::FromSeconds(3));
+  job_->AbortAndKillAll(base::Seconds(3));
 }
 
 TEST_F(BrowserJobTest, AbortAndKillAll_BrowserGoneChildrenLive) {
@@ -176,7 +175,7 @@ TEST_F(BrowserJobTest, AbortAndKillAll_BrowserGoneChildrenLive) {
   EXPECT_CALL(metrics_, RecordStats(_)).Times(AnyNumber());
 
   ASSERT_TRUE(job_->RunInBackground());
-  job_->AbortAndKillAll(base::TimeDelta::FromSeconds(3));
+  job_->AbortAndKillAll(base::Seconds(3));
 }
 
 TEST_F(BrowserJobTest, UnshareMountNamespaceForGuest) {
@@ -197,7 +196,7 @@ TEST_F(BrowserJobTest, UnshareMountNamespaceForGuest) {
   BrowserJob job(
       argv, env_, &checker_, &metrics_, &utils_,
       BrowserJob::Config{false /*isolate_guest_session*/,
-                         false /*isolate_regular_session*/, base::nullopt},
+                         false /*isolate_regular_session*/, std::nullopt},
       std::move(p_subp));
 
   ASSERT_TRUE(job.RunInBackground());
@@ -223,7 +222,7 @@ TEST_F(BrowserJobTest, EnterMountNamespaceForGuest) {
       argv, env_, &checker_, &metrics_, &utils_,
       BrowserJob::Config{true /*isolate_guest_session*/,
                          false /*isolate_regular_session*/,
-                         base::Optional<base::FilePath>(
+                         std::optional<base::FilePath>(
                              BrowserJobTest::kChromeMountNamespacePath)},
       std::move(p_subp));
 
@@ -247,7 +246,7 @@ TEST_F(BrowserJobTest, EnterMountNamespaceForRegularUser) {
       argv_, env_, &checker_, &metrics_, &utils_,
       BrowserJob::Config{true /*isolate_guest_session*/,
                          true /*isolate_regular_session*/,
-                         base::Optional<base::FilePath>(
+                         std::optional<base::FilePath>(
                              BrowserJobTest::kChromeMountNamespacePath)},
       std::move(p_subp));
 
@@ -305,18 +304,18 @@ TEST_F(BrowserJobTest, ShouldAddCrashLoopArgBeforeStopping) {
     EXPECT_THAT(
         job_->ExportArgv(),
         Not(Contains(HasSubstr(BrowserJobInterface::kCrashLoopBeforeFlag))));
-    job_->AbortAndKillAll(base::TimeDelta::FromSeconds(0));
+    job_->AbortAndKillAll(base::Seconds(0));
   }
 
   EXPECT_FALSE(job_->ShouldStop());
   EXPECT_TRUE(job_->RunInBackground());
-  // 121 = 61 (the time time(nullptr) is returning) + 60
+  // 201 = 101 (the time utils_.time(nullptr) is returning) + 100
   // (kRestartWindowSeconds).
-  ASSERT_EQ(BrowserJob::kRestartWindowSeconds, 60)
+  ASSERT_EQ(BrowserJob::kRestartWindowSeconds, 100)
       << "Need to change expected value if kRestartWindowSeconds changes";
   ExpectArgsToContainFlag(job_->ExportArgv(),
-                          BrowserJobInterface::kCrashLoopBeforeFlag, "121");
-  job_->AbortAndKillAll(base::TimeDelta::FromSeconds(0));
+                          BrowserJobInterface::kCrashLoopBeforeFlag, "201");
+  job_->AbortAndKillAll(base::Seconds(0));
   EXPECT_TRUE(job_->ShouldStop());
 }
 
@@ -332,7 +331,7 @@ TEST_F(BrowserJobTest, ShouldRunTest) {
 
 TEST_F(BrowserJobTest, NullFileCheckerTest) {
   BrowserJob job(argv_, env_, nullptr, &metrics_, &utils_,
-                 BrowserJob::Config{false, false, base::nullopt},
+                 BrowserJob::Config{false, false, std::nullopt},
                  std::make_unique<login_manager::Subprocess>(1, &utils_));
   EXPECT_TRUE(job.ShouldRunBrowser());
 }
@@ -399,7 +398,7 @@ TEST_F(BrowserJobTest, StartStopSessionTest) {
 
 TEST_F(BrowserJobTest, StartStopMultiSessionTest) {
   BrowserJob job(argv_, env_, &checker_, &metrics_, &utils_,
-                 BrowserJob::Config{false, false, base::nullopt},
+                 BrowserJob::Config{false, false, std::nullopt},
                  std::make_unique<login_manager::Subprocess>(1, &utils_));
   job.StartSession(kUser, kHash);
 
@@ -427,7 +426,7 @@ TEST_F(BrowserJobTest, StartStopMultiSessionTest) {
 TEST_F(BrowserJobTest, StartStopSessionFromLoginTest) {
   std::vector<std::string> argv = {"zero", "one", "two", "--login-manager"};
   BrowserJob job(argv, env_, &checker_, &metrics_, &utils_,
-                 BrowserJob::Config{false, false, base::nullopt},
+                 BrowserJob::Config{false, false, std::nullopt},
                  std::make_unique<login_manager::Subprocess>(1, &utils_));
 
   job.StartSession(kUser, kHash);
@@ -478,8 +477,8 @@ TEST_F(BrowserJobTest, SetExtraArguments) {
 
 TEST_F(BrowserJobTest, SetTestArguments) {
   const char* kTestArgs[] = {"--test", "--it", "--all"};
-  std::vector<std::string> test_args(kTestArgs,
-                                     kTestArgs + base::size(kTestArgs));
+  std::vector<std::string> test_args(std::begin(kTestArgs),
+                                     std::end(kTestArgs));
   job_->SetTestArguments(test_args);
 
   std::vector<std::string> job_args = job_->ExportArgv();
@@ -489,13 +488,13 @@ TEST_F(BrowserJobTest, SetTestArguments) {
 
 TEST_F(BrowserJobTest, SetTestArgumentsAndSetExtraArgumentsDontConflict) {
   const char* kTestArgs[] = {"--test", "--it", "--all"};
-  std::vector<std::string> test_args(kTestArgs,
-                                     kTestArgs + base::size(kTestArgs));
+  std::vector<std::string> test_args(std::begin(kTestArgs),
+                                     std::end(kTestArgs));
   job_->SetTestArguments(test_args);
 
   const char* kExtraArgs[] = {"--ichi", "--ni", "--san"};
-  std::vector<std::string> extra_args(kExtraArgs,
-                                      kExtraArgs + base::size(kExtraArgs));
+  std::vector<std::string> extra_args(std::begin(kExtraArgs),
+                                      std::end(kExtraArgs));
   job_->SetExtraArguments(extra_args);
 
   std::vector<std::string> job_args = job_->ExportArgv();
@@ -504,8 +503,8 @@ TEST_F(BrowserJobTest, SetTestArgumentsAndSetExtraArgumentsDontConflict) {
   ExpectArgsToContainAll(job_args, extra_args);
 
   const char* kNewTestArgs[] = {"--debugging=sucks", "--testing=rocks"};
-  std::vector<std::string> new_test_args(
-      kNewTestArgs, kNewTestArgs + base::size(kNewTestArgs));
+  std::vector<std::string> new_test_args(std::begin(kNewTestArgs),
+                                         std::end(kNewTestArgs));
   job_->SetTestArguments(new_test_args);
   job_args = job_->ExportArgv();
   ExpectArgsToContainAll(job_args, argv_);
@@ -514,8 +513,8 @@ TEST_F(BrowserJobTest, SetTestArgumentsAndSetExtraArgumentsDontConflict) {
   EXPECT_THAT(job_args, Not(IsSupersetOf(test_args)));
 
   const char* kNewExtraArgs[] = {"--uno", "--dos"};
-  std::vector<std::string> new_extra_args(
-      kNewExtraArgs, kNewExtraArgs + base::size(kNewExtraArgs));
+  std::vector<std::string> new_extra_args(std::begin(kNewExtraArgs),
+                                          std::end(kNewExtraArgs));
   job_->SetExtraArguments(new_extra_args);
   job_args = job_->ExportArgv();
   ExpectArgsToContainAll(job_args, argv_);
@@ -537,9 +536,9 @@ TEST_F(BrowserJobTest, FeatureFlags) {
 }
 
 TEST_F(BrowserJobTest, ExportArgv) {
-  std::vector<std::string> argv(kArgv, kArgv + base::size(kArgv));
+  std::vector<std::string> argv(std::begin(kArgv), std::end(kArgv));
   BrowserJob job(argv, env_, &checker_, &metrics_, &utils_,
-                 BrowserJob::Config{false, false, base::nullopt},
+                 BrowserJob::Config{false, false, std::nullopt},
                  std::make_unique<login_manager::Subprocess>(1, &utils_));
 
   std::vector<std::string> extra_args = {"--ichi", "--ni", "--san"};
@@ -549,9 +548,9 @@ TEST_F(BrowserJobTest, ExportArgv) {
 }
 
 TEST_F(BrowserJobTest, SetAdditionalEnvironmentVariables) {
-  std::vector<std::string> argv(kArgv, kArgv + base::size(kArgv));
+  std::vector<std::string> argv(std::begin(kArgv), std::end(kArgv));
   BrowserJob job(argv, {"A=a"}, &checker_, &metrics_, &utils_,
-                 BrowserJob::Config{false, false, base::nullopt},
+                 BrowserJob::Config{false, false, std::nullopt},
                  std::make_unique<login_manager::Subprocess>(1, &utils_));
   job.SetAdditionalEnvironmentVariables({"B=b", "C="});
   EXPECT_EQ((std::vector<std::string>{"A=a", "B=b", "C="}),
@@ -573,7 +572,7 @@ TEST_F(BrowserJobTest, CombineVModuleArgs) {
     std::vector<std::string> argv = {kArg1,     kVmodule1, kArg2, kArg3,
                                      kVmodule2, kVmodule3, kArg4};
     BrowserJob job(argv, env_, &checker_, &metrics_, &utils_,
-                   BrowserJob::Config{false, false, base::nullopt},
+                   BrowserJob::Config{false, false, std::nullopt},
                    std::make_unique<login_manager::Subprocess>(1, &utils_));
 
     const char* kCombinedVmodule =
@@ -589,7 +588,7 @@ TEST_F(BrowserJobTest, CombineVModuleArgs) {
 
     std::vector<std::string> argv = {kArg1, kVmodule, kArg2, kArg3, kArg4};
     BrowserJob job(argv, env_, &checker_, &metrics_, &utils_,
-                   BrowserJob::Config{false, false, base::nullopt},
+                   BrowserJob::Config{false, false, std::nullopt},
                    std::make_unique<login_manager::Subprocess>(1, &utils_));
 
     EXPECT_THAT(job.ExportArgv(),
@@ -601,7 +600,7 @@ TEST_F(BrowserJobTest, CombineVModuleArgs) {
     std::vector<std::string> argv = {kArg1, kArg2, kArg3, kArg4};
 
     BrowserJob job(argv, env_, &checker_, &metrics_, &utils_,
-                   BrowserJob::Config{false, false, base::nullopt},
+                   BrowserJob::Config{false, false, std::nullopt},
                    std::make_unique<login_manager::Subprocess>(1, &utils_));
 
     EXPECT_THAT(job.ExportArgv(), ElementsAre(kArg1, kArg2, kArg3, kArg4));
@@ -642,7 +641,7 @@ TEST_F(BrowserJobTest, CombineFeatureArgs) {
       kEnable3, kDisable3, kBlinkEnable3, kBlinkDisable3,
   };
   BrowserJob job(kArgv, env_, &checker_, &metrics_, &utils_,
-                 BrowserJob::Config{false, false, base::nullopt},
+                 BrowserJob::Config{false, false, std::nullopt},
                  std::make_unique<login_manager::Subprocess>(1, &utils_));
 
   // --enable-features and --disable-features should be merged into args at the
@@ -672,24 +671,89 @@ TEST_F(BrowserJobTest, CombineFeatureArgs) {
 
 TEST_F(BrowserJobTest, SetBrowserDataMigrationArgsForUser) {
   job_->StartSession(kUser, kHash);
-  job_->SetBrowserDataMigrationArgsForUser(kHash);
+  job_->SetBrowserDataMigrationArgsForUser(kHash, "copy");
 
   // Check that |job_args_1| has args set for data migration.
   std::vector<std::string> job_args_1 = job_->ExportArgv();
   ExpectArgsToContainFlag(job_args_1, BrowserJob::kLoginManagerFlag, "");
   ExpectArgsToContainFlag(job_args_1,
                           BrowserJob::kBrowserDataMigrationForUserFlag, kHash);
+  ExpectArgsToContainFlag(job_args_1, BrowserJob::kBrowserDataMigrationModeFlag,
+                          "copy");
   ExpectArgsNotToContainFlag(job_args_1, BrowserJob::kLoginUserFlag, kUser);
-
   job_->ClearBrowserDataMigrationArgs();
 
-  // Check that calling |RunInBackground()| once clears args for data migration
-  // and |job_args_2| has args set to launch chrome for regular user session.
+  job_->SetBrowserDataMigrationArgsForUser(kHash, "move");
+  // Check that |job_args_2| has args set for data migration.
+  std::vector<std::string> job_args_2 = job_->ExportArgv();
+  ExpectArgsToContainFlag(job_args_2, BrowserJob::kLoginManagerFlag, "");
+  ExpectArgsToContainFlag(job_args_2,
+                          BrowserJob::kBrowserDataMigrationForUserFlag, kHash);
+  ExpectArgsToContainFlag(job_args_2, BrowserJob::kBrowserDataMigrationModeFlag,
+                          "move");
+  ExpectArgsNotToContainFlag(job_args_2, BrowserJob::kLoginUserFlag, kUser);
+  job_->ClearBrowserDataMigrationArgs();
+
+  job_->SetBrowserDataMigrationArgsForUser(kHash, "any");
+  // Check that |job_args_2| has args set for data migration.
+  std::vector<std::string> job_args_3 = job_->ExportArgv();
+  ExpectArgsToContainFlag(job_args_3, BrowserJob::kLoginManagerFlag, "");
+  ExpectArgsToContainFlag(job_args_3,
+                          BrowserJob::kBrowserDataMigrationForUserFlag, kHash);
+  ExpectArgsToContainFlag(job_args_3, BrowserJob::kBrowserDataMigrationModeFlag,
+                          "any");
+  ExpectArgsNotToContainFlag(job_args_3, BrowserJob::kLoginUserFlag, kUser);
+  job_->ClearBrowserDataMigrationArgs();
+
+  // Check that calling |ClearBrowserDataMigrationArgs()| once clears args for
+  // data migration and |job_args_4| has args set to launch chrome for regular
+  // user session.
+  std::vector<std::string> job_args_4 = job_->ExportArgv();
+  ExpectArgsToContainFlag(job_args_4, BrowserJob::kLoginUserFlag, kUser);
+  ExpectArgsNotToContainFlag(job_args_4, BrowserJob::kLoginManagerFlag, "");
+  ExpectArgsNotToContainFlag(
+      job_args_4, BrowserJob::kBrowserDataMigrationForUserFlag, kHash);
+  ExpectArgsNotToContainFlag(job_args_4,
+                             BrowserJob::kBrowserDataMigrationModeFlag, "any");
+}
+
+TEST_F(BrowserJobTest, SetBrowserDataBackwardMigrationArgsForUser) {
+  job_->StartSession(kUser, kHash);
+  job_->SetBrowserDataBackwardMigrationArgsForUser(kHash);
+
+  // Check that |job_args_1| has args set for data migration.
+  std::vector<std::string> job_args_1 = job_->ExportArgv();
+  ExpectArgsToContainFlag(job_args_1, BrowserJob::kLoginManagerFlag, "");
+  ExpectArgsToContainFlag(
+      job_args_1, BrowserJob::kBrowserDataBackwardMigrationForUserFlag, kHash);
+  ExpectArgsNotToContainFlag(job_args_1, BrowserJob::kLoginUserFlag, kUser);
+  job_->ClearBrowserDataBackwardMigrationArgs();
+
+  // Check that calling |ClearBrowserDataBackwardMigrationArgs()| once clears
+  // args for data migration and |job_args_2| has args set to launch chrome for
+  // regular user session.
   std::vector<std::string> job_args_2 = job_->ExportArgv();
   ExpectArgsToContainFlag(job_args_2, BrowserJob::kLoginUserFlag, kUser);
   ExpectArgsNotToContainFlag(job_args_2, BrowserJob::kLoginManagerFlag, "");
   ExpectArgsNotToContainFlag(
-      job_args_2, BrowserJob::kBrowserDataMigrationForUserFlag, kHash);
+      job_args_2, BrowserJob::kBrowserDataBackwardMigrationForUserFlag, kHash);
+}
+
+TEST_F(BrowserJobTest, SetDoubleMigration) {
+  job_->StartSession(kUser, kHash);
+  job_->SetBrowserDataMigrationArgsForUser(kHash, "copy");
+  job_->SetBrowserDataBackwardMigrationArgsForUser(kHash);
+
+  ASSERT_DEATH({ job_->ExportArgv(); },
+               "Both forward and backward migration have been called");
+}
+
+TEST_F(BrowserJobTest, SetMultiUserSessionStarted) {
+  ExpectArgsNotToContainFlag(job_->ExportArgv(),
+                             BrowserJob::kDisallowLacrosFlag, "");
+  job_->SetMultiUserSessionStarted();
+  ExpectArgsToContainFlag(job_->ExportArgv(), BrowserJob::kDisallowLacrosFlag,
+                          "");
 }
 
 }  // namespace login_manager

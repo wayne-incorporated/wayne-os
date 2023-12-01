@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -47,8 +47,8 @@ class ResponseCapturer {
   std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<Types...>>
   CreateMethodResponse() {
     return std::make_unique<brillo::dbus_utils::DBusMethodResponse<Types...>>(
-        &call_,
-        base::Bind(&ResponseCapturer::Capture, weak_ptr_factory_.GetWeakPtr()));
+        &call_, base::BindOnce(&ResponseCapturer::Capture,
+                               weak_ptr_factory_.GetWeakPtr()));
   }
 
  private:

@@ -1,0 +1,1 @@
+cros-camera-hal-configs-poppy-0.0.1.ebuild

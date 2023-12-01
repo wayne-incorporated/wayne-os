@@ -1,0 +1,64 @@
+From ba6eadb8cbda2060004462c8d548dc562c49b4dd Mon Sep 17 00:00:00 2001
+From: "H.J. Lu" <hjl.tools@gmail.com>
+Date: Wed, 6 Apr 2022 10:06:37 -0300
+Subject: [PATCH 009/163] Add declare_object_symbol_alias for assembly codes
+ (BZ #28128)
+
+There are 2 problems in:
+
+ #define declare_symbol_alias(symbol, original, type, size) \
+  declare_symbol_alias_1 (symbol, original, type, size)
+ #ifdef __ASSEMBLER__
+ # define declare_symbol_alias_1(symbol, original, type, size) \
+   strong_alias (original, symbol); \
+   .type C_SYMBOL_NAME (symbol), %##type; \
+   .size C_SYMBOL_NAME (symbol), size
+
+1. .type and .size are substituted by arguments.
+2. %##type is expanded to "% type" due to the GCC bug:
+
+https://gcc.gnu.org/bugzilla/show_bug.cgi?id=101613
+
+But assembler doesn't support "% type".
+
+Workaround BZ #28128 by
+
+1. Don't define declare_symbol_alias for assembly codes.
+2. Define declare_object_symbol_alias for assembly codes.
+
+Reviewed-by: Fangrui Song <maskray@google.com>
+(cherry picked from commit 111254f3e1e1a7ae5c2eda7cebc98f93a61d417c)
+---
+ include/libc-symbols.h | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/include/libc-symbols.h b/include/libc-symbols.h
+index 662bd118b1..4bb3d8c7ba 100644
+--- a/include/libc-symbols.h
++++ b/include/libc-symbols.h
+@@ -324,14 +324,16 @@ for linking")
+    This is only necessary when defining something in assembly, or playing
+    funny alias games where the size should be other than what the compiler
+    thinks it is.  */
+-#define declare_symbol_alias(symbol, original, type, size) \
+-  declare_symbol_alias_1 (symbol, original, type, size)
+ #ifdef __ASSEMBLER__
+-# define declare_symbol_alias_1(symbol, original, type, size) \
+-   strong_alias (original, symbol); \
+-   .type C_SYMBOL_NAME (symbol), %##type; \
+-   .size C_SYMBOL_NAME (symbol), size
++# define declare_object_symbol_alias(symbol, original, size) \
++  declare_object_symbol_alias_1 (symbol, original, size)
++# define declare_object_symbol_alias_1(symbol, original, s_size) \
++   strong_alias (original, symbol) ASM_LINE_SEP \
++   .type C_SYMBOL_NAME (symbol), %object ASM_LINE_SEP \
++   .size C_SYMBOL_NAME (symbol), s_size ASM_LINE_SEP
+ #else /* Not __ASSEMBLER__.  */
++# define declare_symbol_alias(symbol, original, type, size) \
++  declare_symbol_alias_1 (symbol, original, type, size)
+ # define declare_symbol_alias_1(symbol, original, type, size) \
+    asm (".globl " __SYMBOL_PREFIX #symbol \
+ 	"\n\t" declare_symbol_alias_1_alias (symbol, original) \
+-- 
+2.37.2
+

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,10 +32,8 @@ class ArcSideloadStatusInterface {
   // Callback of EnableAdbSideload. The first argument indicates whether the
   // operation has succeeded. The second argument is the error message when
   // failed, or nullptr on success.
-  // TODO(victorhsieh): Consider making convert all the Callbacks to
-  // OnceCallback. It will be easier or possible once the next libchrome uprev
-  // (crbug.com/909719) is done.
-  using EnableAdbSideloadCallback = base::Callback<void(Status, const char*)>;
+  using EnableAdbSideloadCallback =
+      base::OnceCallback<void(Status, const char*)>;
 
   // Handles request to allow ARC Sideload via DBus. This can only success
   // before the first user login after boot. Currently must be called after
@@ -44,7 +42,7 @@ class ArcSideloadStatusInterface {
 
   // Callback of QueryAdbSideload. The first argument indicates whether
   // sideloading is allowed on the current device.
-  using QueryAdbSideloadCallback = base::Callback<void(Status)>;
+  using QueryAdbSideloadCallback = base::OnceCallback<void(Status)>;
 
   // Handles query of the ARC Sideload status via DBus. The response will be
   // sent immediately if the status is already known - otherwise the response

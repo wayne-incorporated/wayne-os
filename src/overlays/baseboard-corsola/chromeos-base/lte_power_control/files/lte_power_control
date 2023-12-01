@@ -1,0 +1,83 @@
+#!/bin/sh
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Init gpio for fibocom LTE module
+
+readonly GPIO_DIR="/sys/class/gpio"
+
+disable_gpios() {
+  # lte-w-disable
+  disable_gpio 493
+
+  # sar-detect
+  disable_gpio 494
+
+  # reset and sleep 20ms
+  disable_gpio 497
+  sleep 0.02
+
+  # poweroff and sleep 100ms
+  disable_gpio 496
+  sleep 0.1
+
+  # m2-power
+  disable_gpio 495
+}
+
+set_gpio() {
+  local gpio="$1"
+  local gpio_level="$2"
+  local gpio_path
+  gpio_path="${GPIO_DIR}/gpio${gpio}"
+  if [ ! -e "${gpio_path}" ]; then
+    echo "${gpio}" > "${GPIO_DIR}/export"
+    ret="$?"
+    if [ "${ret}" -ne 0 ]; then
+      exit 1
+    fi
+  fi
+  echo "${gpio_level}" > "${gpio_path}/direction"
+  echo "${gpio}" > "${GPIO_DIR}/unexport"
+}
+
+disable_gpio() {
+  local gpio="$1"
+  set_gpio "${gpio}" "low"
+}
+
+enable_gpio() {
+  local gpio="$1"
+  set_gpio "${gpio}" "high"
+}
+
+main() {
+  local fw
+  fw=$(cros_config /modem firmware-variant)
+  if [ -z "${fw}" ]; then
+    exit 0
+  fi
+
+  if [ "$1" = "on" ]; then
+    # lte-w-disable
+    enable_gpio 493
+
+    # sar-detect"
+    enable_gpio 494
+
+    # m2-power and sleep 2ms
+    enable_gpio 495
+    sleep 0.002
+
+    # poweroff and sleep 14ms
+    enable_gpio 496
+    sleep 0.014
+
+    #reset
+    enable_gpio 497
+  else
+    disable_gpios
+  fi
+}
+main "$@"

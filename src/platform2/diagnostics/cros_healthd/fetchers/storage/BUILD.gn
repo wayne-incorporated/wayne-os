@@ -1,0 +1,47 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+# Library that provides information about present storage devices to
+# cros_healthd.
+pkg_config("storage_data_source_common_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+source_set("storage_data_source") {
+  configs += [ ":storage_data_source_common_pkg_deps" ]
+  deps = [
+    "//diagnostics/base",
+    "//diagnostics/cros_healthd/utils:libcros_healthd_utils",
+    "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+  ]
+  libs = [
+    "mount",
+    "rootdev",
+  ]
+  sources = [
+    "device_info.cc",
+    "device_lister.cc",
+    "device_manager.cc",
+    "device_resolver.cc",
+    "platform.cc",
+  ]
+}
+
+if (use.test) {
+  source_set("storage_data_source_test") {
+    configs += [ ":storage_data_source_common_pkg_deps" ]
+    deps = [ ":storage_data_source" ]
+    sources = [
+      "device_info_test.cc",
+      "device_lister_test.cc",
+      "device_manager_test.cc",
+      "device_resolver_test.cc",
+    ]
+  }
+}

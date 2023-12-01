@@ -1,0 +1,31 @@
+# Copyright 2021 The ChromiumOS Authors
+# Distributed under the terms of the GNU General Public License v2.
+
+EAPI=6
+
+CROS_WORKON_COMMIT="def753bad5e45551f43c41fd700f4793a6d42b3f"
+CROS_WORKON_TREE="f13f0cfa3b1d98298dc20c9f9ed6b1c6b3a05922"
+CROS_WORKON_INCREMENTAL_BUILD=1
+CROS_WORKON_OUTOFTREE_BUILD=1
+CROS_WORKON_PROJECT="chromiumos/platform/satlab"
+CROS_WORKON_LOCALNAME="../platform/satlab"
+
+inherit cros-workon
+
+DESCRIPTION="Install satlab, a test scheduling infrastructure"
+HOMEPAGE="https://chromium.googlesource.com/chromiumos/platform/satlab/+/main/"
+
+LICENSE="BSD-Google"
+SLOT="0"
+KEYWORDS="*"
+
+RDEPEND="
+    app-emulation/docker
+    dev-lang/python:3.6
+    dev-python/grpcio
+    dev-python/protobuf-python
+    net-firewall/iptables
+"
+
+DEPEND="${RDEPEND}
+"

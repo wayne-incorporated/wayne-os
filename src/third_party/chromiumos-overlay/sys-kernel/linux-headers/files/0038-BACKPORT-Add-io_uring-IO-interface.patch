@@ -1,0 +1,163 @@
+From 2b188cc1bb857a9d4701ae59aa7768b5124e262e Mon Sep 17 00:00:00 2001
+From: Jens Axboe <axboe@kernel.dk>
+Date: Mon, 7 Jan 2019 10:46:33 -0700
+Subject: [PATCH] BACKPORT: Add io_uring IO interface
+
+The submission queue (SQ) and completion queue (CQ) rings are shared
+between the application and the kernel. This eliminates the need to
+copy data back and forth to submit and complete IO.
+
+IO submissions use the io_uring_sqe data structure, and completions
+are generated in the form of io_uring_cqe data structures. The SQ
+ring is an index into the io_uring_sqe array, which makes it possible
+to submit a batch of IOs without them being contiguous in the ring.
+The CQ ring is always contiguous, as completion events are inherently
+unordered, and hence any io_uring_cqe entry can point back to an
+arbitrary submission.
+
+Two new system calls are added for this:
+
+io_uring_setup(entries, params)
+	Sets up an io_uring instance for doing async IO. On success,
+	returns a file descriptor that the application can mmap to
+	gain access to the SQ ring, CQ ring, and io_uring_sqes.
+
+io_uring_enter(fd, to_submit, min_complete, flags, sigset, sigsetsize)
+	Initiates IO against the rings mapped to this fd, or waits for
+	them to complete, or both. The behavior is controlled by the
+	parameters passed in. If 'to_submit' is non-zero, then we'll
+	try and submit new IO. If IORING_ENTER_GETEVENTS is set, the
+	kernel will wait for 'min_complete' events, if they aren't
+	already available. It's valid to set IORING_ENTER_GETEVENTS
+	and 'min_complete' == 0 at the same time, this allows the
+	kernel to return already completed events without waiting
+	for them. This is useful only for polling, as for IRQ
+	driven IO, the application can just check the CQ ring
+	without entering the kernel.
+
+With this setup, it's possible to do async IO with a single system
+call. Future developments will enable polled IO with this interface,
+and polled submission as well. The latter will enable an application
+to do IO without doing ANY system calls at all.
+
+For IRQ driven IO, an application only needs to enter the kernel for
+completions if it wants to wait for them to occur.
+
+Each io_uring is backed by a workqueue, to support buffered async IO
+as well. We will only punt to an async context if the command would
+need to wait for IO on the device side. Any data that can be accessed
+directly in the page cache is done inline. This avoids the slowness
+issue of usual threadpools, since cached data is accessed as quickly
+as a sync interface.
+
+Sample application: http://git.kernel.dk/cgit/fio/plain/t/io_uring.c
+
+dgreid - Also pull in the ARM and ARM64 changes which were adding in
+a separate and only partially related commit.
+
+Reviewed-by: Hannes Reinecke <hare@suse.com>
+Signed-off-by: Jens Axboe <axboe@kernel.dk>
+---
+
+diff --git a/arch/arm/tools/syscall.tbl b/arch/arm/tools/syscall.tbl
+--- a/arch/arm/tools/syscall.tbl	2017-12-28 15:53:02.000000000 +0000
++++ b/arch/arm/tools/syscall.tbl	2020-10-30 03:59:25.357442520 +0000
+@@ -412,3 +412,5 @@
+ 395	common	pkey_alloc		sys_pkey_alloc
+ 396	common	pkey_free		sys_pkey_free
+ 397	common	statx			sys_statx
++425	common	io_uring_setup		sys_io_uring_setup
++426	common	io_uring_enter		sys_io_uring_enter
+diff --git a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+--- a/arch/arm64/include/asm/unistd32.h	2017-12-28 15:53:02.000000000 +0000
++++ b/arch/arm64/include/asm/unistd32.h	2020-10-30 04:02:43.711946882 +0000
+@@ -817,6 +817,10 @@
+ __SYSCALL(__NR_pkey_free, sys_pkey_free)
+ #define __NR_statx 397
+ __SYSCALL(__NR_statx, sys_statx)
++#define __NR_io_uring_setup 425
++__SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
++#define __NR_io_uring_enter 426
++__SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
+ 
+ /*
+  * Please add new compat syscalls above this comment and update
+diff --git a/arch/arm64/include/asm/unistd.h b/arch/arm64/include/asm/unistd.h
+--- a/arch/arm64/include/asm/unistd.h	2017-12-28 15:53:02.000000000 +0000
++++ b/arch/arm64/include/asm/unistd.h	2020-10-30 04:02:56.152354901 +0000
+@@ -43,7 +43,7 @@
+ #define __ARM_NR_compat_cacheflush	(__ARM_NR_COMPAT_BASE+2)
+ #define __ARM_NR_compat_set_tls		(__ARM_NR_COMPAT_BASE+5)
+ 
+-#define __NR_compat_syscalls		398
++#define __NR_compat_syscalls		427
+ #endif
+ 
+ #define __ARCH_WANT_SYS_CLONE
+diff --git a/arch/x86/entry/syscalls/syscall_32.tbl b/arch/x86/entry/syscalls/syscall_32.tbl
+--- a/arch/x86/entry/syscalls/syscall_32.tbl	2017-12-28 15:53:02.000000000 +0000
++++ b/arch/x86/entry/syscalls/syscall_32.tbl	2020-10-30 03:58:02.198716480 +0000
+@@ -391,3 +391,5 @@
+ 382	i386	pkey_free		sys_pkey_free
+ 383	i386	statx			sys_statx
+ 384	i386	arch_prctl		sys_arch_prctl			compat_sys_arch_prctl
++425	i386	io_uring_setup		sys_io_uring_setup		__ia32_sys_io_uring_setup
++426	i386	io_uring_enter		sys_io_uring_enter		__ia32_sys_io_uring_enter
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+--- a/arch/x86/entry/syscalls/syscall_64.tbl	2017-12-28 15:53:02.000000000 +0000
++++ b/arch/x86/entry/syscalls/syscall_64.tbl	2020-10-30 03:49:50.902629025 +0000
+@@ -339,6 +339,8 @@
+ 330	common	pkey_alloc		sys_pkey_alloc
+ 331	common	pkey_free		sys_pkey_free
+ 332	common	statx			sys_statx
++425	common	io_uring_setup		__x64_sys_io_uring_setup
++426	common	io_uring_enter		__x64_sys_io_uring_enter
+ 
+ #
+ # x32-specific system call numbers start at 512 to avoid cache impact
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index 257cccba3062..3072dbaa7869 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -67,6 +67,7 @@ struct file_handle;
+ struct file_handle;
+ struct sigaltstack;
+ union bpf_attr;
++struct io_uring_params;
+
+ #include <linux/types.h>
+ #include <linux/aio_abi.h>
+@@ -543,6 +544,11 @@ asmlinkage long sys_io_cancel(aio_context_t ctx_id, struct iocb __user *iocb,
+ 				struct iocb __user * __user *);
+ asmlinkage long sys_io_cancel(aio_context_t ctx_id, struct iocb __user *iocb,
+ 			      struct io_event __user *result);
++asmlinkage long sys_io_uring_setup(u32 entries,
++				   struct io_uring_params __user *p);
++asmlinkage long sys_io_uring_enter(unsigned int fd, u32 to_submit,
++				   u32 min_complete, u32 flags,
++				   const sigset_t __user *sig, size_t sigsz);
+ asmlinkage long sys_sendfile(int out_fd, int in_fd,
+ 			     off_t __user *offset, size_t count);
+ asmlinkage long sys_sendfile64(int out_fd, int in_fd,
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index d90127298f12..87871e7b7ea7 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -732,9 +732,13 @@ __SC_COMP(__NR_io_pgetevents, sys_io_pgetevents, compat_sys_io_pgetevents)
+ __SYSCALL(__NR_pkey_free,     sys_pkey_free)
+ #define __NR_kexec_file_load 291
+ __SYSCALL(__NR_statx,     sys_statx)
++#define __NR_io_uring_setup 425
++__SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
++#define __NR_io_uring_enter 426
++__SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
+ 
+ #undef __NR_syscalls
+-#define __NR_syscalls 292
++#define __NR_syscalls 427
+ 
+ /*
+  * 32 bit systems traditionally used different
+-- 
+2.20.1
+

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+# Copyright 2010 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 
 
 SCRIPT_ROOT=$(dirname $(readlink -f "$0"))
+# shellcheck source=common.sh
 . "${SCRIPT_ROOT}/common.sh" || exit 1
+# shellcheck source=remote_access.sh
 . "${SCRIPT_ROOT}/remote_access.sh" || exit 1
 
 assert_inside_chroot
@@ -105,7 +107,9 @@ main() {
     # duplicate crashes (in case cryptohome is not mounted) below.
     local remote_crash_dirs=(
         "/var/spool/crash"
+        "/home/chronos/crash"
         "/home/user/*/crash"
+        "/run/daemon-store/crash/*"
         "/mnt/stateful_partition/home/user/*/crash"
     )
     local remote_crash_patterns=()

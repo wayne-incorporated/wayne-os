@@ -1,0 +1,39 @@
+# Copyright 2016 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+[Unit]
+Description=Chromium OS power daemon
+PartOf=boot-services.target
+After=boot-services.target
+
+[Service]
+Type=forking
+BusName=org.chromium.PowerManager
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# The next section must match the settings in the powerd_directories.conf.
+# The following paths are created by systemd-tmpfiles.
+Environment=LOG_DIR=/var/log/power_manager
+Environment=POWER_RUN_DIR=/run/power_manager/power
+Environment=PREFS_DIR=/var/lib/power_manager
+Environment=ROOT_RUN_DIR=/run/power_manager/root
+Environment=ROOT_SPOOL_DIR=/var/spool/power_manager/root
+
+Environment=VPD_CACHE_FILE=/mnt/stateful_partition/unencrypted/cache/vpd/filtered.txt
+Environment=MAX_NITS_PREF=internal_backlight_max_nits
+Environment=PM_TEST_DELAY_FILE=/sys/power/pm_test_delay
+Environment=VMODULE_ARG=
+
+ExecStartPre=/usr/share/cros/init/powerd-pre-start.sh
+
+ExecStart=/sbin/minijail0 -u power -g power -G -i  \
+  --no-default-runtime-environment --              \
+  /usr/bin/powerd                                  \
+    --log_dir="${LOG_DIR}"                         \
+    --run_dir="${POWER_RUN_DIR}"                   \
+    --vmodule="${VMODULE_ARG}"                     \
+    >/var/log/powerd.out 2>&1

@@ -1,0 +1,133 @@
+Update sve macros in NativeRegisterContextLinux_arm64.{cpp,h}.
+
+Commit 090306fc80dbf changed most of the arm64 sve macros, but apparently
+did not make the changes in the NativeRegisterContextLinux_arm64.* files
+(or those files were pulled over from someplace else after that commit).
+
+This patch replaces the no-longer-defined macros with their new functions
+or definitions from the commit referenced above.
+
+This change has also been committed upstream (see
+https://reviews.llvm.org/D104826), in commit
+05915400b7f9933b95686116f2dc1370e7f96cfb (r431464).
+
+Author: cmtice@google.com
+Date: 2021-06-23
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.h b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.h
+index 47105a5..24dbd39 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.h
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.h
+@@ -14,6 +14,7 @@
+ #include "Plugins/Process/Linux/NativeRegisterContextLinux.h"
+ #include "Plugins/Process/Utility/NativeRegisterContextDBReg_arm64.h"
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm64.h"
++#include "Plugins/Process/elf-core/RegisterContextPOSIXCore_arm64.h"
+ 
+ #include <asm/ptrace.h>
+ 
+@@ -84,7 +85,7 @@ private:
+       m_fpr; // floating-point registers including extended register sets.
+ 
+   SVEState m_sve_state;
+-  struct user_sve_header m_sve_header;
++  struct sve::user_sve_header m_sve_header;
+   std::vector<uint8_t> m_sve_ptrace_payload;
+ 
+   bool m_refresh_hwdebug_info;
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
+index fbaa7e6..7616eeb 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
+@@ -155,15 +155,15 @@ NativeRegisterContextLinux_arm64::ReadRegister(const RegisterInfo *reg_info,
+       if (reg == GetRegisterInfo().GetRegNumFPSR()) {
+         sve_reg_num = reg;
+         if (m_sve_state == SVEState::Full)
+-          offset = SVE_PT_SVE_FPSR_OFFSET(sve_vq_from_vl(m_sve_header.vl));
++          offset = sve::PTraceFPSROffset(sve::vq_from_vl(m_sve_header.vl));
+         else if (m_sve_state == SVEState::FPSIMD)
+-          offset = SVE_PT_FPSIMD_OFFSET + (32 * 16);
++          offset = sve::ptrace_fpsimd_offset + (32 * 16);
+       } else if (reg == GetRegisterInfo().GetRegNumFPCR()) {
+         sve_reg_num = reg;
+         if (m_sve_state == SVEState::Full)
+-          offset = SVE_PT_SVE_FPCR_OFFSET(sve_vq_from_vl(m_sve_header.vl));
++          offset = sve::PTraceFPCROffset(sve::vq_from_vl(m_sve_header.vl));
+         else if (m_sve_state == SVEState::FPSIMD)
+-          offset = SVE_PT_FPSIMD_OFFSET + (32 * 16) + 4;
++          offset = sve::ptrace_fpsimd_offset + (32 * 16) + 4;
+       } else {
+         // Extract SVE Z register value register number for this reg_info
+         if (reg_info->value_regs &&
+@@ -273,15 +273,15 @@ Status NativeRegisterContextLinux_arm64::WriteRegister(
+       if (reg == GetRegisterInfo().GetRegNumFPSR()) {
+         sve_reg_num = reg;
+         if (m_sve_state == SVEState::Full)
+-          offset = SVE_PT_SVE_FPSR_OFFSET(sve_vq_from_vl(m_sve_header.vl));
++          offset = sve::PTraceFPSROffset(sve::vq_from_vl(m_sve_header.vl));
+         else if (m_sve_state == SVEState::FPSIMD)
+-          offset = SVE_PT_FPSIMD_OFFSET + (32 * 16);
++          offset = sve::ptrace_fpsimd_offset + (32 * 16);
+       } else if (reg == GetRegisterInfo().GetRegNumFPCR()) {
+         sve_reg_num = reg;
+         if (m_sve_state == SVEState::Full)
+-          offset = SVE_PT_SVE_FPCR_OFFSET(sve_vq_from_vl(m_sve_header.vl));
++          offset = sve::PTraceFPCROffset(sve::vq_from_vl(m_sve_header.vl));
+         else if (m_sve_state == SVEState::FPSIMD)
+-          offset = SVE_PT_FPSIMD_OFFSET + (32 * 16) + 4;
++          offset = sve::ptrace_fpsimd_offset + (32 * 16) + 4;
+       } else {
+         // Extract SVE Z register value register number for this reg_info
+         if (reg_info->value_regs &&
+@@ -307,7 +307,7 @@ Status NativeRegisterContextLinux_arm64::WriteRegister(
+       if (GetRegisterInfo().IsSVERegVG(reg)) {
+         uint64_t vg_value = reg_value.GetAsUInt64();
+ 
+-        if (sve_vl_valid(vg_value * 8)) {
++        if (sve::vl_valid(vg_value * 8)) {
+           if (m_sve_header_is_valid && vg_value == GetSVERegVG())
+             return error;
+ 
+@@ -684,16 +684,16 @@ void NativeRegisterContextLinux_arm64::ConfigureRegisterContext() {
+       GetRegisterInfo().ConfigureVectorRegisterInfos(
+           RegisterInfoPOSIX_arm64::eVectorQuadwordAArch64);
+     } else {
+-      if ((m_sve_header.flags & SVE_PT_REGS_MASK) == SVE_PT_REGS_FPSIMD)
++      if ((m_sve_header.flags & sve::ptrace_regs_mask) == sve::ptrace_regs_fpsimd)
+         m_sve_state = SVEState::FPSIMD;
+-      else if ((m_sve_header.flags & SVE_PT_REGS_MASK) == SVE_PT_REGS_SVE)
++      else if ((m_sve_header.flags & sve::ptrace_regs_mask) == sve::ptrace_regs_sve)
+         m_sve_state = SVEState::Full;
+ 
+       uint32_t vq = RegisterInfoPOSIX_arm64::eVectorQuadwordAArch64SVE;
+-      if (sve_vl_valid(m_sve_header.vl))
+-        vq = sve_vq_from_vl(m_sve_header.vl);
++      if (sve::vl_valid(m_sve_header.vl))
++        vq = sve::vq_from_vl(m_sve_header.vl);
+       GetRegisterInfo().ConfigureVectorRegisterInfos(vq);
+-      m_sve_ptrace_payload.resize(SVE_PT_SIZE(vq, SVE_PT_REGS_SVE));
++      m_sve_ptrace_payload.resize(sve::PTraceSize(vq, sve::ptrace_regs_sve));
+     }
+   }
+ }
+@@ -710,18 +710,18 @@ uint32_t NativeRegisterContextLinux_arm64::CalculateSVEOffset(
+   if (m_sve_state == SVEState::FPSIMD) {
+     const uint32_t reg = reg_info->kinds[lldb::eRegisterKindLLDB];
+     sve_reg_offset =
+-        SVE_PT_FPSIMD_OFFSET + (reg - GetRegisterInfo().GetRegNumSVEZ0()) * 16;
++        sve::ptrace_fpsimd_offset + (reg - GetRegisterInfo().GetRegNumSVEZ0()) * 16;
+   } else if (m_sve_state == SVEState::Full) {
+     uint32_t sve_z0_offset = GetGPRSize() + 16;
+     sve_reg_offset =
+-        SVE_SIG_REGS_OFFSET + reg_info->byte_offset - sve_z0_offset;
++        sve::SigRegsOffset() + reg_info->byte_offset - sve_z0_offset;
+   }
+   return sve_reg_offset;
+ }
+ 
+ void *NativeRegisterContextLinux_arm64::GetSVEBuffer() {
+   if (m_sve_state == SVEState::FPSIMD)
+-    return m_sve_ptrace_payload.data() + SVE_PT_FPSIMD_OFFSET;
++    return m_sve_ptrace_payload.data() + sve::ptrace_fpsimd_offset;
+ 
+   return m_sve_ptrace_payload.data();
+ }

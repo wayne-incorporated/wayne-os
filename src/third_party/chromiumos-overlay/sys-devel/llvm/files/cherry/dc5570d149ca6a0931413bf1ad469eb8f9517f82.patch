@@ -1,0 +1,767 @@
+commit dc5570d149ca6a0931413bf1ad469eb8f9517f82
+Author: Jeroen Dobbelaere <jeroen.dobbelaere@synopsys.com>
+Date:   Wed Jul 28 18:53:11 2021 +0200
+
+    Revert "Revert of D49126 [PredicateInfo] Use custom mangling to support ssa_copy with unnamed types."
+    
+    This reverts commit 77080a1eb6061df2dcfae8ac84b85ad4d1e02031.
+    
+    This change introduced issues detected with EXPENSIVE_CHECKS. Reverting to restore the
+    needed function cleanup. A next patch will then just improve on the name mangling.
+
+diff --git a/llvm/include/llvm/Transforms/Utils/PredicateInfo.h b/llvm/include/llvm/Transforms/Utils/PredicateInfo.h
+index c4030735d965..c922476ac79d 100644
+--- a/llvm/include/llvm/Transforms/Utils/PredicateInfo.h
++++ b/llvm/include/llvm/Transforms/Utils/PredicateInfo.h
+@@ -51,11 +51,13 @@
+ #define LLVM_TRANSFORMS_UTILS_PREDICATEINFO_H
+ 
+ #include "llvm/ADT/DenseMap.h"
++#include "llvm/ADT/SmallSet.h"
+ #include "llvm/ADT/ilist.h"
+ #include "llvm/ADT/ilist_node.h"
+ #include "llvm/IR/Instructions.h"
+ #include "llvm/IR/PassManager.h"
+ #include "llvm/IR/Value.h"
++#include "llvm/IR/ValueHandle.h"
+ #include "llvm/Pass.h"
+ 
+ namespace llvm {
+@@ -176,7 +178,7 @@ public:
+ class PredicateInfo {
+ public:
+   PredicateInfo(Function &, DominatorTree &, AssumptionCache &);
+-  ~PredicateInfo() = default;
++  ~PredicateInfo();
+ 
+   void verifyPredicateInfo() const;
+ 
+@@ -203,6 +205,8 @@ private:
+   // the Predicate Info, they belong to the ValueInfo structs in the ValueInfos
+   // vector.
+   DenseMap<const Value *, const PredicateBase *> PredicateMap;
++  // The set of ssa_copy declarations we created with our custom mangling.
++  SmallSet<AssertingVH<Function>, 20> CreatedDeclarations;
+ };
+ 
+ // This pass does eager building and then printing of PredicateInfo. It is used
+diff --git a/llvm/lib/Transforms/Utils/PredicateInfo.cpp b/llvm/lib/Transforms/Utils/PredicateInfo.cpp
+index 91280762aaa7..4c262f60014c 100644
+--- a/llvm/lib/Transforms/Utils/PredicateInfo.cpp
++++ b/llvm/lib/Transforms/Utils/PredicateInfo.cpp
+@@ -16,6 +16,7 @@
+ #include "llvm/ADT/STLExtras.h"
+ #include "llvm/ADT/SmallPtrSet.h"
+ #include "llvm/ADT/Statistic.h"
++#include "llvm/ADT/StringExtras.h"
+ #include "llvm/Analysis/AssumptionCache.h"
+ #include "llvm/Analysis/CFG.h"
+ #include "llvm/IR/AssemblyAnnotationWriter.h"
+@@ -23,6 +24,7 @@
+ #include "llvm/IR/Dominators.h"
+ #include "llvm/IR/GlobalVariable.h"
+ #include "llvm/IR/IRBuilder.h"
++#include "llvm/IR/InstIterator.h"
+ #include "llvm/IR/IntrinsicInst.h"
+ #include "llvm/IR/LLVMContext.h"
+ #include "llvm/IR/Metadata.h"
+@@ -537,6 +539,21 @@ void PredicateInfoBuilder::buildPredicateInfo() {
+   renameUses(OpsToRename);
+ }
+ 
++// Create a ssa_copy declaration with custom mangling, because
++// Intrinsic::getDeclaration does not handle overloaded unnamed types properly:
++// all unnamed types get mangled to the same string. We use the pointer
++// to the type as name here, as it guarantees unique names for different
++// types and we remove the declarations when destroying PredicateInfo.
++// It is a workaround for PR38117, because solving it in a fully general way is
++// tricky (FIXME).
++static Function *getCopyDeclaration(Module *M, Type *Ty) {
++  std::string Name = "llvm.ssa.copy." + utostr((uintptr_t) Ty);
++  return cast<Function>(
++      M->getOrInsertFunction(Name,
++                             getType(M->getContext(), Intrinsic::ssa_copy, Ty))
++          .getCallee());
++}
++
+ // Given the renaming stack, make all the operands currently on the stack real
+ // by inserting them into the IR.  Return the last operation's value.
+ Value *PredicateInfoBuilder::materializeStack(unsigned int &Counter,
+@@ -568,8 +585,9 @@ Value *PredicateInfoBuilder::materializeStack(unsigned int &Counter,
+     // order in the case of multiple predicateinfo in the same block.
+     if (isa<PredicateWithEdge>(ValInfo)) {
+       IRBuilder<> B(getBranchTerminator(ValInfo));
+-      Function *IF = Intrinsic::getDeclaration(
+-          F.getParent(), Intrinsic::ssa_copy, Op->getType());
++      Function *IF = getCopyDeclaration(F.getParent(), Op->getType());
++      if (IF->users().empty())
++        PI.CreatedDeclarations.insert(IF);
+       CallInst *PIC =
+           B.CreateCall(IF, Op, Op->getName() + "." + Twine(Counter++));
+       PI.PredicateMap.insert({PIC, ValInfo});
+@@ -581,8 +599,9 @@ Value *PredicateInfoBuilder::materializeStack(unsigned int &Counter,
+       // Insert the predicate directly after the assume. While it also holds
+       // directly before it, assume(i1 true) is not a useful fact.
+       IRBuilder<> B(PAssume->AssumeInst->getNextNode());
+-      Function *IF = Intrinsic::getDeclaration(
+-          F.getParent(), Intrinsic::ssa_copy, Op->getType());
++      Function *IF = getCopyDeclaration(F.getParent(), Op->getType());
++      if (IF->users().empty())
++        PI.CreatedDeclarations.insert(IF);
+       CallInst *PIC = B.CreateCall(IF, Op);
+       PI.PredicateMap.insert({PIC, ValInfo});
+       Result.Def = PIC;
+@@ -761,6 +780,23 @@ PredicateInfo::PredicateInfo(Function &F, DominatorTree &DT,
+   Builder.buildPredicateInfo();
+ }
+ 
++// Remove all declarations we created . The PredicateInfo consumers are
++// responsible for remove the ssa_copy calls created.
++PredicateInfo::~PredicateInfo() {
++  // Collect function pointers in set first, as SmallSet uses a SmallVector
++  // internally and we have to remove the asserting value handles first.
++  SmallPtrSet<Function *, 20> FunctionPtrs;
++  for (auto &F : CreatedDeclarations)
++    FunctionPtrs.insert(&*F);
++  CreatedDeclarations.clear();
++
++  for (Function *F : FunctionPtrs) {
++    assert(F->user_begin() == F->user_end() &&
++           "PredicateInfo consumer did not remove all SSA copies.");
++    F->eraseFromParent();
++  }
++}
++
+ Optional<PredicateConstraint> PredicateBase::getConstraint() const {
+   switch (Type) {
+   case PT_Assume:
+@@ -827,6 +863,19 @@ void PredicateInfoPrinterLegacyPass::getAnalysisUsage(AnalysisUsage &AU) const {
+   AU.addRequired<AssumptionCacheTracker>();
+ }
+ 
++// Replace ssa_copy calls created by PredicateInfo with their operand.
++static void replaceCreatedSSACopys(PredicateInfo &PredInfo, Function &F) {
++  for (Instruction &Inst : llvm::make_early_inc_range(instructions(F))) {
++    const auto *PI = PredInfo.getPredicateInfoFor(&Inst);
++    auto *II = dyn_cast<IntrinsicInst>(&Inst);
++    if (!PI || !II || II->getIntrinsicID() != Intrinsic::ssa_copy)
++      continue;
++
++    Inst.replaceAllUsesWith(II->getOperand(0));
++    Inst.eraseFromParent();
++  }
++}
++
+ bool PredicateInfoPrinterLegacyPass::runOnFunction(Function &F) {
+   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+   auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
+@@ -834,6 +883,8 @@ bool PredicateInfoPrinterLegacyPass::runOnFunction(Function &F) {
+   PredInfo->print(dbgs());
+   if (VerifyPredicateInfo)
+     PredInfo->verifyPredicateInfo();
++
++  replaceCreatedSSACopys(*PredInfo, F);
+   return false;
+ }
+ 
+@@ -845,6 +896,7 @@ PreservedAnalyses PredicateInfoPrinterPass::run(Function &F,
+   auto PredInfo = std::make_unique<PredicateInfo>(F, DT, AC);
+   PredInfo->print(OS);
+ 
++  replaceCreatedSSACopys(*PredInfo, F);
+   return PreservedAnalyses::all();
+ }
+ 
+diff --git a/llvm/test/Other/debugcounter-predicateinfo.ll b/llvm/test/Other/debugcounter-predicateinfo.ll
+index 90303ab0dabc..bbc7a0f71271 100644
+--- a/llvm/test/Other/debugcounter-predicateinfo.ll
++++ b/llvm/test/Other/debugcounter-predicateinfo.ll
+@@ -8,10 +8,10 @@ define fastcc void @barney() {
+ ; CHECK-NEXT:    br label [[BB22:%.*]]
+ ; CHECK:       bb22:
+ ; CHECK-NEXT:    [[TMP23:%.*]] = icmp eq i32 undef, 2
+-; CHECK:         [[TMP23_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[TMP23]])
++; CHECK:         [[TMP23_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[TMP23]])
+ ; CHECK-NEXT:    br i1 [[TMP23]], label [[BB29:%.*]], label [[BB35:%.*]]
+ ; CHECK:       bb29:
+-; CHECK:         [[TMP23_0_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[TMP23_0]])
++; CHECK:         [[TMP23_0_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[TMP23_0]])
+ ; CHECK-NEXT:    br i1 [[TMP23]], label [[BB33:%.*]], label [[BB35]]
+ ; CHECK:       bb33:
+ ; CHECK-NEXT:    br i1 [[TMP23_0_1]], label [[BB35]], label [[BB35]]
+diff --git a/llvm/test/Transforms/Util/PredicateInfo/condprop.ll b/llvm/test/Transforms/Util/PredicateInfo/condprop.ll
+index 9400e60c81ff..689326b6ca97 100644
+--- a/llvm/test/Transforms/Util/PredicateInfo/condprop.ll
++++ b/llvm/test/Transforms/Util/PredicateInfo/condprop.ll
+@@ -186,10 +186,10 @@ case3:
+ define i1 @test5(i32 %x, i32 %y) {
+ ; CHECK-LABEL: @test5(
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[X:%.*]], [[Y:%.*]]
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[X_1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
+-; CHECK:         [[Y_1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[X_1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
++; CHECK:         [[Y_1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[SAME:%.*]], label [[DIFFERENT:%.*]]
+ ; CHECK:       same:
+ ; CHECK-NEXT:    [[CMP2:%.*]] = icmp ne i32 [[X_0]], [[Y_0]]
+@@ -259,10 +259,10 @@ different:
+ define i1 @test7(i32 %x, i32 %y) {
+ ; CHECK-LABEL: @test7(
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[X:%.*]], [[Y:%.*]]
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[X_1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
+-; CHECK:         [[Y_1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[X_1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
++; CHECK:         [[Y_1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[SAME:%.*]], label [[DIFFERENT:%.*]]
+ ; CHECK:       same:
+ ; CHECK-NEXT:    [[CMP2:%.*]] = icmp sle i32 [[X_0]], [[Y_0]]
+@@ -286,10 +286,10 @@ different:
+ define i1 @test7_fp(float %x, float %y) {
+ ; CHECK-LABEL: @test7_fp(
+ ; CHECK-NEXT:    [[CMP:%.*]] = fcmp ogt float [[X:%.*]], [[Y:%.*]]
+-; CHECK:         [[X_0:%.*]] = call float @llvm.ssa.copy.f32(float [[X]])
+-; CHECK:         [[X_1:%.*]] = call float @llvm.ssa.copy.f32(float [[X]])
+-; CHECK:         [[Y_0:%.*]] = call float @llvm.ssa.copy.f32(float [[Y]])
+-; CHECK:         [[Y_1:%.*]] = call float @llvm.ssa.copy.f32(float [[Y]])
++; CHECK:         [[X_0:%.*]] = call float @llvm.ssa.copy.{{.+}}(float [[X]])
++; CHECK:         [[X_1:%.*]] = call float @llvm.ssa.copy.{{.+}}(float [[X]])
++; CHECK:         [[Y_0:%.*]] = call float @llvm.ssa.copy.{{.+}}(float [[Y]])
++; CHECK:         [[Y_1:%.*]] = call float @llvm.ssa.copy.{{.+}}(float [[Y]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[SAME:%.*]], label [[DIFFERENT:%.*]]
+ ; CHECK:       same:
+ ; CHECK-NEXT:    [[CMP2:%.*]] = fcmp ule float [[X_0]], [[Y_0]]
+@@ -359,8 +359,8 @@ different:
+ define i32 @test9(i32 %i, i32 %j) {
+ ; CHECK-LABEL: @test9(
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[I:%.*]], [[J:%.*]]
+-; CHECK:         [[I_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[I]])
+-; CHECK:         [[J_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[J]])
++; CHECK:         [[I_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[I]])
++; CHECK:         [[J_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[J]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[COND_TRUE:%.*]], label [[RET:%.*]]
+ ; CHECK:       cond_true:
+ ; CHECK-NEXT:    [[DIFF:%.*]] = sub i32 [[I_0]], [[J_0]]
+@@ -382,8 +382,8 @@ ret:
+ define i32 @test10(i32 %j, i32 %i) {
+ ; CHECK-LABEL: @test10(
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[I:%.*]], [[J:%.*]]
+-; CHECK:         [[I_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[I]])
+-; CHECK:         [[J_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[J]])
++; CHECK:         [[I_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[I]])
++; CHECK:         [[J_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[J]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[COND_TRUE:%.*]], label [[RET:%.*]]
+ ; CHECK:       cond_true:
+ ; CHECK-NEXT:    [[DIFF:%.*]] = sub i32 [[I_0]], [[J_0]]
+@@ -409,14 +409,14 @@ define i32 @test11(i32 %x) {
+ ; CHECK-NEXT:    [[V0:%.*]] = call i32 @yogibar()
+ ; CHECK-NEXT:    [[V1:%.*]] = call i32 @yogibar()
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[V0]], [[V1]]
+-; CHECK:         [[V0_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[V0]])
+-; CHECK:         [[V1_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[V1]])
++; CHECK:         [[V0_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[V0]])
++; CHECK:         [[V1_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[V1]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[COND_TRUE:%.*]], label [[NEXT:%.*]]
+ ; CHECK:       cond_true:
+ ; CHECK-NEXT:    ret i32 [[V1_0]]
+ ; CHECK:       next:
+ ; CHECK-NEXT:    [[CMP2:%.*]] = icmp eq i32 [[X:%.*]], [[V0_0]]
+-; CHECK:         [[V0_0_1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[V0_0]])
++; CHECK:         [[V0_0_1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[V0_0]])
+ ; CHECK-NEXT:    br i1 [[CMP2]], label [[COND_TRUE2:%.*]], label [[NEXT2:%.*]]
+ ; CHECK:       cond_true2:
+ ; CHECK-NEXT:    ret i32 [[V0_0_1]]
+@@ -445,8 +445,8 @@ next2:
+ define i32 @test12(i32 %x) {
+ ; CHECK-LABEL: @test12(
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[X:%.*]], 0
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[X_1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[X_1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[COND_TRUE:%.*]], label [[COND_FALSE:%.*]]
+ ; CHECK:       cond_true:
+ ; CHECK-NEXT:    br label [[RET:%.*]]
+diff --git a/llvm/test/Transforms/Util/PredicateInfo/diamond.ll b/llvm/test/Transforms/Util/PredicateInfo/diamond.ll
+index e3f56d88caf0..8e3da687c139 100644
+--- a/llvm/test/Transforms/Util/PredicateInfo/diamond.ll
++++ b/llvm/test/Transforms/Util/PredicateInfo/diamond.ll
+@@ -5,12 +5,12 @@ define i1 @f(i32 %x, i1 %y) {
+ ; CHECK-NEXT:    br i1 [[Y:%.*]], label [[BB0:%.*]], label [[BB1:%.*]]
+ ; CHECK:       bb0:
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp sge i32 [[X:%.*]], 0
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[BB2:%.*]], label [[BB3:%.*]]
+ ; CHECK:       bb1:
+ ; CHECK-NEXT:    [[X2:%.*]] = add nuw nsw i32 [[X]], 1
+ ; CHECK-NEXT:    [[CMP2:%.*]] = icmp sge i32 [[X2]], 2
+-; CHECK:         [[X2_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X2]])
++; CHECK:         [[X2_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X2]])
+ ; CHECK-NEXT:    br i1 [[CMP2]], label [[BB2]], label [[BB3]]
+ ; CHECK:       bb2:
+ ; CHECK-NEXT:    [[X3:%.*]] = phi i32 [ [[X_0]], [[BB0]] ], [ [[X2_0]], [[BB1]] ]
+@@ -38,12 +38,12 @@ define i1 @g(i32 %x, i1 %y) {
+ ; CHECK-NEXT:    br i1 [[Y:%.*]], label [[BB0:%.*]], label [[BB1:%.*]]
+ ; CHECK:       bb0:
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp sge i32 [[X:%.*]], 0
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[BB3:%.*]], label [[BB2:%.*]]
+ ; CHECK:       bb1:
+ ; CHECK-NEXT:    [[X2:%.*]] = add nuw nsw i32 [[X]], 1
+ ; CHECK-NEXT:    [[CMP2:%.*]] = icmp sge i32 [[X2]], 2
+-; CHECK:         [[X2_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X2]])
++; CHECK:         [[X2_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X2]])
+ ; CHECK-NEXT:    br i1 [[CMP2]], label [[BB3]], label [[BB2]]
+ ; CHECK:       bb2:
+ ; CHECK-NEXT:    [[X3:%.*]] = phi i32 [ [[X_0]], [[BB0]] ], [ [[X2_0]], [[BB1]] ]
+diff --git a/llvm/test/Transforms/Util/PredicateInfo/edge.ll b/llvm/test/Transforms/Util/PredicateInfo/edge.ll
+index 2b88e32fd450..dbd15dc70ba5 100644
+--- a/llvm/test/Transforms/Util/PredicateInfo/edge.ll
++++ b/llvm/test/Transforms/Util/PredicateInfo/edge.ll
+@@ -5,7 +5,7 @@ define i32 @f1(i32 %x) {
+ ; CHECK-LABEL: @f1(
+ ; CHECK-NEXT:  bb0:
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[X:%.*]], 0
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[BB2:%.*]], label [[BB1:%.*]]
+ ; CHECK:       bb1:
+ ; CHECK-NEXT:    br label [[BB2]]
+@@ -29,7 +29,7 @@ define i32 @f2(i32 %x) {
+ ; CHECK-LABEL: @f2(
+ ; CHECK-NEXT:  bb0:
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp ne i32 [[X:%.*]], 0
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[BB1:%.*]], label [[BB2:%.*]]
+ ; CHECK:       bb1:
+ ; CHECK-NEXT:    br label [[BB2]]
+@@ -52,7 +52,7 @@ bb2:
+ define i32 @f3(i32 %x) {
+ ; CHECK-LABEL: @f3(
+ ; CHECK-NEXT:  bb0:
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X:%.*]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X:%.*]])
+ ; CHECK-NEXT:    switch i32 [[X]], label [[BB1:%.*]] [
+ ; CHECK-NEXT:    i32 0, label [[BB2:%.*]]
+ ; CHECK-NEXT:    ]
+@@ -78,7 +78,7 @@ define double @fcmp_oeq_not_zero(double %x, double %y) {
+ ; CHECK-LABEL: @fcmp_oeq_not_zero(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[CMP:%.*]] = fcmp oeq double [[Y:%.*]], 2.000000e+00
+-; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.f64(double [[Y]])
++; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.{{.+}}(double [[Y]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[IF:%.*]], label [[RETURN:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    [[DIV:%.*]] = fdiv double [[X:%.*]], [[Y_0]]
+@@ -105,7 +105,7 @@ define double @fcmp_une_not_zero(double %x, double %y) {
+ ; CHECK-LABEL: @fcmp_une_not_zero(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[CMP:%.*]] = fcmp une double [[Y:%.*]], 2.000000e+00
+-; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.f64(double [[Y]])
++; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.{{.+}}(double [[Y]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[RETURN:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       else:
+ ; CHECK-NEXT:    [[DIV:%.*]] = fdiv double [[X:%.*]], [[Y_0]]
+@@ -132,7 +132,7 @@ define double @fcmp_oeq_zero(double %x, double %y) {
+ ; CHECK-LABEL: @fcmp_oeq_zero(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[CMP:%.*]] = fcmp oeq double [[Y:%.*]], 0.000000e+00
+-; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.f64(double [[Y]])
++; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.{{.+}}(double [[Y]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[IF:%.*]], label [[RETURN:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    [[DIV:%.*]] = fdiv double [[X:%.*]], [[Y_0]]
+@@ -159,7 +159,7 @@ define double @fcmp_une_zero(double %x, double %y) {
+ ; CHECK-LABEL: @fcmp_une_zero(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[CMP:%.*]] = fcmp une double [[Y:%.*]], -0.000000e+00
+-; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.f64(double [[Y]])
++; CHECK:         [[Y_0:%.*]] = call double @llvm.ssa.copy.{{.+}}(double [[Y]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[RETURN:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       else:
+ ; CHECK-NEXT:    [[DIV:%.*]] = fdiv double [[X:%.*]], [[Y_0]]
+@@ -188,7 +188,7 @@ define double @fcmp_oeq_maybe_zero(double %x, double %y, double %z1, double %z2)
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[Z:%.*]] = fadd double [[Z1:%.*]], [[Z2:%.*]]
+ ; CHECK-NEXT:    [[CMP:%.*]] = fcmp oeq double [[Y:%.*]], [[Z]]
+-; CHECK:         [[Z_0:%.*]] = call double @llvm.ssa.copy.f64(double [[Z]])
++; CHECK:         [[Z_0:%.*]] = call double @llvm.ssa.copy.{{.+}}(double [[Z]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[IF:%.*]], label [[RETURN:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    [[DIV:%.*]] = fdiv double [[X:%.*]], [[Z_0]]
+@@ -217,7 +217,7 @@ define double @fcmp_une_maybe_zero(double %x, double %y, double %z1, double %z2)
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[Z:%.*]] = fadd double [[Z1:%.*]], [[Z2:%.*]]
+ ; CHECK-NEXT:    [[CMP:%.*]] = fcmp une double [[Y:%.*]], [[Z]]
+-; CHECK:         [[Z_0:%.*]] = call double @llvm.ssa.copy.f64(double [[Z]])
++; CHECK:         [[Z_0:%.*]] = call double @llvm.ssa.copy.{{.+}}(double [[Z]])
+ ; CHECK-NEXT:    br i1 [[CMP]], label [[RETURN:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       else:
+ ; CHECK-NEXT:    [[DIV:%.*]] = fdiv double [[X:%.*]], [[Z_0]]
+diff --git a/llvm/test/Transforms/Util/PredicateInfo/testandor.ll b/llvm/test/Transforms/Util/PredicateInfo/testandor.ll
+index 9c765fe72b89..64ca2664e4f8 100644
+--- a/llvm/test/Transforms/Util/PredicateInfo/testandor.ll
++++ b/llvm/test/Transforms/Util/PredicateInfo/testandor.ll
+@@ -10,11 +10,11 @@ define void @test_or(i32 %x, i32 %y) {
+ ; CHECK-NEXT:    [[XZ:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[YZ:%.*]] = icmp eq i32 [[Y:%.*]], 0
+ ; CHECK-NEXT:    [[Z:%.*]] = or i1 [[XZ]], [[YZ]]
+-; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[Z]])
+-; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[XZ]])
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[YZ]])
+-; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
++; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[Z]])
++; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[XZ]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[YZ]])
++; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
+ ; CHECK-NEXT:    br i1 [[Z]], label [[ONEOF:%.*]], label [[NEITHER:%.*]]
+ ; CHECK:       oneof:
+ ; CHECK-NEXT:    call void @foo(i1 [[XZ]])
+@@ -55,11 +55,11 @@ define void @test_or_logical(i32 %x, i32 %y) {
+ ; CHECK-NEXT:    [[XZ:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[YZ:%.*]] = icmp eq i32 [[Y:%.*]], 0
+ ; CHECK-NEXT:    [[Z:%.*]] = select i1 [[XZ]], i1 true, i1 [[YZ]]
+-; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[Z]])
+-; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[XZ]])
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[YZ]])
+-; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
++; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[Z]])
++; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[XZ]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[YZ]])
++; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
+ ; CHECK-NEXT:    br i1 [[Z]], label [[ONEOF:%.*]], label [[NEITHER:%.*]]
+ ; CHECK:       oneof:
+ ; CHECK-NEXT:    call void @foo(i1 [[XZ]])
+@@ -100,11 +100,11 @@ define void @test_and(i32 %x, i32 %y) {
+ ; CHECK-NEXT:    [[XZ:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[YZ:%.*]] = icmp eq i32 [[Y:%.*]], 0
+ ; CHECK-NEXT:    [[Z:%.*]] = and i1 [[XZ]], [[YZ]]
+-; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[Z]])
+-; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[XZ]])
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[YZ]])
+-; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
++; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[Z]])
++; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[XZ]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[YZ]])
++; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
+ ; CHECK-NEXT:    br i1 [[Z]], label [[BOTH:%.*]], label [[NOPE:%.*]]
+ ; CHECK:       both:
+ ; CHECK-NEXT:    call void @foo(i1 [[XZ_0]])
+@@ -145,11 +145,11 @@ define void @test_and_logical(i32 %x, i32 %y) {
+ ; CHECK-NEXT:    [[XZ:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[YZ:%.*]] = icmp eq i32 [[Y:%.*]], 0
+ ; CHECK-NEXT:    [[Z:%.*]] = select i1 [[XZ]], i1 [[YZ]], i1 false
+-; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[Z]])
+-; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[XZ]])
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[YZ]])
+-; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
++; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[Z]])
++; CHECK:         [[XZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[XZ]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[YZ_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[YZ]])
++; CHECK:         [[Y_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
+ ; CHECK-NEXT:    br i1 [[Z]], label [[BOTH:%.*]], label [[NOPE:%.*]]
+ ; CHECK:       both:
+ ; CHECK-NEXT:    call void @foo(i1 [[XZ_0]])
+@@ -190,11 +190,11 @@ define void @testandsame(i32 %x, i32 %y) {
+ ; CHECK-NEXT:    [[XGT:%.*]] = icmp sgt i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[XLT:%.*]] = icmp slt i32 [[X]], 100
+ ; CHECK-NEXT:    [[Z:%.*]] = and i1 [[XGT]], [[XLT]]
+-; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[Z]])
+-; CHECK:         [[XGT_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[XGT]])
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[X_0_1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X_0]])
+-; CHECK:         [[XLT_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[XLT]])
++; CHECK:         [[Z_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[Z]])
++; CHECK:         [[XGT_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[XGT]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[X_0_1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X_0]])
++; CHECK:         [[XLT_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[XLT]])
+ ; CHECK-NEXT:    br i1 [[Z]], label [[BOTH:%.*]], label [[NOPE:%.*]]
+ ; CHECK:       both:
+ ; CHECK-NEXT:    call void @foo(i1 [[XGT_0]])
+@@ -229,16 +229,16 @@ define void @testandassume(i32 %x, i32 %y) {
+ ; CHECK-NEXT:    [[YZ:%.*]] = icmp eq i32 [[Y:%.*]], 0
+ ; CHECK-NEXT:    [[Z:%.*]] = and i1 [[XZ]], [[YZ]]
+ ; CHECK-NEXT:    call void @llvm.assume(i1 [[Z]])
+-; CHECK:         [[TMP1:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[Y]])
+-; CHECK:         [[TMP2:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[YZ]])
+-; CHECK:         [[TMP3:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
+-; CHECK:         [[TMP4:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[XZ]])
+-; CHECK:         [[TMP5:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[Z]])
+-; CHECK:         [[DOT0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[TMP5]])
+-; CHECK:         [[DOT01:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[TMP4]])
+-; CHECK:         [[DOT02:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[TMP3]])
+-; CHECK:         [[DOT03:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[TMP2]])
+-; CHECK:         [[DOT04:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[TMP1]])
++; CHECK:         [[TMP1:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[Y]])
++; CHECK:         [[TMP2:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[YZ]])
++; CHECK:         [[TMP3:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
++; CHECK:         [[TMP4:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[XZ]])
++; CHECK:         [[TMP5:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[Z]])
++; CHECK:         [[DOT0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[TMP5]])
++; CHECK:         [[DOT01:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[TMP4]])
++; CHECK:         [[DOT02:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[TMP3]])
++; CHECK:         [[DOT03:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[TMP2]])
++; CHECK:         [[DOT04:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[TMP1]])
+ ; CHECK-NEXT:    br i1 [[TMP5]], label [[BOTH:%.*]], label [[NOPE:%.*]]
+ ; CHECK:       both:
+ ; CHECK-NEXT:    call void @foo(i1 [[DOT01]])
+@@ -274,8 +274,8 @@ define void @testorassume(i32 %x, i32 %y) {
+ ; CHECK-NEXT:    [[YZ:%.*]] = icmp eq i32 [[Y:%.*]], 0
+ ; CHECK-NEXT:    [[Z:%.*]] = or i1 [[XZ]], [[YZ]]
+ ; CHECK-NEXT:    call void @llvm.assume(i1 [[Z]])
+-; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[Z]])
+-; CHECK:         [[DOT0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[TMP1]])
++; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[Z]])
++; CHECK:         [[DOT0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[TMP1]])
+ ; CHECK-NEXT:    br i1 [[TMP1]], label [[BOTH:%.*]], label [[NOPE:%.*]]
+ ; CHECK:       both:
+ ; CHECK-NEXT:    call void @foo(i1 [[XZ]])
+@@ -307,11 +307,11 @@ define void @test_and_one_unknown_cond(i32 %x, i1 %c1) {
+ ; CHECK-LABEL: @test_and_one_unknown_cond(
+ ; CHECK-NEXT:    [[C2:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[A:%.*]] = and i1 [[C1:%.*]], [[C2]]
+-; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A]])
+-; CHECK:         [[A_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A]])
+-; CHECK:         [[C1_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C1]])
+-; CHECK:         [[C2_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C2]])
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
++; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A]])
++; CHECK:         [[A_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A]])
++; CHECK:         [[C1_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C1]])
++; CHECK:         [[C2_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C2]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
+ ; CHECK-NEXT:    br i1 [[A]], label [[BOTH:%.*]], label [[NOPE:%.*]]
+ ; CHECK:       both:
+ ; CHECK-NEXT:    call void @bar(i32 [[X_0]])
+@@ -349,11 +349,11 @@ define void @test_or_one_unknown_cond(i32 %x, i1 %c1) {
+ ; CHECK-LABEL: @test_or_one_unknown_cond(
+ ; CHECK-NEXT:    [[C2:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[A:%.*]] = or i1 [[C1:%.*]], [[C2]]
+-; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A]])
+-; CHECK:         [[A_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A]])
+-; CHECK:         [[C1_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C1]])
+-; CHECK:         [[C2_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C2]])
+-; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.i32(i32 [[X]])
++; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A]])
++; CHECK:         [[A_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A]])
++; CHECK:         [[C1_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C1]])
++; CHECK:         [[C2_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C2]])
++; CHECK:         [[X_0:%.*]] = call i32 @llvm.ssa.copy.{{.+}}(i32 [[X]])
+ ; CHECK-NEXT:    br i1 [[A]], label [[NOPE:%.*]], label [[BOTH_INVERTED:%.*]]
+ ; CHECK:       both_inverted:
+ ; CHECK-NEXT:    call void @bar(i32 [[X_0]])
+@@ -391,12 +391,12 @@ define void @test_and_chain(i1 %a, i1 %b, i1 %c) {
+ ; CHECK-LABEL: @test_and_chain(
+ ; CHECK-NEXT:    [[AND1:%.*]] = and i1 [[A:%.*]], [[B:%.*]]
+ ; CHECK-NEXT:    [[AND2:%.*]] = and i1 [[AND1]], [[C:%.*]]
+-; CHECK:         [[AND2_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[AND2]])
+-; CHECK:         [[AND2_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[AND2]])
+-; CHECK:         [[AND1_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[AND1]])
+-; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A]])
+-; CHECK:         [[B_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[B]])
+-; CHECK:         [[C_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C]])
++; CHECK:         [[AND2_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[AND2]])
++; CHECK:         [[AND2_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[AND2]])
++; CHECK:         [[AND1_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[AND1]])
++; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A]])
++; CHECK:         [[B_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[B]])
++; CHECK:         [[C_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C]])
+ ; CHECK-NEXT:    br i1 [[AND2]], label [[IF:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    call void @foo(i1 [[A_0]])
+@@ -438,12 +438,12 @@ define void @test_or_chain(i1 %a, i1 %b, i1 %c) {
+ ; CHECK-LABEL: @test_or_chain(
+ ; CHECK-NEXT:    [[OR1:%.*]] = or i1 [[A:%.*]], [[B:%.*]]
+ ; CHECK-NEXT:    [[OR2:%.*]] = or i1 [[OR1]], [[C:%.*]]
+-; CHECK:         [[OR2_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[OR2]])
+-; CHECK:         [[OR2_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[OR2]])
+-; CHECK:         [[OR1_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[OR1]])
+-; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A]])
+-; CHECK:         [[B_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[B]])
+-; CHECK:         [[C_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C]])
++; CHECK:         [[OR2_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[OR2]])
++; CHECK:         [[OR2_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[OR2]])
++; CHECK:         [[OR1_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[OR1]])
++; CHECK:         [[A_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A]])
++; CHECK:         [[B_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[B]])
++; CHECK:         [[C_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C]])
+ ; CHECK-NEXT:    br i1 [[OR2]], label [[IF:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    call void @foo(i1 [[A]])
+@@ -485,10 +485,10 @@ define void @test_and_or_mixed(i1 %a, i1 %b, i1 %c) {
+ ; CHECK-LABEL: @test_and_or_mixed(
+ ; CHECK-NEXT:    [[OR:%.*]] = or i1 [[A:%.*]], [[B:%.*]]
+ ; CHECK-NEXT:    [[AND:%.*]] = and i1 [[OR]], [[C:%.*]]
+-; CHECK:         [[AND_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[AND]])
+-; CHECK:         [[AND_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[AND]])
+-; CHECK:         [[OR_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[OR]])
+-; CHECK:         [[C_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C]])
++; CHECK:         [[AND_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[AND]])
++; CHECK:         [[AND_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[AND]])
++; CHECK:         [[OR_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[OR]])
++; CHECK:         [[C_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C]])
+ ; CHECK-NEXT:    br i1 [[AND]], label [[IF:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    call void @foo(i1 [[A]])
+@@ -542,15 +542,15 @@ define void @test_deep_and_chain(i1 %a1) {
+ ; CHECK-NEXT:    [[A13:%.*]] = and i1 [[A12]], true
+ ; CHECK-NEXT:    [[A14:%.*]] = and i1 [[A13]], true
+ ; CHECK-NEXT:    [[A15:%.*]] = and i1 [[A14]], true
+-; CHECK:         [[A15_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A15]])
+-; CHECK:         [[A15_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A15]])
+-; CHECK:         [[A14_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A14]])
+-; CHECK:         [[A13_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A13]])
+-; CHECK:         [[A12_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A12]])
+-; CHECK:         [[A11_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A11]])
+-; CHECK:         [[A10_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A10]])
+-; CHECK:         [[A9_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A9]])
+-; CHECK:         [[A8_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A8]])
++; CHECK:         [[A15_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A15]])
++; CHECK:         [[A15_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A15]])
++; CHECK:         [[A14_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A14]])
++; CHECK:         [[A13_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A13]])
++; CHECK:         [[A12_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A12]])
++; CHECK:         [[A11_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A11]])
++; CHECK:         [[A10_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A10]])
++; CHECK:         [[A9_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A9]])
++; CHECK:         [[A8_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A8]])
+ ; CHECK-NEXT:    br i1 [[A15]], label [[IF:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    call void @foo(i1 [[A1]])
+@@ -656,15 +656,15 @@ define void @test_deep_and_tree(i1 %a1) {
+ ; CHECK-NEXT:    [[A13:%.*]] = and i1 [[A12]], [[A12]]
+ ; CHECK-NEXT:    [[A14:%.*]] = and i1 [[A13]], [[A13]]
+ ; CHECK-NEXT:    [[A15:%.*]] = and i1 [[A14]], [[A14]]
+-; CHECK:         [[A15_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A15]])
+-; CHECK:         [[A15_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A15]])
+-; CHECK:         [[A14_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A14]])
+-; CHECK:         [[A13_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A13]])
+-; CHECK:         [[A12_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A12]])
+-; CHECK:         [[A11_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A11]])
+-; CHECK:         [[A10_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A10]])
+-; CHECK:         [[A9_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A9]])
+-; CHECK:         [[A8_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A8]])
++; CHECK:         [[A15_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A15]])
++; CHECK:         [[A15_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A15]])
++; CHECK:         [[A14_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A14]])
++; CHECK:         [[A13_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A13]])
++; CHECK:         [[A12_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A12]])
++; CHECK:         [[A11_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A11]])
++; CHECK:         [[A10_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A10]])
++; CHECK:         [[A9_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A9]])
++; CHECK:         [[A8_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A8]])
+ ; CHECK-NEXT:    br i1 [[A15]], label [[IF:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    call void @foo(i1 [[A1]])
+@@ -770,15 +770,15 @@ define void @test_deep_or_tree(i1 %a1) {
+ ; CHECK-NEXT:    [[A13:%.*]] = or i1 [[A12]], [[A12]]
+ ; CHECK-NEXT:    [[A14:%.*]] = or i1 [[A13]], [[A13]]
+ ; CHECK-NEXT:    [[A15:%.*]] = or i1 [[A14]], [[A14]]
+-; CHECK:         [[A15_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A15]])
+-; CHECK:         [[A15_1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A15]])
+-; CHECK:         [[A14_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A14]])
+-; CHECK:         [[A13_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A13]])
+-; CHECK:         [[A12_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A12]])
+-; CHECK:         [[A11_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A11]])
+-; CHECK:         [[A10_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A10]])
+-; CHECK:         [[A9_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A9]])
+-; CHECK:         [[A8_0:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A8]])
++; CHECK:         [[A15_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A15]])
++; CHECK:         [[A15_1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A15]])
++; CHECK:         [[A14_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A14]])
++; CHECK:         [[A13_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A13]])
++; CHECK:         [[A12_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A12]])
++; CHECK:         [[A11_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A11]])
++; CHECK:         [[A10_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A10]])
++; CHECK:         [[A9_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A9]])
++; CHECK:         [[A8_0:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A8]])
+ ; CHECK-NEXT:    br i1 [[A15]], label [[IF:%.*]], label [[ELSE:%.*]]
+ ; CHECK:       if:
+ ; CHECK-NEXT:    call void @foo(i1 [[A1]])
+@@ -873,11 +873,11 @@ define void @test_assume_and_chain(i1 %a, i1 %b, i1 %c) {
+ ; CHECK-NEXT:    [[AND1:%.*]] = and i1 [[A:%.*]], [[B:%.*]]
+ ; CHECK-NEXT:    [[AND2:%.*]] = and i1 [[AND1]], [[C:%.*]]
+ ; CHECK-NEXT:    call void @llvm.assume(i1 [[AND2]])
+-; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[C]])
+-; CHECK:         [[TMP2:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[B]])
+-; CHECK:         [[TMP3:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A]])
+-; CHECK:         [[TMP4:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[AND1]])
+-; CHECK:         [[TMP5:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[AND2]])
++; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[C]])
++; CHECK:         [[TMP2:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[B]])
++; CHECK:         [[TMP3:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A]])
++; CHECK:         [[TMP4:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[AND1]])
++; CHECK:         [[TMP5:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[AND2]])
+ ; CHECK-NEXT:    call void @foo(i1 [[TMP3]])
+ ; CHECK-NEXT:    call void @foo(i1 [[TMP2]])
+ ; CHECK-NEXT:    call void @foo(i1 [[TMP1]])
+@@ -901,7 +901,7 @@ define void @test_assume_or_chain(i1 %a, i1 %b, i1 %c) {
+ ; CHECK-NEXT:    [[OR1:%.*]] = or i1 [[A:%.*]], [[B:%.*]]
+ ; CHECK-NEXT:    [[OR2:%.*]] = or i1 [[OR1]], [[C:%.*]]
+ ; CHECK-NEXT:    call void @llvm.assume(i1 [[OR2]])
+-; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[OR2]])
++; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[OR2]])
+ ; CHECK-NEXT:    call void @foo(i1 [[A]])
+ ; CHECK-NEXT:    call void @foo(i1 [[B]])
+ ; CHECK-NEXT:    call void @foo(i1 [[C]])
+@@ -937,14 +937,14 @@ define void @test_assume_deep_and_tree(i1 %a1) {
+ ; CHECK-NEXT:    [[A14:%.*]] = and i1 [[A13]], [[A13]]
+ ; CHECK-NEXT:    [[A15:%.*]] = and i1 [[A14]], [[A14]]
+ ; CHECK-NEXT:    call void @llvm.assume(i1 [[A15]])
+-; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A8]])
+-; CHECK:         [[TMP2:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A9]])
+-; CHECK:         [[TMP3:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A10]])
+-; CHECK:         [[TMP4:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A11]])
+-; CHECK:         [[TMP5:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A12]])
+-; CHECK:         [[TMP6:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A13]])
+-; CHECK:         [[TMP7:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A14]])
+-; CHECK:         [[TMP8:%.*]] = call i1 @llvm.ssa.copy.i1(i1 [[A15]])
++; CHECK:         [[TMP1:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A8]])
++; CHECK:         [[TMP2:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A9]])
++; CHECK:         [[TMP3:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A10]])
++; CHECK:         [[TMP4:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A11]])
++; CHECK:         [[TMP5:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A12]])
++; CHECK:         [[TMP6:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A13]])
++; CHECK:         [[TMP7:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A14]])
++; CHECK:         [[TMP8:%.*]] = call i1 @llvm.ssa.copy.{{.+}}(i1 [[A15]])
+ ; CHECK-NEXT:    call void @foo(i1 [[A1]])
+ ; CHECK-NEXT:    call void @foo(i1 [[A2]])
+ ; CHECK-NEXT:    call void @foo(i1 [[A3]])
+diff --git a/llvm/test/Transforms/Util/PredicateInfo/unnamed-types.ll b/llvm/test/Transforms/Util/PredicateInfo/unnamed-types.ll
+index 13575e7caa66..d1e0f358fc9f 100644
+--- a/llvm/test/Transforms/Util/PredicateInfo/unnamed-types.ll
++++ b/llvm/test/Transforms/Util/PredicateInfo/unnamed-types.ll
+@@ -8,12 +8,12 @@
+ ; CHECK-LABEL: bb:
+ ; CHECK: Has predicate info
+ ; CHECK: branch predicate info { TrueEdge: 1 Comparison:  %cmp1 = icmp ne %0* %arg, null Edge: [label %bb,label %bb1], RenamedOp: %arg }
+-; CHECK-NEXT:  %arg.0 = call %0* @llvm.ssa.copy.p0s_s.{{.+}}(%0* %arg)
++; CHECK-NEXT:  %arg.0 = call %0* @llvm.ssa.copy.{{.+}}(%0* %arg)
+ 
+ ; CHECK-LABEL: bb1:
+ ; CHECK: Has predicate info
+ ; CHECK-NEXT: branch predicate info { TrueEdge: 0 Comparison:  %cmp2 = icmp ne %1* null, %tmp Edge: [label %bb1,label %bb3], RenamedOp: %tmp }
+-; CHECK-NEXT: %tmp.0 = call %1* @llvm.ssa.copy.p0s_s.{{.+}}(%1* %tmp)
++; CHECK-NEXT: %tmp.0 = call %1* @llvm.ssa.copy.{{.+}}(%1* %tmp)
+ 
+ define void @f0(%0* %arg, %1* %tmp) {
+ bb:

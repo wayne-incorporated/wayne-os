@@ -1,0 +1,76 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This file lists out the seccomp policy for allowed syscalls on midis.
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+access: 1
+faccessat: 1
+faccessat2: 1
+brk: 1
+clock_getres: 1
+clock_gettime: 1
+close: 1
+connect: 1
+epoll_create1: 1
+epoll_ctl: 1
+epoll_wait: 1
+eventfd2: 1
+exit_group: 1
+fcntl: 1
+fstat: 1
+futex: 1
+getdents: 1
+getdents64: 1
+getegid: 1
+geteuid: 1
+getgid: 1
+getpid: 1
+getrandom: 1
+getresgid: 1
+getresuid: 1
+getsockname: 1
+gettid: 1
+gettimeofday: 1
+getuid: 1
+# Allow the following ALSA sequencer IOCTLs:
+# - TCGETS
+# - SNDRV_SEQ_IOCTL_PVERSION
+# - SNDRV_SEQ_IOCTL_CLIENT_ID
+# - SNDRV_SEQ_IOCTL_RUNNING_MODE
+# - SNDRV_SEQ_IOCTL_GET_CLIENT_INFO
+# - SNDRV_SEQ_IOCTL_SET_CLIENT_INFO
+# - SNDRV_SEQ_IOCTL_CREATE_PORT
+# - SNDRV_SEQ_IOCTL_SUBSCRIBE_PORT
+# - SNDRV_SEQ_IOCTL_QUERY_NEXT_PORT
+# - SNDRV_SEQ_IOCTL_UNSUBSCRIBE_PORT
+# - SNDRV_SEQ_IOCTL_DELETE_PORT
+# - SNDRV_SEQ_IOCTL_QUERY_NEXT_CLIENT
+ioctl: arg1 == 0x5401 || arg1 == 0x80045300 || arg1 == 0x80045301 || arg1 == 0xc0105303 || arg1 == 0xc0bc5310 || arg1 == 0x40bc5311 || arg1 == 0xc0a85320 || arg1 == 0x40505330 || arg1 == 0xc0a85352 || arg1 == 0x40505331 || arg1 == 0x40a85321 || arg1 == 0xc0bc5351
+lseek: 1
+memfd_create: 1
+# mmap should only be allowed in READ mode.
+mmap: arg2 in 0xfffffffb || arg2 in 0xfffffffd
+# mprotect should only be allowed in READ mode.
+mprotect: arg2 in 0xfffffffb || arg2 in 0xfffffffd
+munmap: 1
+newfstatat: 1
+open: 1
+openat: 1
+pipe2: 1
+poll: 1
+process_vm_readv: 1
+read: 1
+recvmsg: 1
+rt_sigprocmask: 1
+sendmsg: 1
+sendto: 1
+# Allow socket(domain == AF_UNIX)
+socket: arg0 == 0x1
+socketpair: 1
+stat: 1
+uname: 1
+write: 1
+fstatfs: 1

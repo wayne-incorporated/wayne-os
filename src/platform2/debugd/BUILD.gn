@@ -1,0 +1,429 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":audit_log_filter",
+    ":bt_usb_disconnect_helper",
+    ":capture_packets",
+    ":cups_uri_helper",
+    ":debugd",
+    ":debugd-adaptors",
+    ":debugd_dbus_utils",
+    ":dev_features_chrome_remote_debugging",
+    ":dev_features_password",
+    ":dev_features_rootfs_verification",
+    ":dev_features_ssh",
+    ":dev_features_usb_boot",
+    ":external-proto",
+    ":folder_size_dump",
+    ":generate_logs",
+    ":icmp",
+    ":libdebugd",
+    ":modetest_helper",
+    ":netif",
+    ":network_status",
+    ":scheduler_configuration_helper",
+    ":typec_connector_class_helper",
+    ":usb4_devinfo_helper",
+  ]
+  if (use.test) {
+    deps += [ ":debugd_testrunner" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":debugd_cups_uri_helper_utils_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  defines = [
+    "USE_CELLULAR=${use.cellular}",
+    "USE_IWLWIFI_DUMP=${use.iwlwifi_dump}",
+    "USE_TPM=${use.tpm}",
+    "USE_ARCVM=${use.arcvm}",
+  ]
+
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+    "liblzma",
+    "libmetrics",
+    "libminijail",
+    "libuser_data_auth-client",
+    "vboot_host",
+  ]
+}
+
+proto_library("external-proto") {
+  proto_in_dir = "${sysroot}/usr/include/chromeos/dbus/cryptohome"
+  proto_out_dir = "include"
+  sources = [
+    "${proto_in_dir}/key.proto",
+    "${proto_in_dir}/rpc.proto",
+  ]
+}
+
+generate_dbus_adaptors("debugd-adaptors") {
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/debugd/dbus_adaptors"
+  sources = [ "dbus_bindings/org.chromium.debugd.xml" ]
+}
+
+pkg_config("libdebugd_dependent_config") {
+  # NOSORT
+  pkg_deps = [
+    "libshill-client",
+    "libuser_data_auth-client",
+
+    # system_api depends on protobuf. It must appear before protobuf here so the
+    # linker flags are in the right order.
+    "system_api",
+    "protobuf",
+  ]
+}
+
+static_library("libdebugd") {
+  sources = [
+    "src/battery_tool.cc",
+    "src/bluetooth_utils.cc",
+    "src/constants.cc",
+    "src/container_tool.cc",
+    "src/crash_sender_tool.cc",
+    "src/cros_healthd_tool.cc",
+    "src/cups_tool.cc",
+    "src/debug_logs_tool.cc",
+    "src/debug_mode_tool.cc",
+    "src/debugd_dbus_adaptor.cc",
+    "src/dev_features_tool.cc",
+    "src/dev_mode_no_owner_restriction.cc",
+    "src/dmesg_tool.cc",
+    "src/drm_trace_tool.cc",
+    "src/ec_typec_tool.cc",
+    "src/ectool_util.cc",
+    "src/example_tool.cc",
+    "src/helper_utils.cc",
+    "src/icmp_tool.cc",
+    "src/ipaddrs_tool.cc",
+    "src/kernel_feature_tool.cc",
+    "src/log_tool.cc",
+    "src/lp_tools.cc",
+    "src/memory_tool.cc",
+    "src/metrics.cc",
+    "src/netif_tool.cc",
+    "src/network_status_tool.cc",
+    "src/oom_adj_tool.cc",
+    "src/packet_capture_tool.cc",
+    "src/perf_tool.cc",
+    "src/perfetto_tool.cc",
+    "src/ping_tool.cc",
+    "src/printscan_tool.cc",
+    "src/probe_tool.cc",
+    "src/process_with_id.cc",
+    "src/process_with_output.cc",
+    "src/route_tool.cc",
+    "src/sandboxed_process.cc",
+    "src/scheduler_configuration_tool.cc",
+    "src/session_manager_proxy.cc",
+    "src/shill_scripts_tool.cc",
+    "src/simple_service_tool.cc",
+    "src/storage_tool.cc",
+    "src/subprocess_tool.cc",
+    "src/swap_tool.cc",
+    "src/sysrq_tool.cc",
+    "src/systrace_tool.cc",
+    "src/tracepath_tool.cc",
+    "src/u2f_tool.cc",
+    "src/upstart_tools.cc",
+    "src/variant_utils.cc",
+    "src/verify_ro_tool.cc",
+    "src/wifi_fw_dump_tool.cc",
+    "src/wifi_power_tool.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  all_dependent_configs = [ ":libdebugd_dependent_config" ]
+  libs = [
+    "policy",
+    "rootdev",
+  ]
+  deps = [
+    ":debugd-adaptors",
+    ":external-proto",
+    ":scheduler_configuration_utils",
+  ]
+}
+
+static_library("debugd_dbus_utils") {
+  sources = [
+    "src/helpers/shill_proxy.cc",
+    "src/helpers/system_service_proxy.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+static_library("scheduler_configuration_utils") {
+  sources = [ "src/helpers/scheduler_configuration_utils.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+pkg_config("debugd_config") {
+  pkg_deps = [ "protobuf" ]
+}
+
+install_config("debugd_share_config") {
+  sources = [ "share/perfetto_feedback_config.textproto" ]
+  install_path = "/usr/share/debugd"
+}
+
+executable("debugd") {
+  sources = [ "src/main.cc" ]
+  configs += [
+    ":debugd_config",
+    ":target_defaults",
+  ]
+  deps = [
+    ":debugd_share_config",
+    ":libdebugd",
+  ]
+}
+
+pkg_config("capture_packets_config") {
+  pkg_deps = [ "libcap" ]
+}
+
+executable("capture_packets") {
+  sources = [ "src/helpers/capture_packets.cc" ]
+  configs += [
+    ":capture_packets_config",
+    ":target_defaults",
+  ]
+  libs = [ "pcap" ]
+}
+
+executable("cups_uri_helper") {
+  sources = [
+    "src/helpers/cups_uri_helper.cc",
+    "src/helpers/cups_uri_helper_utils.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("dev_features_chrome_remote_debugging") {
+  sources = [ "src/helpers/dev_features_chrome_remote_debugging.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libdebugd" ]
+}
+
+executable("dev_features_password") {
+  sources = [
+    "src/helpers/dev_features_password.cc",
+    "src/helpers/dev_features_password_utils.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libdebugd" ]
+}
+
+executable("dev_features_rootfs_verification") {
+  sources = [ "src/helpers/dev_features_rootfs_verification.cc" ]
+  configs += [ ":target_defaults" ]
+  libs = [ "rootdev" ]
+  deps = [ ":libdebugd" ]
+}
+
+executable("dev_features_ssh") {
+  sources = [ "src/helpers/dev_features_ssh.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libdebugd" ]
+}
+
+pkg_config("dev_features_usb_boot_config") {
+  pkg_deps = [ "vboot_host" ]
+}
+
+executable("dev_features_usb_boot") {
+  sources = [ "src/helpers/dev_features_usb_boot.cc" ]
+  configs += [
+    ":dev_features_usb_boot_config",
+    ":target_defaults",
+  ]
+  deps = [ ":libdebugd" ]
+}
+
+pkg_config("audit_log_utils_config") {
+  pkg_deps = [ "re2" ]
+}
+
+executable("audit_log_filter") {
+  sources = [
+    "src/helpers/audit_log_filter.cc",
+    "src/helpers/audit_log_utils.cc",
+  ]
+  configs += [
+    ":target_defaults",
+    ":audit_log_utils_config",
+  ]
+  deps = [ ":libdebugd" ]
+}
+
+pkg_config("folder_size_dump_config") {
+  pkg_deps = [ "re2" ]
+}
+
+executable("folder_size_dump") {
+  sources = [ "src/helpers/folder_size_dump.cc" ]
+  configs += [
+    ":target_defaults",
+    ":folder_size_dump_config",
+  ]
+}
+
+executable("generate_logs") {
+  sources = [ "tools/generate_logs.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("icmp") {
+  sources = [ "src/helpers/icmp.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("modetest_helper") {
+  sources = [
+    "src/helpers/modetest_helper.cc",
+    "src/helpers/modetest_helper_utils.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  pkg_deps = [ "re2" ]
+}
+
+executable("netif") {
+  sources = [ "src/helpers/netif.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":debugd_dbus_utils" ]
+}
+
+executable("network_status") {
+  sources = [ "src/helpers/network_status.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":debugd_dbus_utils" ]
+}
+
+executable("scheduler_configuration_helper") {
+  sources = [
+    "src/helpers/scheduler_configuration_helper.cc",
+    "src/helpers/scheduler_configuration_utils.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+pkg_config("usb4_devinfo_helper_config") {
+  pkg_deps = [ "re2" ]
+}
+
+executable("usb4_devinfo_helper") {
+  sources = [ "src/helpers/usb4_devinfo_helper.cc" ]
+  configs += [
+    ":target_defaults",
+    ":usb4_devinfo_helper_config",
+  ]
+}
+
+pkg_config("typec_connector_class_helper_config") {
+  pkg_deps = [ "re2" ]
+}
+
+executable("typec_connector_class_helper") {
+  sources = [
+    "src/helpers/typec_connector_class_helper.cc",
+    "src/helpers/typec_connector_class_helper_utils.cc",
+  ]
+  configs += [
+    ":target_defaults",
+    ":typec_connector_class_helper_config",
+  ]
+}
+
+pkg_config("bt_usb_disconnect_helper_config") {
+  pkg_deps = [ "re2" ]
+}
+
+executable("bt_usb_disconnect_helper") {
+  sources = [ "src/helpers/bt_usb_disconnect_helper.cc" ]
+  configs += [
+    ":target_defaults",
+    ":bt_usb_disconnect_helper_config",
+  ]
+}
+
+if (use.test) {
+  pkg_config("debugd_testrunner_config") {
+    pkg_deps = [
+      "libchrome-test",
+      "protobuf",
+      "re2",
+    ]
+  }
+
+  executable("debugd_testrunner") {
+    sources = [
+      "src/crash_sender_tool_test.cc",
+      "src/cups_tool_test.cc",
+      "src/dev_mode_no_owner_restriction_test.cc",
+      "src/dmesg_tool_test.cc",
+      "src/drm_trace_tool_test.cc",
+      "src/ec_typec_tool_test.cc",
+      "src/helper_utils_test.cc",
+      "src/helpers/audit_log_utils.cc",
+      "src/helpers/audit_log_utils_test.cc",
+      "src/helpers/cups_uri_helper_test.cc",
+      "src/helpers/cups_uri_helper_utils.cc",
+      "src/helpers/dev_features_password_utils.cc",
+      "src/helpers/dev_features_password_utils_test.cc",
+      "src/helpers/modetest_helper_utils.cc",
+      "src/helpers/modetest_helper_utils_test.cc",
+      "src/helpers/scheduler_configuration_utils_test.cc",
+      "src/helpers/typec_connector_class_helper_test.cc",
+      "src/helpers/typec_connector_class_helper_utils.cc",
+      "src/log_tool_doc_test.cc",
+      "src/log_tool_test.cc",
+      "src/metrics_test.cc",
+      "src/perf_tool_test.cc",
+      "src/printscan_tool_test.cc",
+      "src/probe_tool_test.cc",
+      "src/process_with_id_test.cc",
+      "src/storage_tool_test.cc",
+      "src/subprocess_tool_test.cc",
+      "src/upstart_tools_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":debugd_testrunner_config",
+      ":target_defaults",
+    ]
+    libs = [ "m" ]
+    deps = [
+      ":debugd_dbus_utils",
+      ":libdebugd",
+      ":scheduler_configuration_utils",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("debugd_cups_uri_helper_utils_fuzzer") {
+    sources = [
+      "src/helpers/cups_uri_helper_utils.cc",
+      "src/helpers/cups_uri_helper_utils_fuzzer.cc",
+    ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+  }
+}

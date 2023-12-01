@@ -1,17 +1,18 @@
 #!/bin/bash
-# Copyright 2014 The Chromium OS Authors. All rights reserved.
+# Copyright 2014 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 generate_licensing()
 {
-  local PKG="${CATEGORY}/${PF}"
+  local PKG="${CATEGORY:-}/${PF:-}"
 
   # This expands to something like
   # /build/x86-alex/tmp/portage/dev-util/libc-bench-0.0.1-r6
   # Run FEATURES='noclean' emerge-x86-alex libc-bench to prevent having the
   # directory cleaned up if you are debugging.
-  einfo "Generating license for ${PKG} in ${PORTAGE_BUILDDIR}"
+  einfo "Generating license for ${PKG} in ${PORTAGE_BUILDDIR:-}"
+  python3.8 \
   /mnt/host/source/chromite/licensing/ebuild_license_hook \
       --builddir "${PORTAGE_BUILDDIR}" || die "
 Failed Generating Licensing for ${PKG}

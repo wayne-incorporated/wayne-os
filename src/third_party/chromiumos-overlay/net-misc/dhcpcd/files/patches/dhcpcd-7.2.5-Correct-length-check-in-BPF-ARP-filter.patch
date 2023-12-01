@@ -1,0 +1,28 @@
+From bea500f6f6296234deac0ed6d6af8b1a1c006484 Mon Sep 17 00:00:00 2001
+From: Andrzej Ostruszka <amo@semihalf.com>
+Date: Thu, 4 Nov 2021 09:53:08 +0000
+Subject: [PATCH 2/3] Correct length check in BPF ARP filter
+
+The packet length should be compared against both Ethernet header
+(struct ether_header) and ARP packet (struct ether_arp).
+---
+ src/bpf.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/bpf.c b/src/bpf.c
+index 0e9277d0..ea08c846 100644
+--- a/src/bpf.c
++++ b/src/bpf.c
+@@ -395,7 +395,8 @@ bpf_cmp_hwaddr(struct bpf_insn *bpf, size_t bpf_len, size_t off,
+ static const struct bpf_insn bpf_arp_ether [] = {
+ 	/* Ensure packet is at least correct size. */
+ 	BPF_STMT(BPF_LD + BPF_W + BPF_LEN, 0),
+-	BPF_JUMP(BPF_JMP + BPF_JGE + BPF_K, sizeof(struct ether_arp), 1, 0),
++	BPF_JUMP(BPF_JMP + BPF_JGE + BPF_K,
++		 sizeof(struct ether_header) + sizeof(struct ether_arp), 1, 0),
+ 	BPF_STMT(BPF_RET + BPF_K, 0),
+ 
+ 	/* Check this is an ARP packet. */
+-- 
+2.34.0.rc0.344.g81b53c2807-goog
+

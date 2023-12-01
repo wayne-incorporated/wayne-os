@@ -1,0 +1,78 @@
+commit b270fd59f0a86fe737853abc43e76b9d29a67eea
+Author: George Burgess IV <george.burgess.iv@gmail.com>
+Date:   Wed Jan 20 10:56:21 2021 -0800
+
+    Revert "[clang] Change builtin object size when subobject is invalid"
+    
+    This reverts commit 275f30df8ad6de75e1f29e4b33eaeb67686caf0d.
+    
+    As noted on the code review (https://reviews.llvm.org/D92892), this
+    change causes us to reject valid code in a few cases. Reverting so we
+    have more time to figure out what the right fix{es are, is} here.
+
+diff --git a/clang/lib/AST/ExprConstant.cpp b/clang/lib/AST/ExprConstant.cpp
+index b153e22259f7..56181bbe1166 100644
+--- a/clang/lib/AST/ExprConstant.cpp
++++ b/clang/lib/AST/ExprConstant.cpp
+@@ -11408,9 +11408,9 @@ static bool tryEvaluateBuiltinObjectSize(const Expr *E, unsigned Type,
+       return false;
+   }
+ 
+-  // If we point outside of the object, there are no accessible bytes.
+-  if (LVal.getLValueOffset().isNegative() ||
+-      ((Type & 1) && !LVal.Designator.isValidSubobject())) {
++  // If we point to before the start of the object, there are no accessible
++  // bytes.
++  if (LVal.getLValueOffset().isNegative()) {
+     Size = 0;
+     return true;
+   }
+diff --git a/clang/test/CodeGen/object-size.c b/clang/test/CodeGen/object-size.c
+index dbf286138454..ff54b11a0f04 100644
+--- a/clang/test/CodeGen/object-size.c
++++ b/clang/test/CodeGen/object-size.c
+@@ -310,7 +310,7 @@ void test24() {
+ void test25() {
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* {{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN((void*)0x1000, 0);
+-  // CHECK: store i32 0
++  // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* {{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN((void*)0x1000, 1);
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* {{.*}}, i1 true, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN((void*)0x1000, 2);
+@@ -321,7 +321,7 @@ void test25() {
+ 
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* {{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN((void*)0 + 0x1000, 0);
+-  // CHECK: store i32 0
++  // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* {{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN((void*)0 + 0x1000, 1);
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* {{.*}}, i1 true, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN((void*)0 + 0x1000, 2);
+@@ -337,7 +337,7 @@ void test26() {
+ 
+   // CHECK: store i32 316
+   gi = OBJECT_SIZE_BUILTIN(&t[1].v[11], 0);
+-  // CHECK: store i32 0
++  // CHECK: store i32 312
+   gi = OBJECT_SIZE_BUILTIN(&t[1].v[12], 1);
+   // CHECK: store i32 308
+   gi = OBJECT_SIZE_BUILTIN(&t[1].v[13], 2);
+@@ -433,7 +433,7 @@ void test29(struct DynStructVar *dv, struct DynStruct0 *d0,
+ 
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* %{{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN(d0->snd, 0);
+-  // CHECK: store i32 0
++  // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* %{{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN(d0->snd, 1);
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* %{{.*}}, i1 true, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN(d0->snd, 2);
+@@ -518,7 +518,7 @@ void test31() {
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* %{{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN(&ds1[9].snd[0], 1);
+ 
+-  // CHECK: store i32 0
++  // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* %{{.*}}, i1 false, i1 true, i1
+   gi = OBJECT_SIZE_BUILTIN(&ds0[9].snd[0], 1);
+ 
+   // CHECK: call i64 @llvm.objectsize.i64.p0i8(i8* %{{.*}}, i1 false, i1 true, i1

@@ -1,0 +1,1 @@
+autotest-capability-chipset-mt8195-1.0.1.ebuild

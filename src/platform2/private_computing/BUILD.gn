@@ -1,0 +1,99 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":dbus_adaptors_generator",
+    ":install_init",
+    ":install_minijail_conf",
+    ":install_service",
+    ":install_systemd",
+    ":private_computingd",
+  ]
+  if (use.test) {
+    deps += [ ":private_computing_test" ]
+  }
+}
+
+# D-Bus code generator.
+generate_dbus_adaptors("dbus_adaptors_generator") {
+  sources = [ "dbus_bindings/org.chromium.PrivateComputing.xml" ]
+  dbus_adaptors_out_dir = "include/private_computing"
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+    "protobuf-lite",
+    "system_api",
+  ]
+}
+
+static_library("private_computing_lib") {
+  sources = [
+    "private_computing_adaptor.cc",
+    "private_computing_adaptor.h",
+    "private_computing_daemon.cc",
+    "private_computing_daemon.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":dbus_adaptors_generator" ]
+}
+
+executable("private_computingd") {
+  sources = [ "private_computing.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":private_computing_lib" ]
+}
+
+install_config("install_init") {
+  sources = [ "init/private_computing.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "minijail/private_computing.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_systemd") {
+  sources = [ "dbus/org.chromium.PrivateComputing.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_service") {
+  sources = [ "dbus/org.chromium.PrivateComputing.service" ]
+  install_path = "/usr/share/dbus-1/system-services"
+}
+
+# Unit tests.
+if (use.test) {
+  pkg_config("private_computing_test_config") {
+    pkg_deps = [
+      "libchrome",
+      "libchrome-test",
+    ]
+  }
+  executable("private_computing_test") {
+    sources = [ "private_computing_adaptor_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":private_computing_test_config",
+      ":target_defaults",
+    ]
+    defines = [ "UNIT_TEST" ]
+    run_test = true
+    deps = [
+      ":private_computing_lib",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}

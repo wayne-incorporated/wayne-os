@@ -1,0 +1,32 @@
+From 4ab3bbd5e9ba1560cc03cf474bb90cc0863028d9 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 09:54:02 -0300
+Subject: [PATCH 081/163] locale: Fix implicit conversion on collate_finish
+
+Clang issues:
+
+programs/ld-collate.c:1824:55: error: implicit conversion from 'unsigned
+long' to 'unsigned int' changes value from 18446744073709551615 to
+4294967295 [-Werror,-Wconstant-conversion]
+  collate->undefined.used_in_level = need_undefined ? ~0ul : 0;
+                                   ~                  ^~~~
+---
+ locale/programs/ld-collate.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/locale/programs/ld-collate.c b/locale/programs/ld-collate.c
+index c790623cbc..87b20a2466 100644
+--- a/locale/programs/ld-collate.c
++++ b/locale/programs/ld-collate.c
+@@ -1821,7 +1821,7 @@ symbol `%s' has the same encoding as"), (*eptr)->name);
+ 
+   /* Now determine whether the UNDEFINED entry is needed and if yes,
+      whether it was defined.  */
+-  collate->undefined.used_in_level = need_undefined ? ~0ul : 0;
++  collate->undefined.used_in_level = need_undefined ? ~0u : 0;
+   if (collate->undefined.file == NULL)
+     {
+       if (need_undefined)
+-- 
+2.37.2
+

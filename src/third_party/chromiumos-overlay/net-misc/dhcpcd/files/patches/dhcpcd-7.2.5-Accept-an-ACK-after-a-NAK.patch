@@ -1,0 +1,103 @@
+From 736c33730f553737e9842f2699f52aa35d06baf1 Mon Sep 17 00:00:00 2001
+From: Paul Stewart <pstew@chromium.org>
+Date: Mon, 31 May 2021 15:45:01 +0000
+Subject: [PATCH 06/19] Accept an ACK after a NAK
+
+When a NAK is received, wait for a response interval before
+acting on it.  In doing so, this allows for networks that
+may have duelling DHCP servers which both consider themselves
+authoritative on a network.  Since other DHCP clients also
+act in a similar manner, issues of this sort end up undetected
+and network administrators thus consider this situation nominal.
+
+BUG=chromium:384897
+TEST=New network_DhcpNak test subcase in CL:208214
+
+Reviewed-on: https://chromium-review.googlesource.com/208207
+---
+ src/dhcp.c | 49 ++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 30 insertions(+), 19 deletions(-)
+
+diff --git a/src/dhcp.c b/src/dhcp.c
+index 4590958c..782eb231 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -3095,6 +3095,30 @@ dhcp_redirect_dhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 	}
+ }
+ 
++static void
++handle_nak(void *arg)
++{
++	struct interface *ifp = arg;
++	struct dhcp_state *state = D_STATE(ifp);
++
++	loginfox("%s: Handling deferred NAK", ifp->name);
++	if (!(ifp->ctx->options & DHCPCD_TEST)) {
++		dhcp_drop(ifp, "NAK");
++		unlink(state->leasefile);
++	}
++
++	/* If we constantly get NAKS then we should slowly back off */
++	eloop_timeout_add_sec(ifp->ctx->eloop,
++			      state->nakoff, dhcp_discover, ifp);
++	if (state->nakoff == 0)
++		state->nakoff = 1;
++	else {
++		state->nakoff *= 2;
++		if (state->nakoff > NAKOFF_MAX)
++			state->nakoff = NAKOFF_MAX;
++	}
++}
++
+ static void
+ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+     const struct in_addr *from)
+@@ -3266,31 +3290,17 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 	}
+ 
+ 	if (type == DHCP_NAK) {
+-		/* We should restart on a NAK */
+-		LOGDHCP(logwarnx, "NAK:");
+-		if ((msg = get_option_string(ifp->ctx,
+-		    bootp, bootp_len, DHO_MESSAGE)))
++		if ((msg = get_option_string(ifp->ctx, bootp,
++					     bootp_len, DHO_MESSAGE)))
+ 		{
+ 			logwarnx("%s: message: %s", ifp->name, msg);
+ 			free(msg);
+ 		}
+ 		if (state->state == DHS_INFORM) /* INFORM should not be NAKed */
+ 			return;
+-		if (!(ifp->ctx->options & DHCPCD_TEST)) {
+-			dhcp_drop(ifp, "NAK");
+-			unlink(state->leasefile);
+-		}
+-
+-		/* If we constantly get NAKS then we should slowly back off */
+-		eloop_timeout_add_sec(ifp->ctx->eloop,
+-		    state->nakoff, dhcp_discover, ifp);
+-		if (state->nakoff == 0)
+-			state->nakoff = 1;
+-		else {
+-			state->nakoff *= 2;
+-			if (state->nakoff > NAKOFF_MAX)
+-				state->nakoff = NAKOFF_MAX;
+-		}
++                LOGDHCP(logwarnx, "NAK (deferred)");
++		eloop_timeout_add_sec(ifp->ctx->eloop, DHCP_BASE,
++                                      handle_nak, ifp);
+ 		return;
+ 	}
+ 
+@@ -3423,6 +3433,7 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 			return;
+ 		}
+ 		eloop_timeout_delete(ifp->ctx->eloop, send_discover, ifp);
++		eloop_timeout_delete(ifp->ctx->eloop, handle_nak, ifp);
+ 		/* We don't request BOOTP addresses */
+ 		if (type) {
+ 			/* We used to ARP check here, but that seems to be in
+-- 
+2.33.0.800.g4c38ced690-goog
+

@@ -1,0 +1,77 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":libcontainer" ]
+  if (use.test) {
+    deps += [ ":libcontainer_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libchrome",
+    "libminijail",
+  ]
+  defines = [ "USE_device_mapper=${use.device_mapper}" ]
+  if (use.device_mapper) {
+    pkg_deps += [ "devmapper" ]
+  }
+}
+
+shared_library("libcontainer") {
+  sources = [
+    "cgroup.cc",
+    "config.cc",
+    "container.cc",
+    "libcontainer.cc",
+    "libcontainer_util.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("libcontainer_test") {
+    sources = [
+      "cgroup.cc",
+      "cgroup_test.cc",
+      "config.cc",
+      "container.cc",
+      "libcontainer.cc",
+      "libcontainer_test.cc",
+      "libcontainer_util.cc",
+    ]
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    defines = [ "UNIT_TEST" ]
+    ldflags = [
+      "-Wl,-wrap=chmod",
+      "-Wl,-wrap=chown",
+      "-Wl,-wrap=getuid",
+      "-Wl,-wrap=kill",
+      "-Wl,-wrap=mkdir",
+      "-Wl,-wrap=mkdtemp",
+      "-Wl,-wrap=mount",
+      "-Wl,-wrap=rmdir",
+      "-Wl,-wrap=setns",
+      "-Wl,-wrap=umount",
+      "-Wl,-wrap=umount2",
+      "-Wl,-wrap=unlink",
+      "-Wl,-wrap=mknod",
+      "-Wl,-wrap=stat",
+    ]
+    deps = [ "//common-mk/testrunner" ]
+  }
+}

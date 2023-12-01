@@ -1,0 +1,21 @@
+use the host python when running the h2py code, and have that search sysroot
+
+--- a/Tools/scripts/h2py.py
++++ b/Tools/scripts/h2py.py
+@@ -60,6 +60,7 @@ except KeyError:
+             pass
+ 
+ def main():
++    sysroot = os.getenv('SYSROOT', '')
+     global filedict
+     opts, args = getopt.getopt(sys.argv[1:], 'i:')
+     for o, a in opts:
+@@ -72,7 +73,7 @@ def main():
+             process(sys.stdin.buffer, sys.stdout.buffer)
+         else:
+             filename = filename.encode()
+-            fp = open(filename, 'rb')
++            fp = open(sysroot + filename, 'rb')
+             outfile = os.path.basename(filename)
+             i = outfile.rfind(b'.')
+             if i > 0: outfile = outfile[:i]

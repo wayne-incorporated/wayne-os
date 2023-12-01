@@ -1,0 +1,78 @@
+This adds an allowlist of packages that have known memory leaks.
+So that the leak detector will not report memory leaks from these packages.
+diff --git a/lib/sanitizer_common/sanitizer_flags.inc b/lib/sanitizer_common/sanitizer_flags.inc
+index 58f7f37..bf97783 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_flags.inc
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_flags.inc
+@@ -152,7 +152,7 @@ COMMON_FLAG(const char *, coverage_dir, ".",
+ COMMON_FLAG(bool, full_address_space, false,
+             "Sanitize complete address space; "
+             "by default kernel area on 32-bit platforms will not be sanitized")
+-COMMON_FLAG(bool, print_suppressions, true,
++COMMON_FLAG(bool, print_suppressions, false,
+             "Print matched suppressions at exit.")
+ COMMON_FLAG(
+     bool, disable_coredump, (SANITIZER_WORDSIZE == 64),
+
+diff --git a/lib/lsan/lsan_default_suppression.h b/lib/lsan/lsan_default_suppression.h
+new file mode 100644
+index 0000000..91aa484
+--- /dev/null
++++ b/compiler-rt/lib/lsan/lsan_default_suppression.h
+@@ -0,0 +1,34 @@
++namespace __lsan {
++
++char kLSanDefaultSuppressions[] =
++// ================ Leaks in third-party code ================
++
++// False positives in libfontconfig. http://crbug.com/39050
++"leak:libfontconfig\n"
++
++// Leaks in Nvidia's libGL.
++"leak:libGL.so\n"
++
++"leak:libnssutil3\n"
++"leak:libnspr4\n"
++"leak:libnss3\n"
++"leak:libplds4\n"
++"leak:libnssckbi\n"
++
++// XRandR has several one time leaks.
++"leak:libxrandr\n"
++
++// xrandr leak. http://crbug.com/119677
++"leak:XRRFindDisplay\n"
++
++// leak on session_manager. http://crbug.com/378805
++"leak:/sbin/session_manager\n"
++
++// leak on cryptohome. http://crbug.com/508281
++"leak:/usr/sbin/cryptohome\n"
++
++// leak on buffet. http://crbug.com/473700
++//"leak:/usr/bin/buffet\n"
++// End of suppressions.
++;  // Please keep this semicolon.
++}
+
+diff --git a/compiler-rt/lib/lsan/lsan_common.cpp b/compiler-rt/lib/lsan/lsan_common.cpp
+index ac7536757743..bb4b5c5a6169 100644
+--- a/compiler-rt/lib/lsan/lsan_common.cpp
++++ b/compiler-rt/lib/lsan/lsan_common.cpp
+@@ -12,6 +12,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "lsan_common.h"
++#include "lsan_default_suppression.h"
+ 
+ #include "sanitizer_common/sanitizer_common.h"
+ #include "sanitizer_common/sanitizer_flag_parser.h"
+@@ -126,6 +127,8 @@ void LeakSuppressionContext::LazyInit() {
+     if (&__lsan_default_suppressions)
+       context.Parse(__lsan_default_suppressions());
+     context.Parse(kStdSuppressions);
++    context.Parse(kLSanDefaultSuppressions);
++
+     if (flags()->use_tls && flags()->use_ld_allocations)
+       suppress_module = GetLinker();
+   } 

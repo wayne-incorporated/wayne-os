@@ -1,0 +1,96 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+# Library that provides cros_healthd's event functionality.
+pkg_config("libcros_healthd_events_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmojo",
+    "libpower_manager-client",
+    "libusb-1.0",
+    "protobuf",
+    "system_api",
+  ]
+}
+
+pkg_config("libcros_healthd_events_public_pkg_deps") {
+  pkg_deps = [ "mojo_service_manager" ]
+}
+
+source_set("libcros_healthd_events") {
+  configs += [ ":libcros_healthd_events_pkg_deps" ]
+  public_configs = [ ":libcros_healthd_events_public_pkg_deps" ]
+  deps = [
+    "//diagnostics/base",
+    "//diagnostics/cros_healthd/system:libcros_healthd_system",
+    "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+  ]
+  sources = [
+    "audio_events_impl.cc",
+    "audio_jack_events_impl.cc",
+    "bluetooth_events_impl.cc",
+    "crash_events_impl.cc",
+    "event_reporter.cc",
+    "lid_events_impl.cc",
+    "power_events_impl.cc",
+    "stylus_events_impl.cc",
+    "stylus_garage_events_impl.cc",
+    "touchpad_events_impl.cc",
+    "touchscreen_events_impl.cc",
+    "udev_events_impl.cc",
+  ]
+}
+
+if (use.test) {
+  pkg_config("libcros_healthd_events_test_pkg_deps") {
+    pkg_deps = [
+      "libchrome",
+      "libchrome-test",
+      "libmojo",
+      "libpower_manager-client",
+      "libpower_manager-client-test",
+    ]
+  }
+
+  source_set("libcros_healthd_events_test") {
+    sources = [
+      "audio_events_impl_test.cc",
+      "audio_jack_events_impl_test.cc",
+      "bluetooth_events_impl_test.cc",
+      "crash_events_impl_test.cc",
+      "event_repoter_test.cc",
+      "lid_events_impl_test.cc",
+      "power_events_impl_test.cc",
+      "stylus_events_impl_test.cc",
+      "stylus_garage_events_impl_test.cc",
+      "touchpad_events_impl_test.cc",
+      "touchscreen_events_impl_test.cc",
+      "udev_events_impl_test.cc",
+    ]
+    configs += [ ":libcros_healthd_events_test_pkg_deps" ]
+    deps = [
+      ":libcros_healthd_events",
+      "//diagnostics/base",
+      "//diagnostics/base:healthd_testrunner",
+      "//diagnostics/cros_healthd/system:libcros_healthd_system_test_utils",
+      "//diagnostics/cros_healthd/utils:libcros_healthd_utils_test_utils",
+      "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("crash_events_uploads_log_parser_fuzzer") {
+    sources = [ "crash_events_uploads_log_parser_fuzzer.cc" ]
+    configs += [
+      ":libcros_healthd_events_pkg_deps",
+      "//common-mk/common_fuzzer:common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [ ":libcros_healthd_events" ]
+  }
+}

@@ -1,0 +1,42 @@
+From 7de7270e7f961dab439e3f2ba16f72ddd524f36a Mon Sep 17 00:00:00 2001
+From: Cooper Chiou <cooper.chiou@intel.com>
+Date: Tue, 13 Jul 2021 16:03:03 +0800
+Subject: [PATCH] vp9hdec: fix pCurrFrame->pMdfSurface NULL pointer issue
+
+There is "Segmentation fault" error when run vp9 decode
+test on BSW/BDW Chromebook by following tool command line:
+/usr/local/libexec/chrome-binary-tests/decode_test --md5
+--visible --video=vp9_video.ivf
+
+Add null point detection function in Intel_HybridVp9Decode_HostVldRenderCb
+to aviod this issue.
+
+Signed-off-by: Cooper Chiou <cooper.chiou@intel.com>
+---
+ src/vp9hdec/decode_hybrid_vp9.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/vp9hdec/decode_hybrid_vp9.cpp b/src/vp9hdec/decode_hybrid_vp9.cpp
+index 1baf339177bb..7a086e2c8298 100644
+--- a/src/vp9hdec/decode_hybrid_vp9.cpp
++++ b/src/vp9hdec/decode_hybrid_vp9.cpp
+@@ -3289,9 +3289,16 @@ VAStatus Intel_HybridVp9Decode_HostVldRenderCb (
+ 
+     // Reset padding flag of current frame and update surface dimension
+     surface = SURFACE(pMdfDecodeFrame->ucCurrIndex);
++    if ((surface == NULL) || (surface->private_data == NULL))
++        return VA_STATUS_ERROR_INVALID_PARAMETER;
++
+     pFrameSource = (INTEL_DECODE_HYBRID_VP9_MDF_FRAME_SOURCE *)(surface->private_data);
+     pCurrFrame = &(pFrameSource->Frame);
+     pFrameSource->bHasPadding = false;
++
++    if (pCurrFrame->pMdfSurface == NULL)
++        return VA_STATUS_ERROR_INVALID_PARAMETER;
++
+     pCurrFrame->pMdfSurface->SetSurfaceStateDimensions(
+         pMdfDecodeFrame->dwWidth,
+         pMdfDecodeFrame->dwHeight);
+-- 
+2.17.1
+

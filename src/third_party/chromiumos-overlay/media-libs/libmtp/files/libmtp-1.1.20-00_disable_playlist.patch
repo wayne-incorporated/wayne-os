@@ -1,0 +1,275 @@
+diff --git a/examples/Makefile.am b/examples/Makefile.am
+index 46ac70f..0bac1b3 100644
+--- a/examples/Makefile.am
++++ b/examples/Makefile.am
+@@ -1,6 +1,6 @@
+ bin_PROGRAMS=mtp-connect mtp-detect mtp-tracks mtp-files \
+-	mtp-folders mtp-trexist mtp-playlists mtp-getplaylist \
+-	mtp-format mtp-albumart mtp-albums mtp-newplaylist mtp-emptyfolders \
++	mtp-folders mtp-trexist \
++	mtp-format mtp-albumart mtp-albums mtp-emptyfolders \
+ 	mtp-thumb mtp-reset mtp-filetree
+ 
+ mtp_connect_SOURCES=connect.c connect.h delfile.c getfile.c newfolder.c \
+@@ -11,9 +11,6 @@ mtp_tracks_SOURCES=tracks.c util.c util.h common.h
+ mtp_files_SOURCES=files.c util.c util.h common.h
+ mtp_folders_SOURCES=folders.c util.c util.h common.h
+ mtp_trexist_SOURCES=trexist.c util.c util.h common.h
+-mtp_playlists_SOURCES=playlists.c util.c util.h common.h
+-mtp_getplaylist_SOURCES=getplaylist.c util.c util.h common.h
+-mtp_newplaylist_SOURCES=newplaylist.c util.c util.h common.h
+ mtp_format_SOURCES=format.c util.c util.h common.h
+ mtp_albumart_SOURCES=albumart.c util.c util.h common.h
+ mtp_albums_SOURCES=albums.c util.c util.h common.h
+diff --git a/examples/Makefile.in b/examples/Makefile.in
+index 0466ecc..d5bf186 100644
+--- a/examples/Makefile.in
++++ b/examples/Makefile.in
+@@ -90,10 +90,10 @@ build_triplet = @build@
+ host_triplet = @host@
+ bin_PROGRAMS = mtp-connect$(EXEEXT) mtp-detect$(EXEEXT) \
+ 	mtp-tracks$(EXEEXT) mtp-files$(EXEEXT) mtp-folders$(EXEEXT) \
+-	mtp-trexist$(EXEEXT) mtp-playlists$(EXEEXT) \
+-	mtp-getplaylist$(EXEEXT) mtp-format$(EXEEXT) \
++	mtp-trexist$(EXEEXT) \
++	mtp-format$(EXEEXT) \
+ 	mtp-albumart$(EXEEXT) mtp-albums$(EXEEXT) \
+-	mtp-newplaylist$(EXEEXT) mtp-emptyfolders$(EXEEXT) \
++	mtp-emptyfolders$(EXEEXT) \
+ 	mtp-thumb$(EXEEXT) mtp-reset$(EXEEXT) mtp-filetree$(EXEEXT)
+ subdir = examples
+ ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
+@@ -153,18 +153,6 @@ am_mtp_format_OBJECTS = format.$(OBJEXT) util.$(OBJEXT)
+ mtp_format_OBJECTS = $(am_mtp_format_OBJECTS)
+ mtp_format_LDADD = $(LDADD)
+ mtp_format_DEPENDENCIES = ../src/libmtp.la
+-am_mtp_getplaylist_OBJECTS = getplaylist.$(OBJEXT) util.$(OBJEXT)
+-mtp_getplaylist_OBJECTS = $(am_mtp_getplaylist_OBJECTS)
+-mtp_getplaylist_LDADD = $(LDADD)
+-mtp_getplaylist_DEPENDENCIES = ../src/libmtp.la
+-am_mtp_newplaylist_OBJECTS = newplaylist.$(OBJEXT) util.$(OBJEXT)
+-mtp_newplaylist_OBJECTS = $(am_mtp_newplaylist_OBJECTS)
+-mtp_newplaylist_LDADD = $(LDADD)
+-mtp_newplaylist_DEPENDENCIES = ../src/libmtp.la
+-am_mtp_playlists_OBJECTS = playlists.$(OBJEXT) util.$(OBJEXT)
+-mtp_playlists_OBJECTS = $(am_mtp_playlists_OBJECTS)
+-mtp_playlists_LDADD = $(LDADD)
+-mtp_playlists_DEPENDENCIES = ../src/libmtp.la
+ am_mtp_reset_OBJECTS = reset.$(OBJEXT) util.$(OBJEXT)
+ mtp_reset_OBJECTS = $(am_mtp_reset_OBJECTS)
+ mtp_reset_LDADD = $(LDADD)
+@@ -231,16 +219,14 @@ SOURCES = $(mtp_albumart_SOURCES) $(mtp_albums_SOURCES) \
+ 	$(mtp_connect_SOURCES) $(mtp_detect_SOURCES) \
+ 	$(mtp_emptyfolders_SOURCES) $(mtp_files_SOURCES) \
+ 	$(mtp_filetree_SOURCES) $(mtp_folders_SOURCES) \
+-	$(mtp_format_SOURCES) $(mtp_getplaylist_SOURCES) \
+-	$(mtp_newplaylist_SOURCES) $(mtp_playlists_SOURCES) \
++	$(mtp_format_SOURCES) \
+ 	$(mtp_reset_SOURCES) $(mtp_thumb_SOURCES) \
+ 	$(mtp_tracks_SOURCES) $(mtp_trexist_SOURCES)
+ DIST_SOURCES = $(mtp_albumart_SOURCES) $(mtp_albums_SOURCES) \
+ 	$(mtp_connect_SOURCES) $(mtp_detect_SOURCES) \
+ 	$(mtp_emptyfolders_SOURCES) $(mtp_files_SOURCES) \
+ 	$(mtp_filetree_SOURCES) $(mtp_folders_SOURCES) \
+-	$(mtp_format_SOURCES) $(mtp_getplaylist_SOURCES) \
+-	$(mtp_newplaylist_SOURCES) $(mtp_playlists_SOURCES) \
++	$(mtp_format_SOURCES) \
+ 	$(mtp_reset_SOURCES) $(mtp_thumb_SOURCES) \
+ 	$(mtp_tracks_SOURCES) $(mtp_trexist_SOURCES)
+ am__can_run_installinfo = \
+@@ -412,9 +398,6 @@ mtp_tracks_SOURCES = tracks.c util.c util.h common.h
+ mtp_files_SOURCES = files.c util.c util.h common.h
+ mtp_folders_SOURCES = folders.c util.c util.h common.h
+ mtp_trexist_SOURCES = trexist.c util.c util.h common.h
+-mtp_playlists_SOURCES = playlists.c util.c util.h common.h
+-mtp_getplaylist_SOURCES = getplaylist.c util.c util.h common.h
+-mtp_newplaylist_SOURCES = newplaylist.c util.c util.h common.h
+ mtp_format_SOURCES = format.c util.c util.h common.h
+ mtp_albumart_SOURCES = albumart.c util.c util.h common.h
+ mtp_albums_SOURCES = albums.c util.c util.h common.h
+@@ -544,18 +527,6 @@ mtp-format$(EXEEXT): $(mtp_format_OBJECTS) $(mtp_format_DEPENDENCIES) $(EXTRA_mt
+ 	@rm -f mtp-format$(EXEEXT)
+ 	$(AM_V_CCLD)$(LINK) $(mtp_format_OBJECTS) $(mtp_format_LDADD) $(LIBS)
+ 
+-mtp-getplaylist$(EXEEXT): $(mtp_getplaylist_OBJECTS) $(mtp_getplaylist_DEPENDENCIES) $(EXTRA_mtp_getplaylist_DEPENDENCIES) 
+-	@rm -f mtp-getplaylist$(EXEEXT)
+-	$(AM_V_CCLD)$(LINK) $(mtp_getplaylist_OBJECTS) $(mtp_getplaylist_LDADD) $(LIBS)
+-
+-mtp-newplaylist$(EXEEXT): $(mtp_newplaylist_OBJECTS) $(mtp_newplaylist_DEPENDENCIES) $(EXTRA_mtp_newplaylist_DEPENDENCIES) 
+-	@rm -f mtp-newplaylist$(EXEEXT)
+-	$(AM_V_CCLD)$(LINK) $(mtp_newplaylist_OBJECTS) $(mtp_newplaylist_LDADD) $(LIBS)
+-
+-mtp-playlists$(EXEEXT): $(mtp_playlists_OBJECTS) $(mtp_playlists_DEPENDENCIES) $(EXTRA_mtp_playlists_DEPENDENCIES) 
+-	@rm -f mtp-playlists$(EXEEXT)
+-	$(AM_V_CCLD)$(LINK) $(mtp_playlists_OBJECTS) $(mtp_playlists_LDADD) $(LIBS)
+-
+ mtp-reset$(EXEEXT): $(mtp_reset_OBJECTS) $(mtp_reset_DEPENDENCIES) $(EXTRA_mtp_reset_DEPENDENCIES) 
+ 	@rm -f mtp-reset$(EXEEXT)
+ 	$(AM_V_CCLD)$(LINK) $(mtp_reset_OBJECTS) $(mtp_reset_LDADD) $(LIBS)
+@@ -589,11 +560,8 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/folders.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/format.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/getfile.Po@am__quote@ # am--include-marker
+-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/getplaylist.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/newfolder.Po@am__quote@ # am--include-marker
+-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/newplaylist.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pathutils.Po@am__quote@ # am--include-marker
+-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/playlists.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/reset.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sendfile.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sendtr.Po@am__quote@ # am--include-marker
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 7dc1a1a..5494371 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -1,9 +1,9 @@
+ lib_LTLIBRARIES = libmtp.la
+ 
+ libmtp_la_CFLAGS = @LIBUSB_CFLAGS@
+-libmtp_la_SOURCES = libmtp.c unicode.c unicode.h util.c util.h playlist-spl.c \
++libmtp_la_SOURCES = libmtp.c unicode.c unicode.h util.c util.h \
+ 	gphoto2-endian.h _stdint.h ptp.c ptp.h libusb-glue.h \
+-	music-players.h device-flags.h playlist-spl.h mtpz.h \
++	music-players.h device-flags.h mtpz.h \
+ 	chdk_live_view.h chdk_ptp.h
+ 
+ if MTPZ_COMPILE
+diff --git a/src/Makefile.in b/src/Makefile.in
+index cc331d8..c50e9db 100644
+--- a/src/Makefile.in
++++ b/src/Makefile.in
+@@ -140,8 +140,8 @@ am__installdirs = "$(DESTDIR)$(libdir)" "$(DESTDIR)$(includedir)"
+ LTLIBRARIES = $(lib_LTLIBRARIES)
+ am__DEPENDENCIES_1 =
+ am__libmtp_la_SOURCES_DIST = libmtp.c unicode.c unicode.h util.c \
+-	util.h playlist-spl.c gphoto2-endian.h _stdint.h ptp.c ptp.h \
+-	libusb-glue.h music-players.h device-flags.h playlist-spl.h \
++	util.h gphoto2-endian.h _stdint.h ptp.c ptp.h \
++	libusb-glue.h music-players.h device-flags.h \
+ 	mtpz.h chdk_live_view.h chdk_ptp.h mtpz.c libusb1-glue.c \
+ 	libusb-glue.c libopenusb1-glue.c
+ @MTPZ_COMPILE_TRUE@am__objects_1 = libmtp_la-mtpz.lo
+@@ -150,7 +150,7 @@ am__libmtp_la_SOURCES_DIST = libmtp.c unicode.c unicode.h util.c \
+ @LIBOPENUSB_COMPILE_TRUE@am__objects_4 =  \
+ @LIBOPENUSB_COMPILE_TRUE@	libmtp_la-libopenusb1-glue.lo
+ am_libmtp_la_OBJECTS = libmtp_la-libmtp.lo libmtp_la-unicode.lo \
+-	libmtp_la-util.lo libmtp_la-playlist-spl.lo libmtp_la-ptp.lo \
++	libmtp_la-util.lo libmtp_la-ptp.lo \
+ 	$(am__objects_1) $(am__objects_2) $(am__objects_3) \
+ 	$(am__objects_4)
+ libmtp_la_OBJECTS = $(am_libmtp_la_OBJECTS)
+@@ -372,8 +372,8 @@ top_srcdir = @top_srcdir@
+ lib_LTLIBRARIES = libmtp.la
+ libmtp_la_CFLAGS = @LIBUSB_CFLAGS@
+ libmtp_la_SOURCES = libmtp.c unicode.c unicode.h util.c util.h \
+-	playlist-spl.c gphoto2-endian.h _stdint.h ptp.c ptp.h \
+-	libusb-glue.h music-players.h device-flags.h playlist-spl.h \
++	gphoto2-endian.h _stdint.h ptp.c ptp.h \
++	libusb-glue.h music-players.h device-flags.h \
+ 	mtpz.h chdk_live_view.h chdk_ptp.h $(am__append_1) \
+ 	$(am__append_2) $(am__append_3) $(am__append_4)
+ include_HEADERS = libmtp.h
+@@ -498,7 +498,6 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libmtp_la-libusb-glue.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libmtp_la-libusb1-glue.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libmtp_la-mtpz.Plo@am__quote@ # am--include-marker
+-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libmtp_la-playlist-spl.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libmtp_la-ptp.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libmtp_la-unicode.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libmtp_la-util.Plo@am__quote@ # am--include-marker
+@@ -551,13 +550,6 @@ libmtp_la-util.lo: util.c
+ @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+ @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libmtp_la_CFLAGS) $(CFLAGS) -c -o libmtp_la-util.lo `test -f 'util.c' || echo '$(srcdir)/'`util.c
+ 
+-libmtp_la-playlist-spl.lo: playlist-spl.c
+-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libmtp_la_CFLAGS) $(CFLAGS) -MT libmtp_la-playlist-spl.lo -MD -MP -MF $(DEPDIR)/libmtp_la-playlist-spl.Tpo -c -o libmtp_la-playlist-spl.lo `test -f 'playlist-spl.c' || echo '$(srcdir)/'`playlist-spl.c
+-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libmtp_la-playlist-spl.Tpo $(DEPDIR)/libmtp_la-playlist-spl.Plo
+-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='playlist-spl.c' object='libmtp_la-playlist-spl.lo' libtool=yes @AMDEPBACKSLASH@
+-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libmtp_la_CFLAGS) $(CFLAGS) -c -o libmtp_la-playlist-spl.lo `test -f 'playlist-spl.c' || echo '$(srcdir)/'`playlist-spl.c
+-
+ libmtp_la-ptp.lo: ptp.c
+ @am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libmtp_la_CFLAGS) $(CFLAGS) -MT libmtp_la-ptp.lo -MD -MP -MF $(DEPDIR)/libmtp_la-ptp.Tpo -c -o libmtp_la-ptp.lo `test -f 'ptp.c' || echo '$(srcdir)/'`ptp.c
+ @am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libmtp_la-ptp.Tpo $(DEPDIR)/libmtp_la-ptp.Plo
+diff --git a/src/libmtp.c b/src/libmtp.c
+index 02963cc..f295c6d 100644
+--- a/src/libmtp.c
++++ b/src/libmtp.c
+@@ -40,7 +40,9 @@
+ #include "ptp.h"
+ #include "libusb-glue.h"
+ #include "device-flags.h"
++#if 0
+ #include "playlist-spl.h"
++#endif
+ #include "util.h"
+ 
+ #include "mtpz.h"
+@@ -7065,6 +7067,7 @@ int LIBMTP_Set_Track_Name(LIBMTP_mtpdevice_t *device,
+   return ret;
+ }
+ 
++#if 0
+ /**
+  * This function renames a single playlist object file holder.
+  * This simply means that the <code>PTP_OPC_ObjectFileName</code>
+@@ -7101,6 +7104,7 @@ int LIBMTP_Set_Playlist_Name(LIBMTP_mtpdevice_t *device,
+   playlist->name = strdup(newname);
+   return ret;
+ }
++#endif
+ 
+ /**
+  * This function renames a single album.
+@@ -7518,6 +7522,7 @@ uint32_t LIBMTP_Create_Folder(LIBMTP_mtpdevice_t *device, char *name,
+   return new_id;
+ }
+ 
++#if 0
+ /**
+  * This creates a new playlist metadata structure and allocates memory
+  * for it. Notice that if you add strings to this structure they
+@@ -7714,6 +7719,7 @@ LIBMTP_playlist_t *LIBMTP_Get_Playlist(LIBMTP_mtpdevice_t *device, uint32_t cons
+ 
+   return pl;
+ }
++#endif
+ 
+ /**
+  * This function creates a new abstract list such as a playlist
+@@ -8270,6 +8276,7 @@ static int update_abstract_list(LIBMTP_mtpdevice_t *device,
+ }
+ 
+ 
++#if 0
+ /**
+  * This routine creates a new playlist based on the metadata
+  * supplied. If the <code>tracks</code> field of the metadata
+@@ -8368,6 +8375,7 @@ int LIBMTP_Update_Playlist(LIBMTP_mtpdevice_t *device,
+ 			      metadata->tracks,
+ 			      metadata->no_tracks);
+ }
++#endif
+ 
+ /**
+  * This creates a new album metadata structure and allocates memory
+diff --git a/src/libmtp.h.in b/src/libmtp.h.in
+index fa5cfb8..e6df53b 100644
+--- a/src/libmtp.h.in
++++ b/src/libmtp.h.in
+@@ -1018,6 +1018,7 @@ int LIBMTP_Set_Folder_Name(LIBMTP_mtpdevice_t *, LIBMTP_folder_t *, const char *
+ /** @} */
+ 
+ 
++#if 0
+ /**
+  * @}
+  * @defgroup playlists The audio/video playlist management API.
+@@ -1030,6 +1031,7 @@ LIBMTP_playlist_t *LIBMTP_Get_Playlist(LIBMTP_mtpdevice_t *, uint32_t const);
+ int LIBMTP_Create_New_Playlist(LIBMTP_mtpdevice_t *, LIBMTP_playlist_t * const);
+ int LIBMTP_Update_Playlist(LIBMTP_mtpdevice_t *, LIBMTP_playlist_t * const);
+ int LIBMTP_Set_Playlist_Name(LIBMTP_mtpdevice_t *, LIBMTP_playlist_t *, const char *);
++#endif
+ 
+ /**
+  * @}

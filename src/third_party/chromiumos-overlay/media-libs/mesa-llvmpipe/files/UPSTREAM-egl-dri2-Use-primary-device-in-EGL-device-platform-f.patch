@@ -1,0 +1,100 @@
+From 47ed5836cc0649614c52db1bca5c1888fb548acd Mon Sep 17 00:00:00 2001
+From: Lepton Wu <lepton@chromium.org>
+Date: Mon, 9 Jan 2023 12:50:58 -0800
+Subject: [PATCH] egl/dri2: Use primary device in EGL device platform for
+ kms_swrast
+
+For KMS only devices, there is no render node available. Also remove
+unused _eglGetDRMDeviceRenderNode function.
+
+Signed-off-by: Lepton Wu <lepton@chromium.org>
+Reviewed-by: Chia-I Wu <olvaffe@gmail.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/20592>
+---
+ src/egl/drivers/dri2/platform_device.c | 13 +++++++++----
+ src/egl/main/egldevice.c               | 16 ----------------
+ src/egl/main/egldevice.h               |  3 ---
+ 3 files changed, 9 insertions(+), 23 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/platform_device.c b/src/egl/drivers/dri2/platform_device.c
+index d107697ae51..e2793eb2b01 100644
+--- a/src/egl/drivers/dri2/platform_device.c
++++ b/src/egl/drivers/dri2/platform_device.c
+@@ -240,6 +240,7 @@ device_get_fd(_EGLDisplay *disp, _EGLDevice *dev)
+ {
+ #ifdef HAVE_LIBDRM
+    int fd = disp->Options.fd;
++   bool kms_swrast = disp->Options.ForceSoftware;
+    /* The fcntl() code in _eglGetDeviceDisplay() ensures that valid fd >= 3,
+     * and invalid one is 0.
+     */
+@@ -252,17 +253,21 @@ device_get_fd(_EGLDisplay *disp, _EGLDevice *dev)
+       if (dev != _eglAddDevice(fd, false))
+          return -1;
+ 
+-      /* No EGL_EXT_output* extensions are supported, hence no master perms
+-       * are needed. Get the render one - otherwise drivers might error out.
++      /* kms_swrast only work with primary node. It used to work with render node in
++       * the past because some downstream kernel carry a patch to enable dumb bo
++       * ioctl on render nodes.
+        */
+-      char *node = drmGetRenderDeviceNameFromFd(fd);
++      char *node = kms_swrast ? drmGetPrimaryDeviceNameFromFd(fd) :
++                                drmGetRenderDeviceNameFromFd(fd);
+ 
+       /* Don't close the internal fd, get render node one based on it. */
+       fd = loader_open_device(node);
+       free(node);
+       return fd;
+    }
+-   const char *node = _eglGetDRMDeviceRenderNode(dev);
++   const char *node =  _eglQueryDeviceStringEXT(dev, kms_swrast ?
++                                                     EGL_DRM_DEVICE_FILE_EXT :
++                                                     EGL_DRM_RENDER_NODE_FILE_EXT);
+    return loader_open_device(node);
+ #else
+    _eglLog(_EGL_FATAL, "Driver bug: Built without libdrm, yet using a HW device");
+diff --git a/src/egl/main/egldevice.c b/src/egl/main/egldevice.c
+index c1c421b5050..68c272d282d 100644
+--- a/src/egl/main/egldevice.c
++++ b/src/egl/main/egldevice.c
+@@ -214,22 +214,6 @@ _eglDeviceSupports(_EGLDevice *dev, _EGLDeviceExtension ext)
+    };
+ }
+ 
+-/* Ideally we'll have an extension which passes the render node,
+- * instead of the card one + magic.
+- *
+- * Then we can move this in _eglQueryDeviceStringEXT below. Until then
+- * keep it separate.
+- */
+-const char *
+-_eglGetDRMDeviceRenderNode(_EGLDevice *dev)
+-{
+-#ifdef HAVE_LIBDRM
+-   return dev->device->nodes[DRM_NODE_RENDER];
+-#else
+-   return NULL;
+-#endif
+-}
+-
+ EGLBoolean
+ _eglQueryDeviceAttribEXT(_EGLDevice *dev, EGLint attribute,
+                          EGLAttrib *value)
+diff --git a/src/egl/main/egldevice.h b/src/egl/main/egldevice.h
+index bf2337d4fd4..9a103e19ff2 100644
+--- a/src/egl/main/egldevice.h
++++ b/src/egl/main/egldevice.h
+@@ -69,9 +69,6 @@ typedef enum _egl_device_extension _EGLDeviceExtension;
+ EGLBoolean
+ _eglDeviceSupports(_EGLDevice *dev, _EGLDeviceExtension ext);
+ 
+-const char *
+-_eglGetDRMDeviceRenderNode(_EGLDevice *dev);
+-
+ EGLBoolean
+ _eglQueryDeviceAttribEXT(_EGLDevice *dev, EGLint attribute,
+                          EGLAttrib *value);
+-- 
+2.39.1.581.gbfd45094c4-goog
+

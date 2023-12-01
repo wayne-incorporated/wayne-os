@@ -1,0 +1,133 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+  ]
+
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+static_library("missive_client") {
+  sources = [
+    "missive_client.cc",
+    "missive_client.h",
+    "missive_dbus_constants.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//missive/proto:libmissiveprotointerface",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/storage:missive_storage_module",
+    "//missive/util:disconnectable_client",
+    "//missive/util:status",
+  ]
+}
+
+static_library("report_queue_configuration") {
+  sources = [
+    "report_queue_configuration.cc",
+    "report_queue_configuration.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/util:status",
+    "//missive/util:status_macros",
+  ]
+}
+
+static_library("report_queue_factory") {
+  sources = [
+    "report_queue_factory.cc",
+    "report_queue_factory.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":report_queue",
+    ":report_queue_configuration",
+    ":report_queue_provider",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/util:backoff_settings",
+    "//missive/util:status",
+  ]
+}
+
+static_library("report_queue") {
+  sources = [
+    "report_queue.cc",
+    "report_queue.h",
+    "report_queue_impl.cc",
+    "report_queue_impl.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":report_queue_configuration",
+    "//missive/analytics:libanalytics",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/storage:storage_module_interface",
+    "//missive/util:status",
+    "//missive/util:status_macros",
+  ]
+}
+
+static_library("report_queue_provider") {
+  sources = [
+    "dm_token_retriever.h",
+    "empty_dm_token_retriever.cc",
+    "empty_dm_token_retriever.h",
+    "report_queue_provider.cc",
+    "report_queue_provider.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":missive_client",
+    ":report_queue",
+    ":report_queue_configuration",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/storage:storage_module_interface",
+    "//missive/util:status",
+    "//missive/util:status_macros",
+  ]
+}
+
+static_library("client_test_support") {
+  sources = [
+    "mock_dm_token_retriever.cc",
+    "mock_dm_token_retriever.h",
+    "mock_report_queue.cc",
+    "mock_report_queue.h",
+    "mock_report_queue_provider.cc",
+    "mock_report_queue_provider.h",
+    "report_queue_nonchrome_provider.cc",
+    "report_queue_nonchrome_provider.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":report_queue",
+    ":report_queue_configuration",
+    ":report_queue_factory",
+    ":report_queue_provider",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/proto:test_proto",
+    "//missive/storage:storage_test_support",
+    "//missive/util:status",
+    "//missive/util:status_macros",
+  ]
+}

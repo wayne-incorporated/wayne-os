@@ -1,0 +1,184 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":attestation-injected-keys",
+    ":fake_pca_agentd",
+    ":hwsec-ownership-id",
+    ":hwsec-test-va",
+  ]
+  if (use.test) {
+    deps += [ ":hwsec-test-utils_testrunner" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+  defines = [
+    "USE_TPM_DYNAMIC=${use.tpm_dynamic}",
+    "USE_TPM1=${use.tpm}",
+    "USE_TPM2=${use.tpm2}",
+  ]
+}
+
+executable("attestation-injected-keys") {
+  sources = [
+    "attestation_injected_keys/main.cc",
+    "attestation_injected_keys/utility.cc",
+  ]
+  install_path = "bin"
+  configs += [ ":target_defaults" ]
+  pkg_deps = [
+    "protobuf",
+    "system_api",
+  ]
+}
+
+executable("hwsec-test-va") {
+  sources = [ "verified_access/main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+
+  pkg_deps = [
+    "openssl",
+    "protobuf",
+    "system_api",
+  ]
+
+  deps = [
+    ":common_library",
+    ":verified_access_library",
+  ]
+}
+
+executable("hwsec-ownership-id") {
+  sources = [
+    "ownership_id/main.cc",
+    "ownership_id/ownership_id_factory.cc",
+  ]
+  if (use.tpm) {
+    sources += [ "ownership_id/ownership_id_tpm1.cc" ]
+  }
+  if (use.tpm2) {
+    sources += [ "ownership_id/ownership_id_tpm2.cc" ]
+  }
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+
+  libs = [
+    "hwsec-foundation",
+    "tpm_manager",
+  ]
+
+  pkg_deps = [
+    "openssl",
+    "protobuf",
+    "system_api",
+  ]
+  deps = [ ":common_library" ]
+}
+
+source_set("common_library") {
+  configs += [ ":target_defaults" ]
+  sources = [
+    "common/attestation_crypto.cc",
+    "common/openssl_utility.cc",
+    "well_known_key_pairs/well_known_key_pairs.cc",
+  ]
+}
+
+source_set("verified_access_library") {
+  configs += [ ":target_defaults" ]
+  sources = [ "verified_access/verified_access.cc" ]
+}
+
+executable("fake_pca_agentd") {
+  sources = [ "fake_pca_agent/main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+
+  pkg_deps = [
+    "openssl",
+    "protobuf",
+    "system_api",
+  ]
+  deps = [
+    ":common_library",
+    ":fake_pca_agent_library",
+  ]
+}
+
+source_set("fake_pca_agent_library") {
+  configs += [ ":target_defaults" ]
+  sources = [
+    "fake_pca_agent/issue_certificate.cc",
+    "fake_pca_agent/pca_factory.cc",
+    "fake_pca_agent/service.cc",
+  ]
+  libs = [ "hwsec-foundation" ]
+  if (use.tpm2) {
+    sources += [
+      "fake_pca_agent/kdf.cc",
+      "fake_pca_agent/pca_certify_v2.cc",
+      "fake_pca_agent/pca_enroll_v2.cc",
+      "fake_pca_agent/tpm2_struct_utils.cc",
+    ]
+    libs += [ "trunks" ]
+  }
+  if (use.tpm) {
+    sources += [
+      "fake_pca_agent/pca_certify_v1.cc",
+      "fake_pca_agent/pca_enroll_v1.cc",
+      "fake_pca_agent/tpm1_struct_utils.cc",
+    ]
+    libs += [ "tspi" ]
+  }
+}
+
+if (use.test) {
+  pkg_config("hwsec-test-utils_testrunner_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("hwsec-test-utils_testrunner") {
+    sources = [ "verified_access/verified_access_test.cc" ]
+    configs += [
+      ":target_defaults",
+      ":hwsec-test-utils_testrunner_config",
+      "//common-mk:test",
+    ]
+    run_test = true
+    if (use.tpm2) {
+      sources += [
+        "fake_pca_agent/pca_certify_v2_test.cc",
+        "fake_pca_agent/pca_enroll_v2_test.cc",
+      ]
+      libs = [ "trunks" ]
+    } else {
+      sources += [
+        "fake_pca_agent/pca_certify_v1_test.cc",
+        "fake_pca_agent/pca_enroll_v1_test.cc",
+      ]
+      libs = [ "tspi" ]
+    }
+
+    pkg_deps = [
+      "openssl",
+      "protobuf",
+      "system_api",
+    ]
+    deps = [
+      ":common_library",
+      ":fake_pca_agent_library",
+      ":verified_access_library",
+      "//common-mk/testrunner",
+    ]
+  }
+}

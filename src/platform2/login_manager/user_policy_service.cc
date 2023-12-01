@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -60,15 +60,15 @@ void UserPolicyService::PersistKeyCopy() {
 bool UserPolicyService::Store(const PolicyNamespace& ns,
                               const std::vector<uint8_t>& policy_blob,
                               int key_flags,
-                              SignatureCheck signature_check,
-                              const Completion& completion) {
+                              Completion completion) {
   em::PolicyFetchResponse policy;
   em::PolicyData policy_data;
   if (!policy.ParseFromArray(policy_blob.data(), policy_blob.size()) ||
       !policy.has_policy_data() ||
       !policy_data.ParseFromString(policy.policy_data())) {
-    completion.Run(CREATE_ERROR_AND_LOG(dbus_error::kSigDecodeFail,
-                                        "Unable to parse policy protobuf."));
+    std::move(completion)
+        .Run(CREATE_ERROR_AND_LOG(dbus_error::kSigDecodeFail,
+                                  "Unable to parse policy protobuf."));
     return false;
   }
 
@@ -78,16 +78,16 @@ bool UserPolicyService::Store(const PolicyNamespace& ns,
     // Also clear the key.
     if (key()->IsPopulated()) {
       key()->ClobberCompromisedKey(std::vector<uint8_t>());
-      PostPersistKeyTask();
+      PersistKey();
     }
 
     GetOrCreateStore(ns)->Set(policy);
-    PostPersistPolicyTask(ns, completion);
+    PersistPolicy(ns, std::move(completion));
     return true;
   }
 
-  return PolicyService::StorePolicy(ns, policy, key_flags, signature_check,
-                                    completion);
+  return PolicyService::StorePolicy(ns, policy, key_flags,
+                                    std::move(completion));
 }
 
 void UserPolicyService::OnKeyPersisted(bool status) {

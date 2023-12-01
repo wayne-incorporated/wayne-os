@@ -1,0 +1,59 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+# Library that provides cros_healthd's network diagnostics adapter functionality.
+pkg_config("libnetwork_diagnostics_pkg_deps") {
+  pkg_deps = [
+    "libchrome",
+    "libmojo",
+  ]
+}
+
+source_set("libnetwork_diagnostics_adapter") {
+  configs += [ ":libnetwork_diagnostics_pkg_deps" ]
+  deps = [
+    ":libnetwork_diagnostics_utils",
+    "//diagnostics/mojom/external:network_diagnostics_mojo_bindings",
+  ]
+  sources = [ "network_diagnostics_adapter_impl.cc" ]
+}
+
+source_set("libnetwork_diagnostics_utils") {
+  configs += [ ":libnetwork_diagnostics_pkg_deps" ]
+  deps = [ "//diagnostics/mojom/external:network_diagnostics_mojo_bindings" ]
+  sources = [ "network_diagnostics_utils.cc" ]
+}
+
+if (use.test) {
+  pkg_config("network_diagnostics_test_pkg_deps") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  source_set("network_diagnostics_test") {
+    sources = [ "network_diagnostics_adapter_impl_test.cc" ]
+    configs += [ ":network_diagnostics_test_pkg_deps" ]
+    deps = [
+      ":libnetwork_diagnostics_adapter",
+      ":libnetwork_diagnostics_utils",
+      "//diagnostics/base:healthd_testrunner",
+    ]
+  }
+}
+
+if (use.test || use.fuzzer) {
+  pkg_config("libnetwork_diagnostics_adapter_test_utils_pkg_deps") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  source_set("libnetwork_diagnostics_adapter_test_utils") {
+    configs += [ ":libnetwork_diagnostics_adapter_test_utils_pkg_deps" ]
+    deps = [
+      ":libnetwork_diagnostics_adapter",
+      "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+    ]
+    sources = [ "mock_network_diagnostics_adapter.cc" ]
+  }
+}

@@ -1,0 +1,49 @@
+From eed0ea024ed8ae0dc1f319d3c9f46ac53fcd26cd Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Tue, 16 Feb 2021 00:21:51 +0200
+Subject: [PATCH] pppd: fix cross-compilation using Clang
+
+Clang does not have the --print-sysroot option so the shell
+snippet silently fails leading to "-I/usr/include/openssl".
+Thankfully systems like Gentoo/portage or Yocto/bitbake enable
+sysroot poisoning precisely to catch these kinds of bugs.
+
+There is only one user of this non-standard CFLAG include in
+pppcrypt.h, so make it consistent with the rest of the sources
+(eg. see eap-tls.[h|c] openssl/* includes) and drop the fragile
+sysroot hackery.
+
+Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.com>
+---
+ pppd/Makefile.linux | 1 -
+ pppd/pppcrypt.h     | 2 +-
+ 2 files changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/pppd/Makefile.linux b/pppd/Makefile.linux
+index 22837c5..3c07a04 100644
+--- a/pppd/Makefile.linux
++++ b/pppd/Makefile.linux
+@@ -155,7 +155,6 @@ endif
+ 
+ ifdef NEEDDES
+ ifndef USE_CRYPT
+-CFLAGS   += -I$(shell $(CC) --print-sysroot)/usr/include/openssl
+ NEEDCRYPTOLIB = y
+ else
+ CFLAGS   += -DUSE_CRYPT=1
+diff --git a/pppd/pppcrypt.h b/pppd/pppcrypt.h
+index 364940e..0f71bb3 100644
+--- a/pppd/pppcrypt.h
++++ b/pppd/pppcrypt.h
+@@ -38,7 +38,7 @@
+ #endif
+ 
+ #ifndef USE_CRYPT
+-#include <des.h>
++#include <openssl/des.h>
+ #endif
+ 
+ extern bool	DesSetkey(u_char *);
+-- 
+2.30.1
+

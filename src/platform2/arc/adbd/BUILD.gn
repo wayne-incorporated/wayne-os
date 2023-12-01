@@ -1,0 +1,153 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":arc-adbd",
+    ":install_init",
+    ":install_policy",
+  ]
+
+  if (use.fuzzer) {
+    deps += [
+      ":arc-adbd-create-pipe-fuzzer",
+      ":arc-adbd-setup-config-fs-fuzzer",
+      ":arc-adbd-setup-function-fs-fuzzer",
+    ]
+  }
+  if (use.arcvm) {
+    deps += [ ":install_systemd" ]
+  }
+  if (use.test) {
+    deps += [
+      ":arcvm_sock_to_usb_test",
+      ":arcvm_usb_to_sock_test",
+    ]
+  }
+}
+
+pkg_config("config") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+static_library("libarcadbd") {
+  sources = [
+    "adbd.cc",
+    "adbd.h",
+    "arcvm_sock_to_usb.cc",
+    "arcvm_sock_to_usb.h",
+    "arcvm_usb_to_sock.cc",
+    "arcvm_usb_to_sock.h",
+  ]
+  configs += [ ":config" ]
+}
+
+executable("arc-adbd") {
+  sources = [ "adbd_main.cc" ]
+  configs += [ ":config" ]
+  install_path = "sbin"
+  deps = [ ":libarcadbd" ]
+}
+
+install_config("install_init") {
+  if (use.arcvm) {
+    sources = [ "init/arcvm-adbd.conf" ]
+  } else {
+    sources = [ "init/arc-adbd.conf" ]
+  }
+  install_path = "/etc/init"
+}
+
+if (use.arcvm) {
+  install_config("install_systemd") {
+    sources = [ "init/dbus-1/ArcVmAdbd.conf" ]
+    install_path = "/etc/dbus-1/system.d"
+  }
+}
+
+if (use.seccomp) {
+  install_config("install_policy") {
+    if (use.arcvm) {
+      _vm = "vm"
+    } else {
+      _vm = ""
+    }
+    _arch = getenv("ARCH")
+    sources = [ "seccomp/arc${_vm}-adbd-${_arch}.policy" ]
+    install_path = "/usr/share/policy"
+    outputs = [ "arc${_vm}-adbd-seccomp.policy" ]
+  }
+}
+
+# Fuzzer only.
+if (use.fuzzer) {
+  pkg_config("arc_adbd_fuzzer_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("arc-adbd-setup-config-fs-fuzzer") {
+    sources = [ "fuzzers/adbd_setup_config_fs_fuzzer.cc" ]
+
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":arc_adbd_fuzzer_config",
+    ]
+
+    deps = [ ":libarcadbd" ]
+  }
+
+  executable("arc-adbd-setup-function-fs-fuzzer") {
+    sources = [ "fuzzers/adbd_setup_function_fs_fuzzer.cc" ]
+
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":arc_adbd_fuzzer_config",
+    ]
+
+    deps = [ ":libarcadbd" ]
+  }
+
+  executable("arc-adbd-create-pipe-fuzzer") {
+    sources = [ "fuzzers/adbd_create_pipe_fuzzer.cc" ]
+
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":arc_adbd_fuzzer_config",
+    ]
+
+    deps = [ ":libarcadbd" ]
+  }
+}
+
+if (use.test) {
+  executable("arcvm_sock_to_usb_test") {
+    sources = [ "arcvm_sock_to_usb_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":config",
+    ]
+    deps = [
+      ":libarcadbd",
+      "//common-mk/testrunner:testrunner",
+    ]
+    run_test = true
+  }
+  executable("arcvm_usb_to_sock_test") {
+    sources = [ "arcvm_usb_to_sock_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":config",
+    ]
+    deps = [
+      ":libarcadbd",
+      "//common-mk/testrunner:testrunner",
+    ]
+    run_test = true
+  }
+}

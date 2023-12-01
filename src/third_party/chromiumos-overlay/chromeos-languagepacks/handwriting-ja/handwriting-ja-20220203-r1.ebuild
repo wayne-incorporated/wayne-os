@@ -1,0 +1,1 @@
+handwriting-ja-20220203.ebuild

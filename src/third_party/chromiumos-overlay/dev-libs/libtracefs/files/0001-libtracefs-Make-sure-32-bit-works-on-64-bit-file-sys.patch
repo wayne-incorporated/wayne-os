@@ -1,0 +1,32 @@
+From bc160ef993ad87ae54417504c30bfa3d7c245656 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (Google)" <rostedt@goodmis.org>
+Date: Wed, 21 Dec 2022 13:49:03 -0500
+Subject: [PATCH] libtracefs: Make sure 32 bit works on 64 bit file systems
+
+As stat() can overflow if a 32 bit user space reads a file on a file
+system that has inodes greater than MAX_INT. Compile with
+_FILE_OFFSET_BITS=64 that mitigates this problem on 32 bit user space.
+
+Reported-by: Mike Frysinger <vapier@google.com>
+Signed-off-by: Steven Rostedt (Google) <rostedt@goodmis.org>
+---
+ Makefile | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Makefile b/Makefile
+index 27d425c..36c2076 100644
+--- a/Makefile
++++ b/Makefile
+@@ -164,6 +164,9 @@ export INCLUDES
+ # Append required CFLAGS
+ override CFLAGS += -D_GNU_SOURCE $(LIBTRACEEVENT_INCLUDES) $(INCLUDES)
+ 
++# Make sure 32 bit stat() works on large file systems
++override CFLAGS += -D_FILE_OFFSET_BITS=64
++
+ all: all_cmd
+ 
+ LIB_TARGET  = libtracefs.a libtracefs.so.$(TRACEFS_VERSION)
+-- 
+2.39.0.314.g84b9a713c41-goog
+

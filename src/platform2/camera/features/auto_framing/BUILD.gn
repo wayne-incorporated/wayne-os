@@ -1,0 +1,35 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//camera/build/cc_embed_data.gni")
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  configs = [ "//camera/build:cros_camera_common" ]
+  pkg_deps = [
+    "libcros_camera_android_deps",
+    "libsync",
+    "libyuv",
+  ]
+}
+
+source_set("auto_framing") {
+  sources = [
+    "//camera/features/auto_framing/auto_framing_client.cc",
+    "//camera/features/auto_framing/auto_framing_stream_manipulator.cc",
+  ]
+  libs = [ "autoframing_cros" ]
+  public_configs = [ ":target_defaults" ]
+
+  # -fPIC needed by the libcros_camera.so shared library.
+  configs += [ "//common-mk:pic" ]
+  public_deps = [ "//camera/gpu" ]
+  deps = [
+    "//camera/common:base",
+    "//camera/common:libcros_camera_mojom",
+    "//camera/common:mojo_base",
+    "//camera/features",
+    "//camera/gpu:image_processor",
+  ]
+}

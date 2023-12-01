@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2019 The Chromium OS Authors. All rights reserved.
+# Copyright 2019 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -20,9 +20,9 @@
 # mount the filesystem as read-write -- only read-only[2].
 #
 # [1] 32-bit flag we are modifying:
-#  https://chromium.googlesource.com/chromiumos/third_party/kernel.git/+/master/include/linux/ext2_fs.h#l417
+#  https://chromium.googlesource.com/chromiumos/third_party/kernel.git/+/HEAD/include/linux/ext2_fs.h#l417
 # [2] Mount behavior is enforced here:
-#  https://chromium.googlesource.com/chromiumos/third_party/kernel.git/+/master/ext2/super.c#l857
+#  https://chromium.googlesource.com/chromiumos/third_party/kernel.git/+/HEAD/ext2/super.c#l857
 #
 # N.B., if the high order feature bits are used in the future, we will need to
 #       revisit this technique.

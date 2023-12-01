@@ -1,0 +1,42 @@
+From 4dd03628f4a0fca7c792a52182b4497c4143b942 Mon Sep 17 00:00:00 2001
+From: Nicholas Bishop <nicholasbishop@google.com>
+Date: Tue, 5 Apr 2022 18:39:41 -0400
+Subject: [PATCH] CHROMIUM: nouveau: force synchronous pushbuffer submissions
+
+This is a workaround for crashes in the browser GPU process with the
+nouveau driver when the skia renderer is enabled.
+
+Tested on the Lenovo Thinkpad T510 with NVS 3100M and the Apple Macbook
+7,1 with GeForce 320M.
+
+To test, play a youtube video and also open the system tray network menu
+so that it shows the blue infinite progress bar. Leave in that state for
+a while and watch for crashes or graphics artifacts. Without this patch
+the GPU process crashes within a second or two, and continues crashing
+repeatedly. With this fix no crashes were observed over a period of two
+hours.
+
+BUG=b:224789366
+BUG=b:228335451
+TEST=See above
+
+Change-Id: Id7d3b863712e4b37d62cf11d450fb5a18ad88eb6
+---
+ nouveau/pushbuf.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/nouveau/pushbuf.c b/nouveau/pushbuf.c
+index 5fadd7a9..f05aa1a9 100644
+--- a/nouveau/pushbuf.c
++++ b/nouveau/pushbuf.c
+@@ -341,6 +341,7 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
+ 		req.suffix0 = nvpb->suffix0;
+ 		req.suffix1 = nvpb->suffix1;
+ 		req.vram_available = 0; /* for valgrind */
++		req.vram_available |= NOUVEAU_GEM_PUSHBUF_SYNC;
+ 		if (dbg_on(1))
+ 			req.vram_available |= NOUVEAU_GEM_PUSHBUF_SYNC;
+ 		req.gart_available = 0;
+-- 
+2.35.1.1094.g7c7d902a7c-goog
+

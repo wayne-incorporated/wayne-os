@@ -1,0 +1,94 @@
+#! /bin/sh
+
+# Copyright 2014 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Dash does not support arrays, so this script uses name composition instead.
+# This would cause false positives from cros lint for unused names, so the
+# warning is disabled here:
+# shellcheck disable=SC2034
+
+# unit test for storage_info
+# shellcheck source=../share/storage-info-common.sh
+. share/storage-info-common.sh
+
+TEST_COUNT=11
+
+# stout - old fw  crbug.com/328587#c11
+MODEL_1="SanDisk_SSD_U100_16GB"
+VERSION_1="10.52.01"
+RESULT_1="MATCH"
+
+# stout - new fw  crbug.com/328587#c13
+MODEL_2="SanDisk_SSD_U100_16GB"
+VERSION_2="CS.56.00"
+RESULT_2="NOT_MATCH"
+
+# stout - new fw 2  crbug.com/328587#c34
+MODEL_3="SanDisk_SSD_i100_32GB"
+VERSION_3="10.54.01"
+RESULT_3="NOT_MATCH"
+
+# link - old fw  crbug.com/328587#c37
+MODEL_4="SanDisk_SSD_i100_32GB"
+VERSION_4="CS.51.00"
+RESULT_4="MATCH"
+
+# link - new fw
+MODEL_5="SanDisk_SSD_i100_32GB"
+VERSION_5="11.56.00"
+RESULT_5="NOT_MATCH"
+
+# crbug.com/328587#c39
+MODEL_6="SanDisk_SSD_U100_32GB"
+VERSION_6="10.01.04"
+RESULT_6="MATCH"
+
+# falco
+MODEL_7="LITEONIT_LSS-32L6G-HP"
+VERSION_7="DS51704"
+RESULT_7="NOT_MATCH"
+
+# butterfly
+MODEL_8="SanDisk_SDSA5GK-016G-1006"
+VERSION_8="CS.54.06"
+RESULT_8="MATCH"
+
+# Lulu
+MODEL_9="LITEON_CS1-SP16-11_M.2_2242_16GB"
+VERSION_9="LS4110B"
+RESULT_9="MATCH"
+
+# reven b/253081168
+MODEL_10="LITEON_L8H-256V2G-11_M.2_2280_256GB"
+VERSION_10="F88110B"
+RESULT_10="MATCH"
+
+# reven b/255677276
+MODEL_11="LITEON_LMH-256V2M-11_MSATA_256GBFM8110C"
+VERSION_11="F88110B"
+RESULT_11="MATCH"
+
+get_is_ssd_ignorelist_result() {
+  if is_ssd_ignorelist "$1" "$2"; then
+    echo "MATCH"
+  else
+    echo "NOT_MATCH"
+  fi
+}
+
+
+for i in $(seq 1 "${TEST_COUNT}"); do
+  # use eval for variable indirection
+  MODEL=$(expand_var "MODEL_${i}")
+  VERSION=$(expand_var "VERSION_${i}")
+  RESULT=$(expand_var "RESULT_${i}")
+  ACTUAL_RESULT=$(get_is_ssd_ignorelist_result "${MODEL}" "${VERSION}")
+  if [ "${ACTUAL_RESULT}" != "${RESULT}" ]; then
+    printf '\033[31m[FAILED]\033[0m'
+    echo " result for ${MODEL} ${VERSION} is not ${RESULT}"
+    exit 1
+  fi
+done
+printf '\033[32m[OK]\033[0m\n'

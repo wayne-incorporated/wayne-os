@@ -1,0 +1,307 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":install_dbus_config",
+    ":install_init_config",
+    ":libpatchpanel",
+    ":libpatchpanel-util",
+    ":patchpaneld",
+  ]
+  if (use.fuzzer) {
+    deps += [
+      ":big_endian_fuzzer",
+      ":broadcast_forwarder_fuzzer",
+      ":counters_service_fuzzer",
+      ":datapath_fuzzer",
+      ":dns_query_fuzzer",
+      ":dns_util_fuzzer",
+      ":firewall_fuzzer",
+      ":multicast_forwarder_fuzzer",
+      ":ndproxy_fuzzer",
+      ":net_util_fuzzer",
+    ]
+  }
+  if (use.test) {
+    deps += [ ":patchpanel_testrunner" ]
+  }
+}
+
+# Install the D-Bus config.
+install_config("install_dbus_config") {
+  sources = [ "dbus/org.chromium.Patchpanel.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+# Install the init config.
+install_config("install_init_config") {
+  sources = [ "init/patchpanel.conf" ]
+  install_path = "/etc/init"
+}
+
+pkg_config("target_defaults") {
+  cflags = [ "-Wconversion" ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "libnet-base",
+    "libshill-client",
+    "libshill-net",
+    "re2",
+    "system_api",
+    "vboot_host",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+proto_library("patchpanel_ipc_protos") {
+  proto_in_dir = "."
+  proto_out_dir = "include/patchpanel"
+  sources = [ "${proto_in_dir}/ipc.proto" ]
+}
+
+# Generate the D-Bus C++ binding.
+generate_dbus_adaptors("patchpanel_dbus_adaptors") {
+  sources = [ "dbus_bindings/org.chromium.patchpanel.xml" ]
+  dbus_adaptors_out_dir = "include/patchpanel/dbus_adaptors"
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+}
+
+source_set("util_sources") {
+  sources = [
+    "address_manager.cc",
+    "dns/big_endian.cc",
+    "dns/dns_query.cc",
+    "dns/dns_response.cc",
+    "dns/dns_util.cc",
+    "dns/io_buffer.cc",
+    "mac_address_generator.cc",
+    "message_dispatcher.cc",
+    "net_util.cc",
+    "socket.cc",
+    "socket_forwarder.cc",
+    "subnet.cc",
+    "subnet_pool.cc",
+  ]
+  configs += [
+    ":target_defaults",
+    "//common-mk:pic",
+  ]
+}
+
+shared_library("libpatchpanel-util") {
+  deps = [ ":util_sources" ]
+  install_path = "lib"
+}
+
+static_library("libpatchpanel") {
+  sources = [
+    "adb_proxy.cc",
+    "arc_service.cc",
+    "broadcast_forwarder.cc",
+    "counters_service.cc",
+    "crostini_service.cc",
+    "datapath.cc",
+    "device.cc",
+    "dhcp_server_controller.cc",
+    "firewall.cc",
+    "guest_ipv6_service.cc",
+    "iptables.cc",
+    "manager.cc",
+    "minijailed_process_runner.cc",
+    "multicast_forwarder.cc",
+    "multicast_proxy.cc",
+    "ndproxy.cc",
+    "network_monitor_service.cc",
+    "patchpanel_adaptor.cc",
+    "patchpanel_daemon.cc",
+    "proto_utils.cc",
+    "routing_service.cc",
+    "rtnl_client.cc",
+    "scoped_ns.cc",
+    "shill_client.cc",
+    "subprocess_controller.cc",
+    "system.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  cflags = [ "-Wconversion" ]
+  defines = [ "USE_ARCVM=${use.arcvm}" ]
+  all_dependent_pkg_deps = [
+    "protobuf",
+    "system_api",
+  ]
+  deps = [
+    ":patchpanel_dbus_adaptors",
+    ":patchpanel_ipc_protos",
+    ":util_sources",
+  ]
+}
+
+executable("patchpaneld") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libpatchpanel" ]
+  install_path = "bin"
+}
+
+if (use.fuzzer) {
+  pkg_config("fuzzing_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("big_endian_fuzzer") {
+    sources = [ "dns/big_endian_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("broadcast_forwarder_fuzzer") {
+    sources = [ "broadcast_forwarder_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("counters_service_fuzzer") {
+    sources = [ "counters_service_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("datapath_fuzzer") {
+    sources = [ "datapath_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("dns_query_fuzzer") {
+    sources = [ "dns/dns_query_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("dns_util_fuzzer") {
+    sources = [ "dns/dns_util_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("firewall_fuzzer") {
+    sources = [ "firewall_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("multicast_forwarder_fuzzer") {
+    sources = [ "multicast_forwarder_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("ndproxy_fuzzer") {
+    sources = [ "ndproxy_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+
+  executable("net_util_fuzzer") {
+    sources = [ "net_util_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+      ":fuzzing_config",
+    ]
+    deps = [ ":libpatchpanel" ]
+  }
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("patchpanel_testrunner") {
+    run_test = true
+    sources = [
+      "address_manager_test.cc",
+      "arc_service_test.cc",
+      "counters_service_test.cc",
+      "crostini_service_test.cc",
+      "datapath_test.cc",
+      "dhcp_server_controller_test.cc",
+      "dns/dns_query_test.cc",
+      "dns/dns_response_test.cc",
+      "firewall_test.cc",
+      "guest_ipv6_service_test.cc",
+      "mac_address_generator_test.cc",
+      "minijailed_process_runner_test.cc",
+      "ndproxy_test.cc",
+      "net_util_test.cc",
+      "network_monitor_service_test.cc",
+      "proto_utils_test.cc",
+      "routing_service_test.cc",
+      "shill_client_test.cc",
+      "socket_forwarder_test.cc",
+      "subnet_pool_test.cc",
+      "subnet_test.cc",
+      "subprocess_controller_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    defines = [ "UNIT_TEST" ]
+    deps = [
+      ":libpatchpanel",
+      "//common-mk/testrunner",
+      "//shill/net:net_test_support",
+    ]
+  }
+}

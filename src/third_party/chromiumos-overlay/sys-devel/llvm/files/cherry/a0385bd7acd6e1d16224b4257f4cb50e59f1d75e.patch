@@ -1,0 +1,80 @@
+commit a0385bd7acd6e1d16224b4257f4cb50e59f1d75e
+Author: David Blaikie <dblaikie@gmail.com>
+Date:   Fri Jul 17 10:41:35 2020 -0700
+
+    [llvm] Add contains(KeyType) -> bool methods to SmallPtrSet
+    
+    Matches C++20 API addition.
+    
+    Differential Revision: https://reviews.llvm.org/D83449
+
+diff --git a/llvm/include/llvm/ADT/SmallPtrSet.h b/llvm/include/llvm/ADT/SmallPtrSet.h
+index 0ab05cfe611..57dd8f6b695 100644
+--- a/llvm/include/llvm/ADT/SmallPtrSet.h
++++ b/llvm/include/llvm/ADT/SmallPtrSet.h
+@@ -378,6 +378,9 @@ public:
+   iterator find(ConstPtrType Ptr) const {
+     return makeIterator(find_imp(ConstPtrTraits::getAsVoidPointer(Ptr)));
+   }
++  bool contains(ConstPtrType Ptr) const {
++    return find_imp(ConstPtrTraits::getAsVoidPointer(Ptr)) != EndPointer();
++  }
+ 
+   template <typename IterT>
+   void insert(IterT I, IterT E) {
+diff --git a/llvm/unittests/ADT/SmallPtrSetTest.cpp b/llvm/unittests/ADT/SmallPtrSetTest.cpp
+index 3226fe61550..eacd62ffc6f 100644
+--- a/llvm/unittests/ADT/SmallPtrSetTest.cpp
++++ b/llvm/unittests/ADT/SmallPtrSetTest.cpp
+@@ -313,8 +313,8 @@ TEST(SmallPtrSetTest, ConstTest) {
+   IntSet.insert(B);
+   EXPECT_EQ(IntSet.count(B), 1u);
+   EXPECT_EQ(IntSet.count(C), 1u);
+-  EXPECT_NE(IntSet.find(B), IntSet.end());
+-  EXPECT_NE(IntSet.find(C), IntSet.end());
++  EXPECT_TRUE(IntSet.contains(B));
++  EXPECT_TRUE(IntSet.contains(C));
+ }
+ 
+ // Verify that we automatically get the const version of PointerLikeTypeTraits
+@@ -327,7 +327,7 @@ TEST(SmallPtrSetTest, ConstNonPtrTest) {
+   TestPair Pair(&A[0], 1);
+   IntSet.insert(Pair);
+   EXPECT_EQ(IntSet.count(Pair), 1u);
+-  EXPECT_NE(IntSet.find(Pair), IntSet.end());
++  EXPECT_TRUE(IntSet.contains(Pair));
+ }
+ 
+ // Test equality comparison.
+@@ -367,3 +367,31 @@ TEST(SmallPtrSetTest, EqualityComparison) {
+   EXPECT_NE(c, e);
+   EXPECT_NE(e, d);
+ }
++
++TEST(SmallPtrSetTest, Contains) {
++  SmallPtrSet<int *, 2> Set;
++  int buf[4] = {0, 11, 22, 11};
++  EXPECT_FALSE(Set.contains(&buf[0]));
++  EXPECT_FALSE(Set.contains(&buf[1]));
++
++  Set.insert(&buf[0]);
++  Set.insert(&buf[1]);
++  EXPECT_TRUE(Set.contains(&buf[0]));
++  EXPECT_TRUE(Set.contains(&buf[1]));
++  EXPECT_FALSE(Set.contains(&buf[3]));
++
++  Set.insert(&buf[1]);
++  EXPECT_TRUE(Set.contains(&buf[0]));
++  EXPECT_TRUE(Set.contains(&buf[1]));
++  EXPECT_FALSE(Set.contains(&buf[3]));
++
++  Set.erase(&buf[1]);
++  EXPECT_TRUE(Set.contains(&buf[0]));
++  EXPECT_FALSE(Set.contains(&buf[1]));
++
++  Set.insert(&buf[1]);
++  Set.insert(&buf[2]);
++  EXPECT_TRUE(Set.contains(&buf[0]));
++  EXPECT_TRUE(Set.contains(&buf[1]));
++  EXPECT_TRUE(Set.contains(&buf[2]));
++}

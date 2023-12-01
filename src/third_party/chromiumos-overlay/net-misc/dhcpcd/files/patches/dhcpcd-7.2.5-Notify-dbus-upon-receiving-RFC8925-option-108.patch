@@ -1,0 +1,39 @@
+From cd421c36793de4ede4834fd190a4fe3dfce10568 Mon Sep 17 00:00:00 2001
+From: Taoyu Li <taoyl@google.com>
+Date: Wed, 15 Feb 2023 17:24:27 +0900
+Subject: [PATCH] Notify through DBUS upon receiving RFC8925 option 108
+
+Also to remove forced logging to stderr.
+---
+ src/dhcp.c   | 1 +
+ src/logerr.c | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/dhcp.c b/src/dhcp.c
+index 1ba6015b..89cef252 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -3553,6 +3553,7 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 	}
+ 
+ 	if (use_v6only) {
++		rpc_signal_status("IPv6OnlyPreferred");
+ 		dhcp_drop(ifp, "EXPIRE");
+ 		dhcp_unlink(ifp->ctx, state->leasefile);
+ 		eloop_timeout_delete(ifp->ctx->eloop, NULL, ifp);
+diff --git a/src/logerr.c b/src/logerr.c
+index 9e543cc9..afef8d1b 100644
+--- a/src/logerr.c
++++ b/src/logerr.c
+@@ -329,7 +329,7 @@ logopen(const char *path)
+ 	struct logctx *ctx = &_logctx;
+ 
+ 	if (path == NULL) {
+-		int opts = LOG_PERROR;
++		int opts = 0;
+ 
+ 		if (ctx->log_opts & LOGERR_LOG_PID)
+ 			opts |= LOG_PID;
+-- 
+2.40.0.rc0.216.gc4246ad0f0-goog
+

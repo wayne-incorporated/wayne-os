@@ -1,0 +1,12 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+ACTION!="add", GOTO="usb_realtek_net_end"
+SUBSYSTEM!="usb", GOTO="usb_realtek_net_end"
+ENV{DEVTYPE}!="usb_device", GOTO="usb_realtek_net_end"
+
+# RTL8153D - to support WOL, r8153 driver must claim this device instead of cdc_ncm
+ATTR{idVendor}=="0bda", ATTR{idProduct}=="8153", ATTR{bcdDevice}=="3300", ATTR{bConfigurationValue}!="1", ATTR{bConfigurationValue}="1"
+
+LABEL="usb_realtek_net_end"

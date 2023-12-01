@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,27 +8,33 @@
 #include <unistd.h>
 
 #include <array>
+#include <memory>
 #include <set>
 #include <utility>
 
-#include <base/bind.h>
 #include <base/check.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
+#include <base/functional/bind.h>
 #include <base/hash/sha1.h>
 #include <base/json/json_writer.h>
 #include <base/logging.h>
-#include <base/macros.h>
 #include <base/process/launch.h>
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_split.h>
+#include <base/strings/string_util.h>
 #include <base/strings/stringprintf.h>
 #include <base/system/sys_info.h>
 #include <base/values.h>
+#include <brillo/files/file_util.h>
+#include <brillo/udev/udev.h>
+#include <brillo/udev/udev_device.h>
+#include <brillo/udev/udev_enumerate.h>
 #include <brillo/userdb_utils.h>
 #include <chromeos-config/libcros_config/cros_config_interface.h>
 #include <chromeos/ui/chromium_command_builder.h>
 #include <chromeos/ui/util.h>
+#include <libsegmentation/feature_management.h>
 #include <policy/device_policy.h>
 #include <policy/libpolicy.h>
 
@@ -44,6 +50,7 @@ namespace login_manager {
 
 constexpr char kUiPath[] = "/ui";
 constexpr char kSerializedAshSwitchesProperty[] = "serialized-ash-switches";
+constexpr char kHelpContentIdProperty[] = "help-content-id";
 
 const char kWallpaperProperty[] = "wallpaper";
 
@@ -73,13 +80,30 @@ constexpr char kDisableInstantTetheringProperty[] = "disable-instant-tethering";
 
 constexpr char kOzoneNNPalmPropertiesPath[] = "/nnpalm";
 constexpr char kOzoneNNPalmCompatibleProperty[] = "touch-compatible";
+constexpr char kOzoneNNPalmModelVersionProperty[] = "model";
 constexpr char kOzoneNNPalmRadiusProperty[] = "radius-polynomial";
-constexpr std::array<const char*, 2> kOzoneNNPalmOptionalProperties = {
-    kOzoneNNPalmCompatibleProperty, kOzoneNNPalmRadiusProperty};
+constexpr std::array<const char*, 3> kOzoneNNPalmOptionalProperties = {
+    kOzoneNNPalmCompatibleProperty, kOzoneNNPalmModelVersionProperty,
+    kOzoneNNPalmRadiusProperty};
 
 const char kPowerPath[] = "/power";
 const char kAllowAmbientEQField[] = "allow-ambient-eq";
 const char kAllowAmbientEQFeature[] = "AllowAmbientEQ";
+
+constexpr char kHibernateField[] = "disable-hibernate";
+constexpr char kHibernateFeature[] = "Hibernate";
+
+constexpr char kPowerdHibernateExperimentFlag[] =
+    "/var/lib/power_manager/enable_hibernate_experiment";
+
+constexpr char kPowerdRoPrefPath[] = "/usr/share/power_manager";
+constexpr char kPowerdBoardSpecificPrefPath[] =
+    "/usr/share/power_manager/board_specific";
+
+constexpr std::array<const char*, 2> kPowerdPrefPaths = {
+    kPowerdBoardSpecificPrefPath,
+    kPowerdRoPrefPath,
+};
 
 constexpr char kEnableCrashpadFlag[] = "--enable-crashpad";
 constexpr char kEnableBreakpadFlag[] = "--no-enable-crashpad";
@@ -89,6 +113,9 @@ const char kBoostUrgentProperty[] = "boost-urgent";
 
 constexpr char kModemPath[] = "/modem";
 constexpr char kModemAttachApnProperty[] = "attach-apn-required";
+
+constexpr char kHpsPath[] = "/hps";
+constexpr char kHasHpsProperty[] = "has-hps";
 
 // These hashes are only being used temporarily till we can determine if a
 // device is a Chromebox for Meetings or not from the Install Time attributes.
@@ -104,6 +131,8 @@ const char* kChromeboxForMeetingAppIdHashes[] = {
     "4AC2B6C63C6480D150DFDA13E4A5956EB1D0DDBB",
     "81986D4F846CEDDDB962643FA501D1780DD441BB",
 };
+
+constexpr char kDmiProductNameFile[] = "/sys/class/dmi/id/product_name";
 
 namespace {
 
@@ -137,6 +166,18 @@ void SetUpAutoNightLightFlag(ChromiumCommandBuilder* builder,
     return;
 
   builder->AddFeatureEnableOverride("AutoNightLight");
+}
+
+void SetUpHasHpsFlag(ChromiumCommandBuilder* builder,
+                     brillo::CrosConfigInterface* cros_config) {
+  std::string has_hps;
+  if (!cros_config ||
+      !cros_config->GetString(kHpsPath, kHasHpsProperty, &has_hps) ||
+      has_hps != "true") {
+    return;
+  }
+
+  builder->AddArg("--has-hps");
 }
 
 // Enables the "HandwritingRecognitionWebPlatformApi" Blink feature flag if
@@ -190,7 +231,7 @@ bool AddWallpaperFlags(
     ChromiumCommandBuilder* builder,
     const std::string& flag_type,
     const std::string& file_type,
-    base::Callback<bool(const base::FilePath&)> path_exists) {
+    const base::RepeatingCallback<bool(const base::FilePath&)>& path_exists) {
   const base::FilePath large_path(base::StringPrintf(
       "/usr/share/chromeos-assets/wallpaper/%s_large.jpg", file_type.c_str()));
   const base::FilePath small_path(base::StringPrintf(
@@ -238,6 +279,12 @@ void AddArcFlags(ChromiumCommandBuilder* builder,
     builder->AddArg("--force-remote-shell-scale=2");
   if (builder->UseFlagIsSet("arcvm") && !builder->UseFlagIsSet("arcpp"))
     builder->AddArg("--enable-arcvm");
+  if (builder->UseFlagIsSet("arcvm_data_migration"))
+    builder->AddFeatureEnableOverride("ArcVmDataMigration");
+  if (builder->UseFlagIsSet("arcvm_virtio_blk_data"))
+    builder->AddFeatureEnableOverride("ArcEnableVirtioBlkForData");
+  if (builder->UseFlagIsSet("lvm_application_containers"))
+    builder->AddFeatureEnableOverride("ArcLvmApplicationContainers");
   // Devices of tablet form factor will have special app behaviour.
   if (builder->UseFlagIsSet("tablet_form_factor"))
     builder->AddArg("--enable-tablet-form-factor");
@@ -259,8 +306,6 @@ void AddArcFlags(ChromiumCommandBuilder* builder,
     builder->AddArg("--enable-ndk-translation");
   if (builder->UseFlagIsSet("ndk_translation64"))
     builder->AddArg("--enable-ndk-translation64");
-  if (builder->UseFlagIsSet("arc_native_bridge_64bit_support_experiment"))
-    builder->AddArg("--arc-enable-native-bridge-64bit-support-experiment");
 }
 
 void AddCrostiniFlags(ChromiumCommandBuilder* builder) {
@@ -269,9 +314,6 @@ void AddCrostiniFlags(ChromiumCommandBuilder* builder) {
   }
   if (builder->UseFlagIsSet("virtio_gpu")) {
     builder->AddFeatureEnableOverride("CrostiniGpuSupport");
-  }
-  if (builder->UseFlagIsSet("kvm_transition")) {
-    builder->AddArg("--kernelnext-restrict-vms");
   }
 }
 
@@ -296,7 +338,8 @@ void AddBorealisFlags(ChromiumCommandBuilder* builder) {
     if (base::SysInfo::GetLsbReleaseValue("CHROMEOS_RELEASE_TRACK",
                                           &channel_string) &&
         channel_string != "beta-channel" &&
-        channel_string != "stable-channel") {
+        channel_string != "stable-channel" && channel_string != "ltc-channel" &&
+        channel_string != "lts-channel") {
       builder->AddFeatureEnableOverride("ExoPointerLock");
     }
   }
@@ -328,31 +371,26 @@ void CreateDirectories(ChromiumCommandBuilder* builder) {
   CHECK(EnsureDirectoryExists(data_dir.Append("Default"), uid, gid, 0755));
 
   const base::FilePath state_dir("/run/state");
-  CHECK(base::DeletePathRecursively(state_dir));
+  CHECK(brillo::DeletePathRecursively(state_dir));
   CHECK(EnsureDirectoryExists(state_dir, kRootUid, kRootGid, 0710));
 
   // Create a directory where the session manager can store a copy of the user
   // policy key, that will be readable by the chrome process as chronos.
   const base::FilePath policy_dir("/run/user_policy");
-  CHECK(base::DeletePathRecursively(policy_dir));
+  CHECK(brillo::DeletePathRecursively(policy_dir));
   CHECK(EnsureDirectoryExists(policy_dir, kRootUid, gid, 0710));
 
   // Create a directory where the chrome process can store a reboot request so
   // that it persists across browser crashes but is always removed on reboot.
-  // This directory also houses the wayland and arc-bridge sockets that are
-  // exported to VMs and Android.
+  // This directory also houses the default wayland and arc-bridge sockets that
+  // are exported to VMs and Android.
   CHECK(EnsureDirectoryExists(base::FilePath("/run/chrome"), uid, gid, 0755));
 
-  // Ensure the existence of the directory in which the device settings and
-  // other ownership-related state will live. Yes, it should be owned by root.
-  // The permissions are set such that the policy-readers group can see the
-  // content of known files inside the directory. The policy-readers group is
-  // composed of the chronos user and other daemon accessing the device policies
-  // but not anything else.
-  gid_t policy_readers_gid;
-  CHECK(brillo::userdb::GetGroupInfo("policy-readers", &policy_readers_gid));
-  CHECK(EnsureDirectoryExists(base::FilePath("/var/lib/whitelist"), kRootUid,
-                              policy_readers_gid, 0750));
+  // Create a directory where the libassistant V2 can create socket files for
+  // gRPC.
+  const base::FilePath libassistant_dir("/run/libassistant");
+  CHECK(brillo::DeletePathRecursively(libassistant_dir));
+  CHECK(EnsureDirectoryExists(libassistant_dir, uid, gid, 0700));
 
   // Create the directory where policies for extensions installed in
   // device-local accounts are cached. This data is read and written by chronos.
@@ -371,6 +409,11 @@ void CreateDirectories(ChromiumCommandBuilder* builder) {
   CHECK(EnsureDirectoryExists(
       base::FilePath("/var/cache/device_policy_external_data"), uid, gid,
       0700));
+
+  // Create the directory where screensaver images data referenced by device
+  // policy is cached. This data is read and written by chronos.
+  CHECK(EnsureDirectoryExists(base::FilePath("/var/cache/managed_screensaver"),
+                              uid, gid, 0700));
 
   // Create the directory where the AppPack extensions are cached.
   // These extensions are read and written by chronos.
@@ -411,6 +454,10 @@ void CreateDirectories(ChromiumCommandBuilder* builder) {
   builder->AddEnvVar("CHROME_LOG_FILE",
                      system_log_dir.Append("chrome").value());
 
+  // Log directory for Lacros to write logging messages before the user logs in.
+  base::FilePath lacros_system_log_dir("/var/log/lacros");
+  CHECK(EnsureDirectoryExists(lacros_system_log_dir, uid, gid, 0755));
+
   // Log directory for the user session. Note that the user dir won't be mounted
   // until later (when the cryptohome is mounted), so we don't create
   // CHROMEOS_SESSION_LOG_DIR here.
@@ -420,42 +467,8 @@ void CreateDirectories(ChromiumCommandBuilder* builder) {
   // Disable Mesa's internal shader disk caching feature, since Chrome has its
   // own shader cache implementation and the GPU process sandbox does not
   // allow threads (Mesa uses threads for this feature).
-  builder->AddEnvVar("MESA_GLSL_CACHE_DISABLE", "true");
-
-  // On devices with Chrome OS camera HAL, Chrome needs to host the unix domain
-  // named socket /run/camera/camera3.sock to provide the camera HAL Mojo
-  // service to the system.
-  if (base::PathExists(base::FilePath("/usr/bin/cros_camera_service"))) {
-    // The socket is created and listened on by Chrome, and receives connections
-    // from the camera HAL v3 process and cameraserver process in Android
-    // container which run as group arc-camera.  In addition, the camera HAL v3
-    // process also hosts a unix domain named socket in /run/camera for the
-    // sandboxed camera library process.  Thus the directory is created with
-    // user chronos and group arc-camera with 0770 permission.
-    gid_t arc_camera_gid;
-    CHECK(brillo::userdb::GetGroupInfo("arc-camera", &arc_camera_gid));
-    CHECK(EnsureDirectoryExists(base::FilePath("/run/camera"), uid,
-                                arc_camera_gid, 0770));
-    // The /var/cache/camera folder is used to store camera-related configs and
-    // settings that are either extracted from Android container, or generated
-    // by the camera HAL at runtime.
-    CHECK(EnsureDirectoryExists(base::FilePath("/var/cache/camera"), uid,
-                                arc_camera_gid, 0770));
-  }
-
-  // On devices with CUPS proxy daemon, Chrome needs to create the directory so
-  // cups_proxy can host a unix domain named socket at
-  // /run/cups_proxy/cups_proxy.sock
-  if (base::PathExists(base::FilePath("/usr/bin/cups_proxy"))) {
-    uid_t cups_proxy_uid;
-    gid_t cups_proxy_gid;
-    CHECK(brillo::userdb::GetUserInfo("cups-proxy", &cups_proxy_uid,
-                                      &cups_proxy_gid));
-    // TODO(pihsun): Check if this permission is good. We need to add the
-    // client accessing this to cups_proxy group for this to work.
-    CHECK(EnsureDirectoryExists(base::FilePath("/run/cups_proxy"),
-                                cups_proxy_uid, cups_proxy_gid, 0770));
-  }
+  builder->AddEnvVar("MESA_GLSL_CACHE_DISABLE", "true");    // Mesa classic
+  builder->AddEnvVar("MESA_SHADER_CACHE_DISABLE", "true");  // Mesa iris
 }
 
 // Adds system-related flags to the command line.
@@ -465,8 +478,8 @@ void AddSystemFlags(ChromiumCommandBuilder* builder,
 
   // We need to delete these files as Chrome may have left them around from its
   // prior run (if it crashed).
-  base::DeleteFile(data_dir.Append("SingletonLock"));
-  base::DeleteFile(data_dir.Append("SingletonSocket"));
+  brillo::DeleteFile(data_dir.Append("SingletonLock"));
+  brillo::DeleteFile(data_dir.Append("SingletonSocket"));
 
   // Some targets (embedded, VMs) do not need component updates.
   if (!builder->UseFlagIsSet("compupdates"))
@@ -479,6 +492,10 @@ void AddSystemFlags(ChromiumCommandBuilder* builder,
   if (builder->UseFlagIsSet("diagnostics"))
     builder->AddFeatureEnableOverride("UmaStorageDimensions");
 
+  // TODO(b/187516317): remove when the issue is resolved in FW.
+  if (builder->UseFlagIsSet("broken_24hours_wake"))
+    builder->AddFeatureDisableOverride("SupportsRtcWakeOver24Hours");
+
   // Enable Wilco only features.
   if (builder->UseFlagIsSet("wilco")) {
     builder->AddFeatureEnableOverride("WilcoDtc");
@@ -490,8 +507,72 @@ void AddSystemFlags(ChromiumCommandBuilder* builder,
   if (builder->UseFlagIsSet("scheduler_configuration_performance"))
     builder->AddArg("--scheduler-configuration-default=performance");
 
+  // Enable runtime TPM selection. This UseFlag is set only on reven board.
+  if (builder->UseFlagIsSet("tpm_dynamic"))
+    builder->AddArg("--tpm-is-dynamic");
+
+  // Enable special branded strings. This UseFlag is set only on reven board.
+  if (builder->UseFlagIsSet("reven_branding"))
+    builder->AddArg("--reven-branding");
+
+  // In ash, we use mojo service manager as the mojo broker so disable it here.
+  builder->AddArg("--disable-mojo-broker");
+  builder->AddArg("--ash-use-cros-mojo-service-manager");
+  builder->AddArg("--cros-healthd-uses-service-manager");
+
   SetUpOsInstallFlags(builder);
   SetUpSchedulerFlags(builder, cros_config);
+}
+
+std::string ConvertNullToEmptyString(const char* str) {
+  return str ? str : std::string();
+}
+
+void SetUpHPEngageOneProAIOSystem(ChromiumCommandBuilder* builder) {
+  std::string dmi_product_name;
+  if (!base::ReadFileToString(base::FilePath(kDmiProductNameFile),
+                              &dmi_product_name)) {
+    LOG(ERROR) << "failed to load product_name dmi id file";
+    return;
+  }
+  base::TrimWhitespaceASCII(dmi_product_name, base::TRIM_TRAILING,
+                            &dmi_product_name);
+  if (dmi_product_name != std::string("HP Engage One Pro AIO System")) {
+    return;
+  }
+
+  auto udev = brillo::Udev::Create();
+  auto enumerate = udev->CreateEnumerate();
+
+  if (!enumerate->AddMatchSubsystem("input") || !enumerate->ScanDevices())
+    return;
+
+  for (std::unique_ptr<brillo::UdevListEntry> list_entry =
+           enumerate->GetListEntry();
+       list_entry; list_entry = list_entry->GetNext()) {
+    std::string sys_path = ConvertNullToEmptyString(list_entry->GetName());
+
+    std::unique_ptr<brillo::UdevDevice> device =
+        udev->CreateDeviceFromSysPath(sys_path.c_str());
+    if (!device)
+      continue;
+
+    double touch_slop_distance = 0;
+
+    std::string touch_slop_distance_string = ConvertNullToEmptyString(
+        device->GetPropertyValue("CROS_TOUCH_SLOP_DISTANCE"));
+
+    if (!base::StringToDouble(touch_slop_distance_string,
+                              &touch_slop_distance)) {
+      if (touch_slop_distance_string != "")
+        LOG(WARNING) << "Invalid touch-slop-distance: '"
+                     << touch_slop_distance_string << "'.";
+      continue;
+    }
+    builder->AddArg(
+        base::StringPrintf("--touch-slop-distance=%f", touch_slop_distance));
+    break;
+  }
 }
 
 // Adds UI-related flags to the command line.
@@ -501,8 +582,8 @@ void AddUiFlags(ChromiumCommandBuilder* builder,
 
   // Force OOBE on test images that have requested it.
   if (base::PathExists(base::FilePath("/root/.test_repeat_oobe"))) {
-    base::DeleteFile(data_dir.Append(".oobe_completed"));
-    base::DeleteFile(data_dir.Append("Local State"));
+    brillo::DeleteFile(data_dir.Append(".oobe_completed"));
+    brillo::DeleteFile(data_dir.Append("Local State"));
   }
 
   // Disable logging redirection on test images to make debugging easier.
@@ -571,7 +652,8 @@ void AddUiFlags(ChromiumCommandBuilder* builder,
   SetUpAutoDimFlag(builder, cros_config);
   SetUpFormFactorFlag(builder, cros_config);
 
-  SetUpWallpaperFlags(builder, cros_config, base::Bind(base::PathExists));
+  SetUpWallpaperFlags(builder, cros_config,
+                      base::BindRepeating(base::PathExists));
 
   // TODO(yongjaek): Remove the following flag when the kiosk mode app is ready
   // at crbug.com/309806.
@@ -592,51 +674,23 @@ void AddUiFlags(ChromiumCommandBuilder* builder,
 
   SetUpPowerButtonPositionFlag(builder, cros_config);
   SetUpSideVolumeButtonPositionFlag(builder, cros_config);
+  SetUpHelpContentSwitch(builder, cros_config);
   SetUpRegulatoryLabelFlag(builder, cros_config);
   SetUpInternalStylusFlag(builder, cros_config);
   SetUpFingerprintSensorLocationFlag(builder, cros_config);
   SetUpOzoneNNPalmPropertiesFlag(builder, cros_config);
   SetUpAutoNightLightFlag(builder, cros_config);
   SetUpAllowAmbientEQFlag(builder, cros_config);
+  SetUpHibernateFlag(builder, cros_config);
   SetUpInstantTetheringFlag(builder, cros_config);
   SetUpModemFlag(builder, cros_config);
+  SetUpHPEngageOneProAIOSystem(builder);
 }
 
 // Adds enterprise-related flags to the command line.
 void AddEnterpriseFlags(ChromiumCommandBuilder* builder) {
   builder->AddArg("--enterprise-enrollment-initial-modulus=15");
   builder->AddArg("--enterprise-enrollment-modulus-limit=19");
-}
-
-// Adds patterns to the --vmodule flag.
-void AddVmodulePatterns(ChromiumCommandBuilder* builder) {
-  // Turn on logging about external displays being connected and disconnected.
-  // Different behavior is seen from different displays and these messages are
-  // used to determine what happened within feedback reports.
-  builder->AddVmodulePattern("*/ui/display/manager/chromeos/*=1");
-
-  // Turn on basic logging for Ozone platform implementations.
-  builder->AddVmodulePattern("*/ui/ozone/*=1");
-
-  // Turn on basic logging for enrollment flow.
-  builder->AddVmodulePattern("*/browser/chromeos/login/enrollment/*=1");
-  builder->AddVmodulePattern("enrollment_screen_handler=1");
-
-  // Turn on OOBE/Login logs.
-  builder->AddVmodulePattern("*/browser/chromeos/login/screens/*=1");
-  builder->AddVmodulePattern("*/webui/chromeos/login/*=1");
-  builder->AddVmodulePattern("wizard_controller=1");
-
-  // TODO(https://crbug.com/907158): Needed for investigating issues with tablet
-  // mode detection and internal input device event blocking logic.
-  builder->AddVmodulePattern("*/ash/wm/tablet_mode/*=1");
-
-  // TODO(https://crbug.com/1106586,https://crbug.com/1102123): Remove after
-  // issues with night light are closed.
-  builder->AddVmodulePattern("*night_light*=1");
-
-  if (builder->UseFlagIsSet("cheets"))
-    builder->AddVmodulePattern("*arc/*=1");
 }
 
 }  // namespace
@@ -669,7 +723,32 @@ void AddSerializedAshSwitches(ChromiumCommandBuilder* builder,
   for (const auto& flag :
        base::SplitString(serialized_ash_switches, "\0"s, base::KEEP_WHITESPACE,
                          base::SPLIT_WANT_NONEMPTY)) {
-    builder->AddArg(flag);
+    if (base::StartsWith(flag,
+                         "--enable-features=", base::CompareCase::SENSITIVE) ||
+        base::StartsWith(flag,
+                         "--disable-features=", base::CompareCase::SENSITIVE)) {
+      std::vector<std::string> pieces = base::SplitString(
+          flag, "=,", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+      CHECK_GE(pieces.size(), 2u);
+      const bool is_enable_features = pieces[0] == "--enable-features";
+      for (size_t i = 1; i < pieces.size(); i++) {
+        if (is_enable_features)
+          builder->AddFeatureEnableOverride(pieces[i]);
+        else
+          builder->AddFeatureDisableOverride(pieces[i]);
+      }
+    } else {
+      builder->AddArg(flag);
+    }
+  }
+}
+
+void SetUpHelpContentSwitch(ChromiumCommandBuilder* builder,
+                            brillo::CrosConfigInterface* cros_config) {
+  std::string help_content_id;
+  if (cros_config && cros_config->GetString(kUiPath, kHelpContentIdProperty,
+                                            &help_content_id)) {
+    builder->AddArg("--device-help-content-id=" + help_content_id);
   }
 }
 
@@ -685,7 +764,7 @@ void SetUpRegulatoryLabelFlag(ChromiumCommandBuilder* builder,
 void SetUpWallpaperFlags(
     ChromiumCommandBuilder* builder,
     brillo::CrosConfigInterface* cros_config,
-    base::Callback<bool(const base::FilePath&)> path_exists) {
+    const base::RepeatingCallback<bool(const base::FilePath&)>& path_exists) {
   AddWallpaperFlags(builder, "guest", "guest", path_exists);
   AddWallpaperFlags(builder, "child", "child", path_exists);
 
@@ -775,9 +854,9 @@ void SetUpPowerButtonPositionFlag(ChromiumCommandBuilder* builder,
     return;
   }
 
-  base::Value position_info(base::Value::Type::DICTIONARY);
-  position_info.SetStringKey(kPowerButtonEdgeField, std::move(edge_as_string));
-  position_info.SetDoubleKey(kPowerButtonPositionField, position_as_double);
+  base::Value::Dict position_info;
+  position_info.Set(kPowerButtonEdgeField, std::move(edge_as_string));
+  position_info.Set(kPowerButtonPositionField, position_as_double);
 
   std::string json_position_info;
   base::JSONWriter::Write(position_info, &json_position_info);
@@ -796,10 +875,9 @@ void SetUpSideVolumeButtonPositionFlag(
     return;
   }
 
-  base::Value position_info(base::Value::Type::DICTIONARY);
-  position_info.SetStringKey(kSideVolumeButtonRegion,
-                             std::move(region_as_string));
-  position_info.SetStringKey(kSideVolumeButtonSide, std::move(side_as_string));
+  base::Value::Dict position_info;
+  position_info.Set(kSideVolumeButtonRegion, std::move(region_as_string));
+  position_info.Set(kSideVolumeButtonSide, std::move(side_as_string));
 
   std::string json_position_info;
   if (!base::JSONWriter::Write(position_info, &json_position_info)) {
@@ -812,13 +890,13 @@ void SetUpSideVolumeButtonPositionFlag(
 
 void SetUpOzoneNNPalmPropertiesFlag(ChromiumCommandBuilder* builder,
                                     brillo::CrosConfigInterface* cros_config) {
-  base::Value info(base::Value::Type::DICTIONARY);
+  base::Value::Dict info;
   if (cros_config) {
     std::string value;
     for (const char* property : kOzoneNNPalmOptionalProperties) {
       if (cros_config->GetString(kOzoneNNPalmPropertiesPath, property,
                                  &value)) {
-        info.SetStringKey(property, std::move(value));
+        info.Set(property, std::move(value));
         continue;
       }
     }
@@ -849,6 +927,57 @@ void SetUpAllowAmbientEQFlag(ChromiumCommandBuilder* builder,
   builder->AddFeatureEnableOverride("AllowAmbientEQ");
 }
 
+// Gets a powerd pref from |cros_config|, falling back on searching the
+// file-based powerd preferences if not found. Powerd has a hierarchy of
+// preferences it searches for a given key, so search both the core defaults
+// set by boxster as well as file-based preferences customized by different
+// overlays.
+bool GetPowerdPref(const char* pref_name,
+                   brillo::CrosConfigInterface* cros_config,
+                   std::string* val_out) {
+  if (cros_config && cros_config->GetString(kPowerPath, pref_name, val_out)) {
+    return true;
+  }
+
+  std::string pref_name_underscores;
+  base::ReplaceChars(pref_name, "-", "_", &pref_name_underscores);
+  for (const char* pref_dir : kPowerdPrefPaths) {
+    base::FilePath dir_path = base::FilePath(pref_dir);
+    base::FilePath pref_path =
+        base::FilePath(dir_path.Append(pref_name_underscores));
+
+    if (base::PathExists(pref_path)) {
+      if (base::ReadFileToString(pref_path, val_out)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// Enables the "Hibernate" feature if "disable-hibernate" is set to 0 in
+// the powerd preferences or the experimental flag is enabled.
+void SetUpHibernateFlag(ChromiumCommandBuilder* builder,
+                        brillo::CrosConfigInterface* cros_config) {
+  std::string hibernate_str;
+
+  // If the experimental flag is set, enable resume from hibernation.
+  if (base::PathExists(base::FilePath(kPowerdHibernateExperimentFlag))) {
+    builder->AddFeatureEnableOverride(kHibernateFeature);
+    return;
+  }
+
+  if (!GetPowerdPref(kHibernateField, cros_config, &hibernate_str)) {
+    return;
+  }
+
+  base::TrimWhitespaceASCII(hibernate_str, base::TRIM_ALL, &hibernate_str);
+  if (hibernate_str == "0") {
+    builder->AddFeatureEnableOverride(kHibernateFeature);
+  }
+}
+
 void SetUpInstantTetheringFlag(ChromiumCommandBuilder* builder,
                                brillo::CrosConfigInterface* cros_config) {
   if (builder->UseFlagIsSet("disable_instant_tethering")) {
@@ -877,6 +1006,9 @@ void AddCrashHandlerFlag(ChromiumCommandBuilder* builder) {
 // supported subset of devices.
 void AddMlFlags(ChromiumCommandBuilder* builder,
                 brillo::CrosConfigInterface* cros_config) {
+  if (builder->UseFlagIsSet("ml_service"))
+    builder->AddArg("--ml_service=enabled");
+
   if (builder->UseFlagIsSet("smartdim"))
     builder->AddFeatureEnableOverride("SmartDim");
 
@@ -885,6 +1017,9 @@ void AddMlFlags(ChromiumCommandBuilder* builder,
 
   if (builder->UseFlagIsSet("enable_heuristic_palm_detection_filter"))
     builder->AddFeatureEnableOverride("EnableHeuristicPalmDetectionFilter");
+
+  if (!builder->UseFlagIsSet("ondevice_grammar"))
+    builder->AddFeatureDisableOverride("OnDeviceGrammarCheck");
 
   if (builder->UseFlagIsSet("ondevice_handwriting"))
     builder->AddArg("--ondevice_handwriting=use_rootfs");
@@ -904,11 +1039,34 @@ void AddMlFlags(ChromiumCommandBuilder* builder,
 
   if (builder->UseFlagIsSet("ondevice_document_scanner"))
     builder->AddArg("--ondevice_document_scanner=use_rootfs");
+  else if (builder->UseFlagIsSet("ondevice_document_scanner_dlc"))
+    builder->AddArg("--ondevice_document_scanner=use_dlc");
+
+  if (!builder->UseFlagIsSet("federated_service")) {
+    builder->AddFeatureDisableOverride("FederatedService");
+  }
+
+  if (builder->UseFlagIsSet("camera_feature_effects"))
+    builder->AddArg("--camera-effects-supported-by-hardware");
 
   SetUpHandwritingRecognitionWebPlatformApiFlag(builder, cros_config);
+  SetUpHasHpsFlag(builder, cros_config);
+}
+
+// Adds flags related to feature management that must be enabled for this
+// device.
+void AddFeatureManagementFlags(
+    ChromiumCommandBuilder* builder,
+    segmentation::FeatureManagement* feature_management) {
+  std::set<std::string> features =
+      feature_management->ListFeatures(segmentation::USAGE_CHROME);
+  for (auto feature : features) {
+    builder->AddFeatureEnableOverride(feature);
+  }
 }
 
 void PerformChromeSetup(brillo::CrosConfigInterface* cros_config,
+                        segmentation::FeatureManagement* feature_management,
                         bool* is_developer_end_user_out,
                         std::map<std::string, std::string>* env_vars_out,
                         std::vector<std::string>* args_out,
@@ -936,9 +1094,9 @@ void PerformChromeSetup(brillo::CrosConfigInterface* cros_config,
   AddBorealisFlags(&builder);
   AddLacrosFlags(&builder);
   AddEnterpriseFlags(&builder);
-  AddVmodulePatterns(&builder);
   AddCrashHandlerFlag(&builder);
   AddMlFlags(&builder, cros_config);
+  AddFeatureManagementFlags(&builder, feature_management);
 
   // Apply any modifications requested by the developer.
   if (builder.is_developer_end_user()) {

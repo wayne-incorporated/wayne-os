@@ -1,0 +1,36 @@
+From 7f77c1cf6d631c5811bf64c80e1ab0e3920712b6 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Sun, 3 Apr 2022 11:23:20 -0300
+Subject: [PATCH 162/163] elf: Use volatile to set __rseq_size and
+ __rseq_offset
+
+To avoid compiler to optimize them away.
+---
+ sysdeps/nptl/dl-tls_init_tp.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/nptl/dl-tls_init_tp.c b/sysdeps/nptl/dl-tls_init_tp.c
+index 53fba774a5..01ff90117c 100644
+--- a/sysdeps/nptl/dl-tls_init_tp.c
++++ b/sysdeps/nptl/dl-tls_init_tp.c
+@@ -109,7 +109,7 @@ __tls_init_tp (void)
+       {
+         /* We need a writable view of the variables.  They are in
+            .data.relro and are not yet write-protected.  */
+-        extern unsigned int size __asm__ ("__rseq_size");
++        extern volatile unsigned int size __asm__ ("__rseq_size");
+         size = sizeof (pd->rseq_area);
+       }
+ 
+@@ -119,7 +119,7 @@ __tls_init_tp (void)
+        all targets support __thread_pointer, so set __rseq_offset only
+        if thre rseq registration may have happened because RSEQ_SIG is
+        defined.  */
+-    extern ptrdiff_t offset __asm__ ("__rseq_offset");
++    extern volatile ptrdiff_t offset __asm__ ("__rseq_offset");
+     offset = (char *) &pd->rseq_area - (char *) __thread_pointer ();
+ #endif
+   }
+-- 
+2.37.2
+

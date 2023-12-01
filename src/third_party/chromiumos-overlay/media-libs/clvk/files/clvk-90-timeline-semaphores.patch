@@ -1,0 +1,916 @@
+diff --git a/clvk/src/device.cpp b/clvk/src/device.cpp
+index ffdaccf..80aea93 100644
+--- a/clvk/src/device.cpp
++++ b/clvk/src/device.cpp
+@@ -47,6 +47,8 @@ void cvk_device::init_vulkan_properties(VkInstance instance) {
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT;
+     m_subgroup_properties.sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
++    m_timeline_semaphore_properties.sType =
++        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES;
+ 
+ #define VER_EXT_PROP(ver, ext, prop)                                           \
+     {ver, ext, reinterpret_cast<VkBaseOutStructure*>(&prop)}
+@@ -61,6 +63,9 @@ void cvk_device::init_vulkan_properties(VkInstance instance) {
+                          m_pci_bus_info_properties),
+             VER_EXT_PROP(VK_MAKE_VERSION(1, 1, 0), nullptr,
+                          m_subgroup_properties),
++            VER_EXT_PROP(VK_MAKE_VERSION(1, 2, 0),
++                         VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
++                         m_timeline_semaphore_properties),
+         };
+ #undef VER_EXT_PROP
+ 
+@@ -218,6 +223,7 @@ bool cvk_device::init_extensions() {
+         VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME,
+         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
++        VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
+     };
+ 
+     if (m_properties.apiVersion < VK_MAKE_VERSION(1, 2, 0)) {
+@@ -271,6 +277,8 @@ void cvk_device::init_features(VkInstance instance) {
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES;
+     m_features_buffer_device_address.sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
++    m_features_timeline_semaphore.sType =
++        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+ 
+     std::vector<std::tuple<uint32_t, const char*, VkBaseOutStructure*>>
+         coreversion_extension_features = {
+@@ -300,7 +308,9 @@ void cvk_device::init_features(VkInstance instance) {
+             VER_EXT_FEAT(VK_MAKE_VERSION(1, 2, 0),
+                          VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+                          m_features_buffer_device_address),
+-
++            VER_EXT_FEAT(VK_MAKE_VERSION(1, 2, 0),
++                         VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
++                         m_features_timeline_semaphore),
+ #undef VER_EXT_FEAT
+         };
+ 
+@@ -347,6 +357,8 @@ void cvk_device::init_features(VkInstance instance) {
+     cvk_info(
+         "subgroup extended types: %d",
+         m_features_shader_subgroup_extended_types.shaderSubgroupExtendedTypes);
++    cvk_info("timeline semaphore: %d",
++             m_features_timeline_semaphore.timelineSemaphore);
+ 
+     // Selectively enable core features.
+     if (supported_features.features.shaderInt16) {
+diff --git a/clvk/src/device.hpp b/clvk/src/device.hpp
+index 4a59319..6bd10d9 100644
+--- a/clvk/src/device.hpp
++++ b/clvk/src/device.hpp
+@@ -440,6 +440,15 @@ struct cvk_device : public _cl_device_id,
+ 
+     CHECK_RETURN bool has_timer_support() const { return m_has_timer_support; }
+ 
++    CHECK_RETURN bool has_timeline_semaphore_support() const {
++        return m_features_timeline_semaphore.timelineSemaphore;
++    }
++
++    CHECK_RETURN uint32_t maxTimelineSemaphoreValueDifference() const {
++        return m_timeline_semaphore_properties
++            .maxTimelineSemaphoreValueDifference;
++    }
++
+     CHECK_RETURN cl_int get_device_host_timer(cl_ulong* dev_ts,
+                                               cl_ulong* host_ts) const;
+     cl_ulong device_timer_to_host(cl_ulong dev, cl_ulong sync_dev,
+@@ -550,6 +559,7 @@ private:
+     VkPhysicalDeviceIDPropertiesKHR m_device_id_properties;
+     VkPhysicalDeviceSubgroupProperties m_subgroup_properties{};
+     VkPhysicalDevicePCIBusInfoPropertiesEXT m_pci_bus_info_properties;
++    VkPhysicalDeviceTimelineSemaphoreProperties m_timeline_semaphore_properties;
+     // Vulkan features
+     VkPhysicalDeviceFeatures2 m_features{};
+     VkPhysicalDeviceVariablePointerFeatures m_features_variable_pointer{};
+@@ -564,6 +574,7 @@ private:
+         m_features_vulkan_memory_model{};
+     VkPhysicalDeviceBufferDeviceAddressFeaturesKHR
+         m_features_buffer_device_address{};
++    VkPhysicalDeviceTimelineSemaphoreFeatures m_features_timeline_semaphore{};
+ 
+     VkDevice m_dev;
+     std::vector<const char*> m_vulkan_device_extensions;
+diff --git a/clvk/src/event.cpp b/clvk/src/event.cpp
+index daa6671..97f756a 100644
+--- a/clvk/src/event.cpp
++++ b/clvk/src/event.cpp
+@@ -32,15 +32,23 @@ cvk_event_command::cvk_event_command(cvk_context* ctx, cvk_command* cmd,
+         m_status = CL_QUEUED;
+         m_command_type = cmd->type();
+     }
++    if (m_command_type == CL_COMMAND_USER || !queue->use_timeline_semaphore()) {
++        m_cv = std::make_unique<cvk_std_condition_variable>();
++    } else {
++        cvk_semaphore* sem;
++        uint64_t value;
++        queue->get_next_semaphore_and_value(&sem, &value, m_command_type);
++        m_cv = std::make_unique<cvk_semaphore_condition_variable>(sem, value);
++    }
+ }
+ 
+-void cvk_event_command::set_status(cl_int status) {
++void cvk_event_command::set_status_no_lock(cl_int status) {
++    if (status >= m_status)
++        return;
++
+     cvk_debug_group(loggroup::event,
+                     "cvk_event::set_status: event = %p, status = %d", this,
+                     status);
+-    std::lock_guard<std::mutex> lock(m_lock);
+-
+-    CVK_ASSERT(status < m_status);
+     m_status = status;
+ 
+     if (m_queue && m_queue->has_property(CL_QUEUE_PROFILING_ENABLE) && m_cmd &&
+@@ -56,7 +64,7 @@ void cvk_event_command::set_status(cl_int status) {
+         }
+     }
+ 
+-    if (completed() || terminated()) {
++    if (m_status <= 0) {
+ 
+         for (auto& type_cb : m_callbacks) {
+             for (auto& cb : type_cb.second) {
+@@ -64,6 +72,6 @@ void cvk_event_command::set_status(cl_int status) {
+             }
+         }
+ 
+-        m_cv.notify_all();
++        m_cv->notify();
+     }
+ }
+diff --git a/clvk/src/event.hpp b/clvk/src/event.hpp
+index 656be1b..9b74c26 100644
+--- a/clvk/src/event.hpp
++++ b/clvk/src/event.hpp
+@@ -17,6 +17,7 @@
+ #include "cl_headers.hpp"
+ #include "icd.hpp"
+ #include "objects.hpp"
++#include "semaphore.hpp"
+ #include "tracing.hpp"
+ #include "utils.hpp"
+ 
+@@ -34,12 +35,68 @@ struct cvk_event_callback {
+     void* data;
+ };
+ 
++struct cvk_condition_variable {
++    virtual ~cvk_condition_variable() {}
++
++    virtual void notify() = 0;
++    CHECK_RETURN virtual bool wait(std::unique_lock<std::mutex>&) = 0;
++
++    virtual cvk_semaphore* get_semaphore() {
++        CVK_ASSERT(false && "Should never be called");
++        return NULL;
++    }
++    virtual uint64_t get_value() {
++        CVK_ASSERT(false && "Should never be called");
++        return 0;
++    }
++
++    // By default, completion is managed by the user. Only timeline semaphore
++    // can have unnotified completion requiring an additionnal manual check.
++    CHECK_RETURN virtual bool is_complete() { return false; }
++};
++
++struct cvk_semaphore_condition_variable final : public cvk_condition_variable {
++    cvk_semaphore_condition_variable(cvk_semaphore* sem, uint64_t value)
++        : m_sem(sem), m_value(value) {
++        sem->retain();
++    }
++    ~cvk_semaphore_condition_variable() { m_sem->release(); }
++
++    void notify() override final { m_sem->notify(m_value); }
++    CHECK_RETURN bool wait(std::unique_lock<std::mutex>& lock) override final {
++        lock.unlock();
++        bool ret = m_sem->wait(m_value);
++        lock.lock();
++        return ret;
++    }
++
++    bool is_complete() override final { return m_sem->poll_once(m_value); }
++
++    cvk_semaphore* get_semaphore() override final { return m_sem; }
++    uint64_t get_value() override final { return m_value; }
++
++private:
++    cvk_semaphore* m_sem;
++    uint64_t m_value;
++};
++
++struct cvk_std_condition_variable final : public cvk_condition_variable {
++    void notify() override final { m_cv.notify_all(); }
++    CHECK_RETURN bool wait(std::unique_lock<std::mutex>& lock) override final {
++        m_cv.wait(lock);
++        return true;
++    }
++
++private:
++    std::condition_variable m_cv;
++};
++
+ struct cvk_event : public _cl_event, api_object<object_magic::event> {
+ 
+     cvk_event(cvk_context* ctx, cvk_command_queue* queue)
+         : api_object(ctx), m_command_type(0), m_queue(queue) {}
+ 
+-    virtual cl_int get_status() const = 0;
++    virtual cl_int get_status() = 0;
+ 
+     bool completed() { return get_status() == CL_COMPLETE; }
+ 
+@@ -63,6 +120,14 @@ struct cvk_event : public _cl_event, api_object<object_magic::event> {
+     virtual cl_int wait() = 0 ;
+ 
+     virtual uint64_t get_profiling_info(cl_profiling_info pinfo) const = 0 ;
++    virtual cvk_semaphore* get_semaphore() {
++        CVK_ASSERT(false && "Should never be called");
++        return nullptr;
++    }
++    virtual uint64_t get_value() {
++        CVK_ASSERT(false && "Should never be called");
++        return 0;
++    }
+ 
+ protected:
+     cl_command_type m_command_type;
+@@ -73,7 +138,10 @@ struct cvk_event_command : public cvk_event {
+ 
+     cvk_event_command(cvk_context* ctx, cvk_command* cmd, cvk_command_queue* queue);
+ 
+-    void set_status(cl_int status) override final;
++    void set_status(cl_int status) override final {
++        std::lock_guard<std::mutex> lock(m_lock);
++        set_status_no_lock(status);
++    }
+ 
+     void register_callback(cl_int callback_type,
+                            cvk_event_callback_pointer_type ptr,
+@@ -89,18 +157,35 @@ struct cvk_event_command : public cvk_event {
+         }
+     }
+ 
+-    cl_int get_status() const override final { return m_status; }
++    void check_completion() {
++        std::unique_lock<std::mutex> lock(m_lock);
++        if (m_cv->is_complete()) {
++            set_status_no_lock(CL_COMPLETE);
++        }
++    }
++
++    cl_int get_status() override final {
++        check_completion();
++        return m_status;
++    }
+ 
+     cl_int wait() override final {
+         std::unique_lock<std::mutex> lock(m_lock);
+         cvk_debug_group(loggroup::event,
+                         "cvk_event::wait: event = %p, status = %d", this,
+                         m_status);
+-        if ((m_status != CL_COMPLETE) && (m_status >= 0)) {
++        if (m_status > 0) {
+             TRACE_BEGIN_EVENT(command_type(), "queue", (uintptr_t)m_queue,
+                               "command", (uintptr_t)m_cmd);
+-            m_cv.wait(lock);
++            auto ret = m_cv->wait(lock);
+             TRACE_END();
++            if (!ret) {
++                m_status = CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST;
++            }
++            // This is needed in case of timeline semaphore which mark the
++            // event as completed but have not update anything (not the
++            // status nor the profiling information)
++            set_status_no_lock(CL_COMPLETE);
+         }
+ 
+         return m_status;
+@@ -130,13 +215,19 @@ struct cvk_event_command : public cvk_event {
+         set_profiling_info(pinfo, sample_clock());
+     }
+ 
++    cvk_semaphore* get_semaphore() override final {
++        return m_cv->get_semaphore();
++    }
++    uint64_t get_value() override final { return m_cv->get_value(); }
++
+ private:
++    void set_status_no_lock(cl_int status);
+     void execute_callback(cvk_event_callback cb) {
+         cb.pointer(this, m_status, cb.data);
+     }
+ 
+     std::mutex m_lock;
+-    std::condition_variable m_cv;
++    std::unique_ptr<cvk_condition_variable> m_cv;
+     cl_int m_status;
+     cl_ulong m_profiling_data[4]{};
+     cvk_command* m_cmd;
+@@ -175,7 +266,7 @@ struct cvk_event_combine : public cvk_event {
+         }
+     }
+ 
+-    cl_int get_status() const override final {
++    cl_int get_status() override final {
+         return std::min(m_end_event->get_status(), m_start_event->get_status());
+     }
+ 
+diff --git a/clvk/src/queue.cpp b/clvk/src/queue.cpp
+index 3b85a77..ab12142 100644
+--- a/clvk/src/queue.cpp
++++ b/clvk/src/queue.cpp
+@@ -33,11 +33,14 @@ cvk_command_queue::cvk_command_queue(
+       m_properties_array(std::move(properties_array)), m_executor(nullptr),
+       m_command_batch(nullptr), m_vulkan_queue(device->vulkan_queue_allocate()),
+       m_command_pool(device, m_vulkan_queue.queue_family()),
++      m_semaphore_main_timeline(nullptr),
++      m_semaphore_image_init_timeline(nullptr),
+       m_max_cmd_batch_size(device->get_max_cmd_batch_size()),
+       m_max_first_cmd_batch_size(device->get_max_first_cmd_batch_size()),
+       m_max_cmd_group_size(device->get_max_cmd_group_size()),
+       m_max_first_cmd_group_size(device->get_max_first_cmd_group_size()),
+-      m_nb_batch_in_flight(0), m_nb_group_in_flight(0) {
++      m_nb_batch_in_flight(0), m_nb_group_in_flight(0),
++      m_nb_synchronous_submit_command_in_flight(0) {
+ 
+     m_groups.push_back(std::make_unique<cvk_command_group>());
+ 
+@@ -66,6 +69,12 @@ cl_int cvk_command_queue::init() {
+ }
+ 
+ cvk_command_queue::~cvk_command_queue() {
++    if (m_semaphore_image_init_timeline != nullptr) {
++        m_semaphore_image_init_timeline->release();
++    }
++    if (m_semaphore_main_timeline != nullptr) {
++        m_semaphore_main_timeline->release();
++    }
+     if (m_executor != nullptr) {
+         get_thread_pool()->return_executor(m_executor);
+     }
+@@ -125,6 +134,9 @@ void cvk_command_queue::enqueue_command(cvk_command* cmd) {
+     } else if (m_finish_event != nullptr) {
+         cmd->add_dependency(m_finish_event);
+     }
++    if (cmd->is_synchronous_submit()) {
++        sync_submit_cmd_enqueued();
++    }
+     m_groups.back()->commands.push_back(cmd);
+ }
+ 
+@@ -153,6 +165,9 @@ cl_int cvk_command_queue::enqueue_command(cvk_command* cmd, _cl_event** event) {
+             return err;
+         }
+ 
++        cmd->event()->set_profiling_info_from_monotonic_clock(
++            CL_PROFILING_COMMAND_QUEUED);
++
+         // End command batch when size limit reached
+         if (m_command_batch->batch_size() >= m_max_cmd_batch_size ||
+             (m_nb_batch_in_flight == 0 &&
+@@ -177,13 +192,13 @@ cl_int cvk_command_queue::enqueue_command(cvk_command* cmd, _cl_event** event) {
+         }
+ 
+         enqueue_command(cmd);
++
++        cmd->event()->set_profiling_info_from_monotonic_clock(
++            CL_PROFILING_COMMAND_QUEUED);
+     }
+ 
+     cvk_debug_fn("enqueued command %p, event %p", cmd, cmd->event());
+ 
+-    cmd->event()->set_profiling_info_from_monotonic_clock(
+-        CL_PROFILING_COMMAND_QUEUED);
+-
+     if (event != nullptr) {
+         // The event will be returned to the app, retain it for the user
+         cmd->event()->retain();
+@@ -240,8 +255,17 @@ cl_int cvk_command_queue::end_current_command_batch() {
+             return CL_OUT_OF_RESOURCES;
+         }
+         enqueue_command(m_command_batch);
+-        m_command_batch = nullptr;
+ 
++        if (use_timeline_semaphore() &&
++            m_nb_synchronous_submit_command_in_flight == 1) {
++            m_command_batch->set_event_status(CL_SUBMITTED);
++            m_command_batch->set_event_status(CL_RUNNING);
++            if (m_command_batch->submit() != CL_COMPLETE) {
++                return CL_OUT_OF_RESOURCES;
++            }
++        }
++
++        m_command_batch = nullptr;
+         batch_enqueued();
+     }
+     return CL_SUCCESS;
+@@ -315,7 +339,7 @@ cl_int cvk_command_queue::execute_cmds_required_by_no_lock(
+     }
+ 
+     m_lock.unlock();
+-    auto cmds = exec->extract_cmds_required_by(false, num_events, event_list);
++    auto cmds = exec->extract_cmds_required_by(true, num_events, event_list);
+     auto ret = cmds.execute_cmds();
+     m_lock.lock();
+ 
+@@ -482,6 +506,36 @@ cl_int cvk_command_queue::finish() {
+     return CL_SUCCESS;
+ }
+ 
++cl_int cvk_command_queue::get_next_semaphore_and_value(cvk_semaphore** sem,
++                                                     uint64_t* value,
++                                                     cl_command_type type) {
++    CVK_ASSERT(m_device->has_timeline_semaphore_support());
++
++    cvk_semaphore*& semaphore = type == CLVK_COMMAND_IMAGE_INIT
++                                    ? m_semaphore_image_init_timeline
++                                    : m_semaphore_main_timeline;
++    if (semaphore == nullptr) {
++        cl_semaphore_type_khr type = 0;
++        std::vector<cl_semaphore_properties_khr> properties;
++        std::vector<cl_device_id> devices;
++        semaphore = new cvk_semaphore(m_context, type, std::move(devices),
++                                      std::move(properties));
++        auto status = semaphore->init();
++        if (status != CL_SUCCESS) {
++            return status;
++        }
++    }
++
++    *sem = semaphore;
++    *value = semaphore->get_next_value();
++
++    if (*value >= m_device->maxTimelineSemaphoreValueDifference()) {
++        semaphore->release();
++        semaphore = nullptr;
++    }
++    return CL_SUCCESS;
++}
++
+ VkResult cvk_command_pool::allocate_command_buffer(VkCommandBuffer* cmdbuf) {
+ 
+     std::lock_guard<std::mutex> lock(m_lock);
+@@ -523,6 +577,22 @@ bool cvk_command_buffer::begin() {
+     return true;
+ }
+ 
++bool cvk_command_buffer::submit(VkSemaphore signal_semaphore,
++                                uint64_t signal_value,
++                                std::vector<VkSemaphore>& wait_semaphores,
++                                std::vector<uint64_t>& wait_values) {
++    auto& queue = m_queue->vulkan_queue();
++
++    VkResult res = queue.submit(m_command_buffer, signal_semaphore,
++                                signal_value, wait_semaphores, wait_values);
++
++    if (res != VK_SUCCESS) {
++        return false;
++    }
++
++    return true;
++}
++
+ bool cvk_command_buffer::submit_and_wait() {
+     auto& queue = m_queue->vulkan_queue();
+ 
+@@ -1077,12 +1147,38 @@ cl_int cvk_command_batchable::do_action() {
+     return CL_COMPLETE;
+ }
+ 
+-cl_int cvk_command_batch::do_action() {
++cl_int cvk_command_batch::submit() {
++    VkSemaphore signal_semaphore = m_event->get_semaphore()->get_vk_semaphore();
++    uint64_t signal_value = m_event->get_value();
++    std::vector<VkSemaphore> wait_semaphores;
++    std::vector<uint64_t> wait_values;
++    for (auto &dep : dependencies()) {
++        wait_semaphores.push_back(dep->get_semaphore()->get_vk_semaphore());
++        wait_values.push_back(dep->get_value());
++    }
++    if (!m_command_buffer->submit(signal_semaphore, signal_value,
++                                  wait_semaphores, wait_values)) {
++        return CL_OUT_OF_RESOURCES;
++    }
++    m_submitted = true;
++    // We have consider the default case when the batch is executed
++    // synchronously. As we now know that is will be asynchronous, mark this
++    // command as completed as far as synchronous commands are concerned.
++    m_queue->sync_submit_cmd_completed();
+ 
+-    cvk_info("executing batch of %lu commands", m_commands.size());
++    // add ourselves in dependency so that we wait on the batch completion
++    // before calling 'cvk_command_batch::do_action' in 'cvk_command::execute'.
++    add_dependency(m_event);
+ 
+-    if (!m_command_buffer->submit_and_wait()) {
+-        return CL_OUT_OF_RESOURCES;
++    return CL_COMPLETE;
++}
++
++cl_int cvk_command_batch::do_action() {
++    if (!m_submitted) {
++        cvk_info("executing batch of %lu commands", m_commands.size());
++        if (!m_command_buffer->submit_and_wait()) {
++            return CL_OUT_OF_RESOURCES;
++        }
+     }
+ 
+     m_queue->batch_completed();
+diff --git a/clvk/src/queue.hpp b/clvk/src/queue.hpp
+index da261e3..fd7e2fe 100644
+--- a/clvk/src/queue.hpp
++++ b/clvk/src/queue.hpp
+@@ -143,6 +143,11 @@ struct cvk_command_queue : public _cl_command_queue,
+         return (m_properties & prop) == prop;
+     }
+ 
++    bool use_timeline_semaphore() const {
++        return m_device->has_timeline_semaphore_support() &&
++               !has_property(CL_QUEUE_PROFILING_ENABLE);
++    }
++
+     CHECK_RETURN cl_int enqueue_command_with_deps(cvk_command* cmd,
+                                                   cl_uint num_dep_events,
+                                                   _cl_event* const* dep_events,
+@@ -201,11 +206,21 @@ struct cvk_command_queue : public _cl_command_queue,
+         TRACE_CNT(group_in_flight_counter, group - 1);
+     }
+ 
++    void sync_submit_cmd_enqueued() {
++        m_nb_synchronous_submit_command_in_flight++;
++    }
++    void sync_submit_cmd_completed() {
++        m_nb_synchronous_submit_command_in_flight--;
++    }
++
+     cl_int execute_cmds_required_by(cl_uint num_events,
+                                     _cl_event* const* event_list);
+     cl_int execute_cmds_required_by_no_lock(cl_uint num_events,
+                                             _cl_event* const* event_list);
+ 
++    cl_int get_next_semaphore_and_value(cvk_semaphore** sem, uint64_t* value,
++                                      cl_command_type type);
++
+ private:
+     CHECK_RETURN cl_int satisfy_data_dependencies(cvk_command* cmd);
+     void enqueue_command(cvk_command* cmd);
+@@ -228,6 +243,9 @@ private:
+     cvk_vulkan_queue_wrapper& m_vulkan_queue;
+     cvk_command_pool m_command_pool;
+ 
++    cvk_semaphore *m_semaphore_main_timeline;
++    cvk_semaphore *m_semaphore_image_init_timeline;
++
+     cl_uint m_max_cmd_batch_size;
+     cl_uint m_max_first_cmd_batch_size;
+     cl_uint m_max_cmd_group_size;
+@@ -236,6 +254,8 @@ private:
+     std::atomic<uint64_t> m_nb_batch_in_flight;
+     std::atomic<uint64_t> m_nb_group_in_flight;
+ 
++    std::atomic<uint64_t> m_nb_synchronous_submit_command_in_flight;
++
+     TRACE_CNT_VAR(batch_in_flight_counter);
+     TRACE_CNT_VAR(group_in_flight_counter);
+ };
+@@ -322,6 +342,10 @@ struct cvk_command_buffer {
+         return res == VK_SUCCESS;
+     }
+ 
++    CHECK_RETURN bool submit(VkSemaphore signal_semaphore,
++                             uint64_t signal_value,
++                             std::vector<VkSemaphore>& wait_semaphores,
++                             std::vector<uint64_t>& wait_values);
+     CHECK_RETURN bool submit_and_wait();
+ 
+     operator VkCommandBuffer() { return m_command_buffer; }
+@@ -340,7 +364,12 @@ struct cvk_command {
+         : m_type(type), m_queue(queue),
+           m_event(new cvk_event_command(m_queue->context(), this, queue)) {}
+ 
+-    virtual ~cvk_command() { m_event->release(); }
++    virtual ~cvk_command() {
++        for (auto& event : m_event_deps) {
++            event->release();
++        }
++        m_event->release();
++    }
+ 
+     void set_dependencies(cl_uint num_event_deps,
+                           _cl_event* const* event_deps) {
+@@ -369,6 +398,15 @@ struct cvk_command {
+     // never have data movement requirements of their own.
+     virtual bool is_data_movement() const { return false; }
+ 
++    virtual bool is_synchronous_submit() const {
++        for (auto &ev : m_event_deps) {
++            if (ev->is_user_event()) {
++                return true;
++            }
++        }
++        return false;
++    }
++
+     void add_dependency(cvk_event* dep) {
+         dep->retain();
+         m_event_deps.push_back(dep);
+@@ -382,7 +420,6 @@ struct cvk_command {
+             if (ev->wait() != CL_COMPLETE) {
+                 status = CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST;
+             }
+-            ev->release();
+         }
+ 
+         // Then execute the action if no dependencies failed
+@@ -396,12 +433,15 @@ struct cvk_command {
+             status = do_action();
+             TRACE_END();
+         }
++        if (is_synchronous_submit()){
++            m_queue->sync_submit_cmd_completed();
++        }
+ 
+         set_event_status(status);
+         return status;
+     }
+ 
+-    cvk_event_command* event() const { return m_event; }
++    virtual cvk_event_command* event() const { return m_event; }
+ 
+     cl_command_type type() const { return m_type; }
+ 
+@@ -629,6 +669,7 @@ struct cvk_command_batchable : public cvk_command {
+ 
+     bool can_be_batched() const override final;
+     bool is_built_before_enqueue() const override final { return false; }
++    bool is_synchronous_submit() const override final { return true; }
+ 
+     CHECK_RETURN cl_int get_timestamp_query_results(cl_ulong* start,
+                                                     cl_ulong* end);
+@@ -765,7 +806,7 @@ private:
+ 
+ struct cvk_command_batch : public cvk_command {
+     cvk_command_batch(cvk_command_queue* queue)
+-        : cvk_command(CLVK_COMMAND_BATCH, queue) {}
++        : cvk_command(CLVK_COMMAND_BATCH, queue), m_submitted(false) {}
+ 
+     cl_int add_command(cvk_command_batchable* cmd) {
+         if (!m_command_buffer) {
+@@ -797,6 +838,8 @@ struct cvk_command_batch : public cvk_command {
+ 
+     cl_uint batch_size() { return m_commands.size(); }
+ 
++    bool is_synchronous_submit() const override final { return !m_submitted; }
++
+     CHECK_RETURN cl_int
+     set_profiling_info(cl_profiling_info pinfo) override final {
+         cl_int status = cvk_command::set_profiling_info(pinfo);
+@@ -829,14 +872,24 @@ struct cvk_command_batch : public cvk_command {
+ 
+     void set_event_status(cl_int status) override final {
+         m_event->set_status(status);
++        if (status == CL_RUNNING && m_queue->profiling_on_device())
++            return;
+         for (auto& cmd : m_commands) {
+             cmd->set_event_status(status);
+         }
+     }
+ 
++    CHECK_RETURN cl_int submit();
++
++    cvk_event_command* event() const override final {
++        CVK_ASSERT(m_commands.size() > 0);
++        return m_commands.back()->event();
++    }
++
+ private:
+     CHECK_RETURN cl_int do_action() override final;
+ 
++    bool m_submitted;
+     std::vector<std::unique_ptr<cvk_command_batchable>> m_commands;
+     std::unique_ptr<cvk_command_buffer> m_command_buffer;
+     cl_ulong m_sync_dev, m_sync_host;
+diff --git a/clvk/src/semaphore.cpp b/clvk/src/semaphore.cpp
+index 684e412..a845a1c 100644
+--- a/clvk/src/semaphore.cpp
++++ b/clvk/src/semaphore.cpp
+@@ -13,13 +13,20 @@
+ // limitations under the License.
+ 
+ #include "semaphore.hpp"
++#include "tracing.hpp"
+ 
+ cl_int cvk_semaphore::init() {
+ 
+     auto vkdev = m_context->device()->vulkan_device();
+ 
++    VkSemaphoreTypeCreateInfo timelineCreateInfo;
++    timelineCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
++    timelineCreateInfo.pNext = NULL;
++    timelineCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
++    timelineCreateInfo.initialValue = m_next_value;
++
+     VkSemaphoreCreateInfo info = {
+-        VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, nullptr,
++        VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &timelineCreateInfo,
+         0 // flags
+     };
+ 
+@@ -30,3 +37,93 @@ cl_int cvk_semaphore::init() {
+ 
+     return CL_SUCCESS;
+ }
++
++void cvk_semaphore::notify(uint64_t value) {
++    std::unique_lock<std::mutex> lock(m_lock);
++    if (value <= m_current_value) {
++        return;
++    }
++
++    VkSemaphoreSignalInfo signalInfo;
++    signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
++    signalInfo.pNext = NULL;
++    signalInfo.semaphore = m_semaphore;
++    signalInfo.value = value;
++    VkResult res =
++        vkSignalSemaphore(m_context->device()->vulkan_device(), &signalInfo);
++    if (res != VK_SUCCESS) {
++        cvk_error("vkSignalSemaphore failed (%d %s)", res,
++                  vulkan_error_string(res));
++    }
++    m_current_value = value;
++}
++
++bool cvk_semaphore::wait(uint64_t value) {
++    std::unique_lock<std::mutex> lock(m_lock);
++    VkResult res = VK_SUCCESS;
++    do {
++        if (value <= m_current_value) {
++            return true;
++        }
++        VkSemaphoreWaitInfo waitInfo;
++        waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
++        waitInfo.pNext = NULL;
++        waitInfo.flags = 0;
++        waitInfo.semaphoreCount = 1;
++        waitInfo.pSemaphores = &m_semaphore;
++        waitInfo.pValues = &value;
++
++        TRACE_BEGIN("vkWaitSemaphore");
++        m_lock.unlock();
++        res = vkWaitSemaphores(m_context->device()->vulkan_device(), &waitInfo,
++                               1000000);
++        m_lock.lock();
++        TRACE_END();
++
++        if (res != VK_TIMEOUT && res != VK_SUCCESS) {
++            cvk_error("vkWaitSemaphores failed (%d %s)", res,
++                      vulkan_error_string(res));
++            return false;
++        }
++    } while (res != VK_SUCCESS);
++    m_current_value = std::max(m_current_value, value);
++    return true;
++}
++
++bool cvk_semaphore::poll(uint64_t value) {
++    uint64_t counter_value;
++    TRACE_BEGIN("vkPollSemaphore");
++    do {
++        VkResult res = vkGetSemaphoreCounterValue(
++            m_context->device()->vulkan_device(), m_semaphore, &counter_value);
++        if (res != VK_SUCCESS) {
++            cvk_error("vkGetSemaphoreCounterValue failed (%d %s)", res,
++                      vulkan_error_string(res));
++            return false;
++        }
++    } while (counter_value < value);
++    m_lock.lock();
++    m_current_value = std::max(m_current_value, counter_value);
++    m_lock.unlock();
++    TRACE_END();
++
++    return true;
++}
++
++bool cvk_semaphore::poll_once(uint64_t value) {
++    uint64_t counter_value;
++    TRACE_BEGIN("vkPollOnceSemaphore");
++    VkResult res = vkGetSemaphoreCounterValue(
++        m_context->device()->vulkan_device(), m_semaphore, &counter_value);
++    if (res != VK_SUCCESS) {
++        cvk_error("vkGetSemaphoreCounterValue failed (%d %s)", res,
++                  vulkan_error_string(res));
++        return false;
++    }
++    m_lock.lock();
++    m_current_value = std::max(m_current_value, counter_value);
++    m_lock.unlock();
++    TRACE_END();
++
++    return m_current_value >= value;
++}
+diff --git a/clvk/src/semaphore.hpp b/clvk/src/semaphore.hpp
+index 31d055a..d3bf48e 100644
+--- a/clvk/src/semaphore.hpp
++++ b/clvk/src/semaphore.hpp
+@@ -28,7 +28,8 @@ struct cvk_semaphore : public _cl_semaphore_khr,
+                   std::vector<cl_device_id>&& devices,
+                   std::vector<cl_semaphore_properties_khr>&& properties)
+         : api_object(context), m_type(type), m_devices(std::move(devices)),
+-          m_properties(std::move(properties)), m_semaphore(VK_NULL_HANDLE) {}
++          m_properties(std::move(properties)), m_semaphore(VK_NULL_HANDLE),
++          m_next_value(0), m_current_value(0) {}
+ 
+     CHECK_RETURN cl_int init();
+ 
+@@ -63,11 +64,24 @@ struct cvk_semaphore : public _cl_semaphore_khr,
+         return 0; // TODO return 1 when signaled
+     }
+ 
++    CHECK_RETURN bool poll_once(uint64_t value);
++    CHECK_RETURN bool poll(uint64_t value);
++    CHECK_RETURN bool wait(uint64_t value);
++    void notify(uint64_t value);
++
++    VkSemaphore get_vk_semaphore() { return m_semaphore; }
++    uint64_t get_next_value() { return ++m_next_value; }
++
+ private:
+     cl_semaphore_type_khr m_type;
+     std::vector<cl_device_id> m_devices;
+     std::vector<cl_semaphore_properties_khr> m_properties;
+     VkSemaphore m_semaphore;
++
++    uint64_t m_next_value;
++    uint64_t m_current_value;
++
++    std::mutex m_lock;
+ };
+ 
+ static inline cvk_semaphore* icd_downcast(cl_semaphore_khr sem) {
+diff --git a/clvk/src/vkutils.hpp b/clvk/src/vkutils.hpp
+index b26a5bd..6ca89e5 100644
+--- a/clvk/src/vkutils.hpp
++++ b/clvk/src/vkutils.hpp
+@@ -64,19 +64,36 @@ struct cvk_vulkan_queue_wrapper {
+         return ret;
+     }
+ 
+-    CHECK_RETURN VkResult submit(const std::vector<VkCommandBuffer>& cmdbufs) {
++    CHECK_RETURN VkResult submit(VkCommandBuffer command_buffer,
++                                 VkSemaphore signal_semaphore,
++                                 uint64_t signal_value,
++                                 std::vector<VkSemaphore>& wait_semaphores,
++                                 std::vector<uint64_t>& wait_values) {
+         std::lock_guard<std::mutex> lock(m_lock);
+ 
++        std::vector<VkPipelineStageFlags> wait_stage_masks;
++        for (auto unused : wait_semaphores) {
++            UNUSED(unused);
++            wait_stage_masks.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
++        }
++        VkTimelineSemaphoreSubmitInfo timelineInfo;
++        timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
++        timelineInfo.pNext = NULL;
++        timelineInfo.waitSemaphoreValueCount = (uint32_t)wait_values.size();
++        timelineInfo.pWaitSemaphoreValues = wait_values.data();
++        timelineInfo.signalSemaphoreValueCount = 1;
++        timelineInfo.pSignalSemaphoreValues = &signal_value;
++
+         VkSubmitInfo submitInfo = {
+             VK_STRUCTURE_TYPE_SUBMIT_INFO,
+-            nullptr,
+-            0,                                     // waitSemaphoreCOunt
+-            nullptr,                               // pWaitSemaphores
+-            nullptr,                               // pWaitDstStageMask
+-            static_cast<uint32_t>(cmdbufs.size()), // commandBufferCount
+-            cmdbufs.data(),
+-            0,       // signalSemaphoreCount
+-            nullptr, // pSignalSemaphores
++            &timelineInfo,
++            (uint32_t)wait_semaphores.size(), // waitSemaphoreCOunt
++            wait_semaphores.data(),           // pWaitSemaphores
++            wait_stage_masks.data(),          // pWaitDstStageMask
++            1,                                // commandBufferCount
++            &command_buffer,
++            1,                 // signalSemaphoreCount
++            &signal_semaphore, // pSignalSemaphores
+         };
+ 
+         TRACE_BEGIN("vkQueueSubmit");
+@@ -87,6 +104,8 @@ struct cvk_vulkan_queue_wrapper {
+                          vulkan_error_string(ret));
+         }
+ 
++        m_num_submissions++;
++
+         return ret;
+     }
+ 

@@ -1,0 +1,152 @@
+commit 0e96d95d13d9f7b2a96bcaa569ce0a0181a6c7f3
+Author: Jeremy Morse <jeremy.morse@sony.com>
+Date:   Fri Mar 4 16:39:22 2022 +0000
+
+    [DebugInfo][InstrRef] Accept register-reads after isel in any block
+    
+    When lowering LLVM-IR to instruction referencing stuff, if a value is
+    defined by a COPY, we try and follow the register definitions back to where
+    the value was defined, and build an instruction reference to that
+    instruction. In a few scenarios (such as arguments), this isn't possible.
+    I added some assertions to catch cases that weren't explicitly whitelisted.
+    
+    Over the course of a few months, several more scenarios have cropped up,
+    the lastest is the llvm.read_register intrinsic, which lets LLVM-IR read an
+    arbitary register at any point. In the face of this, there's little point
+    in validating whether debug-info reads a register in an expected scenario.
+    Thus: this patch just deletes those assertions, and adds a regression test
+    to check that something is done with the llvm.read_register intrinsic.
+    
+    Fixes #54190
+    
+    Differential Revision: https://reviews.llvm.org/D121001
+
+diff --git a/llvm/lib/CodeGen/MachineFunction.cpp b/llvm/lib/CodeGen/MachineFunction.cpp
+index fd5ea5cad072..884f609c1e75 100644
+--- a/llvm/lib/CodeGen/MachineFunction.cpp
++++ b/llvm/lib/CodeGen/MachineFunction.cpp
+@@ -1141,26 +1141,13 @@ auto MachineFunction::salvageCopySSA(MachineInstr &MI)
+   MachineBasicBlock &InsertBB = *CurInst->getParent();
+ 
+   // We reached the start of the block before finding a defining instruction.
+-  // It could be from a constant register, otherwise it must be an argument.
+-  if (TRI.isConstantPhysReg(State.first)) {
+-    // We can produce a DBG_PHI that identifies the constant physreg. Doesn't
+-    // matter where we put it, as it's constant valued.
+-    assert(CurInst->isCopy());
+-  } else if (State.first == TRI.getFrameRegister(*this)) {
+-    // LLVM IR is allowed to read the framepointer by calling a
+-    // llvm.frameaddress.* intrinsic. We can support this by emitting a
+-    // DBG_PHI $fp. This isn't ideal, because it extends the behaviours /
+-    // position that DBG_PHIs appear at, limiting what can be done later.
+-    // TODO: see if there's a better way of expressing these variable
+-    // locations.
+-    ;
+-  } else {
+-    // Assert that this is the entry block, or an EH pad. If it isn't, then
+-    // there is some code construct we don't recognise that deals with physregs
+-    // across blocks.
+-    assert(!State.first.isVirtual());
+-    assert(&*InsertBB.getParent()->begin() == &InsertBB || InsertBB.isEHPad());
+-  }
++  // There are numerous scenarios where this can happen:
++  // * Constant physical registers,
++  // * Several intrinsics that allow LLVM-IR to read arbitary registers,
++  // * Arguments in the entry block,
++  // * Exception handling landing pads.
++  // Validating all of them is too difficult, so just insert a DBG_PHI reading
++  // the variable value at this position, rather than checking it makes sense.
+ 
+   // Create DBG_PHI for specified physreg.
+   auto Builder = BuildMI(InsertBB, InsertBB.getFirstNonPHI(), DebugLoc(),
+diff --git a/llvm/test/DebugInfo/X86/instr-ref-ir-reg-read.ll b/llvm/test/DebugInfo/X86/instr-ref-ir-reg-read.ll
+new file mode 100644
+index 000000000000..ff1ccd939d71
+--- /dev/null
++++ b/llvm/test/DebugInfo/X86/instr-ref-ir-reg-read.ll
+@@ -0,0 +1,85 @@
++; RUN: llc %s -start-after=codegenprepare -stop-before=finalize-isel \
++; RUN:    -experimental-debug-variable-locations=true  -o - \
++; RUN: | FileCheck %s
++
++; Test that the given input doesn't crash with instrruction referencing variable
++; locations. The use of llvm.read_register allows the IR to access any register
++; at any point, which is unfortunate, but a use case that needs to be supported.
++;
++; Just examine to see that we read something from $rsp.
++; CHECK-LABEL: bb.1.if.then:
++; CHECK:       DBG_PHI $rsp, 1
++; CHECK:       DBG_INSTR_REF 1, 0
++
++source_filename = "tlb-9e7172.c"
++target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
++target triple = "x86_64-cros-linux-gnu"
++
++@c = dso_local local_unnamed_addr global i32 0, align 4, !dbg !0
++
++; Function Attrs: noredzone nounwind null_pointer_is_valid optsize sspstrong
++define dso_local void @switch_mm_irqs_off() local_unnamed_addr #0 !dbg !16 {
++entry:
++  %0 = load i32, i32* @c, align 4, !dbg !24
++  %tobool.not = icmp eq i32 %0, 0, !dbg !24
++  br i1 %tobool.not, label %if.end, label %if.then, !dbg !25
++
++if.then:                                          ; preds = %entry
++  call void @llvm.dbg.value(metadata i64 0, metadata !20, metadata !DIExpression()), !dbg !26
++  %1 = tail call i64 @llvm.read_register.i64(metadata !7), !dbg !27
++  call void @llvm.dbg.value(metadata i64 %1, metadata !20, metadata !DIExpression()), !dbg !26
++  %call = tail call i32 @b(i64 noundef %1) #4, !dbg !28
++  ret void, !dbg !29
++
++if.end:                                           ; preds = %entry
++  ret void, !dbg !29
++}
++
++; Function Attrs: nofree nounwind readonly
++declare i64 @llvm.read_register.i64(metadata) #1
++
++; Function Attrs: noredzone null_pointer_is_valid optsize
++declare !dbg !30 dso_local i32 @b(i64 noundef) local_unnamed_addr #2
++
++; Function Attrs: nofree nosync nounwind readnone speculatable willreturn
++declare void @llvm.dbg.value(metadata, metadata, metadata) #3
++
++!llvm.dbg.cu = !{!2}
++!llvm.named.register.rsp = !{!7}
++!llvm.module.flags = !{!8, !9, !10, !11, !12, !13, !14}
++!llvm.ident = !{!15}
++
++!0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
++!1 = distinct !DIGlobalVariable(name: "c", scope: !2, file: !5, line: 2, type: !6, isLocal: false, isDefinition: true)
++!2 = distinct !DICompileUnit(language: DW_LANG_C89, file: !3, producer: "clang", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, globals: !4, splitDebugInlining: false, debugInfoForProfiling: true, nameTableKind: None)
++!3 = !DIFile(filename: "tlb.c", directory: ".")
++!4 = !{!0}
++!5 = !DIFile(filename: "tlb-9e7172.c", directory: ".")
++!6 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
++!7 = !{!"rsp"}
++!8 = !{i32 7, !"Dwarf Version", i32 4}
++!9 = !{i32 2, !"Debug Info Version", i32 3}
++!10 = !{i32 1, !"wchar_size", i32 2}
++!11 = !{i32 1, !"Code Model", i32 2}
++!12 = !{i32 7, !"frame-pointer", i32 2}
++!13 = !{i32 1, !"override-stack-alignment", i32 8}
++!14 = !{i32 4, !"SkipRaxSetup", i32 1}
++!15 = !{!"clang version 15.0.0 (git@github.com:llvm/llvm-project ab49dce01f211fd80f76f449035d771f5e2720b9)"}
++!16 = distinct !DISubprogram(name: "switch_mm_irqs_off", scope: !5, file: !5, line: 4, type: !17, scopeLine: 4, flags: DIFlagPrototyped | DIFlagAllCallsDescribed, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !2, retainedNodes: !19)
++!17 = !DISubroutineType(types: !18)
++!18 = !{null}
++!19 = !{!20}
++!20 = !DILocalVariable(name: "d", scope: !21, file: !5, line: 6, type: !23)
++!21 = distinct !DILexicalBlock(scope: !22, file: !5, line: 5, column: 10)
++!22 = distinct !DILexicalBlock(scope: !16, file: !5, line: 5, column: 7)
++!23 = !DIBasicType(name: "long", size: 64, encoding: DW_ATE_signed)
++!24 = !DILocation(line: 5, column: 7, scope: !22)
++!25 = !DILocation(line: 5, column: 7, scope: !16)
++!26 = !DILocation(line: 0, scope: !21)
++!27 = !DILocation(line: 6, column: 14, scope: !21)
++!28 = !DILocation(line: 7, column: 5, scope: !21)
++!29 = !DILocation(line: 9, column: 1, scope: !16)
++!30 = !DISubprogram(name: "b", scope: !5, file: !5, line: 3, type: !31, flags: DIFlagPrototyped, spFlags: DISPFlagOptimized, retainedNodes: !33)
++!31 = !DISubroutineType(types: !32)
++!32 = !{!6, !23}
++!33 = !{}

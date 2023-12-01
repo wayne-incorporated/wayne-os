@@ -1,0 +1,158 @@
+From 1c8e51d6e0ae428bb2e277e4f8dff79b6eab3874 Mon Sep 17 00:00:00 2001
+From: Peter Qiu <zqiu@chromium.org>
+Date: Thu, 10 Jun 2021 17:52:03 +0000
+Subject: [PATCH 12/19] Improve debugability
+
+Increase log level for certain log messages and add more log messages
+to improve debugability.
+
+Author: Paul Stewart <pstew@chromium.org>
+Author: mukesh agrawal <quiche@chromium.org>
+Reviewed-on: https://gerrit.chromium.org/gerrit/42622
+Reviewed-on: https://chromium-review.googlesource.com/185511
+Reviewed-on: https://chromium-review.googlesource.com/186593
+Reviewed-on: https://chromium-review.googlesource.com/206143
+Reviewed-on: https://gerrit.chromium.org/gerrit/24835
+---
+ src/arp.c  |  2 +-
+ src/dhcp.c | 22 +++++++++++++++++-----
+ src/if.c   |  7 +++++++
+ 3 files changed, 25 insertions(+), 6 deletions(-)
+
+diff --git a/src/arp.c b/src/arp.c
+index f3b2e8ad..c07e0f6c 100644
+--- a/src/arp.c
++++ b/src/arp.c
+@@ -296,7 +296,7 @@ arp_probe1(void *arg)
+ 		tv.tv_nsec = 0;
+ 		eloop_timeout_add_tv(ifp->ctx->eloop, &tv, arp_probed, astate);
+ 	}
+-	logdebugx("%s: ARP probing %s (%d of %d), next in %0.1f seconds",
++	loginfox("%s: ARP probing %s (%d of %d), next in %0.1f seconds",
+ 	    ifp->name, inet_ntoa(astate->addr),
+ 	    astate->probes ? astate->probes : PROBE_NUM, PROBE_NUM,
+ 	    timespec_to_double(&tv));
+diff --git a/src/dhcp.c b/src/dhcp.c
+index d0bb26e5..c03c0904 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -1835,7 +1835,7 @@ send_message(struct interface *ifp, uint8_t type,
+ 		/* No carrier? Don't bother sending the packet. */
+ 		if (ifp->carrier <= LINK_DOWN)
+ 			return;
+-		logdebugx("%s: sending %s with xid 0x%x",
++		loginfox("%s: sending %s with xid 0x%x",
+ 		    ifp->name,
+ 		    ifo->options & DHCPCD_BOOTP ? "BOOTP" : get_dhcp_op(type),
+ 		    state->xid);
+@@ -1855,7 +1855,7 @@ send_message(struct interface *ifp, uint8_t type,
+ 		 * However, we do need to advance the timeout. */
+ 		if (ifp->carrier <= LINK_DOWN)
+ 			goto fail;
+-		logdebugx("%s: sending %s (xid 0x%x), next in %0.1f seconds",
++		loginfox("%s: sending %s (xid 0x%x), next in %0.1f seconds",
+ 		    ifp->name,
+ 		    ifo->options & DHCPCD_BOOTP ? "BOOTP" : get_dhcp_op(type),
+ 		    state->xid,
+@@ -1996,6 +1996,8 @@ dhcp_request(void *arg)
+ 	struct dhcp_state *state = D_STATE(ifp);
+ 
+ 	rpc_signal_status("Request");
++	loginfox("%s: requesting lease of %s",
++		 ifp->name, inet_ntoa(state->lease.addr));
+ 	state->state = DHS_REQUEST;
+ 	state->nak_receive_count = 0;
+ 	send_request(ifp);
+@@ -2085,8 +2087,8 @@ dhcp_startrenew(void *arg)
+ 	eloop_timeout_delete(ifp->ctx->eloop, dhcp_startrenew, ifp);
+ 
+ 	lease = &state->lease;
+-	logdebugx("%s: renewing lease of %s", ifp->name,
+-	    inet_ntoa(lease->addr));
++	loginfox("%s: renewing lease of %s", ifp->name,
++		 inet_ntoa(lease->addr));
+ 	state->state = DHS_RENEW;
+ 	state->nak_receive_count = 0;
+ 	dhcp_new_xid(ifp);
+@@ -2829,6 +2831,7 @@ dhcp_inform(struct interface *ifp)
+ 	ifo = ifp->options;
+ 
+ 	rpc_signal_status("Inform");
++	loginfox("%s: informing peers of local address", ifp->name);
+ 	state->state = DHS_INFORM;
+ 	free(state->offer);
+ 	state->offer = NULL;
+@@ -3354,6 +3357,9 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 		return;
+ 	}
+ 
++	loginfox("%s: received %s with xid 0x%x",
++		 ifp->name, get_dhcp_op(type), state->xid);
++
+ #ifdef AUTH
+ 	/* Authenticate the message */
+ 	auth = get_option(ifp->ctx, bootp, bootp_len,
+@@ -3640,7 +3646,7 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 
+ rapidcommit:
+ 		if (!(ifo->options & DHCPCD_INFORM))
+-			LOGDHCP(logdebugx, "acknowledged");
++			LOGDHCP(loginfox, "acknowledged");
+ 		else
+ 		    ifo->options &= ~DHCPCD_STATIC;
+ 	}
+@@ -3697,6 +3703,8 @@ valid_udp_packet(void *data, size_t data_len, struct in_addr *from,
+ 	uint16_t bytes;
+ 
+ 	if (data_len < sizeof(p->ip)) {
++		logwarnx("packet shorter than an ip header "
++			 "(len=%zd)", data_len);
+ 		if (from)
+ 			from->s_addr = INADDR_ANY;
+ 		errno = ERANGE;
+@@ -3706,6 +3714,7 @@ valid_udp_packet(void *data, size_t data_len, struct in_addr *from,
+ 	if (from)
+ 		from->s_addr = p->ip.ip_src.s_addr;
+ 	if (checksum(&p->ip, sizeof(p->ip)) != 0) {
++		logwarnx("packet failed ip header checksum");
+ 		errno = EINVAL;
+ 		return -1;
+ 	}
+@@ -3718,6 +3727,8 @@ valid_udp_packet(void *data, size_t data_len, struct in_addr *from,
+ 	}
+ 	/* Check we don't go beyond the payload */
+ 	if (bytes > data_len) {
++		logwarnx("packet appears truncated "
++			 "(len=%zd, ip_len=%hu)", data_len, bytes);
+ 		errno = ENOBUFS;
+ 		return -1;
+ 	}
+@@ -3739,6 +3750,7 @@ valid_udp_packet(void *data, size_t data_len, struct in_addr *from,
+ 		p->ip.ip_ttl = 0;
+ 		p->ip.ip_sum = 0;
+ 		if (udpsum && checksum(p, bytes) != udpsum) {
++			logwarnx("packet failed udp checksum");
+ 			errno = EINVAL;
+ 			return -1;
+ 		}
+diff --git a/src/if.c b/src/if.c
+index 643fc546..ad7baa84 100644
+--- a/src/if.c
++++ b/src/if.c
+@@ -630,6 +630,13 @@ if_discover(struct dhcpcd_ctx *ctx, struct ifaddrs **ifaddrs,
+ 		TAILQ_INSERT_TAIL(ifs, ifp, next);
+ 	}
+ 
++	if (!ifs) {
++		loginfox("%s: no matching interfaces", __func__);
++		for (ifa = *ifaddrs; ifa; ifa = ifa->ifa_next) {
++			loginfox("%s: considered %s", __func__, ifa->ifa_name);
++		}
++	}
++
+ #ifdef IFLR_ACTIVE
+ 	close(link_fd);
+ #endif
+-- 
+2.33.0.800.g4c38ced690-goog
+

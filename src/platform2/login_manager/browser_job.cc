@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@
 #include <base/json/json_writer.h>
 #include <base/logging.h>
 #include <base/rand_util.h>
-#include <base/stl_util.h>
+#include <base/ranges/algorithm.h>
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_util.h>
 #include <base/values.h>
@@ -40,6 +40,11 @@ const char BrowserJobInterface::kLoginProfileFlag[] = "--login-profile=";
 const char BrowserJobInterface::kCrashLoopBeforeFlag[] = "--crash-loop-before=";
 const char BrowserJobInterface::kBrowserDataMigrationForUserFlag[] =
     "--browser-data-migration-for-user=";
+const char BrowserJobInterface::kBrowserDataMigrationModeFlag[] =
+    "--browser-data-migration-mode=";
+const char BrowserJobInterface::kBrowserDataBackwardMigrationForUserFlag[] =
+    "--browser-data-backward-migration-for-user=";
+const char BrowserJobInterface::kDisallowLacrosFlag[] = "--disallow-lacros";
 
 const char BrowserJob::kFirstExecAfterBootFlag[] = "--first-exec-after-boot";
 
@@ -49,7 +54,7 @@ const char BrowserJob::kFirstExecAfterBootFlag[] = "--first-exec-after-boot";
 //   2nd chrome start to enter guest sessions
 //   3rd chrome start to apply flags from about:flags page
 // If `kUseExtraArgsRuns` is 3 and the 3rd run is less than
-// `kRestartWindowSecond` seconds (60s) apart from 1st run, it would be
+// `kRestartWindowSecond` seconds (100s) apart from 1st run, it would be
 // considered as too crashy and flags are dropped for the 3rd run.
 // See https://crbug.com/1129951.
 const int BrowserJob::kUseExtraArgsRuns = 4;
@@ -58,7 +63,7 @@ static_assert(BrowserJob::kUseExtraArgsRuns > 1,
               "arguments could need one restart to apply them.");
 
 const int BrowserJob::kRestartTries = BrowserJob::kUseExtraArgsRuns + 2;
-const time_t BrowserJob::kRestartWindowSeconds = 60;
+const time_t BrowserJob::kRestartWindowSeconds = 100;
 
 const char BrowserJobInterface::kGuestSessionFlag[] = "--bwsi";
 
@@ -159,7 +164,7 @@ pid_t BrowserJob::CurrentPid() const {
 }
 
 bool BrowserJob::IsGuestSession() {
-  return base::STLCount(arguments_, kGuestSessionFlag) > 0;
+  return base::ranges::count(arguments_, kGuestSessionFlag) > 0;
 }
 
 bool BrowserJob::ShouldRunBrowser() {
@@ -181,7 +186,18 @@ bool BrowserJob::RunInBackground() {
   bool first_boot = !login_metrics_->HasRecordedChromeExec();
   login_metrics_->RecordStats("chrome-exec");
 
-  RecordTime();
+  // Skip `RecordTime()` if ash is being launched for browser data migration and
+  // browser backward data migration so that the relaunch for migration is not
+  // considered a launch crash by `ShouldDropExtraArguments()`. Without this
+  // "safe-mode" gets triggered for migration after a restart to apply flags.
+  // 1. Ash is launched.
+  // 2. Ash is relaunched to apply flags.
+  // 3. Ash is relaunched to do migration.
+  // 4. Ash is relaunched to put users back in session.
+  if (browser_data_migration_arguments_.empty() &&
+      browser_data_backward_migration_arguments_.empty()) {
+    RecordTime();
+  }
 
   extra_one_time_arguments_.clear();
   if (first_boot)
@@ -295,8 +311,7 @@ void BrowserJob::AbortAndKillAll(base::TimeDelta timeout) {
                << timeout.InSeconds() << " seconds after sending SIGABRT";
   KillEverything(SIGKILL, message);
 
-  constexpr base::TimeDelta kTimeoutForSecondKill =
-      base::TimeDelta::FromSeconds(1);
+  constexpr base::TimeDelta kTimeoutForSecondKill = base::Seconds(1);
   if (!system_->ProcessGroupIsGone(pid, kTimeoutForSecondKill)) {
     LOG(WARNING) << "Browser process " << pid << "'s group still not gone "
                  << kTimeoutForSecondKill << " after sending SIGKILL signal";
@@ -394,10 +409,21 @@ void BrowserJob::ClearPid() {
   subprocess_->ClearPid();
 }
 
+void BrowserJob::SetMultiUserSessionStarted() {
+  multi_user_session_started_ = true;
+}
+
 std::vector<std::string> BrowserJob::ExportArgv() const {
   std::vector<std::string> to_return(arguments_.begin(), arguments_.end());
 
-  if (browser_data_migration_arguments_.empty()) {
+  // Browser forward and backward data migration are exclusive.
+  // No migration is performed if both are false or both are true.
+  if (browser_data_migration_arguments_.empty() ==
+      browser_data_backward_migration_arguments_.empty()) {
+    CHECK(browser_data_migration_arguments_.empty() &&
+          browser_data_backward_migration_arguments_.empty())
+        << "Both forward and backward migration have been called.";
+
     to_return.insert(to_return.end(), login_arguments_.begin(),
                      login_arguments_.end());
   } else {
@@ -417,10 +443,19 @@ std::vector<std::string> BrowserJob::ExportArgv() const {
     // ash-chrome to lacros-chrome. Concretely browser data files in
     // ash-chrome's user data dir will be copied/moved to lacros-chrome's user
     // data dir. |ClearBrowserDataMigrationArgs()| must be called after
-    // launching ash-chrome for data migration once ash-chrome doesn't get stuck
+    // launching ash-chrome for data migration so ash-chrome doesn't get stuck
     // in migration mode.
     to_return.insert(to_return.end(), browser_data_migration_arguments_.begin(),
                      browser_data_migration_arguments_.end());
+
+    // Backward migration works simmilarly:
+    // If |browser_data_backward_migration_arguments_| is not empty, it means
+    // that |SetBrowserDataBackwardMigrationArgsForUser| was called.
+    // |ClearBrowserDataBackwardMigrationArgs()| must be called after
+    // launching ash-chrome for data backward migration.
+    to_return.insert(to_return.end(),
+                     browser_data_backward_migration_arguments_.begin(),
+                     browser_data_backward_migration_arguments_.end());
   }
 
   if (ShouldDropExtraArguments()) {
@@ -433,25 +468,24 @@ std::vector<std::string> BrowserJob::ExportArgv() const {
                      extra_arguments_.end());
 
     // Encode feature flags.
-    std::vector<base::Value> feature_flag_list;
+    base::Value::List feature_flag_list;
     for (const auto& feature_flag : feature_flags_) {
-      feature_flag_list.emplace_back(base::Value(feature_flag));
+      feature_flag_list.Append(feature_flag);
     }
     if (!feature_flag_list.empty()) {
       std::sort(feature_flag_list.begin(), feature_flag_list.end());
       std::string encoded;
-      base::JSONWriter::Write(base::Value(std::move(feature_flag_list)),
-                              &encoded);
+      base::JSONWriter::Write(feature_flag_list, &encoded);
       to_return.push_back(base::StringPrintf(
           "--%s=%s", chromeos::switches::kFeatureFlags, encoded.c_str()));
     }
 
     // Encode origin list values.
-    base::Value origin_list_dict(base::Value::Type::DICTIONARY);
+    base::Value::Dict origin_list_dict;
     for (const auto& entry : origin_list_flags_) {
-      origin_list_dict.SetStringKey(entry.first, entry.second);
+      origin_list_dict.Set(entry.first, entry.second);
     }
-    if (!origin_list_dict.DictEmpty()) {
+    if (!origin_list_dict.empty()) {
       std::string encoded;
       base::JSONWriter::Write(origin_list_dict, &encoded);
       to_return.push_back(base::StringPrintf(
@@ -463,6 +497,10 @@ std::vector<std::string> BrowserJob::ExportArgv() const {
   if (!extra_one_time_arguments_.empty()) {
     to_return.insert(to_return.end(), extra_one_time_arguments_.begin(),
                      extra_one_time_arguments_.end());
+  }
+
+  if (multi_user_session_started_) {
+    to_return.push_back(kDisallowLacrosFlag);
   }
 
   to_return.insert(to_return.end(), test_arguments_.begin(),
@@ -510,16 +548,33 @@ bool BrowserJob::ShouldDropExtraArguments() const {
               kRestartWindowSeconds);
 }
 
-void BrowserJob::SetBrowserDataMigrationArgsForUser(
-    const std::string& userhash) {
+void BrowserJob::SetBrowserDataMigrationArgsForUser(const std::string& userhash,
+                                                    const std::string& mode) {
   browser_data_migration_arguments_.clear();
   browser_data_migration_arguments_.push_back(kBrowserDataMigrationForUserFlag +
                                               userhash);
+
+  browser_data_migration_arguments_.push_back(kBrowserDataMigrationModeFlag +
+                                              mode);
+
   browser_data_migration_arguments_.push_back(kLoginManagerFlag);
 }
 
 void BrowserJob::ClearBrowserDataMigrationArgs() {
   browser_data_migration_arguments_.clear();
+}
+
+void BrowserJob::SetBrowserDataBackwardMigrationArgsForUser(
+    const std::string& userhash) {
+  browser_data_backward_migration_arguments_.clear();
+  browser_data_backward_migration_arguments_.push_back(
+      kBrowserDataBackwardMigrationForUserFlag + userhash);
+
+  browser_data_backward_migration_arguments_.push_back(kLoginManagerFlag);
+}
+
+void BrowserJob::ClearBrowserDataBackwardMigrationArgs() {
+  browser_data_backward_migration_arguments_.clear();
 }
 
 }  // namespace login_manager

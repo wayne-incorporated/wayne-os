@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <secmodt.h>
 #include <unistd.h>
 
+#include <optional>
 #include <utility>
 
 #include <base/files/file_path.h>
@@ -29,7 +30,7 @@ using crypto::ScopedPK11Slot;
 MockNssUtil::MockNssUtil() {
   desc_ = std::make_unique<PK11SlotDescriptor>();
   desc_->slot = ScopedPK11Slot(PK11_ReferenceSlot(GetSlot()));
-  desc_->ns_mnt_path = base::nullopt;
+  desc_->ns_mnt_path = std::nullopt;
 
   ON_CALL(*this, GetNssdbSubpath()).WillByDefault(Return(base::FilePath()));
 }
@@ -52,12 +53,19 @@ std::unique_ptr<crypto::RSAPrivateKey> MockNssUtil::CreateShortKey() {
 ScopedPK11SlotDescriptor MockNssUtil::OpenUserDB(
     const base::FilePath& user_homedir, const OptionalFilePath& ns_mnt_path) {
   ScopedPK11SlotDescriptor res = std::make_unique<PK11SlotDescriptor>();
-  res->ns_mnt_path = base::nullopt;
+  res->ns_mnt_path = std::nullopt;
   if (return_bad_db_) {
     res->slot = ScopedPK11Slot();
     return res;
   }
   res->slot = ScopedPK11Slot(PK11_ReferenceSlot(GetSlot()));
+  return res;
+}
+
+ScopedPK11SlotDescriptor MockNssUtil::GetInternalSlot() {
+  auto res = std::make_unique<PK11SlotDescriptor>();
+  res->slot = crypto::ScopedPK11Slot(PK11_GetInternalKeySlot());
+  DCHECK_EQ(PK11_IsReadOnly(res->slot.get()), true);
   return res;
 }
 

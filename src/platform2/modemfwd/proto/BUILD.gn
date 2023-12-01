@@ -1,0 +1,31 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [ ":modemfw-goprotos" ]
+}
+
+# This library is used by the BUILD.gn of the parent directory and therefore we
+# do not depend on it at "all" target.
+proto_library("modemfw-protos") {
+  proto_in_dir = "."
+  proto_out_dir = "include/modemfwd/proto_bindings"
+  sources = [
+    "${proto_in_dir}/firmware_manifest_v2.proto",
+    "${proto_in_dir}/helper_manifest.proto",
+    "${proto_in_dir}/journal_entry.proto",
+  ]
+}
+
+goproto_library("modemfw-goprotos") {
+  proto_in_dir = "."
+  proto_out_dir = "go/src/"
+  sources = [
+    "${proto_in_dir}/firmware_manifest_v2.proto",
+    "${proto_in_dir}/helper_manifest.proto",
+    "${proto_in_dir}/journal_entry.proto",
+  ]
+}

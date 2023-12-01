@@ -1,0 +1,61 @@
+commit 61a66e4b5ec18e9e73c2f6334f6b7f7dd4bca77e
+Author: Reid Kleckner <rnk@google.com>
+Date:   Wed Jan 27 10:59:28 2021 -0800
+
+    Revert "Suppress non-conforming GNU paste extension in all standard-conforming modes"
+    
+    This reverts commit f4537935dcdbf390c863591cf556e76c3abab9c1.
+    This reverts commit b43c26d036dcbf7a6881f39e4434cf059364022a.
+    
+    This GNU and MSVC extension turns out to be very popular. Most projects
+    are not using C++20, so cannot use the new __VA_OPT__ feature to be
+    standards conformant. The other workaround, using -std=gnu*, enables too
+    many language extensions and isn't viable.
+    
+    Until there is a way for users to get the behavior provided by the
+    `, ## __VA_ARGS__` extension in the -std=c++17 and earlier language
+    modes, we need to revert this.
+
+diff --git a/clang/lib/Lex/TokenLexer.cpp b/clang/lib/Lex/TokenLexer.cpp
+index 97cb2cf0bb8c..da5681aaf478 100644
+--- a/clang/lib/Lex/TokenLexer.cpp
++++ b/clang/lib/Lex/TokenLexer.cpp
+@@ -148,12 +148,12 @@ bool TokenLexer::MaybeRemoveCommaBeforeVaArgs(
+     return false;
+ 
+   // GCC removes the comma in the expansion of " ... , ## __VA_ARGS__ " if
+-  // __VA_ARGS__ is empty, but not in strict mode where there are no
+-  // named arguments, where it remains.  With GNU extensions, it is removed
+-  // regardless of named arguments.
++  // __VA_ARGS__ is empty, but not in strict C99 mode where there are no
++  // named arguments, where it remains.  In all other modes, including C99
++  // with GNU extensions, it is removed regardless of named arguments.
+   // Microsoft also appears to support this extension, unofficially.
+-  if (!PP.getLangOpts().GNUMode && !PP.getLangOpts().MSVCCompat &&
+-      Macro->getNumParams() < 2)
++  if (PP.getLangOpts().C99 && !PP.getLangOpts().GNUMode
++        && Macro->getNumParams() < 2)
+     return false;
+ 
+   // Is a comma available to be removed?
+diff --git a/clang/test/Preprocessor/macro_fn_comma_swallow2.c b/clang/test/Preprocessor/macro_fn_comma_swallow2.c
+index 4e4960ca7f18..93ab2b83664a 100644
+--- a/clang/test/Preprocessor/macro_fn_comma_swallow2.c
++++ b/clang/test/Preprocessor/macro_fn_comma_swallow2.c
+@@ -1,16 +1,11 @@
+ // Test the __VA_ARGS__ comma swallowing extensions of various compiler dialects.
+ 
+ // RUN: %clang_cc1 -E %s | FileCheck -check-prefix=GCC -strict-whitespace %s
+-// RUN: %clang_cc1 -E -std=c90 %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+ // RUN: %clang_cc1 -E -std=c99 %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+ // RUN: %clang_cc1 -E -std=c11 %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+ // RUN: %clang_cc1 -E -x c++ %s | FileCheck -check-prefix=GCC -strict-whitespace %s
+-// RUN: %clang_cc1 -E -x c++ -std=c++03 %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+-// RUN: %clang_cc1 -E -x c++ -std=c++11 %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+ // RUN: %clang_cc1 -E -std=gnu99 %s | FileCheck -check-prefix=GCC -strict-whitespace %s
+ // RUN: %clang_cc1 -E -fms-compatibility %s | FileCheck -check-prefix=MS -strict-whitespace %s
+-// RUN: %clang_cc1 -E -x c++ -fms-compatibility %s | FileCheck -check-prefix=MS -strict-whitespace %s
+-// RUN: %clang_cc1 -E -x c++ -std=c++11 -fms-compatibility %s | FileCheck -check-prefix=MS -strict-whitespace %s
+ // RUN: %clang_cc1 -E -DNAMED %s | FileCheck -check-prefix=GCC -strict-whitespace %s
+ // RUN: %clang_cc1 -E -std=c99 -DNAMED %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+ 

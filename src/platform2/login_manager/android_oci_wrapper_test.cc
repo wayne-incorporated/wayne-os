@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 #include <string>
 #include <vector>
 
-#include <base/bind.h>
 #include <base/files/file_enumerator.h>
 #include <base/files/file_path.h>
 #include <base/files/scoped_temp_dir.h>
+#include <base/functional/bind.h>
 #include <base/strings/string_number_conversions.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -71,8 +71,8 @@ class AndroidOciWrapperTest : public ::testing::Test {
   bool CallStartContainer() {
     return impl_->StartContainer(
         std::vector<std::string>{},
-        base::Bind(&AndroidOciWrapperTest::ExitCallback,
-                   base::Unretained(this)));
+        base::BindOnce(&AndroidOciWrapperTest::ExitCallback,
+                       base::Unretained(this)));
   }
 
   void ExpectKill(bool forceful, int exit_code) {
@@ -185,15 +185,15 @@ TEST_F(AndroidOciWrapperTest, ForcefulShutdownAfterGracefulShutdownFailed) {
 TEST_F(AndroidOciWrapperTest, KillJobOnEnsure) {
   StartContainerAsParent();
 
-  base::TimeDelta delta = base::TimeDelta::FromSeconds(11);
+  base::TimeDelta delta = base::Seconds(11);
   EXPECT_CALL(system_utils_, ProcessIsGone(container_pid_, delta))
       .WillOnce(Return(false));
 
   EXPECT_CALL(system_utils_, kill(container_pid_, _, SIGKILL))
       .WillOnce(Return(true));
 
-  EXPECT_CALL(system_utils_, ProcessIsGone(container_pid_,
-                                           Le(base::TimeDelta::FromSeconds(5))))
+  EXPECT_CALL(system_utils_,
+              ProcessIsGone(container_pid_, Le(base::Seconds(5))))
       .WillOnce(Return(true));
 
   ExpectDestroy(0 /* exit_code */);
@@ -208,7 +208,7 @@ TEST_F(AndroidOciWrapperTest, CleanExitAfterRequest) {
 
   impl_->RequestJobExit(ArcContainerStopReason::USER_REQUEST);
 
-  base::TimeDelta delta = base::TimeDelta::FromSeconds(11);
+  base::TimeDelta delta = base::Seconds(11);
   EXPECT_CALL(system_utils_, ProcessIsGone(container_pid_, delta))
       .WillOnce(Return(true));
 

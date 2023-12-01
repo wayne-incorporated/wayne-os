@@ -1,0 +1,186 @@
+// Copyright 2018 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+
+package arc_proxy;
+
+// This file defines the protocol to communicate between the host and the guest.
+// Some fields across messages has special convention as follows.
+//
+// handle: is an int64 ID corresponding to a file descriptor for each side.
+//   Either side could create a handle, so to avoid conflicting, positive
+//   value is used for a handle initially created in the host side, and
+//   negative value is used for one initially created in the guest side.
+//   0 is the special value, meaning INVALID.
+//
+// cookie: is an identifier to represent an operation flow. Some operations
+//   need to work on both side alternatively. "cookie" should be created in
+//   the side where the first message of the flow is created, and should be
+//   kept in each message.
+//   Similar to handle, to avoid conflict, positive value should be used for
+//   a cookie initially created in the host side, and negative value should
+//   for one initially created in the guest side.
+// error_code: is a status code corresponding to "errno" of the operation.
+//   Specifically, '0' means success.
+
+// Single message to communicate between MojoProxy in the host and the guest.
+message MojoMessage {
+  oneof command {
+    Close close = 1;
+    Data data = 2;
+
+    ConnectRequest connect_request = 3;
+    ConnectResponse connect_response = 4;
+    PreadRequest pread_request = 5;
+    PreadResponse pread_response = 6;
+    PwriteRequest pwrite_request = 7;
+    PwriteResponse pwrite_response = 8;
+    FstatRequest fstat_request = 9;
+    FstatResponse fstat_response = 10;
+    FtruncateRequest ftruncate_request = 11;
+    FtruncateResponse ftruncate_response = 12;
+  }
+}
+
+// Notify a file descriptor corresponding to the |handle| is closed to the
+// other side, expecting the file descriptor in the other side will be closed.
+message Close {
+  int64 handle = 1;
+}
+
+// Represents a file descriptor to be transferred.
+message FileDescriptor {
+  enum Type {
+    SOCKET_STREAM = 0;
+    FIFO_READ = 1;
+    FIFO_WRITE = 2;
+    REGULAR_FILE = 3;
+    TRANSPORTABLE = 4;  // FDs transportable via virtio-wl.
+    SOCKET_DGRAM = 5;
+    SOCKET_SEQPACKET = 6;
+    // TODO(b/123432308): Support more file descriptor types.
+  }
+  Type type = 1;
+  int64 handle = 2;
+
+  reserved 3;  // uint64 file_size = 3 [deprecated=true];
+  reserved 4;  // uint32 drm_virtgpu_res_handle = 4; [deprecated=true];
+
+  int32 flags = 5;
+}
+
+// Notify the data is available on a stream (pipe or socket) corresponding to
+// the |handle|.
+message Data {
+  int64 handle = 1;
+
+  // Data to be transferred. This must not be empty.
+  bytes blob = 2;
+
+  // This is only available on the message for the socket.
+  repeated FileDescriptor transferred_fd = 3;
+}
+
+// Request to connect(2) a unix domain socket in the other side.
+message ConnectRequest {
+  int64 cookie = 1;
+
+  // Path to the target unix domain socket file.
+  string path = 2;
+}
+
+// Response to the ConnectRequest.
+message ConnectResponse {
+  int64 cookie = 1;
+  int32 error_code = 2;
+
+  // Handle corresponding to the opened socket.
+  int64 handle = 3;
+}
+
+// Request to pread(2) a file.
+message PreadRequest {
+  int64 cookie = 1;
+
+  // Handle to read the data. Its type needs to be REGULAR_FILE.
+  int64 handle = 2;
+
+  // Number of bytes to read.
+  uint64 count = 3;
+
+  // The file position to read the data.
+  uint64 offset = 4;
+}
+
+// Response to the PreadRequest.
+message PreadResponse {
+  int64 cookie = 1;
+  int32 error_code = 2;
+
+  // Read data.
+  bytes blob = 3;
+}
+
+// Request to pwrite(2) a file.
+message PwriteRequest {
+  int64 cookie = 1;
+
+  // Handle to write the data. Its type needs to be REGULAR_FILE.
+  int64 handle = 2;
+
+  // Data.
+  bytes blob = 3;
+
+  // The file position to write the data.
+  uint64 offset = 4;
+}
+
+// Response to the PwriteRequest.
+message PwriteResponse {
+  int64 cookie = 1;
+  int32 error_code = 2;
+  int64 bytes_written = 3;
+}
+
+// Request to fstat(2) a file.
+message FstatRequest {
+  int64 cookie = 1;
+
+  // Handle corresponding to the file descriptor to be fstat(2)ed.
+  // The type of the handle should be REGULAR_FILE, now.
+  int64 handle = 2;
+}
+
+// Response to the FstatRequest.
+message FstatResponse {
+  int64 cookie = 1;
+  int32 error_code = 2;
+
+  // The size of the file. To be compatible with off_t st_size
+  // (in struct stat), the type is int64, rather than uint64.
+  int64 size = 3;
+
+  // Note: at the moment, |size| is the only information needed to implement
+  // proxy, so in order to keep the message size as small as possible, no other
+  // fields are added. They can be, upon necessary.
+}
+
+// Request to ftruncate(2) a file.
+message FtruncateRequest {
+  int64 cookie = 1;
+
+  // Handle of the file. Its type needs to be REGULAR_FILE.
+  int64 handle = 2;
+
+  // Desired length.
+  int64 length = 3;
+}
+
+// Response to a FtruncateRequest.
+message FtruncateResponse {
+  int64 cookie = 1;
+  int32 error_code = 2;
+}

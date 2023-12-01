@@ -1,0 +1,90 @@
+From e1286bec2cf70685f43e9ce798c42cf974fb55ea Mon Sep 17 00:00:00 2001
+From: Fangrui Song <maskray@google.com>
+Date: Thu, 4 Nov 2021 01:30:12 -0700
+Subject: [PATCH 14/17] readelf: Support RELR in -S and -d and output
+
+readelf -r dumping support is not added in this patch.
+
+include/
+	* elf/common.h: Add SHT_RELR, DT_RELR{,SZ,ENT}
+bfd/
+	* elf.c (_bfd_elf_print_private_bfd_data): Add DT_RELR{,SZ,ENT}.
+binutils/
+	* readelf.c (get_dynamic_type): Add DT_RELR{,SZ,ENT}.
+	(get_section_type_name): Add SHT_RELR.
+---
+ bfd/elf.c            | 3 +++
+ binutils/readelf.c   | 6 ++++++
+ include/elf/common.h | 4 ++++
+ 3 files changed, 13 insertions(+)
+
+diff --git a/bfd/elf.c b/bfd/elf.c
+index 84a5d942817..f4abaa946b5 100644
+--- a/bfd/elf.c
++++ b/bfd/elf.c
+@@ -1760,6 +1760,9 @@ _bfd_elf_print_private_bfd_data (bfd *abfd, void *farg)
+ 	    case DT_REL: name = "REL"; break;
+ 	    case DT_RELSZ: name = "RELSZ"; break;
+ 	    case DT_RELENT: name = "RELENT"; break;
++	    case DT_RELR: name = "RELR"; break;
++	    case DT_RELRSZ: name = "RELRSZ"; break;
++	    case DT_RELRENT: name = "RELRENT"; break;
+ 	    case DT_PLTREL: name = "PLTREL"; break;
+ 	    case DT_DEBUG: name = "DEBUG"; break;
+ 	    case DT_TEXTREL: name = "TEXTREL"; break;
+diff --git a/binutils/readelf.c b/binutils/readelf.c
+index 9950f7d8452..92c817ce31c 100644
+--- a/binutils/readelf.c
++++ b/binutils/readelf.c
+@@ -2177,6 +2177,9 @@ get_dynamic_type (Filedata * filedata, unsigned long type)
+     case DT_REL:	return "REL";
+     case DT_RELSZ:	return "RELSZ";
+     case DT_RELENT:	return "RELENT";
++    case DT_RELR:	return "RELR";
++    case DT_RELRSZ:	return "RELRSZ";
++    case DT_RELRENT:	return "RELRENT";
+     case DT_PLTREL:	return "PLTREL";
+     case DT_DEBUG:	return "DEBUG";
+     case DT_TEXTREL:	return "TEXTREL";
+@@ -4365,6 +4368,7 @@ get_section_type_name (Filedata * filedata, unsigned int sh_type)
+     case SHT_SYMTAB:		return "SYMTAB";
+     case SHT_STRTAB:		return "STRTAB";
+     case SHT_RELA:		return "RELA";
++    case SHT_RELR:		return "RELR";
+     case SHT_HASH:		return "HASH";
+     case SHT_DYNAMIC:		return "DYNAMIC";
+     case SHT_NOTE:		return "NOTE";
+@@ -11012,6 +11016,8 @@ the .dynstr section doesn't match the DT_STRTAB and DT_STRSZ tags\n"));
+ 	case DT_PLTPADSZ:
+ 	case DT_MOVEENT	:
+ 	case DT_MOVESZ	:
++	case DT_RELRENT	:
++	case DT_RELRSZ	:
+ 	case DT_PREINIT_ARRAYSZ:
+ 	case DT_INIT_ARRAYSZ:
+ 	case DT_FINI_ARRAYSZ:
+diff --git a/include/elf/common.h b/include/elf/common.h
+index e7d55ae0782..d3eb81194fd 100644
+--- a/include/elf/common.h
++++ b/include/elf/common.h
+@@ -523,6 +523,7 @@
+ #define SHT_PREINIT_ARRAY 16		/* Array of ptrs to pre-init funcs */
+ #define SHT_GROUP	  17		/* Section contains a section group */
+ #define SHT_SYMTAB_SHNDX  18		/* Indices for SHN_XINDEX entries */
++#define SHT_RELR	  19		/* RELR relative relocations */
+ 
+ #define SHT_LOOS	0x60000000	/* First of OS specific semantics */
+ #define SHT_HIOS	0x6fffffff	/* Last of OS specific semantics */
+@@ -1027,6 +1028,9 @@
+ #define DT_PREINIT_ARRAY   32
+ #define DT_PREINIT_ARRAYSZ 33
+ #define DT_SYMTAB_SHNDX    34
++#define DT_RELRSZ	35
++#define DT_RELR		36
++#define DT_RELRENT	37
+ 
+ /* Note, the Oct 4, 1999 draft of the ELF ABI changed the values
+    for DT_LOOS and DT_HIOS.  Some implementations however, use
+-- 
+2.34.1
+

@@ -1,0 +1,59 @@
+commit cb0a4bb5be10636aaec3ecb56ed586dee3eb0b9e
+Author: Fangrui Song <i@maskray.me>
+Date:   Fri Feb 18 11:20:36 2022 -0800
+
+    [ELF] Change (NOLOAD) section type mismatch error to warning
+    
+    Making a (NOLOAD) section SHT_PROGBITS is fishy (the user may expect all-zero
+    content, but the linker does not check that), but some projects (e.g. Linux
+    kernel https://github.com/ClangBuiltLinux/linux/issues/1597) traditionally rely
+    on the behavior. Issue a warning to not break them.
+
+diff --git a/lld/ELF/OutputSections.cpp b/lld/ELF/OutputSections.cpp
+index 2b5deecdcec7..252108b464b2 100644
+--- a/lld/ELF/OutputSections.cpp
++++ b/lld/ELF/OutputSections.cpp
+@@ -112,11 +112,16 @@ void OutputSection::commitSection(InputSection *isec) {
+     if (hasInputSections || typeIsSet) {
+       if (typeIsSet || !canMergeToProgbits(type) ||
+           !canMergeToProgbits(isec->type)) {
+-        errorOrWarn("section type mismatch for " + isec->name + "\n>>> " +
+-                    toString(isec) + ": " +
+-                    getELFSectionTypeName(config->emachine, isec->type) +
+-                    "\n>>> output section " + name + ": " +
+-                    getELFSectionTypeName(config->emachine, type));
++        // Changing the type of a (NOLOAD) section is fishy, but some projects
++        // (e.g. https://github.com/ClangBuiltLinux/linux/issues/1597)
++        // traditionally rely on the behavior. Issue a warning to not break
++        // them. Other types get an error.
++        auto diagnose = type == SHT_NOBITS ? warn : errorOrWarn;
++        diagnose("section type mismatch for " + isec->name + "\n>>> " +
++                 toString(isec) + ": " +
++                 getELFSectionTypeName(config->emachine, isec->type) +
++                 "\n>>> output section " + name + ": " +
++                 getELFSectionTypeName(config->emachine, type));
+       }
+       type = SHT_PROGBITS;
+     } else {
+diff --git a/lld/test/ELF/linkerscript/noload.s b/lld/test/ELF/linkerscript/noload.s
+index 92afadc9b263..1cc09670e8b1 100644
+--- a/lld/test/ELF/linkerscript/noload.s
++++ b/lld/test/ELF/linkerscript/noload.s
+@@ -17,9 +17,14 @@
+ # CHECK:      00 .data_noload_a .data_noload_b .no_input_sec_noload {{$}}
+ # CHECK:      01 .text {{$}}
+ 
+-# RUN: not ld.lld --script %t/lds %t.o %t/mismatch.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=ERR
+-
+-# ERR: error: section type mismatch for .data_noload_a
++## The output SHT_PROBITS is contrary to the user expectation of SHT_NOBITS.
++## Issue a warning. See https://github.com/ClangBuiltLinux/linux/issues/1597
++# RUN: ld.lld --script %t/lds %t.o %t/mismatch.o -o %t/out 2>&1 |& FileCheck %s --check-prefix=WARN
++# RUN: llvm-readelf -S -l %t/out | FileCheck %s --check-prefix=CHECK2
++
++# WARN:   warning: section type mismatch for .data_noload_a
++# CHECK2:      Name                 Type     Address          Off               Size
++# CHECK2:      .data_noload_a       PROGBITS 0000000000000000 [[OFF:[0-9a-f]+]] 001001
+ 
+ #--- asm
+ .section .text,"ax",@progbits

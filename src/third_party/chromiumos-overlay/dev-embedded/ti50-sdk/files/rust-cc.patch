@@ -1,0 +1,68 @@
+From 98ceb44f1992add33c414df26da9aef4f3cd83a3 Mon Sep 17 00:00:00 2001
+From: Michael Benfield <mbenfield@google.com>
+Date: Sun, 18 Dec 2022 23:31:48 +0000
+Subject: [PATCH] cc
+
+---
+ compiler/rustc_codegen_ssa/src/back/link.rs | 25 ++++++++++++---------
+ 1 file changed, 14 insertions(+), 11 deletions(-)
+
+diff --git a/compiler/rustc_codegen_ssa/src/back/link.rs b/compiler/rustc_codegen_ssa/src/back/link.rs
+index 0dc0dee862c..4d146f59f72 100644
+--- a/compiler/rustc_codegen_ssa/src/back/link.rs
++++ b/compiler/rustc_codegen_ssa/src/back/link.rs
+@@ -1212,7 +1212,7 @@ fn infer_from(
+             (Some(linker), Some(flavor)) => Some((linker, flavor)),
+             // only the linker flavor is known; use the default linker for the selected flavor
+             (None, Some(flavor)) => Some((
+-                PathBuf::from(match flavor {
++                match flavor {
+                     LinkerFlavor::Gnu(Cc::Yes, _)
+                     | LinkerFlavor::Darwin(Cc::Yes, _)
+                     | LinkerFlavor::WasmLld(Cc::Yes)
+@@ -1224,29 +1224,32 @@ fn infer_from(
+                             // and many modern illumos distributions today
+                             // ship GCC as "gcc" without also making it
+                             // available as "cc".
+-                            "gcc"
++                            "gcc".into()
+                         } else {
+-                            "cc"
++                            match env::var_os("CC") {
++                                Some(path) => path.into(),
++                                None => "cc".into(),
++                            }
+                         }
+                     }
+                     LinkerFlavor::Gnu(_, Lld::Yes)
+                     | LinkerFlavor::Darwin(_, Lld::Yes)
+                     | LinkerFlavor::WasmLld(..)
+-                    | LinkerFlavor::Msvc(Lld::Yes) => "lld",
++                    | LinkerFlavor::Msvc(Lld::Yes) => "lld".into(),
+                     LinkerFlavor::Gnu(..) | LinkerFlavor::Darwin(..) | LinkerFlavor::Unix(..) => {
+-                        "ld"
++                        "ld".into()
+                     }
+-                    LinkerFlavor::Msvc(..) => "link.exe",
++                    LinkerFlavor::Msvc(..) => "link.exe".into(),
+                     LinkerFlavor::EmCc => {
+                         if cfg!(windows) {
+-                            "emcc.bat"
++                            "emcc.bat".into()
+                         } else {
+-                            "emcc"
++                            "emcc".into()
+                         }
+                     }
+-                    LinkerFlavor::Bpf => "bpf-linker",
+-                    LinkerFlavor::Ptx => "rust-ptx-linker",
+-                }),
++                    LinkerFlavor::Bpf => "bpf-linker".into(),
++                    LinkerFlavor::Ptx => "rust-ptx-linker".into(),
++                },
+                 flavor,
+             )),
+             (Some(linker), None) => {
+-- 
+2.39.0.314.g84b9a713c41-goog
+

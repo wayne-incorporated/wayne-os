@@ -1,0 +1,30 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libchrome",
+    "protobuf",
+    "system_api",
+  ]
+}
+
+source_set("liblogs") {
+  sources = [ "logs_utils.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ "//rmad/utils:libutils" ]
+}
+
+if (use.test) {
+  source_set("liblogs_test") {
+    sources = [ "logs_utils_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [ ":liblogs" ]
+  }
+}

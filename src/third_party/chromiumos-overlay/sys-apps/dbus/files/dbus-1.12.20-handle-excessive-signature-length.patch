@@ -1,0 +1,33 @@
+From fca805db6473b00b286f9ba0e813a6640796dbea Mon Sep 17 00:00:00 2001
+From: Maksim Ivanov <emaxx@chromium.org>
+Date: Fri, 19 Nov 2021 05:11:56 +0100
+Subject: [PATCH] dbus: Reject excessively long signatures
+
+Fix the D-Bus marshalling code to explicitly handle and return a failure
+when the signature exceeds the allowed length, instead of just asserting
+it (with asserts being compiled out in our builds).
+
+This will prevent various memory corruption issues detected by the
+fuzzer. Note that the fuzzer will still crash currently, because the
+Chromium D-Bus wrapper library (MessageWriter) CHECKs the result of
+writing, so until that's resolved we'll still get reports from
+Clusterfuzz.
+
+BUG=b:198856812, b:206642673, b:200882286, b:200204841, b:200017179, b:198324446, b:198322997
+TEST=(1) the fuzzer fails with assertion failures instead of memory corruptions, (2) the fuzzer doesn't fail locally after patching MessageWriter to not crash
+
+Change-Id: Ic2457cdd8093850d24aca8366c6723ae44b23e13
+---
+diff --git a/dbus/dbus-marshal-basic.c b/dbus/dbus-marshal-basic.c
+index 4352e52..755d027 100644
+--- a/dbus/dbus-marshal-basic.c
++++ b/dbus/dbus-marshal-basic.c
+@@ -712,6 +712,8 @@ marshal_len_followed_by_bytes (int                  marshal_as,
+ 
+   if (marshal_as == MARSHAL_AS_SIGNATURE)
+     {
++      if (data_len > DBUS_MAXIMUM_SIGNATURE_LENGTH || data_len > 255)
++        return FALSE;
+       _dbus_assert (data_len <= DBUS_MAXIMUM_SIGNATURE_LENGTH);
+       _dbus_assert (data_len <= 255); /* same as max sig len right now */
+       

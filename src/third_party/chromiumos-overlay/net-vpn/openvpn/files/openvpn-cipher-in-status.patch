@@ -1,0 +1,24 @@
+From 87abc78744d95c2b8c4a09b9dcb2340744f6877e Mon Sep 17 00:00:00 2001
+From: Taoyu Li <taoyl@google.com>
+Date: Wed, 3 Nov 2021 02:30:08 +0900
+Subject: [PATCH] CHROMIUM: print negotiated cipher in status output
+
+---
+ src/openvpn/sig.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/openvpn/sig.c b/src/openvpn/sig.c
+index 87cef71e..4ee325ff 100644
+--- a/src/openvpn/sig.c
++++ b/src/openvpn/sig.c
+@@ -302,6 +302,7 @@ print_status(const struct context *c, struct status_output *so)
+     status_printf(so, "TCP/UDP read bytes," counter_format, c->c2.link_read_bytes);
+     status_printf(so, "TCP/UDP write bytes," counter_format, c->c2.link_write_bytes);
+     status_printf(so, "Auth read bytes," counter_format, c->c2.link_read_bytes_auth);
++    status_printf(so, "Data channel cipher,%s", translate_cipher_name_to_openvpn(c->options.ciphername));
+ #ifdef USE_COMP
+     if (c->c2.comp_context)
+     {
+-- 
+2.33.1.1089.g2158813163f-goog
+

@@ -1,0 +1,102 @@
+From b20e945da441dfe8bf11b2871cdcfcbc90b0c4db Mon Sep 17 00:00:00 2001
+From: Zubin Mithra <zsm@google.com>
+Date: Wed, 8 Feb 2023 10:21:41 -0800
+Subject: [PATCH 7/7] cros-syzkaller: add rawcover32 to syz-manager
+
+---
+ pkg/cover/html.go    |  7 ++++++-
+ syz-manager/cover.go |  8 ++++++++
+ syz-manager/html.go  | 28 ++++++++++++++++++++++++++++
+ 3 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/pkg/cover/html.go b/pkg/cover/html.go
+index 5b9b86731..fe9b85d7f 100644
+--- a/pkg/cover/html.go
++++ b/pkg/cover/html.go
+@@ -175,8 +175,13 @@ func (rg *ReportGenerator) DoRawCoverFiles(w http.ResponseWriter, progs []Prog,
+ 
+ func (rg *ReportGenerator) DoRawCover(w http.ResponseWriter, progs []Prog, coverFilter map[uint32]uint32) {
+ 	progs = fixUpPCs(rg.target.Arch, progs, coverFilter)
++	DoRawCoverCommon(w, progs, coverFilter, rg.target.Arch, rg.rawCoverEnabled)
++}
++
++func DoRawCoverCommon(w http.ResponseWriter, progs []Prog, coverFilter map[uint32]uint32, arch string, rc bool) {
++	progs = fixUpPCs(arch, progs, coverFilter)
+ 	var pcs []uint64
+-	if len(progs) == 1 && rg.rawCoverEnabled {
++	if len(progs) == 1 && rc {
+ 		pcs = append([]uint64{}, progs[0].PCs...)
+ 	} else {
+ 		uniquePCs := make(map[uint64]bool)
+diff --git a/syz-manager/cover.go b/syz-manager/cover.go
+index bc8d48e10..90c159d80 100644
+--- a/syz-manager/cover.go
++++ b/syz-manager/cover.go
+@@ -34,3 +34,11 @@ func coverToPCs(rg *cover.ReportGenerator, cov []uint32) []uint64 {
+ 	}
+ 	return pcs
+ }
++
++func coverToPCsFn(restorePC func(uint32) uint64, cov []uint32) []uint64 {
++	pcs := make([]uint64, 0, len(cov))
++	for _, pc := range cov {
++		pcs = append(pcs, restorePC(pc))
++	}
++	return pcs
++}
+diff --git a/syz-manager/html.go b/syz-manager/html.go
+index 256355be7..f4ee43733 100644
+--- a/syz-manager/html.go
++++ b/syz-manager/html.go
+@@ -21,6 +21,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/google/syzkaller/pkg/cover"
++	"github.com/google/syzkaller/pkg/cover/backend"
+ 	"github.com/google/syzkaller/pkg/html/pages"
+ 	"github.com/google/syzkaller/pkg/log"
+ 	"github.com/google/syzkaller/pkg/osutil"
+@@ -50,6 +51,7 @@ func (mgr *Manager) initHTTP() {
+ 	handle("/file", mgr.httpFile)
+ 	handle("/report", mgr.httpReport)
+ 	handle("/rawcover", mgr.httpRawCover)
++	handle("/rawcover32", mgr.httpRawCover32)
+ 	handle("/rawcoverfiles", mgr.httpRawCoverFiles)
+ 	handle("/filterpcs", mgr.httpFilterPCs)
+ 	handle("/funccover", mgr.httpFuncCover)
+@@ -545,6 +547,32 @@ func (mgr *Manager) httpRawCover(w http.ResponseWriter, r *http.Request) {
+ 	mgr.httpCoverCover(w, r, DoRawCover, false)
+ }
+ 
++func (mgr *Manager) httpRawCover32(w http.ResponseWriter, r *http.Request) {
++	var arch string
++	var rawCover bool
++	mgr.mu.Lock()
++	arch, rawCover = mgr.cfg.SysTarget.Arch, mgr.cfg.RawCover
++	var progs []cover.Prog
++	for sig, inp := range mgr.corpus {
++		progs = append(progs, cover.Prog{
++			Sig:  sig,
++			Data: string(inp.Prog),
++			PCs: coverToPCsFn(func(pc uint32) uint64 {
++				return backend.PreviousInstructionPC(
++					mgr.cfg.SysTarget,
++					backend.RestorePC(pc, 0),
++				)
++			}, inp.Cover),
++		})
++	}
++	mgr.mu.Unlock()
++	getRawCover(w, progs, arch, rawCover)
++}
++
++func getRawCover(w http.ResponseWriter, progs []cover.Prog, arch string, rc bool) {
++	cover.DoRawCoverCommon(w, progs, nil, arch, rc)
++}
++
+ func (mgr *Manager) httpRawCoverFiles(w http.ResponseWriter, r *http.Request) {
+ 	mgr.httpCoverCover(w, r, DoRawCoverFiles, false)
+ }
+-- 
+2.39.2.637.g21b0678d19-goog
+

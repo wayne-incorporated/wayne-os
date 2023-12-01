@@ -1,0 +1,41 @@
+https://bugs.gentoo.org/508708
+
+From dc24785c4f08eaee4603f2fa24355df2f3790ceb Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@gentoo.org>
+Date: Fri, 25 Apr 2014 13:37:56 -0400
+Subject: [PATCH 2/4] simplify file deletion
+
+Running `rm` on one file at a time is needlessly slow.
+---
+ opengl.eselect | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/opengl.eselect b/opengl.eselect
+index 90ac51e..111412f 100644
+--- a/opengl.eselect
++++ b/opengl.eselect
+@@ -106,9 +106,7 @@ setup_lib_symlinks() {
+ 
+ 	pushd "${target}" &> /dev/null
+ 		# Note that lafiles are removed here and never enabled again
+-		for file in libGL{,core}.la ; do
+-			rm -f "${file}"* || die -q "Failed to delete ${file}"
+-		done
++		rm -f libGL{,core}.la* || die -q "Failed to delete old linker scripts"
+ 
+ 		for file in "${profile_libdir}"/lib{EGL,GL*,OpenVG}{,core}.{so,dylib,a}; do
+ 			upgrade_file "${file}" "${target}"
+@@ -125,9 +123,7 @@ setup_extensions_symlinks() {
+ 		mkdir -p "${target}" || die "Failed to create ${target}"
+ 		pushd "${target}" &> /dev/null
+ 			# First remove old cruft symlinks
+-			for file in lib{wfb,glx,dri,dri2}.{so,dylib,a}; do
+-				rm -f "${file}" || die -q "Failed to delete ${targetdir}/${file}"
+-			done
++			rm -f lib{wfb,glx,dri,dri2}.{so,dylib,a} || die -q "Failed to delete old symlinks in ${targetdir}"
+ 
+ 			# regenerate symlinks
+ 			for file in "${src}"/*.{so,dylib,a}; do
+-- 
+1.9.2
+

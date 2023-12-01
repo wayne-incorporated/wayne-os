@@ -1,0 +1,1 @@
+chromeos-nvt-touch-updater-1.0.7.ebuild

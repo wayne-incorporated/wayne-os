@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+from __future__ import print_function
+
+import sys
+
+import dbus
+import flimflam
+
+if len(sys.argv) < 4:
+    print('Usage: %s <device-name> <property> <value>' % (sys.argv[0]))
+    sys.exit(1)
+
+(_, name, property_key, value) = sys.argv
+
+flim = flimflam.FlimFlam()
+device = flim.FindElementByNameSubstring('Device', name)
+if property_key in ['BgscanShortInterval', 'ScanInterval']:
+    device.SetProperty(property_key, dbus.UInt16(value))
+elif property_key in ['BgscanSignalThreshold', ]:
+    device.SetProperty(property_key, dbus.Int32(value))
+elif property_key in ['Powered']:
+    device.SetProperty(property_key,
+                       dbus.Boolean(value.lower() in ('true', '1')))
+else:
+    device.SetProperty(property_key, value)

@@ -1,0 +1,138 @@
+commit 9fb9c7776edcade522e5718c91189d51796cedd6
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Wed May 10 09:38:06 2023 -0700
+
+    Revert "[SCEV] Replace IsAvailableOnEntry with block disposition"
+    
+    This reverts commit 103fc0f629aa6218783f65dff0197f257137cade.
+    Causes a clang crash in ChromeOS builds.
+    Testcase provided at D149344.
+
+diff --git a/llvm/lib/Analysis/ScalarEvolution.cpp b/llvm/lib/Analysis/ScalarEvolution.cpp
+index 15a88bbf9edb..81f075825ee7 100644
+--- a/llvm/lib/Analysis/ScalarEvolution.cpp
++++ b/llvm/lib/Analysis/ScalarEvolution.cpp
+@@ -5907,6 +5907,90 @@ const SCEV *ScalarEvolution::createAddRecFromPHI(PHINode *PN) {
+   return nullptr;
+ }
+ 
++// Checks if the SCEV S is available at BB.  S is considered available at BB
++// if S can be materialized at BB without introducing a fault.
++static bool IsAvailableOnEntry(const Loop *L, DominatorTree &DT, const SCEV *S,
++                               BasicBlock *BB) {
++  struct CheckAvailable {
++    bool TraversalDone = false;
++    bool Available = true;
++
++    const Loop *L = nullptr;  // The loop BB is in (can be nullptr)
++    BasicBlock *BB = nullptr;
++    DominatorTree &DT;
++
++    CheckAvailable(const Loop *L, BasicBlock *BB, DominatorTree &DT)
++      : L(L), BB(BB), DT(DT) {}
++
++    bool setUnavailable() {
++      TraversalDone = true;
++      Available = false;
++      return false;
++    }
++
++    bool follow(const SCEV *S) {
++      switch (S->getSCEVType()) {
++      case scConstant:
++      case scVScale:
++      case scPtrToInt:
++      case scTruncate:
++      case scZeroExtend:
++      case scSignExtend:
++      case scAddExpr:
++      case scMulExpr:
++      case scUMaxExpr:
++      case scSMaxExpr:
++      case scUMinExpr:
++      case scSMinExpr:
++      case scSequentialUMinExpr:
++        // These expressions are available if their operand(s) is/are.
++        return true;
++
++      case scAddRecExpr: {
++        // We allow add recurrences that are on the loop BB is in, or some
++        // outer loop.  This guarantees availability because the value of the
++        // add recurrence at BB is simply the "current" value of the induction
++        // variable.  We can relax this in the future; for instance an add
++        // recurrence on a sibling dominating loop is also available at BB.
++        const auto *ARLoop = cast<SCEVAddRecExpr>(S)->getLoop();
++        if (L && (ARLoop == L || ARLoop->contains(L)))
++          return true;
++
++        return setUnavailable();
++      }
++
++      case scUnknown: {
++        // For SCEVUnknown, we check for simple dominance.
++        const auto *SU = cast<SCEVUnknown>(S);
++        Value *V = SU->getValue();
++
++        if (isa<Argument>(V))
++          return false;
++
++        if (isa<Instruction>(V) && DT.dominates(cast<Instruction>(V), BB))
++          return false;
++
++        return setUnavailable();
++      }
++
++      case scUDivExpr:
++      case scCouldNotCompute:
++        // We do not try to smart about these at all.
++        return setUnavailable();
++      }
++      llvm_unreachable("Unknown SCEV kind!");
++    }
++
++    bool isDone() { return TraversalDone; }
++  };
++
++  CheckAvailable CA(L, BB, DT);
++  SCEVTraversal<CheckAvailable> ST(CA);
++
++  ST.visitAll(S);
++  return CA.Available;
++}
++
+ // Try to match a control flow sequence that branches out at BI and merges back
+ // at Merge into a "C ? LHS : RHS" select pattern.  Return true on a successful
+ // match.
+@@ -5944,6 +6028,8 @@ const SCEV *ScalarEvolution::createNodeFromSelectLikePHI(PHINode *PN) {
+   auto IsReachable =
+       [&](BasicBlock *BB) { return DT.isReachableFromEntry(BB); };
+   if (PN->getNumIncomingValues() == 2 && all_of(PN->blocks(), IsReachable)) {
++    const Loop *L = LI.getLoopFor(PN->getParent());
++
+     // Try to match
+     //
+     //  br %cond, label %left, label %right
+@@ -5964,8 +6050,8 @@ const SCEV *ScalarEvolution::createNodeFromSelectLikePHI(PHINode *PN) {
+ 
+     if (BI && BI->isConditional() &&
+         BrPHIToSelect(DT, BI, PN, Cond, LHS, RHS) &&
+-        properlyDominates(getSCEV(LHS), PN->getParent()) &&
+-        properlyDominates(getSCEV(RHS), PN->getParent()))
++        IsAvailableOnEntry(L, DT, getSCEV(LHS), PN->getParent()) &&
++        IsAvailableOnEntry(L, DT, getSCEV(RHS), PN->getParent()))
+       return createNodeForSelectOrPHI(PN, Cond, LHS, RHS);
+   }
+ 
+diff --git a/llvm/test/Analysis/ScalarEvolution/logical-operations.ll b/llvm/test/Analysis/ScalarEvolution/logical-operations.ll
+index 4ca2fbef9014..d557f50326d5 100644
+--- a/llvm/test/Analysis/ScalarEvolution/logical-operations.ll
++++ b/llvm/test/Analysis/ScalarEvolution/logical-operations.ll
+@@ -427,7 +427,7 @@ define ptr @tautological_select_like_phi(i32 %tc) {
+ ; CHECK-NEXT:    %iv = phi i32 [ 0, %entry ], [ %iv.next, %latch ]
+ ; CHECK-NEXT:    --> {0,+,1}<nuw><nsw><%loop> U: [0,101) S: [0,101) Exits: 100 LoopDispositions: { %loop: Computable }
+ ; CHECK-NEXT:    %r = phi ptr [ @constant, %truebb ], [ @another_constant, %falsebb ]
+-; CHECK-NEXT:    --> @constant U: [0,-3) S: [-9223372036854775808,9223372036854775805) Exits: @constant LoopDispositions: { %loop: Invariant }
++; CHECK-NEXT:    --> %r U: [0,-3) S: [-9223372036854775808,9223372036854775805) Exits: <<Unknown>> LoopDispositions: { %loop: Variant }
+ ; CHECK-NEXT:    %iv.next = add i32 %iv, 1
+ ; CHECK-NEXT:    --> {1,+,1}<nuw><nsw><%loop> U: [1,102) S: [1,102) Exits: 101 LoopDispositions: { %loop: Computable }
+ ; CHECK-NEXT:  Determining loop execution counts for: @tautological_select_like_phi

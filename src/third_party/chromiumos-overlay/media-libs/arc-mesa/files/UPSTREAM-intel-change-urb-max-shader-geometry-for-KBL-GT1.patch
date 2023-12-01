@@ -1,0 +1,39 @@
+From e78365af3a028f6510a46235b21d3b4f17f44066 Mon Sep 17 00:00:00 2001
+From: Abhishek Kumar <abhishek4.kumar@intel.com>
+Date: Wed, 27 Jan 2021 21:24:30 +0530
+Subject: [PATCH 1/2] intel: change urb max shader geometry for KBL GT1
+
+Below Deqp CTS failure is seen on KBL GT1(tested on 0x5906) only ,
+GT2 all test passes, changing the max shader geometry to 256
+(previous 640) fixes all failure tests.Similar issues on
+CML GT1 (Gen9) is fixed
+https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/8550
+
+dEQP-GLES31.functional.geometry_shading.layered.
+         render_with_default_layer_cubemap
+         render_with_default_layer_3d
+         render_with_default_layer_2d_array
+
+Signed-off-by: Abhishek Kumar <abhishek4.kumar@intel.com>
+Reviewed-by: Lionel Landwerlin <lionel.g.landwerlin@intel.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/8731>
+(cherry picked from commit 26c9574bdb16d7f6cbe06cd5ef5d1ce258afc1ba)
+---
+ src/intel/dev/gen_device_info.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/intel/dev/gen_device_info.c b/src/intel/dev/gen_device_info.c
+index 8eeca8debe55..1ae1207f517e 100644
+--- a/src/intel/dev/gen_device_info.c
++++ b/src/intel/dev/gen_device_info.c
+@@ -696,6 +696,7 @@ static const struct gen_device_info gen_device_info_kbl_gt1 = {
+    .simulator_id = 16,
+    .urb.size = 128,
+    .urb.max_entries[MESA_SHADER_VERTEX] = 928,
++   .urb.max_entries[MESA_SHADER_GEOMETRY] = 256,
+ };
+ 
+ static const struct gen_device_info gen_device_info_kbl_gt1_5 = {
+-- 
+2.29.2
+

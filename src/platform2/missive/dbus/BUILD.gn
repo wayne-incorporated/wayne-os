@@ -1,0 +1,105 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "dbus-1",
+    "libchrome",
+
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+generate_dbus_adaptors("missive_dbus_adaptors") {
+  dbus_adaptors_out_dir = "include/dbus_adaptors"
+  dbus_service_config = "dbus-service-config.json"
+  sources = [ "org.chromium.Missived.xml" ]
+}
+
+# Used by other tools to interact with missived
+generate_dbus_proxies("missive_dbus_proxies") {
+  dbus_service_config = "dbus-service-config.json"
+  proxy_output_file = "include/dbus_proxies/missive/dbus-proxies.h"
+  mock_output_file = "include/dbus_proxies/missive/dbus-proxies-mocks.h"
+  proxy_path_in_mocks = "missive/dbus-proxies.h"
+  sources = [ "org.chromium.Missived.xml" ]
+}
+
+static_library("dbus_adaptor") {
+  sources = [
+    "dbus_adaptor.cc",
+    "dbus_adaptor.h",
+  ]
+  configs += [ ":target_defaults" ]
+  public_deps = [
+    ":missive_dbus_adaptors",
+    ":missive_dbus_proxies",
+  ]
+  deps = [
+    "//missive/missive:missive_service",
+    "//missive/proto:libmissiveprotointerface",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/resources:resource_manager",
+    "//missive/util:status",
+  ]
+}
+
+static_library("upload_client") {
+  sources = [ "upload_client.h" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//missive/proto:libmissiveprotointerface",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/util:status",
+  ]
+}
+
+static_library("upload_client_impl") {
+  sources = [ "upload_client_impl.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":upload_client",
+    "//missive/proto:libmissiveprotointerface",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/util:disconnectable_client",
+    "//missive/util:status",
+  ]
+}
+
+static_library("test_environment") {
+  sources = [
+    "dbus_test_environment.cc",
+    "dbus_test_environment.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/util:status",
+    "//missive/util:test_callbacks_support",
+  ]
+}
+
+static_library("test_support") {
+  sources = [ "mock_upload_client.h" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":test_environment",
+    ":upload_client",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/util:status",
+  ]
+}

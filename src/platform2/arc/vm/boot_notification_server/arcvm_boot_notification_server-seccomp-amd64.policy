@@ -1,0 +1,50 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+mmap: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+openat: 1
+mprotect: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+read: 1
+close: 1
+fstat: 1
+newfstatat: 1
+getpid: 1
+sendto: 1
+write: 1
+stat: 1
+gettid: 1
+brk: 1
+socket: arg0 == AF_VSOCK || arg0 == AF_UNIX
+rt_sigaction: 1
+rt_sigprocmask: 1
+bind: 1
+listen: 1
+access: 1
+faccessat: 1
+faccessat2: 1
+arch_prctl: 1
+munmap: 1
+set_tid_address: 1
+set_robust_list: 1
+prlimit64: 1
+ioctl: arg1 == TCGETS
+connect: 1
+lstat: 1
+unlink: 1
+chmod: 1
+accept: 1
+rt_sigtimedwait: 1
+restart_syscall: 1
+exit: 1
+exit_group: 1
+rt_sigreturn: 1
+clock_gettime: 1
+futex: 1
+tgkill: 1
+getpeername: 1
+fcntl: 1
+unlinkat: 1

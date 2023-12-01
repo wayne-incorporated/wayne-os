@@ -1,0 +1,57 @@
+#!/bin/sh
+# Copyright 2011 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+if [ "$(id -u)" != "0" ] ; then
+  echo $0 must be run as root.
+  echo Did you mean to run \"sudo $(basename "$0")\"\?
+  exit 1
+fi
+
+TO_REMOVE=''
+
+write_value() {
+  echo $1 > "$2"
+  TO_REMOVE="$TO_REMOVE \"$2\""
+}
+
+write_time_ms () {
+  write_value $1 "/var/lib/power_manager/plugged_$2"
+  write_value $1 "/var/lib/power_manager/unplugged_$2"
+}
+
+write_time_ms 30000 dim_ms
+write_time_ms 60000 off_ms
+write_time_ms 90000 suspend_ms
+write_value 0       /var/lib/power_manager/disable_idle_suspend
+
+initctl restart powerd
+
+cat <<EOF
+
+Adjusted power manager settings so that machine will go to sleep
+in 90 seconds.
+
+Please do not touch the machine until it suspends.  You can tell that
+a machine is suspended because its power light will start blinking
+
+To bring machine back up after it goes to sleep, press the power
+button on the keyboard.
+
+EOF
+
+sleep 30
+echo 60 seconds remaining until suspend:  monitor should dim around now
+
+sleep 20
+echo 40 seconds remaining until suspend:  monitor should power off in 10 seconds
+
+sleep 50
+echo Machine should be back from suspend.  Undoing changes
+
+echo cleaning up
+eval rm -v $TO_REMOVE
+
+# Belt-and-suspenders; powerd gets file notify messages on those files
+initctl restart powerd

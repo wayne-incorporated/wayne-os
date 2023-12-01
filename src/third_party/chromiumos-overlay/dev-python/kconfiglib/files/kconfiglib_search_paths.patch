@@ -1,0 +1,198 @@
+From 5b50e16456988db75cad1cca7751ac55323b9870 Mon Sep 17 00:00:00 2001
+From: Simon Glass <sjg@chromium.org>
+Date: Fri, 14 Jan 2022 16:03:43 -0700
+Subject: [PATCH 1/2] Support a list of search paths for Kconfig files
+
+Projects such as Zephyr OS have a module system, where Kconfig files can
+exist in multiple directories that are effectively merged together by the
+build system. In other words, one project directory can refer to
+subdir/Kconfig where subdir/ is actually in another project directory.
+
+As an example:
+
+   zephyr/             - main source directory
+      Kconfig          - main Kconfig file
+
+   module/ec           - module directory
+      motion/          - motion subsystem
+         Kconfig       - Kconfig file for motion subsystem
+
+Wtih the above, we might have, in zephyr/Kconfig:
+
+   source "motion/Kconfig"
+
+and it automatically locates the file in the module/ec directory.
+
+Add support for this, by allowing a list of search paths to be supplied to
+Kconfiglib.
+
+Signed-off-by: Simon Glass <sjg@chromium.org>
+---
+ kconfiglib.py | 25 ++++++++++++++++++++++---
+ 1 file changed, 22 insertions(+), 3 deletions(-)
+
+diff --git a/kconfiglib.py b/kconfiglib.py
+index c67895c..e3105c2 100644
+--- a/kconfiglib.py
++++ b/kconfiglib.py
+@@ -834,6 +834,7 @@ class Kconfig(object):
+         "n",
+         "named_choices",
+         "srctree",
++        "search_paths",
+         "syms",
+         "top_node",
+         "unique_choices",
+@@ -865,7 +866,7 @@ class Kconfig(object):
+     #
+ 
+     def __init__(self, filename="Kconfig", warn=True, warn_to_stderr=True,
+-                 encoding="utf-8", suppress_traceback=False):
++                 encoding="utf-8", suppress_traceback=False, search_paths=None):
+         """
+         Creates a new Kconfig object by parsing Kconfig files.
+         Note that Kconfig files are not the same as .config files (which store
+@@ -942,9 +943,23 @@ def __init__(self, filename="Kconfig", warn=True, warn_to_stderr=True,
+ 
+           Other exceptions besides EnvironmentError and KconfigError are still
+           propagated when suppress_traceback is True.
++
++        search_paths (default: None):
++          List of paths to search for Kconfig files. This is needed when the
++          files are split between two project directories, as is done with
++          Zephyr OS, for example. It allows files in one project to reference
++          files in another.
++
++          This argument affects the operation of commands which include other
++          Kconfig files, such as `source` and `rsource`.
++
++          When not None, it should be a list of paths to directories to search.
++          Each search path is prepended to the relative filename to assist in
++          finding the file. The proeect directories should have distinct
++          filenames and/or subdirectory structures, so avoid ambiguity.
+         """
+         try:
+-            self._init(filename, warn, warn_to_stderr, encoding)
++            self._init(filename, warn, warn_to_stderr, encoding, search_paths)
+         except (EnvironmentError, KconfigError) as e:
+             if suppress_traceback:
+                 cmd = sys.argv[0]  # Empty string if missing
+@@ -956,7 +971,7 @@ def __init__(self, filename="Kconfig", warn=True, warn_to_stderr=True,
+                 sys.exit(cmd + str(e).strip())
+             raise
+ 
+-    def _init(self, filename, warn, warn_to_stderr, encoding):
++    def _init(self, filename, warn, warn_to_stderr, encoding, search_paths):
+         # See __init__()
+ 
+         self._encoding = encoding
+@@ -966,6 +981,7 @@ def _init(self, filename, warn, warn_to_stderr, encoding):
+         # relative to $srctree. relpath() can cause issues for symlinks,
+         # because it assumes symlink/../foo is the same as foo/.
+         self._srctree_prefix = realpath(self.srctree) + os.sep
++        self.search_paths = search_paths
+ 
+         self.warn = warn
+         self.warn_to_stderr = warn_to_stderr
+@@ -2972,6 +2988,9 @@ def _parse_block(self, end_token, parent, prev):
+                 #   Kconfig symbols, which indirectly ensures a consistent
+                 #   ordering in e.g. .config files
+                 filenames = sorted(iglob(join(self._srctree_prefix, pattern)))
++                if self.search_paths:
++                    for prefix in self.search_paths:
++                        filenames += sorted(iglob(join(prefix, pattern)))
+ 
+                 if not filenames and t0 in _OBL_SOURCE_TOKENS:
+                     raise KconfigError(
+
+From 10d9d988cdaf1cf49e5a8007994463c42bdb66ab Mon Sep 17 00:00:00 2001
+From: Simon Glass <sjg@chromium.org>
+Date: Fri, 14 Jan 2022 16:30:24 -0700
+Subject: [PATCH 2/2] Add an option to allow empty macros
+
+When parsing Kconfig which include macros it is currently necessary to
+provide a value for all macros in advance. This may not be possible in
+some cases, e.g. when the caller is performing checks on the Kconfig
+options but is not running a full build of the project.
+
+Add an option to support this. This allows parsing of Zephyr Kconfig
+files without specifying a particular board, etc.
+
+Signed-off-by: Simon Glass <sjg@chromium.org>
+---
+ kconfiglib.py | 25 +++++++++++++++++++++----
+ 1 file changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/kconfiglib.py b/kconfiglib.py
+index e3105c2..0e05aaa 100644
+--- a/kconfiglib.py
++++ b/kconfiglib.py
+@@ -817,6 +817,7 @@ class Kconfig(object):
+         "_srctree_prefix",
+         "_unset_match",
+         "_warn_assign_no_prompt",
++        "allow_empty_macros",
+         "choices",
+         "comments",
+         "config_header",
+@@ -866,7 +867,8 @@ class Kconfig(object):
+     #
+ 
+     def __init__(self, filename="Kconfig", warn=True, warn_to_stderr=True,
+-                 encoding="utf-8", suppress_traceback=False, search_paths=None):
++                 encoding="utf-8", suppress_traceback=False, search_paths=None,
++                 allow_empty_macros=False):
+         """
+         Creates a new Kconfig object by parsing Kconfig files.
+         Note that Kconfig files are not the same as .config files (which store
+@@ -957,9 +959,21 @@ def __init__(self, filename="Kconfig", warn=True, warn_to_stderr=True,
+           Each search path is prepended to the relative filename to assist in
+           finding the file. The proeect directories should have distinct
+           filenames and/or subdirectory structures, so avoid ambiguity.
++
++        allow_empty_macros (default: False):
++          Normally when macros expand to empty it means that the macro is not
++          defined. This is considered an error and parsing of the Kconfig files
++          aborts with an exception. In some cases it is useful to continue
++          parsing, to obtain what information is available.
++
++          An example is where the value of various macros is not known but the
++          caller simply wants to get a list of the available Kconfig options.
++
++          Pass True here to allow empty / undefined macros.
+         """
+         try:
+-            self._init(filename, warn, warn_to_stderr, encoding, search_paths)
++            self._init(filename, warn, warn_to_stderr, encoding, search_paths,
++                       allow_empty_macros)
+         except (EnvironmentError, KconfigError) as e:
+             if suppress_traceback:
+                 cmd = sys.argv[0]  # Empty string if missing
+@@ -971,7 +985,8 @@ def __init__(self, filename="Kconfig", warn=True, warn_to_stderr=True,
+                 sys.exit(cmd + str(e).strip())
+             raise
+ 
+-    def _init(self, filename, warn, warn_to_stderr, encoding, search_paths):
++    def _init(self, filename, warn, warn_to_stderr, encoding, search_paths,
++              allow_empty_macros):
+         # See __init__()
+ 
+         self._encoding = encoding
+@@ -982,6 +997,7 @@ def _init(self, filename, warn, warn_to_stderr, encoding, search_paths):
+         # because it assumes symlink/../foo is the same as foo/.
+         self._srctree_prefix = realpath(self.srctree) + os.sep
+         self.search_paths = search_paths
++        self.allow_empty_macros = allow_empty_macros
+ 
+         self.warn = warn
+         self.warn_to_stderr = warn_to_stderr
+@@ -2701,7 +2717,8 @@ def _expand_name(self, s, i):
+         if not name.strip():
+             # Avoid creating a Kconfig symbol with a blank name. It's almost
+             # guaranteed to be an error.
+-            self._parse_error("macro expanded to blank string")
++            if not self.allow_empty_macros:
++                self._parse_error("macro expanded to blank string")
+ 
+         # Skip trailing whitespace
+         while end_i < len(s) and s[end_i].isspace():

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,19 +11,19 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <base/at_exit.h>
-#include <base/bind.h>
-#include <base/callback.h>
 #include <base/command_line.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback.h>
 #include <base/logging.h>
 #include <base/memory/ref_counted.h>
 #include <base/message_loop/message_pump_type.h>
-#include <base/optional.h>
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_split.h>
 #include <base/strings/string_util.h>
@@ -37,6 +37,7 @@
 #include <brillo/syslog_logging.h>
 #include <chromeos/constants/cryptohome.h>
 #include <chromeos-config/libcros_config/cros_config.h>
+#include <libsegmentation/feature_management.h>
 #include <linux/limits.h>
 #include <rootdev/rootdev.h>
 
@@ -45,6 +46,7 @@
 #include "login_manager/file_checker.h"
 #include "login_manager/login_metrics.h"
 #include "login_manager/regen_mitigator.h"
+#include "login_manager/scheduler_util.h"
 #include "login_manager/session_manager_impl.h"
 #include "login_manager/session_manager_service.h"
 #include "login_manager/system_utils_impl.h"
@@ -90,6 +92,7 @@ static const char kHelpMessage[] =
 
 using login_manager::BrowserJob;
 using login_manager::BrowserJobInterface;
+using login_manager::ConfigureNonUrgentCpuset;
 using login_manager::FileChecker;
 using login_manager::LoginMetrics;
 using login_manager::PerformChromeSetup;
@@ -102,16 +105,12 @@ constexpr char kFlagFileDir[] = "/run/session_manager";
 
 // Hang-detection magic file and constants.
 constexpr char kHangDetectionFlagFile[] = "enable_hang_detection";
-constexpr base::TimeDelta kHangDetectionIntervalStable =
-    base::TimeDelta::FromSeconds(60);
-constexpr base::TimeDelta kHangDetectionIntervalDev =
-    base::TimeDelta::FromSeconds(15);
-constexpr base::TimeDelta kHangDetectionIntervalTest =
-    base::TimeDelta::FromSeconds(5);
+constexpr base::TimeDelta kHangDetectionInterval = base::Seconds(60);
+constexpr base::TimeDelta kHangDetectionIntervalTest = base::Seconds(5);
 
 // Time to wait for children to exit gracefully before killing them
 // with a SIGABRT.
-constexpr base::TimeDelta kKillTimeout = base::TimeDelta::FromSeconds(3);
+constexpr base::TimeDelta kKillTimeout = base::Seconds(3);
 
 }  // namespace
 
@@ -138,17 +137,21 @@ int main(int argc, char* argv[]) {
       base::SplitString(command_flag, base::kWhitespaceASCII,
                         base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
-  // Set things up for running Chrome.
   std::unique_ptr<brillo::CrosConfig> cros_config =
       std::make_unique<brillo::CrosConfig>();
-  if (!cros_config->Init())
-    cros_config = nullptr;
+
+  // Detect small cores and restrict non-urgent tasks to small cores.
+  ConfigureNonUrgentCpuset(cros_config.get());
+
+  // Set things up for running Chrome.
   bool is_developer_end_user = false;
   map<string, string> env_var_map;
   vector<string> args, env_vars;
   uid_t uid = 0;
-  PerformChromeSetup(cros_config.get(), &is_developer_end_user, &env_var_map,
-                     &args, &uid);
+  segmentation::FeatureManagement feature_management;
+
+  PerformChromeSetup(cros_config.get(), &feature_management,
+                     &is_developer_end_user, &env_var_map, &args, &uid);
   command.insert(command.end(), args.begin(), args.end());
   for (const auto& it : env_var_map)
     env_vars.push_back(it.first + "=" + it.second);
@@ -182,19 +185,13 @@ int main(int argc, char* argv[]) {
   const bool enable_hang_detection =
       !is_developer_end_user || hang_detection_file_exists;
 
-  base::TimeDelta hang_detection_interval = kHangDetectionIntervalStable;
-  std::string channel_string;
-  if (base::SysInfo::GetLsbReleaseValue("CHROMEOS_RELEASE_TRACK",
-                                        &channel_string) &&
-      channel_string != "stable-channel") {
-    hang_detection_interval = kHangDetectionIntervalDev;
-  }
+  base::TimeDelta hang_detection_interval = kHangDetectionInterval;
   if (hang_detection_file_exists)
     hang_detection_interval = kHangDetectionIntervalTest;
 
   // Job configuration.
   BrowserJob::Config config;
-  base::Optional<base::FilePath> ns_path;
+  std::optional<base::FilePath> ns_path;
   // TODO(crbug.com/188605, crbug.com/216789): Extend user session isolation and
   // make it stricter.
   // Back when the above bugs were filed, the interaction between
@@ -231,9 +228,7 @@ int main(int argc, char* argv[]) {
     // entering the namespace.
     chrome_mnt_ns =
         std::make_unique<brillo::MountNamespace>(ns_path.value(), &platform);
-    bool status = chrome_mnt_ns->Create();
-    metrics.SendNamespaceCreationResult(status);
-    if (status) {
+    if (chrome_mnt_ns->Create()) {
       // User session shouldn't fail if namespace creation fails.
       // browser_job enters the mount namespace if |config.chrome_mount_ns_path|
       // has a value. Populate this value only if the namespace creation
@@ -272,7 +267,8 @@ int main(int argc, char* argv[]) {
     // Allows devs to start/stop browser manually.
     if (should_run_browser) {
       brillo_loop.PostTask(
-          FROM_HERE, base::Bind(&SessionManagerService::RunBrowser, manager));
+          FROM_HERE,
+          base::BindOnce(&SessionManagerService::RunBrowser, manager));
     }
     // Returns when brillo_loop.BreakLoop() is called.
     brillo_loop.Run();

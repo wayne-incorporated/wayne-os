@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<node name="/org/chromium/SmbProvider"
+    xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+  <interface name="org.chromium.SmbProvider">
+
+    <method name="GetShares">
+      <tp:docstring>
+        Gets a list of SMB shares from a host.
+      </tp:docstring>
+      <arg name="options_blob" type="ay" direction="in">
+        <tp:docstring>
+          Serialized GetSharesOptionsProto protobuf.
+        </tp:docstring>
+      </arg>
+      <arg name="error_code" type="i" direction="out">
+      <tp:docstring>
+        Returned error code. See ErrorType enum.
+      </tp:docstring>
+      </arg>
+      <arg name="shares" type="ay" direction="out">
+        <tp:docstring>
+          Serialized DirectoryEntryList protobuf.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+
+    <method name="SetupKerberos">
+      <tp:docstring>
+        Sets up Kerberos for a user.
+      </tp:docstring>
+      <arg name="account_id" type="s" direction="in">
+        <tp:docstring>
+          Object GUID of the user account to setup Kerberos for.
+        </tp:docstring>
+      </arg>
+      <arg name="success" type="b" direction="out">
+        <tp:docstring>
+          Boolean indicating success of the SetupKerberos operation.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async"/>
+    </method>
+
+    <method name="ParseNetBiosPacket">
+      <tp:docstring>
+        Parses a NetBios Name Request Response packet.
+      </tp:docstring>
+      <arg name="packet" type="ay" direction="in">
+        <tp:docstring>
+          Packet received as a repsonse to a NetBios Name Request.
+        </tp:docstring>
+      </arg>
+      <arg name="transaction_id" type="q" direction="in">
+        <tp:docstring>
+          Transaction ID for the NetBios Name Request. Any packet that does not
+          contain a matching transaction ID is ignored.
+        </tp:docstring>
+      </arg>
+      <arg name="hostnames" type="ay" direction="out">
+        <tp:docstring>
+          Serialized Hostnames protobuf.
+        </tp:docstring>
+      </arg>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+
+  </interface>
+</node>

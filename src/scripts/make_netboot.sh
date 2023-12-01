@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 # are placed in a "netboot" subfolder.
 
 SCRIPT_ROOT=$(dirname $(readlink -f "$0"))
+# shellcheck source=build_library/build_common.sh
 . "${SCRIPT_ROOT}/build_library/build_common.sh" || exit 1
 
 # Script must be run inside the chroot.
@@ -24,12 +25,14 @@ DEFINE_string image_dir "" "Path to the folder to store netboot images."
 FLAGS "$@" || exit 1
 eval set -- "${FLAGS_ARGV}"
 
+# shellcheck source=build_library/build_common.sh
 . "${SCRIPT_ROOT}/build_library/build_common.sh" || exit 1
+# shellcheck source=build_library/board_options.sh
 . "${BUILD_LIBRARY_DIR}/board_options.sh" || exit 1
 
 switch_to_strict_mode
 # build_packages artifact output.
-SYSROOT="${GCLIENT_ROOT}/chroot/build/${FLAGS_board}"
+SYSROOT="/build/${FLAGS_board}"
 # build_image artifact output.
 
 if [ -n "${FLAGS_image_dir}" ]; then

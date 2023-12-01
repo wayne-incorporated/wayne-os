@@ -1,0 +1,1 @@
+parade-ps8815a0-firmware-3.ebuild

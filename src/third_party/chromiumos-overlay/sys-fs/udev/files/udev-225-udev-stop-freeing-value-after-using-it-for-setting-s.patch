@@ -1,0 +1,82 @@
+From a52e62a329f27e5f0a35402cdbd194c9ed4542a7 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Wed, 7 Jun 2017 04:47:47 +0300
+Subject: [PATCH] udev: stop freeing value after using it for setting sysattr
+ (#6094)
+
+This prevents udev from double-freeing and crashing.
+
+See https://github.com/systemd/systemd/issues/6040#issuecomment-306589836
+==351== Invalid free() / delete / delete[] / realloc()
+==351==    at 0x4C2C14B: free (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+==351==    by 0x13CBE8: hashmap_clear_free_free (hashmap.c:900)
+==351==    by 0x13CBE8: hashmap_free_free_free (hashmap.c:852)
+==351==    by 0x147F4F: sd_device_unref (sd-device.c:88)
+==351==    by 0x130CCC: udev_device_unref (libudev-device.c:552)
+==351==    by 0x130CD5: udev_device_unref (libudev-device.c:553)
+==351==    by 0x11FBBB: worker_spawn (udevd.c:488)
+==351==    by 0x1216E5: event_run (udevd.c:584)
+==351==    by 0x1216E5: event_queue_start (udevd.c:823)
+==351==    by 0x122213: on_uevent (udevd.c:927)
+==351==    by 0x141F2F: source_dispatch (sd-event.c:2272)
+==351==    by 0x142D52: sd_event_dispatch (sd-event.c:2631)
+==351==    by 0x142D52: sd_event_run (sd-event.c:2690)
+==351==    by 0x142D52: sd_event_loop (sd-event.c:2710)
+==351==    by 0x1159CB: run (udevd.c:1643)
+==351==    by 0x1159CB: main (udevd.c:1772)
+==351==  Address 0x81745b0 is 0 bytes inside a block of size 1 free'd
+==351==    at 0x4C2C14B: free (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+==351==    by 0x1447F0: freep (alloc-util.h:57)
+==351==    by 0x1447F0: sd_device_set_sysattr_value (sd-device.c:1859)
+==351==    by 0x132081: udev_device_set_sysattr_value (libudev-device.c:849)
+==351==    by 0x12E777: set_trackpoint_sensitivity (udev-builtin-keyboard.c:180)
+==351==    by 0x12E777: builtin_keyboard.lto_priv.170 (udev-builtin-keyboard.c:263)
+==351==    by 0x14D03F: udev_builtin_run.constprop.75 (udev-builtin.c:133)
+==351==    by 0x11FAEB: udev_event_execute_run (udev-event.c:957)
+==351==    by 0x11FAEB: worker_spawn (udevd.c:461)
+==351==    by 0x1216E5: event_run (udevd.c:584)
+==351==    by 0x1216E5: event_queue_start (udevd.c:823)
+==351==    by 0x122213: on_uevent (udevd.c:927)
+==351==    by 0x141F2F: source_dispatch (sd-event.c:2272)
+==351==    by 0x142D52: sd_event_dispatch (sd-event.c:2631)
+==351==    by 0x142D52: sd_event_run (sd-event.c:2690)
+==351==    by 0x142D52: sd_event_loop (sd-event.c:2710)
+==351==    by 0x1159CB: run (udevd.c:1643)
+==351==    by 0x1159CB: main (udevd.c:1772)
+==351==  Block was alloc'd at
+==351==    at 0x4C2CF35: calloc (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+==351==    by 0x144853: sd_device_set_sysattr_value (sd-device.c:1888)
+==351==    by 0x132081: udev_device_set_sysattr_value (libudev-device.c:849)
+==351==    by 0x12E777: set_trackpoint_sensitivity (udev-builtin-keyboard.c:180)
+==351==    by 0x12E777: builtin_keyboard.lto_priv.170 (udev-builtin-keyboard.c:263)
+==351==    by 0x14D03F: udev_builtin_run.constprop.75 (udev-builtin.c:133)
+==351==    by 0x11FAEB: udev_event_execute_run (udev-event.c:957)
+==351==    by 0x11FAEB: worker_spawn (udevd.c:461)
+==351==    by 0x1216E5: event_run (udevd.c:584)
+==351==    by 0x1216E5: event_queue_start (udevd.c:823)
+==351==    by 0x122213: on_uevent (udevd.c:927)
+==351==    by 0x141F2F: source_dispatch (sd-event.c:2272)
+==351==    by 0x142D52: sd_event_dispatch (sd-event.c:2631)
+==351==    by 0x142D52: sd_event_run (sd-event.c:2690)
+==351==    by 0x142D52: sd_event_loop (sd-event.c:2710)
+==351==    by 0x1159CB: run (udevd.c:1643)
+==351==    by 0x1159CB: main (udevd.c:1772)
+(cherry picked from commit 3bd82598a1b48d27b17baf4b43bdf1104bcb1021)
+---
+ src/libsystemd/sd-device/sd-device.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/libsystemd/sd-device/sd-device.c b/src/libsystemd/sd-device/sd-device.c
+index 04ead29338bb..81d8d61ba967 100644
+--- a/src/libsystemd/sd-device/sd-device.c
++++ b/src/libsystemd/sd-device/sd-device.c
+@@ -1892,6 +1892,7 @@ _public_ int sd_device_set_sysattr_value(sd_device *device, const char *sysattr,
+                 r = device_add_sysattr_value(device, sysattr, value);
+                 if (r < 0)
+                         return r;
++                value = NULL;
+ 
+                 return -ENXIO;
+         }
+-- 
+

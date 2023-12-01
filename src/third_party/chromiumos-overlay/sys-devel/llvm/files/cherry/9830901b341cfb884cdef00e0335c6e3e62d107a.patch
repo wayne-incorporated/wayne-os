@@ -1,0 +1,115 @@
+commit 9830901b341cfb884cdef00e0335c6e3e62d107a
+Author: Christopher Di Bella <cjdb@google.com>
+Date:   Fri Feb 26 00:11:25 2021 +0000
+
+    [clang] removes check against integral-to-pointer conversion...
+    
+    ... unless it's a literal
+    
+    D94640 was a bit too aggressive in its analysis, considering integers
+    representing valid addresses as invalid. This change rolls back some of
+    the check, so that only the most obvious case is still flagged.
+    
+    Before:
+    
+    ```cpp
+    free((void*)1000);   // literal converted to `void*`: warning good
+    free((void*)an_int); // `int` object converted to `void*`: warning might
+                         //  be a false positive
+    ```
+    
+    After
+    
+    ```cpp
+    free((void*)1000);   // literal converted to `void*`: warning good
+    free((void*)an_int); // doesn't warn
+    ```
+    
+    Differential Revision: https://reviews.llvm.org/D97512
+
+diff --git a/clang/lib/Sema/SemaChecking.cpp b/clang/lib/Sema/SemaChecking.cpp
+index 7e6dd354caac..22dd634c5031 100644
+--- a/clang/lib/Sema/SemaChecking.cpp
++++ b/clang/lib/Sema/SemaChecking.cpp
+@@ -10316,11 +10316,18 @@ void CheckFreeArgumentsCast(Sema &S, const std::string &CalleeName,
+                             const CastExpr *Cast) {
+   SmallString<128> SizeString;
+   llvm::raw_svector_ostream OS(SizeString);
++
++  clang::CastKind Kind = Cast->getCastKind();
++  if (Kind == clang::CK_BitCast &&
++      !Cast->getSubExpr()->getType()->isFunctionPointerType())
++    return;
++  if (Kind == clang::CK_IntegralToPointer &&
++      !isa<IntegerLiteral>(
++          Cast->getSubExpr()->IgnoreParenImpCasts()->IgnoreParens()))
++    return;
++
+   switch (Cast->getCastKind()) {
+   case clang::CK_BitCast:
+-    if (!Cast->getSubExpr()->getType()->isFunctionPointerType())
+-      return;
+-    LLVM_FALLTHROUGH;
+   case clang::CK_IntegralToPointer:
+   case clang::CK_FunctionToPointerDecay:
+     OS << '\'';
+diff --git a/clang/test/Analysis/free.c b/clang/test/Analysis/free.c
+index 84d53472158c..59767b5917d7 100644
+--- a/clang/test/Analysis/free.c
++++ b/clang/test/Analysis/free.c
+@@ -108,3 +108,11 @@ void t17(void) {
+   // expected-warning@-1{{Argument to free() is the address of the function 'iptr', which is not memory allocated by malloc()}}
+   // expected-warning@-2{{attempt to call free on non-heap object 'iptr'}}
+ }
++
++struct S {
++  const char* p;
++};
++
++void t18 (struct S s) {
++  free((void*)(unsigned long long)s.p); // no warning
++}
+diff --git a/clang/test/Analysis/free.cpp b/clang/test/Analysis/free.cpp
+index 2559770d6ddb..85b0935a5199 100644
+--- a/clang/test/Analysis/free.cpp
++++ b/clang/test/Analysis/free.cpp
+@@ -208,3 +208,39 @@ void t17b (char **x, int offset) {
+   // Unknown value
+   std::free(x[offset]); // no-warning
+ }
++
++struct S {
++  const char* p;
++};
++
++void t18_C_style_C_style_free (S s) {
++  free((void*)(unsigned long long)s.p); // no warning
++}
++
++void t18_C_style_C_style_std_free (S s) {
++  std::free((void*)(unsigned long long)s.p); // no warning
++}
++
++void t18_C_style_reinterpret_free (S s) {
++  free((void*)reinterpret_cast<unsigned long long>(s.p)); // no warning
++}
++
++void t18_C_style_reinterpret_std_free (S s) {
++  std::free((void*)reinterpret_cast<unsigned long long>(s.p)); // no warning
++}
++
++void t18_reinterpret_C_style_free (S s) {
++  free(reinterpret_cast<void*>((unsigned long long)(s.p))); // no warning
++}
++
++void t18_reinterpret_C_style_std_free (S s) {
++  std::free(reinterpret_cast<void*>((unsigned long long)(s.p))); // no warning
++}
++
++void t18_reinterpret_reinterpret_free (S s) {
++  free(reinterpret_cast<void*>(reinterpret_cast<unsigned long long>(s.p))); // no warning
++}
++
++void t18_reinterpret_reinterpret_std_free (S s) {
++  std::free(reinterpret_cast<void*>(reinterpret_cast<unsigned long long>(s.p))); // no warning
++}

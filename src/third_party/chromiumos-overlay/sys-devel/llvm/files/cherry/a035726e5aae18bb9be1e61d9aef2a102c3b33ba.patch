@@ -1,0 +1,463 @@
+commit a035726e5aae18bb9be1e61d9aef2a102c3b33ba
+Author: Wei Mi <wmi@google.com>
+Date:   Thu Mar 19 22:45:27 2020 -0700
+
+    Revert "Generate Callee Saved Register (CSR) related cfi directives like .cfi_restore."
+    
+    This reverts commit 3c96d01d2e3de63304ca3429d349ec62ae2adef3. Got report that it caused test failures in libc++.
+
+diff --git a/llvm/lib/CodeGen/CFIInstrInserter.cpp b/llvm/lib/CodeGen/CFIInstrInserter.cpp
+index 2fc436e6349..ef548c84d3c 100644
+--- a/llvm/lib/CodeGen/CFIInstrInserter.cpp
++++ b/llvm/lib/CodeGen/CFIInstrInserter.cpp
+@@ -18,7 +18,6 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "llvm/ADT/DepthFirstIterator.h"
+-#include "llvm/ADT/SetOperations.h"
+ #include "llvm/CodeGen/MachineFunctionPass.h"
+ #include "llvm/CodeGen/MachineInstrBuilder.h"
+ #include "llvm/CodeGen/MachineModuleInfo.h"
+@@ -77,10 +76,6 @@ class CFIInstrInserter : public MachineFunctionPass {
+     unsigned IncomingCFARegister = 0;
+     /// Value of cfa register valid at basic block exit.
+     unsigned OutgoingCFARegister = 0;
+-    /// Set of callee saved registers saved at basic block entry.
+-    BitVector IncomingCSRSaved;
+-    /// Set of callee saved registers saved at basic block exit.
+-    BitVector OutgoingCSRSaved;
+     /// If in/out cfa offset and register values for this block have already
+     /// been set or not.
+     bool Processed = false;
+@@ -113,8 +108,7 @@ class CFIInstrInserter : public MachineFunctionPass {
+     return -MBBVector[MBB->getNumber()].IncomingCFAOffset;
+   }
+ 
+-  void reportCFAError(const MBBCFAInfo &Pred, const MBBCFAInfo &Succ);
+-  void reportCSRError(const MBBCFAInfo &Pred, const MBBCFAInfo &Succ);
++  void report(const MBBCFAInfo &Pred, const MBBCFAInfo &Succ);
+   /// Go through each MBB in a function and check that outgoing offset and
+   /// register of its predecessors match incoming offset and register of that
+   /// MBB, as well as that incoming offset and register of its successors match
+@@ -138,8 +132,6 @@ void CFIInstrInserter::calculateCFAInfo(MachineFunction &MF) {
+   // function.
+   unsigned InitialRegister =
+       MF.getSubtarget().getFrameLowering()->getInitialCFARegister(MF);
+-  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+-  unsigned NumRegs = TRI.getNumRegs();
+ 
+   // Initialize MBBMap.
+   for (MachineBasicBlock &MBB : MF) {
+@@ -149,8 +141,6 @@ void CFIInstrInserter::calculateCFAInfo(MachineFunction &MF) {
+     MBBInfo.OutgoingCFAOffset = InitialOffset;
+     MBBInfo.IncomingCFARegister = InitialRegister;
+     MBBInfo.OutgoingCFARegister = InitialRegister;
+-    MBBInfo.IncomingCSRSaved.resize(NumRegs);
+-    MBBInfo.OutgoingCSRSaved.resize(NumRegs);
+     MBBVector[MBB.getNumber()] = MBBInfo;
+   }
+ 
+@@ -169,11 +159,8 @@ void CFIInstrInserter::calculateOutgoingCFAInfo(MBBCFAInfo &MBBInfo) {
+   int SetOffset = MBBInfo.IncomingCFAOffset;
+   // Outgoing cfa register set by the block.
+   unsigned SetRegister = MBBInfo.IncomingCFARegister;
+-  MachineFunction *MF = MBBInfo.MBB->getParent();
+-  const std::vector<MCCFIInstruction> &Instrs = MF->getFrameInstructions();
+-  const TargetRegisterInfo &TRI = *MF->getSubtarget().getRegisterInfo();
+-  unsigned NumRegs = TRI.getNumRegs();
+-  BitVector CSRSaved(NumRegs), CSRRestored(NumRegs);
++  const std::vector<MCCFIInstruction> &Instrs =
++      MBBInfo.MBB->getParent()->getFrameInstructions();
+ 
+   // Determine cfa offset and register set by the block.
+   for (MachineInstr &MI : *MBBInfo.MBB) {
+@@ -194,15 +181,6 @@ void CFIInstrInserter::calculateOutgoingCFAInfo(MBBCFAInfo &MBBInfo) {
+         SetRegister = CFI.getRegister();
+         SetOffset = CFI.getOffset();
+         break;
+-      case MCCFIInstruction::OpOffset:
+-      case MCCFIInstruction::OpRegister:
+-      case MCCFIInstruction::OpRelOffset:
+-        CSRSaved.set(CFI.getRegister());
+-        break;
+-      case MCCFIInstruction::OpRestore:
+-      case MCCFIInstruction::OpUndefined:
+-        CSRRestored.set(CFI.getRegister());
+-        break;
+       case MCCFIInstruction::OpRememberState:
+         // TODO: Add support for handling cfi_remember_state.
+ #ifndef NDEBUG
+@@ -221,7 +199,12 @@ void CFIInstrInserter::calculateOutgoingCFAInfo(MBBCFAInfo &MBBInfo) {
+         break;
+       // Other CFI directives do not affect CFA value.
+       case MCCFIInstruction::OpSameValue:
++      case MCCFIInstruction::OpOffset:
++      case MCCFIInstruction::OpRelOffset:
+       case MCCFIInstruction::OpEscape:
++      case MCCFIInstruction::OpRestore:
++      case MCCFIInstruction::OpUndefined:
++      case MCCFIInstruction::OpRegister:
+       case MCCFIInstruction::OpWindowSave:
+       case MCCFIInstruction::OpNegateRAState:
+       case MCCFIInstruction::OpGnuArgsSize:
+@@ -235,11 +218,6 @@ void CFIInstrInserter::calculateOutgoingCFAInfo(MBBCFAInfo &MBBInfo) {
+   // Update outgoing CFA info.
+   MBBInfo.OutgoingCFAOffset = SetOffset;
+   MBBInfo.OutgoingCFARegister = SetRegister;
+-
+-  // Update outgoing CSR info.
+-  MBBInfo.OutgoingCSRSaved = MBBInfo.IncomingCSRSaved;
+-  MBBInfo.OutgoingCSRSaved |= CSRSaved;
+-  MBBInfo.OutgoingCSRSaved.reset(CSRRestored);
+ }
+ 
+ void CFIInstrInserter::updateSuccCFAInfo(MBBCFAInfo &MBBInfo) {
+@@ -258,7 +236,6 @@ void CFIInstrInserter::updateSuccCFAInfo(MBBCFAInfo &MBBInfo) {
+       if (!SuccInfo.Processed) {
+         SuccInfo.IncomingCFAOffset = CurrentInfo.OutgoingCFAOffset;
+         SuccInfo.IncomingCFARegister = CurrentInfo.OutgoingCFARegister;
+-        SuccInfo.IncomingCSRSaved = CurrentInfo.OutgoingCSRSaved;
+         Stack.push_back(Succ);
+       }
+     }
+@@ -310,23 +287,12 @@ bool CFIInstrInserter::insertCFIInstrs(MachineFunction &MF) {
+           .addCFIIndex(CFIIndex);
+       InsertedCFIInstr = true;
+     }
+-
+-    BitVector SetDifference = PrevMBBInfo->OutgoingCSRSaved;
+-    SetDifference.reset(MBBInfo.IncomingCSRSaved);
+-    for (int Reg : SetDifference.set_bits()) {
+-      unsigned CFIIndex =
+-          MF.addFrameInst(MCCFIInstruction::createRestore(nullptr, Reg));
+-      BuildMI(*MBBInfo.MBB, MBBI, DL, TII->get(TargetOpcode::CFI_INSTRUCTION))
+-          .addCFIIndex(CFIIndex);
+-      InsertedCFIInstr = true;
+-    }
+     PrevMBBInfo = &MBBInfo;
+   }
+   return InsertedCFIInstr;
+ }
+ 
+-void CFIInstrInserter::reportCFAError(const MBBCFAInfo &Pred,
+-                                      const MBBCFAInfo &Succ) {
++void CFIInstrInserter::report(const MBBCFAInfo &Pred, const MBBCFAInfo &Succ) {
+   errs() << "*** Inconsistent CFA register and/or offset between pred and succ "
+             "***\n";
+   errs() << "Pred: " << Pred.MBB->getName() << " #" << Pred.MBB->getNumber()
+@@ -341,22 +307,6 @@ void CFIInstrInserter::reportCFAError(const MBBCFAInfo &Pred,
+          << " incoming CFA Offset:" << Succ.IncomingCFAOffset << "\n";
+ }
+ 
+-void CFIInstrInserter::reportCSRError(const MBBCFAInfo &Pred,
+-                                      const MBBCFAInfo &Succ) {
+-  errs() << "*** Inconsistent CSR Saved between pred and succ in function "
+-         << Pred.MBB->getParent()->getName() << " ***\n";
+-  errs() << "Pred: " << Pred.MBB->getName() << " #" << Pred.MBB->getNumber()
+-         << " outgoing CSR Saved: ";
+-  for (int Reg : Pred.OutgoingCSRSaved.set_bits())
+-    errs() << Reg << " ";
+-  errs() << "\n";
+-  errs() << "Succ: " << Succ.MBB->getName() << " #" << Succ.MBB->getNumber()
+-         << " incoming CSR Saved: ";
+-  for (int Reg : Succ.IncomingCSRSaved.set_bits())
+-    errs() << Reg << " ";
+-  errs() << "\n";
+-}
+-
+ unsigned CFIInstrInserter::verify(MachineFunction &MF) {
+   unsigned ErrorNum = 0;
+   for (auto *CurrMBB : depth_first(&MF)) {
+@@ -371,13 +321,7 @@ unsigned CFIInstrInserter::verify(MachineFunction &MF) {
+         // we don't generate epilogues inside such blocks.
+         if (SuccMBBInfo.MBB->succ_empty() && !SuccMBBInfo.MBB->isReturnBlock())
+           continue;
+-        reportCFAError(CurrMBBInfo, SuccMBBInfo);
+-        ErrorNum++;
+-      }
+-      // Check that IncomingCSRSaved of every successor matches the
+-      // OutgoingCSRSaved of CurrMBB
+-      if (SuccMBBInfo.IncomingCSRSaved != CurrMBBInfo.OutgoingCSRSaved) {
+-        reportCSRError(CurrMBBInfo, SuccMBBInfo);
++        report(CurrMBBInfo, SuccMBBInfo);
+         ErrorNum++;
+       }
+     }
+diff --git a/llvm/lib/Target/X86/X86FrameLowering.cpp b/llvm/lib/Target/X86/X86FrameLowering.cpp
+index 1661497849d..4949d2f42c8 100644
+--- a/llvm/lib/Target/X86/X86FrameLowering.cpp
++++ b/llvm/lib/Target/X86/X86FrameLowering.cpp
+@@ -486,7 +486,7 @@ void X86FrameLowering::BuildCFI(MachineBasicBlock &MBB,
+ 
+ void X86FrameLowering::emitCalleeSavedFrameMoves(
+     MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+-    const DebugLoc &DL, bool IsPrologue) const {
++    const DebugLoc &DL) const {
+   MachineFunction &MF = *MBB.getParent();
+   MachineFrameInfo &MFI = MF.getFrameInfo();
+   MachineModuleInfo &MMI = MF.getMMI();
+@@ -501,15 +501,10 @@ void X86FrameLowering::emitCalleeSavedFrameMoves(
+          I = CSI.begin(), E = CSI.end(); I != E; ++I) {
+     int64_t Offset = MFI.getObjectOffset(I->getFrameIdx());
+     unsigned Reg = I->getReg();
+-    unsigned DwarfReg = MRI->getDwarfRegNum(Reg, true);
+ 
+-    if (IsPrologue) {
+-      BuildCFI(MBB, MBBI, DL,
+-               MCCFIInstruction::createOffset(nullptr, DwarfReg, Offset));
+-    } else {
+-      BuildCFI(MBB, MBBI, DL,
+-               MCCFIInstruction::createRestore(nullptr, DwarfReg));
+-    }
++    unsigned DwarfReg = MRI->getDwarfRegNum(Reg, true);
++    BuildCFI(MBB, MBBI, DL,
++             MCCFIInstruction::createOffset(nullptr, DwarfReg, Offset));
+   }
+ }
+ 
+@@ -1680,7 +1675,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
+     }
+ 
+     // Emit DWARF info specifying the offsets of the callee-saved registers.
+-    emitCalleeSavedFrameMoves(MBB, MBBI, DL, true);
++    emitCalleeSavedFrameMoves(MBB, MBBI, DL);
+   }
+ 
+   // X86 Interrupt handling function cannot assume anything about the direction
+@@ -1830,8 +1825,6 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
+   }
+   uint64_t SEHStackAllocAmt = NumBytes;
+ 
+-  // AfterPop is the position to insert .cfi_restore.
+-  MachineBasicBlock::iterator AfterPop = MBBI;
+   if (HasFP) {
+     // Pop EBP.
+     BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::POP64r : X86::POP32r),
+@@ -1842,13 +1835,6 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
+           TRI->getDwarfRegNum(Is64Bit ? X86::RSP : X86::ESP, true);
+       BuildCFI(MBB, MBBI, DL, MCCFIInstruction::createDefCfa(
+                                   nullptr, DwarfStackPtr, -SlotSize));
+-      if (!MBB.succ_empty() && !MBB.isReturnBlock()) {
+-        unsigned DwarfFramePtr = TRI->getDwarfRegNum(MachineFramePtr, true);
+-        BuildCFI(MBB, AfterPop, DL,
+-                 MCCFIInstruction::createRestore(nullptr, DwarfFramePtr));
+-        --MBBI;
+-        --AfterPop;
+-      }
+       --MBBI;
+     }
+   }
+@@ -1948,13 +1934,6 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
+     }
+   }
+ 
+-  // Emit DWARF info specifying the restores of the callee-saved registers.
+-  // For epilogue with return inside or being other block without successor,
+-  // no need to generate .cfi_restore for callee-saved registers.
+-  if (NeedsDwarfCFI && !MBB.succ_empty() && !MBB.isReturnBlock()) {
+-    emitCalleeSavedFrameMoves(MBB, AfterPop, DL, false);
+-  }
+-
+   if (Terminator == MBB.end() || !isTailCallOpcode(Terminator->getOpcode())) {
+     // Add the return addr area delta back since we are not tail calling.
+     int Offset = -1 * X86FI->getTCReturnAddrDelta();
+diff --git a/llvm/lib/Target/X86/X86FrameLowering.h b/llvm/lib/Target/X86/X86FrameLowering.h
+index 43c81d9d5a4..c7b41543c50 100644
+--- a/llvm/lib/Target/X86/X86FrameLowering.h
++++ b/llvm/lib/Target/X86/X86FrameLowering.h
+@@ -60,7 +60,7 @@ public:
+ 
+   void emitCalleeSavedFrameMoves(MachineBasicBlock &MBB,
+                                  MachineBasicBlock::iterator MBBI,
+-                                 const DebugLoc &DL, bool IsPrologue) const;
++                                 const DebugLoc &DL) const;
+ 
+   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
+   /// the function.
+diff --git a/llvm/test/CodeGen/X86/cfi-epilogue-with-return.mir b/llvm/test/CodeGen/X86/cfi-epilogue-with-return.mir
+deleted file mode 100644
+index 583e54b097f..00000000000
+--- a/llvm/test/CodeGen/X86/cfi-epilogue-with-return.mir
++++ /dev/null
+@@ -1,48 +0,0 @@
+-# RUN: llc -o - %s -mtriple=x86_64-- -run-pass=prologepilog 2>&1 | FileCheck %s
+---- |
+-  define i64 @_Z3foob(i1 zeroext %cond) #0 {
+-    ret i64 0
+-  }
+-  attributes #0 = {"frame-pointer"="all"}
+-...
+----
+-# If the epilogue bb.1 is a return block, no .cfi_restore is
+-# needed in it.
+-# CHECK:    bb.1:
+-# CHECK-NOT:  CFI_INSTRUCTION restore
+-# CHECK:      RET 0
+-# CHECK:    bb.2:
+-# CHECK:      RET 0
+-name:            _Z3foob
+-alignment:       16
+-tracksRegLiveness: true
+-liveins:
+-  - { reg: '$edi' }
+-frameInfo:
+-  maxAlignment:    1
+-  hasCalls:        true
+-  savePoint:       '%bb.1'
+-  restorePoint:    '%bb.1'
+-machineFunctionInfo: {}
+-body:             |
+-  bb.0:
+-    liveins: $edi
+-  
+-    TEST8rr renamable $dil, renamable $dil, implicit-def $eflags, implicit killed $edi
+-    JCC_1 %bb.2, 4, implicit killed $eflags
+-    JMP_1 %bb.1
+-  
+-  bb.1:
+-    renamable $rbx = IMPLICIT_DEF
+-    renamable $r14 = IMPLICIT_DEF
+-    renamable $r15 = IMPLICIT_DEF
+-    renamable $r12 = IMPLICIT_DEF
+-    renamable $r13 = IMPLICIT_DEF
+-    dead $eax = MOV32r0 implicit-def dead $eflags, implicit-def $rax
+-    RET 0, killed $rax
+-  
+-  bb.2:
+-    dead $eax = MOV32r0 implicit-def dead $eflags, implicit-def $rax
+-    RET 0, killed $rax
+-
+-...
+diff --git a/llvm/test/CodeGen/X86/cfi-epilogue-without-return.mir b/llvm/test/CodeGen/X86/cfi-epilogue-without-return.mir
+deleted file mode 100644
+index 8f047214896..00000000000
+--- a/llvm/test/CodeGen/X86/cfi-epilogue-without-return.mir
++++ /dev/null
+@@ -1,53 +0,0 @@
+-# RUN: llc -o - %s -mtriple=x86_64-- -run-pass=prologepilog 2>&1 | FileCheck %s
+---- |
+-  declare dso_local void @_Z3goov()
+-  define i64 @_Z3foob(i1 zeroext %cond) #0 {
+-    ret i64 0
+-  }
+-  attributes #0 = {"frame-pointer"="all"}
+-...
+----
+-# If the epilogue bb.1.if.then is not a return block, .cfi_restore is
+-# needed in it, otherwise bb.2.return will see different outgoing CFI
+-# information from its predecessors.
+-# CHECK:    bb.1:
+-# CHECK:      CFI_INSTRUCTION restore $rbx
+-# CHECK-NEXT: CFI_INSTRUCTION restore $r12
+-# CHECK-NEXT: CFI_INSTRUCTION restore $r13
+-# CHECK-NEXT: CFI_INSTRUCTION restore $r14
+-# CHECK-NEXT: CFI_INSTRUCTION restore $r15
+-# CHECK-NEXT: CFI_INSTRUCTION restore $rbp
+-# CHECK-NOT:  RET 0
+-# CHECK:    bb.2:
+-# CHECK:      RET 0
+-name:            _Z3foob
+-alignment:       16
+-tracksRegLiveness: true
+-liveins:
+-  - { reg: '$edi' }
+-frameInfo:
+-  maxAlignment:    1
+-  hasCalls:        true
+-  savePoint:       '%bb.1'
+-  restorePoint:    '%bb.1'
+-machineFunctionInfo: {}
+-body:             |
+-  bb.0:
+-    liveins: $edi
+-  
+-    TEST8rr renamable $dil, renamable $dil, implicit-def $eflags, implicit killed $edi
+-    JCC_1 %bb.2, 4, implicit killed $eflags
+-    JMP_1 %bb.1
+-  
+-  bb.1:
+-    renamable $rbx = IMPLICIT_DEF
+-    renamable $r14 = IMPLICIT_DEF
+-    renamable $r15 = IMPLICIT_DEF
+-    renamable $r12 = IMPLICIT_DEF
+-    renamable $r13 = IMPLICIT_DEF
+-  
+-  bb.2:
+-    dead $eax = MOV32r0 implicit-def dead $eflags, implicit-def $rax
+-    RET 0, killed $rax
+-
+-...
+diff --git a/llvm/test/CodeGen/X86/cfi-inserter-callee-save-register.mir b/llvm/test/CodeGen/X86/cfi-inserter-callee-save-register.mir
+deleted file mode 100644
+index b17c9a67abb..00000000000
+--- a/llvm/test/CodeGen/X86/cfi-inserter-callee-save-register.mir
++++ /dev/null
+@@ -1,34 +0,0 @@
+-# RUN: llc -o - %s -mtriple=x86_64-- -verify-cfiinstrs \
+-# RUN:     -run-pass=cfi-instr-inserter 2>&1 | FileCheck %s
+-# Test that CFI inserter inserts .cfi_restore properly for
+-# callee saved registers.
+---- |
+-  define void @foo() {
+-    ret void
+-  }
+-...
+----
+-# CHECK:      bb.3:
+-# CHECK:      CFI_INSTRUCTION restore $rbx
+-# CHECK-NEXT: CFI_INSTRUCTION restore $rbp
+-name:            foo
+-body:             |
+-  bb.0:
+-    TEST8rr renamable $dil, renamable $dil, implicit-def $eflags, implicit killed $edi
+-    JCC_1 %bb.2, 5, implicit killed $eflags
+-
+-  bb.1:
+-    JMP_1 %bb.3
+-
+-  bb.2:
+-    CFI_INSTRUCTION def_cfa_offset 16
+-    CFI_INSTRUCTION offset $rbp, -16
+-    CFI_INSTRUCTION def_cfa_register $rbp
+-    CFI_INSTRUCTION offset $rbx, -24
+-    CFI_INSTRUCTION def_cfa $rsp, 8
+-    RET 0, $rax
+-
+-  bb.3:
+-    RET 0, $rax
+-
+-...
+diff --git a/llvm/test/CodeGen/X86/cfi-inserter-verify-inconsistent-csr.mir b/llvm/test/CodeGen/X86/cfi-inserter-verify-inconsistent-csr.mir
+deleted file mode 100644
+index 63957ae5229..00000000000
+--- a/llvm/test/CodeGen/X86/cfi-inserter-verify-inconsistent-csr.mir
++++ /dev/null
+@@ -1,28 +0,0 @@
+-# RUN: not --crash llc -o - %s -mtriple=x86_64-- -verify-cfiinstrs \
+-# RUN:     -run-pass=cfi-instr-inserter 2>&1 | FileCheck %s
+-# Test that CFI verifier finds inconsistent csr saved set between bb.end and
+-# one of its precedessors.
+---- |
+-  define void @inconsistentCSR() {
+-  entry:
+-    br label %then
+-  then:
+-    br label %end
+-  end:
+-    ret void
+-  }
+-...
+----
+-# CHECK: *** Inconsistent CSR Saved between pred and succ in function inconsistentCSR ***
+-# CHECK: LLVM ERROR: Found 1 in/out CFI information errors.
+-name: inconsistentCSR
+-body: |
+-  bb.0.entry:
+-    JCC_1 %bb.2, 5, implicit undef $eflags
+-
+-  bb.1.then:
+-    CFI_INSTRUCTION offset $rbp, -16
+-
+-  bb.2.end:
+-    RET 0
+-...

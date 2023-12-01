@@ -1,0 +1,29 @@
+commit a9c0bf04043462d43013bc5616aa48f6d3e16b88
+Author: Vitaly Buka <vitalybuka@google.com>
+Date:   Fri Sep 4 00:17:34 2020 -0700
+
+    [NFC][Asan] Inline enum doc strings
+
+diff --git a/compiler-rt/lib/asan/asan_allocator.cpp b/compiler-rt/lib/asan/asan_allocator.cpp
+index c7c9d7a7b3c..cb9f49f73a3 100644
+--- a/compiler-rt/lib/asan/asan_allocator.cpp
++++ b/compiler-rt/lib/asan/asan_allocator.cpp
+@@ -101,16 +101,14 @@ static const uptr kChunkHeader2Size = sizeof(ChunkBase) - kChunkHeaderSize;
+ COMPILER_CHECK(kChunkHeaderSize == 16);
+ COMPILER_CHECK(kChunkHeader2Size <= 16);
+ 
+-// Every chunk of memory allocated by this allocator can be in one of 3 states:
+-// CHUNK_AVAILABLE: the chunk is in the free list and ready to be allocated.
+-// CHUNK_ALLOCATED: the chunk is allocated and not yet freed.
+-// CHUNK_QUARANTINE: the chunk was freed and put into quarantine zone.
+ enum {
+   // Either just allocated by underlying allocator, but AsanChunk is not yet
+   // ready, or almost returned to undelying allocator and AsanChunk is already
+   // meaningless.
+   CHUNK_INVALID = 0,
++  // The chunk is allocated and not yet freed.
+   CHUNK_ALLOCATED = 2,
++  // The chunk was freed and put into quarantine zone.
+   CHUNK_QUARANTINE = 3
+ };
+ 

@@ -1,0 +1,45 @@
+From 3a5426f5724350bfbd970fe85ef0d0e45b50b2ee Mon Sep 17 00:00:00 2001
+From: Steven Wu <stevenwu@apple.com>
+Date: Mon, 19 Dec 2022 16:02:18 -0800
+Subject: [PATCH] Revert "LTO: always parse modules in opaque pointer mode."
+
+This reverts commit 8ba9a5218782fa4f94b5c516d513a4259992c254.
+---
+ llvm/tools/lto/lto.cpp | 7 +------
+ 1 file changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/llvm/tools/lto/lto.cpp b/llvm/tools/lto/lto.cpp
+index a2d051257ea4..f50b6ac5ae3d 100644
+--- a/llvm/tools/lto/lto.cpp
++++ b/llvm/tools/lto/lto.cpp
+@@ -106,7 +106,6 @@ static void lto_initialize() {
+ 
+     static LLVMContext Context;
+     LTOContext = &Context;
+-    LTOContext->setOpaquePointers(true);
+     LTOContext->setDiagnosticHandler(
+         std::make_unique<LTOToolDiagnosticHandler>(), true);
+     initialized = true;
+@@ -134,10 +133,7 @@ struct LibLTOCodeGenerator : LTOCodeGenerator {
+   // Module must be destructed before its context gets destructed.
+   ~LibLTOCodeGenerator() { resetMergedModule(); }
+ 
+-  void init() {
+-    OwnedContext->setOpaquePointers(true);
+-    setDiagnosticHandler(handleLibLTODiagnostic, nullptr);
+-  }
++  void init() { setDiagnosticHandler(handleLibLTODiagnostic, nullptr); }
+ 
+   std::unique_ptr<MemoryBuffer> NativeObjectFile;
+   std::unique_ptr<LLVMContext> OwnedContext;
+@@ -275,7 +271,6 @@ lto_module_t lto_module_create_in_local_context(const void *mem, size_t length,
+ 
+   // Create a local context. Ownership will be transferred to LTOModule.
+   std::unique_ptr<LLVMContext> Context = std::make_unique<LLVMContext>();
+-  Context->setOpaquePointers(true);
+   Context->setDiagnosticHandler(std::make_unique<LTOToolDiagnosticHandler>(),
+                                 true);
+ 
+-- 
+2.40.0.348.gf938b09366-goog
+

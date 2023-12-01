@@ -1,0 +1,768 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This file defines library targets and other auxiliary definitions that
+# are used for the resulting executable targets.
+
+import("//common-mk/flatbuffer.gni")
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+pkg_config("target_default_deps") {
+  # This is a list of pkg-config dependencies
+  pkg_deps = [
+    "absl",
+    "libbrillo",
+    "libchrome",
+    "openssl",
+    "system_api",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+config("target_defaults") {
+  configs = [ ":target_default_deps" ]
+  defines = [
+    "PLATFORM_FWMP_INDEX=${use.generic_tpm2}",
+    "USE_FUZZER=${use.fuzzer}",
+    "USE_PINWEAVER=${use.pinweaver}",
+    "USE_SELINUX=${use.selinux}",
+    "USE_TPM_DYNAMIC=${use.tpm_dynamic}",
+    "USE_TPM_INSECURE_FALLBACK=${use.tpm_insecure_fallback}",
+    "USE_TPM1=${use.tpm}",
+    "USE_TPM2=${use.tpm2}",
+    "USE_TPM2_SIMULATOR=${use.tpm2_simulator}",
+    "USE_VTPM_PROXY=${use.vtpm_proxy}",
+    "USE_DOUBLE_EXTEND_PCR_ISSUE=${use.double_extend_pcr_issue}",
+    "USE_MOUNT_OOP=${use.mount_oop}",
+    "USE_USER_SESSION_ISOLATION=${use.user_session_isolation}",
+    "USE_USS_MIGRATION=${use.uss_migration}",
+    "USE_SLOW_MOUNT=${use.slow_mount}",
+  ]
+  if (!use.test) {
+    cflags = [ "-Wconsumed" ]
+  }
+}
+
+config("cryptohome-proto_config") {
+  # The local protobuf used some other protos in system_api, so we'll need
+  # to fix the include path so that it builds correctly.
+  include_dirs = [ "${sysroot}/usr/include/cryptohome/proto_bindings/" ]
+}
+
+flatbuffer("python-flatbuffers-reflection") {
+  flatc_out_dir = "python"
+  flatc_args = [ "--python" ]
+  sources = [ "${sysroot}/usr/include/flatbuffers/reflection.fbs" ]
+}
+
+flatbuffer("auth-block-state-flatbuffers-binding-binary") {
+  flatc_out_dir = "bfbs"
+  flatc_args = [
+    "--binary",
+    "--schema",
+  ]
+  sources = [ "../flatbuffer_schemas/auth_block_state.fbs" ]
+}
+
+flatbuffer("enumerations-flatbuffers-binding-binary") {
+  flatc_out_dir = "bfbs"
+  flatc_args = [
+    "--binary",
+    "--schema",
+  ]
+  sources = [ "../flatbuffer_schemas/enumerations.fbs" ]
+}
+
+flatbuffer("structures-flatbuffers-binding-binary") {
+  flatc_out_dir = "bfbs"
+  flatc_args = [
+    "--binary",
+    "--schema",
+  ]
+  sources = [ "../flatbuffer_schemas/structures.fbs" ]
+}
+
+flatbuffer("user-policy-flatbuffers-binding-binary") {
+  flatc_out_dir = "bfbs"
+  flatc_args = [
+    "--binary",
+    "--schema",
+  ]
+  sources = [ "../flatbuffer_schemas/user_policy.fbs" ]
+}
+
+flatbuffer("user-secret-stash-flatbuffers-binding-binary") {
+  flatc_out_dir = "bfbs"
+  flatc_args = [
+    "--binary",
+    "--schema",
+  ]
+  sources = [
+    "../flatbuffer_schemas/user_secret_stash_container.fbs",
+    "../flatbuffer_schemas/user_secret_stash_payload.fbs",
+  ]
+}
+
+flatbuffer("auth-factor-flatbuffers-binding-binary") {
+  flatc_out_dir = "bfbs"
+  flatc_args = [
+    "--binary",
+    "--schema",
+  ]
+  sources = [ "../flatbuffer_schemas/auth_factor.fbs" ]
+}
+
+# Put the generator in the same folder that the generated flatbuffers
+# reflection python library exist.
+copy("flatbuffers-binding-generator") {
+  sources = [
+    "../../libhwsec-foundation/flatbuffers/flatbuffer_cpp_binding_generator.py",
+  ]
+  outputs = [ "${root_gen_dir}/python/flatbuffer_cpp_binding_generator.py" ]
+  deps = [ ":python-flatbuffers-reflection" ]
+}
+
+action("auth-block-state-flatbuffers-binding-generate") {
+  script = "${root_gen_dir}/python/flatbuffer_cpp_binding_generator.py"
+  inputs = [ "../flatbuffer_schemas/auth_block_state.fbs" ]
+  outputs = [
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_block_state.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_block_state_flatbuffer.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_block_state.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_block_state_test_utils.h",
+  ]
+  args = [
+    "--output_dir=${root_gen_dir}/include/cryptohome/flatbuffer_schemas",
+    "--guard_prefix=CRYPTOHOME_FLATBUFFER_SCHEMAS_AUTH_BLOCK_STATE",
+    "--header_include_paths",
+    "cryptohome/flatbuffer_schemas/structures.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/auth_block_state_generated.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_block_state.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/structures_flatbuffer.h",
+    "--flatbuffer_header_include_paths",
+    "libhwsec-foundation/flatbuffers/basic_objects.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_block_state.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_block_state_flatbuffer.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/structures_flatbuffer.h",
+    "--impl_include_paths",
+    "libhwsec-foundation/flatbuffers/flatbuffer_secure_allocator_bridge.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/auth_block_state.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/structures_test_utils.h",
+    "${root_gen_dir}/bfbs/auth_block_state.bfbs",
+    "--filter_by_namespace",
+    "cryptohome",
+  ]
+  deps = [
+    ":auth-block-state-flatbuffers-binding-binary",
+    ":flatbuffers-binding-generator",
+    ":structures-flatbuffers-binding-generate",
+  ]
+}
+
+action("enumerations-flatbuffers-binding-generate") {
+  script = "${root_gen_dir}/python/flatbuffer_cpp_binding_generator.py"
+  inputs = [ "../flatbuffer_schemas/enumerations.fbs" ]
+  outputs = [
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/enumerations.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/enumerations_flatbuffer.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/enumerations.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/enumerations_test_utils.h",
+  ]
+  args = [
+    "--output_dir=${root_gen_dir}/include/cryptohome/flatbuffer_schemas",
+    "--guard_prefix=CRYPTOHOME_FLATBUFFER_SCHEMAS_ENUMERATIONS",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/enumerations.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/enumerations_generated.h",
+    "--flatbuffer_header_include_paths",
+    "libhwsec-foundation/flatbuffers/basic_objects.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/enumerations.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/enumerations_flatbuffer.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/enumerations.h",
+    "${root_gen_dir}/bfbs/enumerations.bfbs",
+    "--filter_by_namespace",
+    "cryptohome::enumeration",
+  ]
+  deps = [
+    ":enumerations-flatbuffers-binding-binary",
+    ":flatbuffers-binding-generator",
+  ]
+}
+
+action("structures-flatbuffers-binding-generate") {
+  script = "${root_gen_dir}/python/flatbuffer_cpp_binding_generator.py"
+  inputs = [ "../flatbuffer_schemas/structures.fbs" ]
+  outputs = [
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/structures.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/structures_flatbuffer.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/structures.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/structures_test_utils.h",
+  ]
+  args = [
+    "--output_dir=${root_gen_dir}/include/cryptohome/flatbuffer_schemas",
+    "--guard_prefix=CRYPTOHOME_FLATBUFFER_SCHEMAS_STRUCTURES",
+    "--header_include_paths",
+    "libhwsec/structures/signature_sealed_data.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/structures.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/structures_generated.h",
+    "--flatbuffer_header_include_paths",
+    "libhwsec/structures/signature_sealed_data_flatbuffer.h",
+    "--flatbuffer_header_include_paths",
+    "libhwsec-foundation/flatbuffers/basic_objects.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/structures.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/structures_flatbuffer.h",
+    "--impl_include_paths",
+    "libhwsec-foundation/flatbuffers/flatbuffer_secure_allocator_bridge.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/structures.h",
+    "--test_utils_header_include_path",
+    "libhwsec/structures/signature_sealed_data_test_utils.h",
+    "${root_gen_dir}/bfbs/structures.bfbs",
+    "--filter_by_namespace",
+    "cryptohome::structure",
+  ]
+  deps = [
+    ":flatbuffers-binding-generator",
+    ":structures-flatbuffers-binding-binary",
+  ]
+}
+
+action("user-policy-flatbuffers-binding-generate") {
+  script = "${root_gen_dir}/python/flatbuffer_cpp_binding_generator.py"
+  inputs = [ "../flatbuffer_schemas/user_policy.fbs" ]
+  outputs = [
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_policy.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_policy_flatbuffer.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_policy.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_policy_test_utils.h",
+  ]
+  args = [
+    "--output_dir=${root_gen_dir}/include/cryptohome/flatbuffer_schemas",
+    "--guard_prefix=CRYPTOHOME_FLATBUFFER_SCHEMAS_USER_POLICY",
+    "--header_include_paths",
+    "cryptohome/flatbuffer_schemas/enumerations.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/user_policy_generated.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/user_policy.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/enumerations_flatbuffer.h",
+    "--flatbuffer_header_include_paths",
+    "libhwsec-foundation/flatbuffers/basic_objects.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/user_policy.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/user_policy_flatbuffer.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/enumerations_flatbuffer.h",
+    "--impl_include_paths",
+    "libhwsec-foundation/flatbuffers/flatbuffer_secure_allocator_bridge.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/user_policy.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/enumerations_test_utils.h",
+    "${root_gen_dir}/bfbs/user_policy.bfbs",
+    "--filter_by_namespace",
+    "cryptohome",
+  ]
+  deps = [
+    ":enumerations-flatbuffers-binding-generate",
+    ":flatbuffers-binding-generator",
+    ":user-policy-flatbuffers-binding-binary",
+  ]
+}
+
+action("user-secret-stash-flatbuffers-binding-generate") {
+  script = "${root_gen_dir}/python/flatbuffer_cpp_binding_generator.py"
+  inputs = [
+    "../flatbuffer_schemas/user_secret_stash_container.fbs",
+    "../flatbuffer_schemas/user_secret_stash_payload.fbs",
+  ]
+  outputs = [
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_secret_stash.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_secret_stash_flatbuffer.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_secret_stash_container.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_secret_stash_payload.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_secret_stash_test_utils.h",
+  ]
+  args = [
+    "--output_dir=${root_gen_dir}/include/cryptohome/flatbuffer_schemas",
+    "--guard_prefix=CRYPTOHOME_FLATBUFFER_SCHEMAS",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/user_secret_stash_container_generated.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/user_secret_stash_payload_generated.h",
+    "--flatbuffer_header_include_paths",
+    "libhwsec-foundation/flatbuffers/basic_objects.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/user_secret_stash_container.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/user_secret_stash_container_flatbuffer.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/user_secret_stash_payload.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/user_secret_stash_payload_flatbuffer.h",
+    "--impl_include_paths",
+    "libhwsec-foundation/flatbuffers/flatbuffer_secure_allocator_bridge.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/user_secret_stash.h",
+    "${root_gen_dir}/bfbs/user_secret_stash_container.bfbs",
+    "${root_gen_dir}/bfbs/user_secret_stash_payload.bfbs",
+  ]
+  deps = [
+    ":flatbuffers-binding-generator",
+    ":user-secret-stash-flatbuffers-binding-binary",
+  ]
+}
+
+action("auth-factor-flatbuffers-binding-generate") {
+  script = "${root_gen_dir}/python/flatbuffer_cpp_binding_generator.py"
+  inputs = [ "../flatbuffer_schemas/auth_factor.fbs" ]
+  outputs = [
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_factor.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_factor_flatbuffer.h",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_factor.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_factor_test_utils.h",
+  ]
+  args = [
+    "--output_dir=${root_gen_dir}/include/cryptohome/flatbuffer_schemas",
+    "--guard_prefix=CRYPTOHOME_FLATBUFFER_SCHEMAS",
+    "--header_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_block_state.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/auth_factor_generated.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_factor.h",
+    "--flatbuffer_header_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_block_state_flatbuffer.h",
+    "--flatbuffer_header_include_paths",
+    "libhwsec-foundation/flatbuffers/basic_objects.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_factor.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_factor_flatbuffer.h",
+    "--impl_include_paths",
+    "cryptohome/flatbuffer_schemas/auth_block_state_flatbuffer.h",
+    "--impl_include_paths",
+    "libhwsec-foundation/flatbuffers/flatbuffer_secure_allocator_bridge.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/auth_factor.h",
+    "--test_utils_header_include_path",
+    "cryptohome/flatbuffer_schemas/auth_block_state_test_utils.h",
+    "${root_gen_dir}/bfbs/auth_factor.bfbs",
+    "--filter_by_namespace",
+    "cryptohome::auth_factor",
+  ]
+  deps = [
+    ":auth-block-state-flatbuffers-binding-generate",
+    ":auth-factor-flatbuffers-binding-binary",
+    ":flatbuffers-binding-generator",
+  ]
+}
+
+source_set("cryptohome-flatbuffers-binding") {
+  sources = [
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_block_state.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/auth_factor.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/enumerations.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/structures.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_policy.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_secret_stash_container.cc",
+    "${root_gen_dir}/include/cryptohome/flatbuffer_schemas/user_secret_stash_payload.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":auth-block-state-flatbuffers-binding-generate",
+    ":auth-factor-flatbuffers-binding-generate",
+    ":enumerations-flatbuffers-binding-generate",
+    ":structures-flatbuffers-binding-generate",
+    ":user-policy-flatbuffers-binding-generate",
+    ":user-secret-stash-flatbuffers-binding-generate",
+  ]
+}
+
+flatbuffer("cryptohome-flatbuffers") {
+  flatc_out_dir = "include/cryptohome"
+  flatc_args = [
+    # Default flatbuffer flags used in Chrome OS.
+    "--cpp",
+    "--keep-prefix",
+
+    # Generate code for enums using C++11 scoped enums.
+    "--scoped-enums",
+  ]
+  sources = [
+    "../flatbuffer_schemas/auth_block_state.fbs",
+    "../flatbuffer_schemas/auth_factor.fbs",
+    "../flatbuffer_schemas/enumerations.fbs",
+    "../flatbuffer_schemas/structures.fbs",
+    "../flatbuffer_schemas/user_policy.fbs",
+    "../flatbuffer_schemas/user_secret_stash_container.fbs",
+    "../flatbuffer_schemas/user_secret_stash_payload.fbs",
+  ]
+}
+
+proto_library("cryptohome-proto") {
+  proto_in_dir = ".."
+  proto_out_dir = "include/cryptohome"
+  proto_lib_dirs = [ "${sysroot}/usr/include/chromeos/dbus/cryptohome/" ]
+
+  sources = [
+    "${proto_in_dir}/cryptorecovery/cryptorecovery.proto",
+    "${proto_in_dir}/cryptorecovery/recovery_id_container.proto",
+    "${proto_in_dir}/hash_tree_leaf_data.proto",
+    "${proto_in_dir}/signature_sealed_data.proto",
+    "${proto_in_dir}/timestamp.proto",
+    "${proto_in_dir}/vault_keyset.proto",
+  ]
+  all_dependent_configs = [ ":cryptohome-proto_config" ]
+}
+
+generate_dbus_proxies("cryptohome-key-delegate-proxies") {
+  proxy_output_file = "include/cryptohome_key_delegate/dbus-proxies.h"
+  sources =
+      [ "../dbus_bindings/org.chromium.CryptohomeKeyDelegateInterface.xml" ]
+}
+
+pkg_config("libcrosplatform_dependent_config") {
+  pkg_deps = [
+    "libcros_config",
+    "libecryptfs",
+    "libmetrics",
+  ]
+}
+
+# Common objects.
+# TODO(b/260536618): Merge this into libcryptohome.
+static_library("libcrosplatform") {
+  sources = [
+    "../auth_factor/auth_factor_label.cc",
+    "../auth_factor/auth_factor_manager.cc",
+    "../cryptohome_metrics.cc",
+    "../filesystem_layout.cc",
+    "../flatbuffer_file.cc",
+    "../storage/encrypted_container/backing_device_factory.cc",
+    "../storage/encrypted_container/dmcrypt_container.cc",
+    "../storage/encrypted_container/ecryptfs_container.cc",
+    "../storage/encrypted_container/encrypted_container_factory.cc",
+    "../storage/encrypted_container/ephemeral_container.cc",
+    "../storage/encrypted_container/fscrypt_container.cc",
+    "../storage/encrypted_container/logical_volume_backing_device.cc",
+    "../storage/encrypted_container/loopback_device.cc",
+    "../storage/encrypted_container/ramdisk_device.cc",
+    "../storage/keyring/real_keyring.cc",
+    "../storage/keyring/utils.cc",
+    "../storage/mount_constants.cc",
+    "../user_secret_stash/storage.cc",
+    "../user_secret_stash/user_metadata.cc",
+    "../user_secret_stash/user_secret_stash.cc",
+  ]
+  all_dependent_configs = [
+    ":libcrosplatform_dependent_config",
+    ":target_defaults",
+  ]
+  libs = [
+    "cbor",
+    "keyutils",
+    "rootdev",
+    "secure_erase_file",
+  ]
+  if (use.selinux) {
+    libs += [ "selinux" ]
+  }
+  deps = [
+    ":cryptohome-flatbuffers-binding",
+    ":cryptohome-proto",
+    ":libcryptohome_platform",
+  ]
+}
+
+shared_library("libcryptohome_platform") {
+  output_name = "libcryptohome_platform"
+  sources = [
+    "../dircrypto_util.cc",
+    "../platform.cc",
+    "../util/get_random_suffix.cc",
+  ]
+  pkg_deps = [ "libcrossystem" ]
+  configs += [ ":target_defaults" ]
+  libs = [
+    "keyutils",
+    "rootdev",
+    "secure_erase_file",
+  ]
+  if (use.selinux) {
+    libs += [ "selinux" ]
+  }
+  install_path = "lib"
+}
+
+generate_pkg_config("libcryptohome_platform_pc") {
+  name = "libcryptohome_platform"
+  description = "cryptohome Platform library"
+  version = "1.0"
+  requires_private = []
+  requires = []
+  cflags = [ "-I/usr/include/cryptohome" ]
+  libs = [ "-lcryptohome_platform" ]
+  install = true
+}
+
+install_config("install_platform_headers") {
+  sources = [
+    "../dircrypto_util.h",
+    "../platform.h",
+  ]
+  install_path = "/usr/include/cryptohome"
+}
+
+static_library("libcrostpm") {
+  sources = [
+    "../auth_blocks/auth_block_utility_impl.cc",
+    "../auth_blocks/auth_block_utils.cc",
+    "../auth_blocks/biometrics_auth_block_service.cc",
+    "../auth_blocks/biometrics_command_processor_impl.cc",
+    "../auth_blocks/challenge_credential_auth_block.cc",
+    "../auth_blocks/cryptohome_recovery_auth_block.cc",
+    "../auth_blocks/double_wrapped_compat_auth_block.cc",
+    "../auth_blocks/fingerprint_auth_block.cc",
+    "../auth_blocks/fp_service.cc",
+    "../auth_blocks/pin_weaver_auth_block.cc",
+    "../auth_blocks/revocation.cc",
+    "../auth_blocks/scrypt_auth_block.cc",
+    "../auth_blocks/tpm_auth_block_utils.cc",
+    "../auth_blocks/tpm_bound_to_pcr_auth_block.cc",
+    "../auth_blocks/tpm_ecc_auth_block.cc",
+    "../auth_blocks/tpm_not_bound_to_pcr_auth_block.cc",
+    "../auth_factor/auth_factor.cc",
+    "../auth_factor_vault_keyset_converter.cc",
+    "../auth_session.cc",
+    "../auth_session_flatbuffer.cc",
+    "../auth_session_manager.cc",
+    "../auth_session_protobuf.cc",
+    "../create_vault_keyset_rpc_impl.cc",
+    "../crypto.cc",
+    "../crypto_error.cc",
+    "../cryptohome_key_loader.cc",
+    "../cryptohome_keys_manager.cc",
+    "../firmware_management_parameters.cc",
+    "../install_attributes.cc",
+    "../key_objects.cc",
+    "../le_credential_manager_impl.cc",
+    "../lockbox.cc",
+    "../persistent_lookup_table.cc",
+    "../pkcs11_init.cc",
+    "../sign_in_hash_tree.cc",
+    "../signature_sealing/structures_proto.cc",
+    "../user_secret_stash/migrator.cc",
+    "../vault_keyset.cc",
+  ]
+  all_dependent_configs = [ ":target_defaults" ]
+  libs = [
+    "chaps",
+    "hwsec",
+    "hwsec-foundation",
+    "installattributes",
+    "system_api",
+  ]
+
+  deps = [
+    ":cryptohome-flatbuffers",
+    ":cryptohome-flatbuffers-binding",
+    ":cryptohome-proto",
+    ":libcrosplatform",
+  ]
+}
+
+generate_dbus_adaptors("userdataauth_adaptors") {
+  dbus_adaptors_out_dir = "include/dbus_adaptors"
+  dbus_service_config = "../dbus_bindings/dbus-service-config-UserDataAuth.json"
+  sources = [ "../dbus_bindings/org.chromium.UserDataAuth.xml" ]
+}
+
+pkg_config("libcryptohome_dependent_config") {
+  pkg_deps = [ "libbootlockbox-client" ]
+}
+
+static_library("libcryptohome") {
+  sources = [
+    "../auth_factor/auth_factor_map.cc",
+    "../auth_factor/auth_factor_storage_type.cc",
+    "../auth_factor/auth_factor_type.cc",
+    "../auth_factor/auth_factor_utils.cc",
+    "../auth_factor/flatbuffer.cc",
+    "../auth_factor/protobuf.cc",
+    "../auth_factor/types/common.cc",
+    "../auth_factor/types/cryptohome_recovery.cc",
+    "../auth_factor/types/fingerprint.cc",
+    "../auth_factor/types/kiosk.cc",
+    "../auth_factor/types/legacy_fingerprint.cc",
+    "../auth_factor/types/manager.cc",
+    "../auth_factor/types/password.cc",
+    "../auth_factor/types/pin.cc",
+    "../auth_factor/types/smart_card.cc",
+    "../auth_factor/verifiers/scrypt.cc",
+    "../auth_factor/verifiers/smart_card.cc",
+    "../auth_factor/with_driver.cc",
+    "../auth_input_utils.cc",
+    "../challenge_credentials/challenge_credentials_constants.cc",
+    "../challenge_credentials/challenge_credentials_decrypt_operation.cc",
+    "../challenge_credentials/challenge_credentials_generate_new_operation.cc",
+    "../challenge_credentials/challenge_credentials_helper_impl.cc",
+    "../challenge_credentials/challenge_credentials_operation.cc",
+    "../challenge_credentials/challenge_credentials_verify_key_operation.cc",
+    "../challenge_credentials/fido_utils.cc",
+    "../chaps_client_factory.cc",
+    "../cleanup/disk_cleanup.cc",
+    "../cleanup/disk_cleanup_routines.cc",
+    "../cleanup/low_disk_space_handler.cc",
+    "../cleanup/user_oldest_activity_timestamp_manager.cc",
+    "../credential_verifier.cc",
+    "../cryptorecovery/inclusion_proof.cc",
+    "../cryptorecovery/inclusion_proof_util.cc",
+    "../cryptorecovery/recovery_crypto.cc",
+    "../cryptorecovery/recovery_crypto_hsm_cbor_serialization.cc",
+    "../cryptorecovery/recovery_crypto_impl.cc",
+    "../data_migrator/migration_helper.cc",
+    "../error/converter.cc",
+    "../error/cryptohome_crypto_error.cc",
+    "../error/cryptohome_error.cc",
+    "../error/cryptohome_le_cred_error.cc",
+    "../error/cryptohome_mount_error.cc",
+    "../error/cryptohome_tpm_error.cc",
+    "../error/reap.cc",
+    "../error/reporting.cc",
+    "../error/utilities.cc",
+    "../features.cc",
+    "../filesystem_layout.cc",
+    "../fingerprint_manager.cc",
+    "../key_challenge_service_factory_impl.cc",
+    "../key_challenge_service_impl.cc",
+    "../keyset_management.cc",
+    "../lockbox-cache.cc",
+    "../pkcs11/real_pkcs11_token.cc",
+    "../service_userdataauth.cc",
+    "../storage/arc_disk_quota.cc",
+    "../storage/cryptohome_vault.cc",
+    "../storage/cryptohome_vault_factory.cc",
+    "../storage/dircrypto_migration_helper_delegate.cc",
+    "../storage/ephemeral_policy_util.cc",
+    "../storage/file_system_keyset.cc",
+    "../storage/homedirs.cc",
+    "../storage/mount.cc",
+    "../storage/mount_constants.cc",
+    "../storage/mount_factory.cc",
+    "../storage/mount_helper.cc",
+    "../storage/mount_stack.cc",
+    "../storage/mount_utils.cc",
+    "../storage/out_of_process_mount_helper.cc",
+    "../user_session/real_user_session.cc",
+    "../user_session/user_session.cc",
+    "../user_session/user_session_map.cc",
+    "../userdataauth.cc",
+    "../vault_keyset_factory.cc",
+  ]
+
+  all_dependent_configs = [
+    ":cryptohome-proto_config",
+    ":libcryptohome_dependent_config",
+    ":target_defaults",
+  ]
+
+  libs = [
+    "biod_proxy",
+    "chaps",
+    "fake_platform_features",
+    "hwsec",
+    "policy",
+  ]
+  deps = [
+    ":cryptohome-key-delegate-proxies",
+    ":cryptohome-proto",
+    ":libcrosplatform",
+    ":libcrostpm",
+    ":namespace-mounter-ipc-proto",
+    ":userdataauth_adaptors",
+  ]
+  pkg_deps = [
+    "dbus-1",
+    "libfeatures",
+  ]
+}
+
+# cryptohome <-> cryptohome-namespace-mounter IPC proto.
+proto_library("namespace-mounter-ipc-proto") {
+  proto_in_dir = "../cryptohome_namespace_mounter"
+  proto_out_dir = "include/cryptohome"
+
+  sources = [ "${proto_in_dir}/namespace_mounter_ipc.proto" ]
+  configs = [ ":cryptohome-proto_config" ]
+}
+
+static_library("libfido") {
+  sources = [
+    "../fido/attested_credential_data.cc",
+    "../fido/authenticator_data.cc",
+    "../fido/ec_public_key.cc",
+    "../fido/fido_constants.cc",
+    "../fido/fido_parsing_utils.cc",
+    "../fido/public_key.cc",
+  ]
+  all_dependent_configs = [ ":target_defaults" ]
+  libs = [ "cbor" ]
+}
+
+shared_library("libcryptohome_data_migrator") {
+  output_name = "libcryptohome_data_migrator"
+  sources = [ "../data_migrator/migration_helper.cc" ]
+  configs += [ ":target_defaults" ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+  install_path = "lib"
+}
+
+generate_pkg_config("libcryptohome_data_migrator_pc") {
+  name = "libcryptohome_data_migrator"
+  description = "Migration Helper from Dircrypto data migrator"
+  version = "1.0"
+  requires_private = []
+  requires = []
+  cflags = [ "-I/usr/include/cryptohome" ]
+  libs = [ "-lcryptohome_data_migrator" ]
+  install = true
+}
+
+install_config("install_data_migrator_headers") {
+  sources = [
+    "../data_migrator/metrics.h",
+    "../data_migrator/migration_helper.h",
+    "../data_migrator/migration_helper_delegate.h",
+  ]
+  install_path = "/usr/include/cryptohome/data_migrator"
+}

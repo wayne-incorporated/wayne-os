@@ -1,0 +1,188 @@
+commit ad253446208a06902d3bc4939ac7a64f8026cc84
+Author: Arthur Eubanks <aeubanks@google.com>
+Date:   Mon Aug 2 15:33:07 2021 -0700
+
+    [MC][CodeGen] Emit constant pools earlier
+    
+    Previously we would emit constant pool entries for ldr inline asm at the
+    very end of AsmPrinter::doFinalization(). However, if we're emitting
+    dwarf aranges, that would end all sections with aranges. Then if we have
+    constant pool entries to be emitted in those same sections, we'd hit an
+    assert that the section has already been ended.
+    
+    We want to emit constant pool entries before emitting dwarf aranges.
+    This patch splits out arm32/64's constant pool entry emission into its
+    own MCTargetStreamer virtual method.
+    
+    Fixes PR51208
+    
+    Reviewed By: MaskRay
+    
+    Differential Revision: https://reviews.llvm.org/D107314
+---
+ llvm/include/llvm/MC/MCStreamer.h                  |  4 ++-
+ llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp         |  5 ++++
+ llvm/lib/MC/MCParser/AsmParser.cpp                 |  7 +++--
+ llvm/lib/MC/MCStreamer.cpp                         |  2 ++
+ .../AArch64/MCTargetDesc/AArch64TargetStreamer.cpp |  6 +++--
+ .../AArch64/MCTargetDesc/AArch64TargetStreamer.h   |  1 +
+ .../Target/ARM/MCTargetDesc/ARMTargetStreamer.cpp  |  4 ++-
+ llvm/test/CodeGen/ARM/arange-ldr.ll                | 31 ++++++++++++++++++++++
+ 8 files changed, 54 insertions(+), 6 deletions(-)
+
+diff --git a/llvm/include/llvm/MC/MCStreamer.h b/llvm/include/llvm/MC/MCStreamer.h
+index fd326ff18712..5f93f972a5de 100644
+--- a/llvm/include/llvm/MC/MCStreamer.h
++++ b/llvm/include/llvm/MC/MCStreamer.h
+@@ -123,6 +123,8 @@ public:
+   /// This is used to emit bytes in \p Data as sequence of .byte directives.
+   virtual void emitRawBytes(StringRef Data);
+ 
++  virtual void emitConstantPools();
++
+   virtual void finish();
+ };
+ 
+@@ -165,7 +167,7 @@ public:
+ 
+   virtual void emitThumbSet(MCSymbol *Symbol, const MCExpr *Value);
+ 
+-  void finish() override;
++  void emitConstantPools() override;
+ 
+   /// Reset any state between object emissions, i.e. the equivalent of
+   /// MCStreamer's reset method.
+diff --git a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+index e528d33b5f8c..7171bfdd28e2 100644
+--- a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
++++ b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+@@ -1815,6 +1815,11 @@ bool AsmPrinter::doFinalization(Module &M) {
+     }
+   }
+ 
++  // This needs to happen before emitting debug information since that can end
++  // arbitrary sections.
++  if (auto *TS = OutStreamer->getTargetStreamer())
++    TS->emitConstantPools();
++
+   // Finalize debug and EH information.
+   for (const HandlerInfo &HI : Handlers) {
+     NamedRegionTimer T(HI.TimerName, HI.TimerDescription, HI.TimerGroupName,
+diff --git a/llvm/lib/MC/MCParser/AsmParser.cpp b/llvm/lib/MC/MCParser/AsmParser.cpp
+index d3cb5ca59bf3..6e93e3a1bdca 100644
+--- a/llvm/lib/MC/MCParser/AsmParser.cpp
++++ b/llvm/lib/MC/MCParser/AsmParser.cpp
+@@ -1052,11 +1052,14 @@ bool AsmParser::Run(bool NoInitialTextSection, bool NoFinalize) {
+       }
+     }
+   }
+-
+   // Finalize the output stream if there are no errors and if the client wants
+   // us to.
+-  if (!HadError && !NoFinalize)
++  if (!HadError && !NoFinalize) {
++    if (auto *TS = Out.getTargetStreamer())
++      TS->emitConstantPools();
++
+     Out.Finish(Lexer.getLoc());
++  }
+ 
+   return HadError || getContext().hadError();
+ }
+diff --git a/llvm/lib/MC/MCStreamer.cpp b/llvm/lib/MC/MCStreamer.cpp
+index fc7fb555f0b9..99b1290d2355 100644
+--- a/llvm/lib/MC/MCStreamer.cpp
++++ b/llvm/lib/MC/MCStreamer.cpp
+@@ -53,6 +53,8 @@ void MCTargetStreamer::emitLabel(MCSymbol *Symbol) {}
+ 
+ void MCTargetStreamer::finish() {}
+ 
++void MCTargetStreamer::emitConstantPools() {}
++
+ void MCTargetStreamer::changeSection(const MCSection *CurSection,
+                                      MCSection *Section,
+                                      const MCExpr *Subsection,
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.cpp
+index 557603c24ba5..cf1a60643efd 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.cpp
+@@ -48,11 +48,13 @@ void AArch64TargetStreamer::emitCurrentConstantPool() {
+   ConstantPools->emitForCurrentSection(Streamer);
+ }
+ 
++void AArch64TargetStreamer::emitConstantPools() {
++  ConstantPools->emitAll(Streamer);
++}
++
+ // finish() - write out any non-empty assembler constant pools and
+ //   write out note.gnu.properties if need.
+ void AArch64TargetStreamer::finish() {
+-  ConstantPools->emitAll(Streamer);
+-
+   if (MarkBTIProperty)
+     emitNoteSection(ELF::GNU_PROPERTY_AARCH64_FEATURE_1_BTI);
+ }
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.h
+index 9b030775094c..86c7baf8f429 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.h
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64TargetStreamer.h
+@@ -23,6 +23,7 @@ public:
+   ~AArch64TargetStreamer() override;
+ 
+   void finish() override;
++  void emitConstantPools() override;
+ 
+   /// Callback used to implement the ldr= pseudo.
+   /// Add a new entry to the constant pool for the current section and return an
+diff --git a/llvm/lib/Target/ARM/MCTargetDesc/ARMTargetStreamer.cpp b/llvm/lib/Target/ARM/MCTargetDesc/ARMTargetStreamer.cpp
+index 1fee354cad93..3e4c97630af6 100644
+--- a/llvm/lib/Target/ARM/MCTargetDesc/ARMTargetStreamer.cpp
++++ b/llvm/lib/Target/ARM/MCTargetDesc/ARMTargetStreamer.cpp
+@@ -43,7 +43,9 @@ void ARMTargetStreamer::emitCurrentConstantPool() {
+ }
+ 
+ // finish() - write out any non-empty assembler constant pools.
+-void ARMTargetStreamer::finish() { ConstantPools->emitAll(Streamer); }
++void ARMTargetStreamer::emitConstantPools() {
++  ConstantPools->emitAll(Streamer);
++}
+ 
+ // reset() - Reset any state
+ void ARMTargetStreamer::reset() {}
+diff --git a/llvm/test/CodeGen/ARM/arange-ldr.ll b/llvm/test/CodeGen/ARM/arange-ldr.ll
+new file mode 100644
+index 000000000000..2c1d0c4f3c1e
+--- /dev/null
++++ b/llvm/test/CodeGen/ARM/arange-ldr.ll
+@@ -0,0 +1,31 @@
++; RUN: llc %s -o - -generate-arange-section | FileCheck %s
++
++; Make sure that emitting constants for ldr and emitting arange work together.
++; Emitting constants must come before emitting aranges since emitting aranges can end arbitrary sections.
++
++target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
++target triple = "armv7-unknown-linux-android21"
++
++; CHECK:       ldr r7, .Ltmp[[#TMP:]]
++
++; CHECK:      .Ltmp[[#TMP]]:
++; CHECK-NEXT: .long  83040
++
++; CHECK: .section        .debug_aranges
++
++define dso_local void @a() local_unnamed_addr !dbg !4 {
++entry:
++  call void asm sideeffect "  ldr r7, =${0:c}\0A", "i"(i32 83040)
++  ret void
++}
++
++!llvm.dbg.cu = !{!0}
++!llvm.module.flags = !{!3}
++
++!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "clang version 14.0.0", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly, enums: !2, splitDebugInlining: false, nameTableKind: None)
++!1 = !DIFile(filename: "/tmp/a.c", directory: "/tmp/")
++!2 = !{}
++!3 = !{i32 2, !"Debug Info Version", i32 3}
++!4 = distinct !DISubprogram(name: "a", scope: !5, file: !5, line: 1, type: !6, scopeLine: 1, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !2)
++!5 = !DIFile(filename: "/tmp/a.c", directory: "")
++!6 = !DISubroutineType(types: !2)

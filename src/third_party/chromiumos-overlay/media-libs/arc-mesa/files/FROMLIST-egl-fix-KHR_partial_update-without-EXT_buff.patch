@@ -1,0 +1,40 @@
+From 4f4c73f8f952fb6d963d58480b37c57b15e2d643 Mon Sep 17 00:00:00 2001
+From: Chia-I Wu <olvaffe@gmail.com>
+Date: Thu, 7 Feb 2019 15:11:57 -0800
+Subject: [PATCH 3/4] FROMLIST: egl: fix KHR_partial_update without
+ EXT_buffer_age
+
+EGL_BUFFER_AGE_EXT can be queried without EXT_buffer_age.
+
+Signed-off-by: Chia-I Wu <olvaffe@gmail.com>
+Acked-by: Lionel Landwerlin <lionel.g.landwerlin@intel.com>
+Reviewed-by: Eric Engestrom <eric.engestrom@intel.com>
+(cherry picked from commit 30c31f2d0eadd7b6d587a37673e059d998960b4f)
+Signed-off-by: Gurchetan Singh <gurchetansingh@chromium.org>
+
+Change-Id: I71eaedb652a3fe6a8a18bccf87f693303c8e703b
+---
+ src/egl/main/eglsurface.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/egl/main/eglsurface.c b/src/egl/main/eglsurface.c
+index cd1c7ea4c561..42f8ca4ad051 100644
+--- a/src/egl/main/eglsurface.c
++++ b/src/egl/main/eglsurface.c
+@@ -522,7 +522,12 @@ _eglQuerySurface(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surface,
+       *value = surface->PostSubBufferSupportedNV;
+       break;
+    case EGL_BUFFER_AGE_EXT:
+-      if (!dpy->Extensions.EXT_buffer_age)
++      /* Both EXT_buffer_age and KHR_partial_update accept EGL_BUFFER_AGE_EXT.
++       * To be precise, the KHR one accepts EGL_BUFFER_AGE_KHR which is an
++       * alias with the same numeric value.
++       */
++      if (!dpy->Extensions.EXT_buffer_age &&
++          !dpy->Extensions.KHR_partial_update)
+          return _eglError(EGL_BAD_ATTRIBUTE, "eglQuerySurface");
+ 
+       _EGLContext *ctx = _eglGetCurrentContext();
+-- 
+2.20.1
+

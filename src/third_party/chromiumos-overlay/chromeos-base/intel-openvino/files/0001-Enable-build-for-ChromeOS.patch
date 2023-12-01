@@ -1,0 +1,48 @@
+From dc7336673b10ac1290a6a6ccfe9935ab6b3b4f99 Mon Sep 17 00:00:00 2001
+From: Reagan Lopez <reagan.lopez@intel.com>
+Date: Thu, 29 Sep 2022 01:46:02 +0000
+Subject: [PATCH 1/2] Enable build for ChromeOS
+
+- Add ChromiumOS to RTTI check on typeid string
+- Define TARGET_OS as CHROMIUMOS
+
+Signed-off-by: Reagan Lopez <reagan.lopez@intel.com>
+---
+ cmake/developer_package/linux_name.cmake | 7 ++++++-
+ src/core/src/any.cpp                     | 2 +-
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/cmake/developer_package/linux_name.cmake b/cmake/developer_package/linux_name.cmake
+index 3e8c775770..3c8710f06a 100644
+--- a/cmake/developer_package/linux_name.cmake
++++ b/cmake/developer_package/linux_name.cmake
+@@ -6,7 +6,12 @@ include(target_flags)
+ 
+ if(LINUX)
+     function(get_linux_name res_var)
+-        if(EXISTS "/etc/lsb-release")
++	if (TARGET_OS_NAME STREQUAL "CHROMIUMOS")
++            set(${res_var} "CHROMIUMOS" PARENT_SCOPE)
++            return()
++        endif()
++
++	if(EXISTS "/etc/lsb-release")
+             # linux version detection using cat /etc/lsb-release
+             file(READ "/etc/lsb-release" release_data)
+             set(name_regex "DISTRIB_ID=([^ \n]*)\n")
+diff --git a/src/core/src/any.cpp b/src/core/src/any.cpp
+index aa37007f32..e0dfcda69e 100644
+--- a/src/core/src/any.cpp
++++ b/src/core/src/any.cpp
+@@ -11,7 +11,7 @@ namespace ov {
+ 
+ bool Any::equal(std::type_index lhs, std::type_index rhs) {
+     auto result = lhs == rhs;
+-#if (defined(__ANDROID__) || defined(__APPLE__)) && defined(__clang__)
++#if (defined(__ANDROID__) || defined(__APPLE__) || defined(__CHROMIUMOS__)) && defined(__clang__)
+     if (!result) {
+         result = std::strcmp(lhs.name(), rhs.name()) == 0;
+     }
+-- 
+2.34.1
+

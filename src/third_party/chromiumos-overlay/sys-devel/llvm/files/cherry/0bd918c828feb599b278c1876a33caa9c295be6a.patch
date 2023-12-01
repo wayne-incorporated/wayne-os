@@ -1,0 +1,189 @@
+commit 0bd918c828feb599b278c1876a33caa9c295be6a
+Author: Petr Hosek <phosek@google.com>
+Date:   Fri Jul 31 01:12:38 2020 -0700
+
+    Revert "[ELF] Add --dependency-file option"
+    
+    This reverts commit b4c7657ba602acde1c2ea5391c973949b9c3ce09 which
+    seems to be breaking certain bots with assertion error.
+
+diff --git a/lld/ELF/Config.h b/lld/ELF/Config.h
+index 8eebecf3eb0..e74a4a0c5b2 100644
+--- a/lld/ELF/Config.h
++++ b/lld/ELF/Config.h
+@@ -11,7 +11,6 @@
+ 
+ #include "lld/Common/ErrorHandler.h"
+ #include "llvm/ADT/MapVector.h"
+-#include "llvm/ADT/SetVector.h"
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/ADT/StringSet.h"
+ #include "llvm/BinaryFormat/ELF.h"
+@@ -91,13 +90,11 @@ struct Configuration {
+   uint8_t osabi = 0;
+   uint32_t andFeatures = 0;
+   llvm::CachePruningPolicy thinLTOCachePolicy;
+-  llvm::SetVector<StringRef> dependencyFiles; // for --dependency-file
+   llvm::StringMap<uint64_t> sectionStartMap;
+   llvm::StringRef bfdname;
+   llvm::StringRef chroot;
+-  llvm::StringRef dependencyFile;
+-  llvm::StringRef dwoDir;
+   llvm::StringRef dynamicLinker;
++  llvm::StringRef dwoDir;
+   llvm::StringRef entry;
+   llvm::StringRef emulation;
+   llvm::StringRef fini;
+diff --git a/lld/ELF/Driver.cpp b/lld/ELF/Driver.cpp
+index 75aa89ff3c8..64a41ba77ba 100644
+--- a/lld/ELF/Driver.cpp
++++ b/lld/ELF/Driver.cpp
+@@ -918,7 +918,6 @@ static void readConfigs(opt::InputArgList &args) {
+   config->optimizeBBJumps =
+       args.hasFlag(OPT_optimize_bb_jumps, OPT_no_optimize_bb_jumps, false);
+   config->demangle = args.hasFlag(OPT_demangle, OPT_no_demangle, true);
+-  config->dependencyFile = args.getLastArgValue(OPT_dependency_file);
+   config->dependentLibraries = args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
+   config->disableVerify = args.hasArg(OPT_disable_verify);
+   config->discard = getDiscard(args);
+@@ -1565,75 +1564,6 @@ static void handleLibcall(StringRef name) {
+     sym->fetch();
+ }
+ 
+-// Handle --dependency-file=<path>. If that option is given, lld creates a
+-// file at a given path with the following contents:
+-//
+-//   <output-file>: <input-file> ...
+-//
+-//   <input-file>:
+-//
+-// where <output-file> is a pathname of an output file and <input-file>
+-// ... is a list of pathnames of all input files. `make` command can read a
+-// file in the above format and interpret it as a dependency info. We write
+-// phony targets for every <input-file> to avoid an error when that file is
+-// removed.
+-//
+-// This option is useful if you want to make your final executable to depend
+-// on all input files including system libraries. Here is why.
+-//
+-// When you write a Makefile, you usually write it so that the final
+-// executable depends on all user-generated object files. Normally, you
+-// don't make your executable to depend on system libraries (such as libc)
+-// because you don't know the exact paths of libraries, even though system
+-// libraries that are linked to your executable statically are technically a
+-// part of your program. By using --dependency-file option, you can make
+-// lld to dump dependency info so that you can maintain exact dependencies
+-// easily.
+-static void writeDependencyFile() {
+-  std::error_code ec;
+-  raw_fd_ostream os(config->dependencyFile, ec, sys::fs::F_None);
+-  if (ec) {
+-    error("cannot open " + config->dependencyFile + ": " + ec.message());
+-    return;
+-  }
+-
+-  // We use the same escape rules as Clang/GCC which are accepted by Make/Ninja:
+-  // * A space is escaped by a backslash which itself must be escaped.
+-  // * A hash sign is escaped by a single backslash.
+-  // * $ is escapes as $$.
+-  auto printFilename = [](raw_fd_ostream &os, StringRef filename) {
+-    llvm::SmallString<256> nativePath;
+-    llvm::sys::path::native(filename.str(), nativePath);
+-    llvm::sys::path::remove_dots(nativePath, /*remove_dot_dot=*/true);
+-    for (unsigned i = 0, e = nativePath.size(); i != e; ++i) {
+-      if (nativePath[i] == '#') {
+-        os << '\\';
+-      } else if (nativePath[i] == ' ') {
+-        os << '\\';
+-        unsigned j = i;
+-        while (j > 0 && nativePath[--j] == '\\')
+-          os << '\\';
+-      } else if (nativePath[i] == '$') {
+-        os << '$';
+-      }
+-      os << nativePath[i];
+-    }
+-  };
+-
+-  os << config->outputFile << ":";
+-  for (StringRef path : config->dependencyFiles) {
+-    os << " \\\n ";
+-    printFilename(os, path);
+-  }
+-  os << "\n";
+-
+-  for (StringRef path : config->dependencyFiles) {
+-    os << "\n";
+-    printFilename(os, path);
+-    os << ":\n";
+-  }
+-}
+-
+ // Replaces common symbols with defined symbols reside in .bss sections.
+ // This function is called after all symbol names are resolved. As a
+ // result, the passes after the symbol resolution won't see any
+@@ -2134,11 +2064,6 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
+     return false;
+   });
+ 
+-  // Since we now have a complete set of input files, we can create
+-  // a .d file to record build dependencies.
+-  if (!config->dependencyFile.empty())
+-    writeDependencyFile();
+-
+   // Now that the number of partitions is fixed, save a pointer to the main
+   // partition.
+   mainPart = &partitions[0];
+diff --git a/lld/ELF/InputFiles.cpp b/lld/ELF/InputFiles.cpp
+index 79cc3c00cb2..c142c00517c 100644
+--- a/lld/ELF/InputFiles.cpp
++++ b/lld/ELF/InputFiles.cpp
+@@ -110,7 +110,6 @@ Optional<MemoryBufferRef> elf::readFile(StringRef path) {
+     path = saver.save(config->chroot + path);
+ 
+   log(path);
+-  config->dependencyFiles.insert(path);
+ 
+   auto mbOrErr = MemoryBuffer::getFile(path, -1, false);
+   if (auto ec = mbOrErr.getError()) {
+diff --git a/lld/ELF/Options.td b/lld/ELF/Options.td
+index 3a8c9e83b08..c3c1309aca1 100644
+--- a/lld/ELF/Options.td
++++ b/lld/ELF/Options.td
+@@ -132,9 +132,6 @@ defm demangle: B<"demangle",
+     "Demangle symbol names (default)",
+     "Do not demangle symbol names">;
+ 
+-defm dependency_file: EEq<"dependency-file", "Write a dependency file">,
+-  MetaVarName<"<path>">;
+-
+ def disable_new_dtags: F<"disable-new-dtags">,
+   HelpText<"Disable new dynamic tags">;
+ 
+diff --git a/lld/test/ELF/dependency-file.s b/lld/test/ELF/dependency-file.s
+deleted file mode 100644
+index e7dbf9c7695..00000000000
+--- a/lld/test/ELF/dependency-file.s
++++ /dev/null
+@@ -1,21 +0,0 @@
+-# REQUIRES: x86
+-# RUN: mkdir -p %t
+-# RUN: llvm-mc -filetype=obj -triple=x86_64 %s -o %t/foo.o
+-# RUN: llvm-mc -filetype=obj -triple=x86_64 /dev/null -o "%t/bar baz.o"
+-# RUN: llvm-mc -filetype=obj -triple=x86_64 /dev/null -o "%t/#quux$.o"
+-# RUN: ld.lld -o %t/foo.exe %t/foo.o %t/"bar baz.o" "%t/#quux$.o" --dependency-file=%t/foo.d
+-# RUN: FileCheck --match-full-lines -DFILE=%t %s < %t/foo.d
+-
+-# CHECK:      [[FILE]]{{/|(\\)+}}foo.exe: \
+-# CHECK-NEXT:   [[FILE]]{{/|(\\)+}}foo.o \
+-# CHECK-NEXT:   [[FILE]]{{/|(\\)+}}bar\ baz.o \
+-# CHECK-NEXT:   [[FILE]]{{/|(\\)+}}\#quux$$.o
+-# CHECK-EMPTY:
+-# CHECK-NEXT: [[FILE]]{{/|(\\)+}}foo.o:
+-# CHECK-EMPTY:
+-# CHECK-NEXT: [[FILE]]{{/|(\\)+}}bar\ baz.o:
+-# CHECK-EMPTY:
+-# CHECK-NEXT: [[FILE]]{{/|(\\)+}}\#quux$$.o:
+-
+-.global _start
+-_start:

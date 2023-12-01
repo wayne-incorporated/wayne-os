@@ -1,0 +1,103 @@
+// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+
+option cc_enable_arenas = true;
+
+// Common definitions used by both host and guest messages.
+package resourced_bridge.v2;
+
+// Requested turbo ratio MSR value.  This value will be directly written to the
+// MSR register.
+message RequestedCpuFrequency {
+  int64 freq_val = 1;
+}
+
+// Requested CpuInfoUpdate interval in ms.  Resourced will enforce a minimum
+// allowable.
+message RequestedInterval {
+  int64 interval_ms = 1;
+}
+
+// Return from host inbound requests.
+message ReturnCode {
+  enum Status {
+    // Write executed successfully.  Verified by readback.
+    SUCCESS = 0;
+
+    // Requested range is out of bounds.  E.g: Polling frequency too high.
+    FAIL_OUT_OF_BOUNDS = 1;
+
+    // Was not able to set value (readback verification failed).
+    // Possible permission issue.
+    FAIL_UNABLE_TO_SET = 2;
+
+    // Attmepting to set caused a cirtical error (i.e: resourced crash).
+    FAIL_CRITICAL = 3;
+
+    // Sent if pull requests are called too frequeently.
+    FAIL_TOO_MANY_REQUESTS = 4;
+  }
+
+  // The status enum returned.
+  Status status = 1;
+}
+
+// CPU power data.
+message CpuRaplPowerData {
+  // Long-term rapl power in uW.
+  int64 power_limit_0 = 1;
+
+  // Short-term rapl power in uW.
+  int64 power_limit_1 = 2;
+
+  // CPU enegy reported by sysfs in uj.
+  int64 cpu_energy = 3;
+}
+
+// CPU Info data per core.  Used either as a pull request or ping packet.
+message CpuInfoData {
+  // CPU info for each core
+  repeated CpuInfoCoreData cpu_core_data = 1;
+}
+
+// CPU Info data per core
+message CpuInfoCoreData {
+  // Current core unmber
+  int64 core_num = 1;
+
+  // min_freq
+  int64 cpu_freq_min_khz = 2;
+
+  // max_freq
+  int64 cpu_freq_max_khz = 3;
+
+  // current_freq
+  int64 cpu_freq_curr_khz = 4;
+
+  // Base frequency taken from sysfs cpu node.
+  // Potentially lossy when converting from GHz string to i64 Hz
+  // Optional since some kernels do not report base freq.
+  optional int64 cpu_freq_base_khz = 5;
+}
+
+// gRPC requires that every RPC has an argument and a return value.  This empty
+// message is used when an argument or return value is not required.
+message EmptyMessage {}
+
+// Inbound Requests from borealis.
+service ResourcedCommListener {
+  rpc StartCpuUpdates(RequestedInterval) returns (ReturnCode);
+  rpc StopCpuUpdates(EmptyMessage) returns (ReturnCode);
+  rpc SetCpuFrequency(RequestedCpuFrequency) returns (ReturnCode);
+  rpc GetCpuInfo(EmptyMessage) returns (CpuInfoData);
+}
+
+// Outbound requests to borealis.
+
+service ResourcedComm {
+  rpc VmInitData(CpuInfoData) returns (EmptyMessage);
+  rpc CpuPowerUpdate(CpuRaplPowerData) returns (EmptyMessage);
+}

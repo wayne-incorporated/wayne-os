@@ -1,21 +1,24 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "login_manager/chrome_setup.h"
 
+#include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 
-#include <base/bind.h>
 #include <base/check.h>
 #include <base/check_op.h>
 #include <base/files/file.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
+#include <base/functional/bind.h>
 #include <base/json/json_writer.h>
-#include <base/optional.h>
+#include <base/logging.h>
+#include <base/strings/strcat.h>
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_split.h>
 #include <base/strings/stringprintf.h>
@@ -23,11 +26,15 @@
 #include <chromeos-config/libcros_config/fake_cros_config.h>
 #include <chromeos/ui/chromium_command_builder.h>
 #include <chromeos/ui/util.h>
+#include <libsegmentation/feature_management.h>
+#include <libsegmentation/feature_management_fake.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using chromeos::ui::ChromiumCommandBuilder;
+using ::testing::Contains;
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 
 namespace login_manager {
 
@@ -44,8 +51,16 @@ class ChromeSetupTest : public ::testing::Test {
   const std::string kOldDisplay = "old";
   const std::string kShelfFlag = "--enable-dim-shelf";
   const std::string kFeatureFlag = "--enable-features";
-  const base::Callback<bool(const base::FilePath&)> kPathInSetCallback =
-      base::Bind(&ChromeSetupTest::PathInSet, base::Unretained(this));
+  const base::RepeatingCallback<bool(const base::FilePath&)>
+      kPathInSetCallback = base::BindRepeating(&ChromeSetupTest::PathInSet,
+                                               base::Unretained(this));
+
+  void SetUp() override {
+    auto fake = std::make_unique<segmentation::fake::FeatureManagementFake>();
+    fake_feature_management_ = fake.get();
+    feature_management_ =
+        std::make_unique<segmentation::FeatureManagement>(std::move(fake));
+  }
 
   // This returns true if the path is found in the paths_ set.
   bool PathInSet(const base::FilePath& path) {
@@ -88,6 +103,9 @@ class ChromeSetupTest : public ::testing::Test {
       GetPath("guest", "small"),   GetPath("guest", "large"),
   };
   brillo::FakeCrosConfig cros_config_;
+
+  std::unique_ptr<segmentation::FeatureManagement> feature_management_;
+  segmentation::fake::FeatureManagementFake* fake_feature_management_;
 };
 
 TEST_F(ChromeSetupTest, TestSerializedAshSwitches) {
@@ -210,16 +228,27 @@ TEST_F(ChromeSetupTest, TestPowerButtonPosition) {
   login_manager::SetUpPowerButtonPositionFlag(&builder_, &cros_config_);
   argv = builder_.arguments();
   ASSERT_EQ(1, argv.size());
-  base::Value position_info(base::Value::Type::DICTIONARY);
-  position_info.SetStringKey(login_manager::kPowerButtonEdgeField,
-                             std::move(kPowerButtonEdge));
+  base::Value::Dict position_info;
+  position_info.Set(login_manager::kPowerButtonEdgeField,
+                    std::move(kPowerButtonEdge));
   double position_as_double = 0;
   base::StringToDouble(kPowerButtonPosition, &position_as_double);
-  position_info.SetDoubleKey(login_manager::kPowerButtonPositionField,
-                             position_as_double);
+  position_info.Set(login_manager::kPowerButtonPositionField,
+                    position_as_double);
   std::string json_position_info;
   base::JSONWriter::Write(position_info, &json_position_info);
   EXPECT_EQ(json_position_info, GetFlag(argv, "--ash-power-button-position"));
+}
+
+TEST_F(ChromeSetupTest, TestHelpContentSwitch) {
+  login_manager::SetUpHelpContentSwitch(&builder_, &cros_config_);
+  std::vector<std::string> argv = builder_.arguments();
+  ASSERT_EQ(0, argv.size());
+
+  cros_config_.SetString("/ui", "help-content-id", "GOOGLE-EVE");
+  login_manager::SetUpHelpContentSwitch(&builder_, &cros_config_);
+  argv = builder_.arguments();
+  EXPECT_EQ("GOOGLE-EVE", GetFlag(argv, "--device-help-content-id"));
 }
 
 TEST_F(ChromeSetupTest, TestRegulatoryLabel) {
@@ -290,7 +319,30 @@ TEST_F(ChromeSetupTest, TestSchedulerFlags) {
   EXPECT_EQ(kBoostUrgentVal, GetFlag(argv, "--scheduler-boost-urgent"));
 }
 
-void InitWithUseFlag(base::Optional<std::string> flag,
+TEST_F(ChromeSetupTest, TestAddFeatureManagementFlag) {
+  std::string feat1 =
+      base::StrCat({segmentation::FeatureManagement::kPrefix, "Feat1"});
+  std::string feat2 =
+      base::StrCat({segmentation::FeatureManagement::kPrefix, "Feat2"});
+
+  login_manager::AddFeatureManagementFlags(&builder_,
+                                           feature_management_.get());
+  std::vector<std::string> argv = builder_.arguments();
+  ASSERT_EQ(0, argv.size());
+
+  fake_feature_management_->SetFeature(feat1, segmentation::USAGE_CHROME);
+  fake_feature_management_->SetFeature(feat2, segmentation::USAGE_CHROME);
+  login_manager::AddFeatureManagementFlags(&builder_,
+                                           feature_management_.get());
+  argv = builder_.arguments();
+  ASSERT_EQ(1, argv.size());
+  std::vector<std::string> result =
+      base::SplitString(GetFlag(argv, kFeatureFlag), ",", base::KEEP_WHITESPACE,
+                        base::SPLIT_WANT_ALL);
+  EXPECT_THAT(result, testing::UnorderedElementsAre(feat1, feat2));
+}
+
+void InitWithUseFlag(std::optional<std::string> flag,
                      base::ScopedTempDir* temp_dir,
                      ChromiumCommandBuilder* builder) {
   ASSERT_TRUE(temp_dir->CreateUniqueTempDir());
@@ -324,7 +376,7 @@ void InitWithUseFlag(base::Optional<std::string> flag,
 TEST(TestAddCrashHandlerFlag, Crashpad) {
   base::ScopedTempDir temp_dir;
   ChromiumCommandBuilder builder;
-  InitWithUseFlag(base::nullopt, &temp_dir, &builder);
+  InitWithUseFlag(std::nullopt, &temp_dir, &builder);
   AddCrashHandlerFlag(&builder);
   EXPECT_THAT(builder.arguments(), ElementsAre("--enable-crashpad"));
 }

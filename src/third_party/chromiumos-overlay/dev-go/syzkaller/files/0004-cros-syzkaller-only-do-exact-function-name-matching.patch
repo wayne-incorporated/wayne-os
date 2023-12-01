@@ -1,0 +1,25 @@
+From 47c12958596a2dca87208d0a62bd26ee5d70a973 Mon Sep 17 00:00:00 2001
+From: Zubin Mithra <zsm@chromium.org>
+Date: Mon, 18 Oct 2021 17:16:33 -0700
+Subject: [PATCH 4/7] cros-syzkaller: only do exact function name matching
+
+---
+ pkg/mgrconfig/load.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/pkg/mgrconfig/load.go b/pkg/mgrconfig/load.go
+index bef05faa4..ac38971a2 100644
+--- a/pkg/mgrconfig/load.go
++++ b/pkg/mgrconfig/load.go
+@@ -363,7 +363,7 @@ func ParseNoMutateSyscalls(target *prog.Target, syscalls []string) (map[int]bool
+ }
+ 
+ func MatchSyscall(name, pattern string) bool {
+-	if pattern == name || strings.HasPrefix(name, pattern+"$") {
++	if pattern == name {
+ 		return true
+ 	}
+ 	if len(pattern) > 1 && pattern[len(pattern)-1] == '*' &&
+-- 
+2.39.2.637.g21b0678d19-goog
+

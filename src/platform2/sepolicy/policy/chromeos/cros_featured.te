@@ -1,0 +1,29 @@
+type cros_featured, chromeos_domain, domain;
+
+domain_auto_trans(cros_init, cros_featured_exec, cros_featured)
+
+log_writer(cros_featured)
+cros_dbus_client(cros_featured)
+
+allow cros_featured sysfs_cpuidle:file rw_file_perms;
+allow cros_featured sysfs_lru_gen_min_ttl_ms:file rw_file_perms;
+allow cros_featured proc_timer:file rw_file_perms;
+rw_dir_file(cros_featured, proc_sys_kernel)
+rw_dir_file(cros_featured, debugfs_tracing)
+r_dir_file(cros_featured, cros_featured_file)
+create_dir_file(cros_featured, cros_var_lib_featured)
+create_dir_file(cros_featured, debugfs_tracing_instances)
+
+# For writing active trial files for early-boot experiments.
+create_dir_file(cros_featured, cros_run_featured_active)
+
+# SafeFD requires traversing from /
+allow cros_featured rootfs:dir { r_dir_perms };
+allow cros_featured cros_run:dir { r_dir_perms };
+allow cros_featured cros_run_featured_seed:dir { rw_dir_perms };
+allow cros_featured cros_run_featured_seed:file { rw_file_perms unlink };
+
+# For tests
+# will be created by tast tests, in the "cros_ssh_session".
+filetrans_pattern(cros_ssh_session, cros_run, cros_run_featured_test, dir, "featured_test")
+rw_dir_file(cros_featured, cros_run_featured_test)

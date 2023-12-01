@@ -1,0 +1,72 @@
+--- a/Lib/sysconfig.py
++++ b/Lib/sysconfig.py
+@@ -414,11 +414,36 @@ def _generate_posix_vars():
+     with open('pybuilddir.txt', 'w', encoding='ascii') as f:
+         f.write(pybuilddir)
+ 
++def _get_sysconfigdata_module():
++    sysroot = os.getenv('SYSROOT')
++    if '_PYTHON_PROJECT_BASE' not in os.environ and sysroot:
++        lib_dir = get_path('platstdlib')
++        import glob
++
++        # If SYSROOT is defined in the environment use the sysconfigdata from
++        # the libdir of that sysroot's Python installation.
++        sysconfig_paths = glob.glob(
++            os.path.join(sysroot, os.path.relpath(lib_dir, '/'),
++                         f'_sysconfigdata_{sys.abiflags}_*.py'))
++
++        if sysconfig_paths:
++            import importlib.machinery
++            import types
++            assert len(sysconfig_paths) == 1, f'Found too many sysconfigdata modules: {sysconfig_paths}'
++            sysconfig_path = sysconfig_paths[0]
++            loader = importlib.machinery.SourceFileLoader('_sysconfigdata', sysconfig_path)
++            module = types.ModuleType(loader.name)
++            loader.exec_module(module)
++            return module
++
++    name = _get_sysconfigdata_name()
++    return __import__(name, globals(), locals(), ['build_time_vars'], 0)
++
++
+ def _init_posix(vars):
+     """Initialize the module as appropriate for POSIX systems."""
+     # _sysconfigdata is generated at build time, see _generate_posix_vars()
+-    name = _get_sysconfigdata_name()
+-    _temp = __import__(name, globals(), locals(), ['build_time_vars'], 0)
++    _temp = _get_sysconfigdata_module()
+     build_time_vars = _temp.build_time_vars
+     vars.update(build_time_vars)
+ 
+@@ -544,10 +569,14 @@ def get_config_vars(*args):
+             # sys.abiflags may not be defined on all platforms.
+             _CONFIG_VARS['abiflags'] = ''
+ 
+-        if os.name == 'nt':
+-            _init_non_posix(_CONFIG_VARS)
+-        if os.name == 'posix':
+-            _init_posix(_CONFIG_VARS)
++        libdir = None
++        if '_PYTHON_PROJECT_BASE' not in os.environ and os.getenv('SYSROOT'):
++            abi = os.getenv('ABI')
++            libdir = os.getenv('LIBDIR_%s' % abi)
++        if not libdir:
++            libdir = '@@GENTOO_LIBDIR@@'
++        _CONFIG_VARS['libdirname'] = libdir
++
+         # For backward compatibility, see issue19555
+         SO = _CONFIG_VARS.get('EXT_SUFFIX')
+         if SO is not None:
+@@ -574,6 +603,11 @@ def get_config_vars(*args):
+                 srcdir = os.path.dirname(get_makefile_filename())
+         _CONFIG_VARS['srcdir'] = _safe_realpath(srcdir)
+ 
++        if os.name == 'nt':
++            _init_non_posix(_CONFIG_VARS)
++        if os.name == 'posix':
++            _init_posix(_CONFIG_VARS)
++
+         # OS X platforms require special customization to handle
+         # multi-architecture, multi-os-version installers
+         if sys.platform == 'darwin':

@@ -1,0 +1,15 @@
+Link with libc++ instead of libstdc++. This avoids undefined reference to std::__1 errors.
+
+diff --git a/rustc-1.29.0-src/src/librustc_llvm/build.rs b/rustc-1.29.0-src/src/librustc_llvm/build.rs
+index 1619637..6ec0f83 100644
+--- a/rustc-1.29.0-src/src/librustc_llvm/build.rs
++++ b/rustc-1.29.0-src/src/librustc_llvm/build.rs
+@@ -248,7 +248,7 @@ fn main() {
+         // NetBSD uses a separate library when relocation is required
+         "stdc++_pic"
+     } else {
+-        "stdc++"
++        "c++"
+     };
+ 
+     // C++ runtime library

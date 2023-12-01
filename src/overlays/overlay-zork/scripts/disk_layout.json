@@ -1,0 +1,53 @@
+{
+  "_comment": "See https://chromium.googlesource.com/chromiumos/platform/crosutils/+/HEAD/build_library/README.disk_layout",
+  "metadata":{
+    "rootdev_base": "/sys/devices/pci0000:00/0000:00:1c.*/0000:*:00.0/nvme/nvme0/nvme0n1 /sys/devices/platform/AMDI0040:00/mmc_host/mmc*/mmc*:000*/block/mmcblk*"
+  },
+  "parent": "disk_layout_v2.json",
+  "layouts": {
+    # base is the fixed device layout template.
+    "base": [
+      {
+        "num": 3,
+        "fs_size": "2600 MiB"
+      }
+    ],
+    "usb": [
+      {
+        "num": 3,
+        "fs_size": "2600 MiB",
+        "size": "2800 MiB"
+      }
+    ],
+    "usb-updatable": [
+      {
+        "num": 5,
+        "size": "2800 MiB"
+      },
+      {
+        "num": 3,
+        "fs_size": "2600 MiB",
+        "size": "2800 MiB"
+      }
+    ],
+    "factory_install": [
+      {
+        "num": 3,
+        "size": "600 MiB",
+        "fs_size": "520 MiB"
+      }
+    ],
+    "recovery": [
+      {
+        # Shrunken rootfs partition to support smaller USB sticks,
+        # and smaller recovery downloads.
+        # Installation will expand this to size from base.
+        # The offset to the beginning of this partition, and the FS
+        # size must match base exactly to allow secure boot.
+        "num": 3,
+        "fs_size": "2600 MiB",
+        "size": "2800 MiB"
+      }
+    ]
+  }
+}

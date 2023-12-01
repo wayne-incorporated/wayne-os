@@ -1,0 +1,120 @@
+From ab1cbd8bcec15b016c96134abbf145cfbeca83ca Mon Sep 17 00:00:00 2001
+From: Miklos Szeredi <mszeredi@redhat.com>
+Date: Thu, 14 May 2020 16:44:25 +0200
+Subject: [PATCH] BACKPORT: vfs: add faccessat2 syscall
+
+POSIX defines faccessat() as having a fourth "flags" argument, while the
+linux syscall doesn't have it.  Glibc tries to emulate AT_EACCESS and
+AT_SYMLINK_NOFOLLOW, but AT_EACCESS emulation is broken.
+
+Add a new faccessat(2) syscall with the added flags argument and implement
+both flags.
+
+The value of AT_EACCESS is defined in glibc headers to be the same as
+AT_REMOVEDIR.  Use this value for the kernel interface as well, together
+with the explanatory comment.
+
+Also add AT_EMPTY_PATH support, which is not documented by POSIX, but can
+be useful and is trivial to implement.
+
+Signed-off-by: Miklos Szeredi <mszeredi@redhat.com>
+[Adrian Ratiu: 4.14 linux-headers backport]
+---
+ arch/arm/tools/syscall.tbl             | 1 +
+ arch/arm64/include/asm/unistd.h        | 2 +-
+ arch/arm64/include/asm/unistd32.h      | 2 ++
+ arch/x86/entry/syscalls/syscall_32.tbl | 1 +
+ arch/x86/entry/syscalls/syscall_64.tbl | 1 +
+ include/linux/syscalls.h               | 2 ++
+ include/uapi/asm-generic/unistd.h      | 5 ++++-
+ 7 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/tools/syscall.tbl b/arch/arm/tools/syscall.tbl
+index 9d87127f33e8..ea8846b73445 100644
+--- a/arch/arm/tools/syscall.tbl
++++ b/arch/arm/tools/syscall.tbl
+@@ -435,3 +435,4 @@
+ 423	common	sched_rr_get_interval_time64	sys_sched_rr_get_interval
+ 425	common	io_uring_setup		sys_io_uring_setup
+ 426	common	io_uring_enter		sys_io_uring_enter
++439	common	faccessat2			sys_faccessat2
+diff --git a/arch/arm64/include/asm/unistd.h b/arch/arm64/include/asm/unistd.h
+index 718b1962a1b8..0dd4a8025c08 100644
+--- a/arch/arm64/include/asm/unistd.h
++++ b/arch/arm64/include/asm/unistd.h
+@@ -43,7 +43,7 @@
+ #define __ARM_NR_compat_cacheflush	(__ARM_NR_COMPAT_BASE+2)
+ #define __ARM_NR_compat_set_tls		(__ARM_NR_COMPAT_BASE+5)
+ 
+-#define __NR_compat_syscalls		427
++#define __NR_compat_syscalls		440
+ #endif
+ 
+ #define __ARCH_WANT_SYS_CLONE
+diff --git a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+index ba9554572592..27179bd921ff 100644
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -863,6 +863,8 @@ __SYSCALL(__NR_sched_rr_get_interval_time64, sys_sched_rr_get_interval)
+ __SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
+ #define __NR_io_uring_enter 426
+ __SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
++#define __NR_faccessat2 439
++__SYSCALL(__NR_faccessat2, sys_faccessat2)
+ 
+ /*
+  * Please add new compat syscalls above this comment and update
+diff --git a/arch/x86/entry/syscalls/syscall_32.tbl b/arch/x86/entry/syscalls/syscall_32.tbl
+index b056050a44ba..7455df86745b 100644
+--- a/arch/x86/entry/syscalls/syscall_32.tbl
++++ b/arch/x86/entry/syscalls/syscall_32.tbl
+@@ -414,3 +414,4 @@
+ 423	i386	sched_rr_get_interval_time64	sys_sched_rr_get_interval	__ia32_sys_sched_rr_get_interval
+ 425	i386	io_uring_setup		sys_io_uring_setup		__ia32_sys_io_uring_setup
+ 426	i386	io_uring_enter		sys_io_uring_enter		__ia32_sys_io_uring_enter
++439	i386	faccessat2		sys_faccessat2
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index 9e69bd2fd081..74a44ceb3e94 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -341,6 +341,7 @@
+ 332	common	statx			sys_statx
+ 425	common	io_uring_setup		__x64_sys_io_uring_setup
+ 426	common	io_uring_enter		__x64_sys_io_uring_enter
++439	common	faccessat2		sys_faccessat2
+ 
+ #
+ # x32-specific system call numbers start at 512 to avoid cache impact
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index a78186d826d7..4437b0dc619d 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -809,6 +809,8 @@ asmlinkage long sys_renameat2(int olddfd, const char __user *oldname,
+ asmlinkage long sys_futimesat(int dfd, const char __user *filename,
+ 			      struct timeval __user *utimes);
+ asmlinkage long sys_faccessat(int dfd, const char __user *filename, int mode);
++asmlinkage long sys_faccessat2(int dfd, const char __user *filename, int mode,
++			       int flags);
+ asmlinkage long sys_fchmodat(int dfd, const char __user * filename,
+ 			     umode_t mode);
+ asmlinkage long sys_fchownat(int dfd, const char __user *filename, uid_t user,
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index d97d59ebf682..e1c762e2baa6 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -781,8 +781,11 @@ __SYSCALL(__NR_io_uring_setup, sys_io_uring_setup)
+ #define __NR_io_uring_enter 426
+ __SYSCALL(__NR_io_uring_enter, sys_io_uring_enter)
+ 
++#define __NR_faccessat2 439
++__SYSCALL(__NR_faccessat2, sys_faccessat2)
++
+ #undef __NR_syscalls
+-#define __NR_syscalls 427
++#define __NR_syscalls 440
+ 
+ /*
+  * All syscalls below here should go away really,
+-- 
+2.31.1
+

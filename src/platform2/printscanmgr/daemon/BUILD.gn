@@ -1,0 +1,63 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("libdaemon_pkg_deps") {
+  # NOSORT
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+    "libmojo",
+
+    # system_api depends on protobuf(or protobuf - lite).It must appear before
+    # protobuf here or the linker flags won't be in the right order.
+    "system_api",
+    "protobuf",
+  ]
+}
+
+source_set("libdaemon") {
+  sources = [
+    "cups_tool.cc",
+    "daemon.cc",
+    "dbus_adaptor.cc",
+    "lp_tools.cc",
+    "printscan_tool.cc",
+  ]
+  configs += [ ":libdaemon_pkg_deps" ]
+  deps = [
+    "//printscanmgr/cups_uri_helper:cups_uri_helper_utils",
+    "//printscanmgr/dbus_bindings:printscanmgr-adaptors",
+    "//printscanmgr/mojom:mojo_bindings",
+  ]
+}
+
+if (use.test) {
+  pkg_config("libdaemon_test_pkg_deps") {
+    # NOSORT
+    pkg_deps = [
+      "libchrome",
+      "libchrome-test",
+
+      # system_api depends on protobuf(or protobuf - lite).It must appear before
+      # protobuf here or the linker flags won't be in the right order.
+      "system_api",
+      "protobuf",
+    ]
+  }
+
+  source_set("libdaemon_test") {
+    sources = [
+      "cups_tool_test.cc",
+      "printscan_tool_test.cc",
+    ]
+    configs += [ ":libdaemon_test_pkg_deps" ]
+    deps = [
+      ":libdaemon",
+      "//printscanmgr/executor:mock_executor",
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_default") {
+  pkg_deps = [
+    "libchrome",
+    "libmojo",
+  ]
+}
+
+source_set("routines") {
+  sources = [ "prime_number_search.cc" ]
+  configs += [ ":target_default" ]
+  deps = [ "//diagnostics/base" ]
+}
+
+if (use.test) {
+  pkg_config("target_test") {
+    pkg_deps = [
+      "libchrome",
+      "libchrome-test",
+    ]
+  }
+
+  source_set("test") {
+    sources = [ "prime_number_search_test.cc" ]
+    configs += [ ":target_test" ]
+    deps = [
+      ":routines",
+      "//diagnostics/base",
+      "//diagnostics/base:healthd_testrunner",
+    ]
+  }
+}

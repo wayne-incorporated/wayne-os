@@ -1,0 +1,113 @@
+Use more portable method of calculating PAGE_SIZE, and
+disable the tests that aren't supported by our implementation
+of ashmem.
+
+diff --git a/platform2/aosp/system/core/libcutils/ashmem_test.cpp b/platform2/aosp/system/core/libcutils/ashmem_test.cpp
+index b37d020..e455772 100644
+--- a/platform2/aosp/system/core/libcutils/ashmem_test.cpp
++++ b/platform2/aosp/system/core/libcutils/ashmem_test.cpp
+@@ -50,10 +50,10 @@ void TestProtDenied(const unique_fd &fd, size_t size, int prot) {
+     EXPECT_EQ(MAP_FAILED, mmap(nullptr, size, prot, MAP_SHARED, fd, 0));
+ }
+
+-void TestProtIs(const unique_fd& fd, int prot) {
++void TestProtIs(const unique_fd& fd, int /*prot*/) {
+     ASSERT_TRUE(fd >= 0);
+     ASSERT_TRUE(ashmem_valid(fd));
+-    EXPECT_EQ(prot, ioctl(fd, ASHMEM_GET_PROT_MASK));
++    // EXPECT_EQ(prot, ioctl(fd, ASHMEM_GET_PROT_MASK));
+ }
+
+ void FillData(uint8_t* data, size_t dataLen) {
+@@ -63,7 +63,7 @@ void FillData(uint8_t* data, size_t dataLen) {
+ }
+
+ TEST(AshmemTest, BasicTest) {
+-    constexpr size_t size = PAGE_SIZE;
++    size_t size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+     uint8_t data[size];
+     FillData(data, size);
+
+@@ -85,7 +85,7 @@ TEST(AshmemTest, BasicTest) {
+ }
+
+ TEST(AshmemTest, ForkTest) {
+-    constexpr size_t size = PAGE_SIZE;
++    size_t size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+     uint8_t data[size];
+     FillData(data, size);
+
+@@ -124,14 +124,15 @@ TEST(AshmemTest, ForkTest) {
+     EXPECT_EQ(0, munmap(region2, size));
+ }
+
+-TEST(AshmemTest, FileOperationsTest) {
++ TEST(AshmemTest, FileOperationsTest) {
+     unique_fd fd;
+     void* region;
++    size_t PAGE_SIZE = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+
+     // Allocate a 4-page buffer, but leave page-sized holes on either side
+-    constexpr size_t size = PAGE_SIZE * 4;
+-    constexpr size_t dataSize = PAGE_SIZE * 2;
+-    constexpr size_t holeSize = PAGE_SIZE;
++    size_t size = PAGE_SIZE * 4;
++    size_t dataSize = PAGE_SIZE * 2;
++    size_t holeSize = PAGE_SIZE;
+     ASSERT_NO_FATAL_FAILURE(TestCreateRegion(size, fd, PROT_READ | PROT_WRITE));
+     ASSERT_NO_FATAL_FAILURE(TestMmap(fd, dataSize, PROT_READ | PROT_WRITE, &region, holeSize));
+
+@@ -139,8 +140,9 @@ TEST(AshmemTest, FileOperationsTest) {
+     FillData(data, dataSize);
+     memcpy(region, data, dataSize);
+
+-    constexpr off_t dataStart = holeSize;
+-    constexpr off_t dataEnd = dataStart + dataSize;
++    off_t off_size = static_cast<off_t>(size);
++    off_t dataStart = holeSize;
++    off_t dataEnd = dataStart + dataSize;
+
+     // The sequence of seeks below looks something like this:
+     //
+@@ -160,7 +162,7 @@ TEST(AshmemTest, FileOperationsTest) {
+     } seeks[] = {
+         {99, SEEK_SET, 99},         {dataStart, SEEK_CUR, dataStart + 99},
+         {0, SEEK_DATA, dataStart},  {dataStart, SEEK_HOLE, dataEnd},
+-        {-99, SEEK_END, size - 99}, {-dataStart, SEEK_CUR, dataEnd - 99},
++        {-99, SEEK_END, off_size - 99}, {-dataStart, SEEK_CUR, dataEnd - 99},
+     };
+     for (const auto& cfg : seeks) {
+         errno = 0;
+@@ -182,9 +184,9 @@ TEST(AshmemTest, FileOperationsTest) {
+     EXPECT_EQ(0, munmap(region, dataSize));
+ }
+
+-TEST(AshmemTest, ProtTest) {
++TEST(AshmemTest, DISABLED_ProtTest) {
+     unique_fd fd;
+-    constexpr size_t size = PAGE_SIZE;
++    size_t size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+     void *region;
+
+     ASSERT_NO_FATAL_FAILURE(TestCreateRegion(size, fd, PROT_READ));
+@@ -210,9 +212,9 @@ TEST(AshmemTest, ProtTest) {
+     TestProtDenied(fd, size, PROT_WRITE);
+ }
+
+-TEST(AshmemTest, ForkProtTest) {
++TEST(AshmemTest, DISABLED_ForkProtTest) {
+     unique_fd fd;
+-    constexpr size_t size = PAGE_SIZE;
++    size_t size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+
+     int protFlags[] = { PROT_READ, PROT_WRITE };
+     for (size_t i = 0; i < arraysize(protFlags); i++) {
+@@ -233,7 +235,7 @@ TEST(AshmemTest, ForkProtTest) {
+ }
+
+ TEST(AshmemTest, ForkMultiRegionTest) {
+-    constexpr size_t size = PAGE_SIZE;
++    size_t size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+     uint8_t data[size];
+     FillData(data, size);
+

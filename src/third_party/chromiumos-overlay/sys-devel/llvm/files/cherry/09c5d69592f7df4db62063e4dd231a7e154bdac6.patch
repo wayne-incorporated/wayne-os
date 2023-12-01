@@ -1,0 +1,354 @@
+From 09c5d69592f7df4db62063e4dd231a7e154bdac6 Mon Sep 17 00:00:00 2001
+From: Jan Svoboda <jan_svoboda@apple.com>
+Date: Mon, 15 May 2023 14:24:08 -0700
+Subject: [PATCH] Revert "[clang][deps] Only cache files with specific
+ extension"
+
+This reverts commit d1e00b6f136ec71a4c95a7eb4fd81ec0ab547962.
+
+Internally, there were issues with caching stat failures for .framework directories. We need some time for investigation to pinpoint what exactly was going wrong.
+---
+ .../DependencyScanningFilesystem.h            |  41 +-----
+ .../DependencyScanningFilesystem.cpp          |  76 ++++++-----
+ .../Tooling/DependencyScannerTest.cpp         | 127 ------------------
+ 3 files changed, 52 insertions(+), 192 deletions(-)
+
+diff --git a/clang/include/clang/Tooling/DependencyScanning/DependencyScanningFilesystem.h b/clang/include/clang/Tooling/DependencyScanning/DependencyScanningFilesystem.h
+index 357a5b942300..4b4e3c7eb2ec 100644
+--- a/clang/include/clang/Tooling/DependencyScanning/DependencyScanningFilesystem.h
++++ b/clang/include/clang/Tooling/DependencyScanning/DependencyScanningFilesystem.h
+@@ -269,32 +269,6 @@ public:
+   }
+ };
+ 
+-enum class ScanFile { Yes, No };
+-enum class CacheStatFailure { Yes, No };
+-
+-struct PathPolicy {
+-  /// Implies caching of all open and stat results.
+-  unsigned Enable : 1;
+-  /// Controls whether a file will be scanned for dependency directives.
+-  unsigned ScanFile : 1;
+-  /// Explicitly disables stat failure caching when false.
+-  unsigned CacheStatFailure : 1;
+-
+-  static PathPolicy fallThrough() { return {false, false, false}; }
+-
+-  static PathPolicy cache(enum ScanFile SF,
+-                          enum CacheStatFailure CSF = CacheStatFailure::Yes) {
+-    return {true, SF == ScanFile::Yes, CSF == CacheStatFailure::Yes};
+-  }
+-
+-private:
+-  PathPolicy(bool E, bool SF, bool CSF)
+-      : Enable(E), ScanFile(SF), CacheStatFailure(CSF) {}
+-};
+-
+-/// Determine caching and scanning behavior based on file extension.
+-PathPolicy getPolicy(StringRef Filename);
+-
+ /// A virtual file system optimized for the dependency discovery.
+ ///
+ /// It is primarily designed to work with source files whose contents was
+@@ -319,25 +293,24 @@ public:
+   ///
+   /// Attempts to use the local and shared caches first, then falls back to
+   /// using the underlying filesystem.
+-  llvm::ErrorOr<EntryRef> getOrCreateFileSystemEntry(StringRef Filename) {
+-    return getOrCreateFileSystemEntry(Filename, getPolicy(Filename));
+-  }
++  llvm::ErrorOr<EntryRef>
++  getOrCreateFileSystemEntry(StringRef Filename,
++                             bool DisableDirectivesScanning = false);
+ 
+ private:
+-  /// Same as the public version, but with explicit PathPolicy parameter.
+-  llvm::ErrorOr<EntryRef> getOrCreateFileSystemEntry(StringRef Filename,
+-                                                     PathPolicy Policy);
++  /// Check whether the file should be scanned for preprocessor directives.
++  bool shouldScanForDirectives(StringRef Filename);
+ 
+   /// For a filename that's not yet associated with any entry in the caches,
+   /// uses the underlying filesystem to either look up the entry based in the
+   /// shared cache indexed by unique ID, or creates new entry from scratch.
+   llvm::ErrorOr<const CachedFileSystemEntry &>
+-  computeAndStoreResult(StringRef Filename, PathPolicy Policy);
++  computeAndStoreResult(StringRef Filename);
+ 
+   /// Scan for preprocessor directives for the given entry if necessary and
+   /// returns a wrapper object with reference semantics.
+   EntryRef scanForDirectivesIfNecessary(const CachedFileSystemEntry &Entry,
+-                                        StringRef Filename, PathPolicy Policy);
++                                        StringRef Filename, bool Disable);
+ 
+   /// Represents a filesystem entry that has been stat-ed (and potentially read)
+   /// and that's about to be inserted into the cache as `CachedFileSystemEntry`.
+diff --git a/clang/lib/Tooling/DependencyScanning/DependencyScanningFilesystem.cpp b/clang/lib/Tooling/DependencyScanning/DependencyScanningFilesystem.cpp
+index eb15fc532995..0ddb5c24c5e6 100644
+--- a/clang/lib/Tooling/DependencyScanning/DependencyScanningFilesystem.cpp
++++ b/clang/lib/Tooling/DependencyScanning/DependencyScanningFilesystem.cpp
+@@ -42,8 +42,9 @@ DependencyScanningWorkerFilesystem::readFile(StringRef Filename) {
+ }
+ 
+ EntryRef DependencyScanningWorkerFilesystem::scanForDirectivesIfNecessary(
+-    const CachedFileSystemEntry &Entry, StringRef Filename, PathPolicy Policy) {
+-  if (Entry.isError() || Entry.isDirectory() || !Policy.ScanFile)
++    const CachedFileSystemEntry &Entry, StringRef Filename, bool Disable) {
++  if (Entry.isError() || Entry.isDirectory() || Disable ||
++      !shouldScanForDirectives(Filename))
+     return EntryRef(Filename, Entry);
+ 
+   CachedFileContents *Contents = Entry.getCachedContents();
+@@ -158,22 +159,39 @@ DependencyScanningFilesystemSharedCache::CacheShard::
+   return *EntriesByFilename.insert({Filename, &Entry}).first->getValue();
+ }
+ 
+-PathPolicy clang::tooling::dependencies::getPolicy(StringRef Filename) {
++/// Whitelist file extensions that should be minimized, treating no extension as
++/// a source file that should be minimized.
++///
++/// This is kinda hacky, it would be better if we knew what kind of file Clang
++/// was expecting instead.
++static bool shouldScanForDirectivesBasedOnExtension(StringRef Filename) {
+   StringRef Ext = llvm::sys::path::extension(Filename);
+   if (Ext.empty())
+-    return PathPolicy::cache(ScanFile::Yes, CacheStatFailure::No);
+-  // clang-format off
+-  return llvm::StringSwitch<PathPolicy>(Ext)
+-      .CasesLower(".c", ".cc", ".cpp", ".c++", ".cxx", PathPolicy::cache(ScanFile::Yes))
+-      .CasesLower(".h", ".hh", ".hpp", ".h++", ".hxx", PathPolicy::cache(ScanFile::Yes))
+-      .CasesLower(".m", ".mm",                         PathPolicy::cache(ScanFile::Yes))
+-      .CasesLower(".i", ".ii", ".mi", ".mmi",          PathPolicy::cache(ScanFile::Yes))
+-      .CasesLower(".def", ".inc",                      PathPolicy::cache(ScanFile::Yes))
+-      .CasesLower(".modulemap", ".map",      PathPolicy::cache(ScanFile::No))
+-      .CasesLower(".framework", ".apinotes", PathPolicy::cache(ScanFile::No))
+-      .CasesLower(".yaml", ".json", ".hmap", PathPolicy::cache(ScanFile::No))
+-      .Default(PathPolicy::fallThrough());
+-  // clang-format on
++    return true; // C++ standard library
++  return llvm::StringSwitch<bool>(Ext)
++      .CasesLower(".c", ".cc", ".cpp", ".c++", ".cxx", true)
++      .CasesLower(".h", ".hh", ".hpp", ".h++", ".hxx", true)
++      .CasesLower(".m", ".mm", true)
++      .CasesLower(".i", ".ii", ".mi", ".mmi", true)
++      .CasesLower(".def", ".inc", true)
++      .Default(false);
++}
++
++static bool shouldCacheStatFailures(StringRef Filename) {
++  StringRef Ext = llvm::sys::path::extension(Filename);
++  if (Ext.empty())
++    return false; // This may be the module cache directory.
++  // Only cache stat failures on files that are not expected to change during
++  // the build.
++  StringRef FName = llvm::sys::path::filename(Filename);
++  if (FName == "module.modulemap" || FName == "module.map")
++    return true;
++  return shouldScanForDirectivesBasedOnExtension(Filename);
++}
++
++bool DependencyScanningWorkerFilesystem::shouldScanForDirectives(
++    StringRef Filename) {
++  return shouldScanForDirectivesBasedOnExtension(Filename);
+ }
+ 
+ const CachedFileSystemEntry &
+@@ -197,11 +215,10 @@ DependencyScanningWorkerFilesystem::findEntryByFilenameWithWriteThrough(
+ }
+ 
+ llvm::ErrorOr<const CachedFileSystemEntry &>
+-DependencyScanningWorkerFilesystem::computeAndStoreResult(StringRef Filename,
+-                                                          PathPolicy Policy) {
++DependencyScanningWorkerFilesystem::computeAndStoreResult(StringRef Filename) {
+   llvm::ErrorOr<llvm::vfs::Status> Stat = getUnderlyingFS().status(Filename);
+   if (!Stat) {
+-    if (!Policy.CacheStatFailure)
++    if (!shouldCacheStatFailures(Filename))
+       return Stat.getError();
+     const auto &Entry =
+         getOrEmplaceSharedEntryForFilename(Filename, Stat.getError());
+@@ -227,13 +244,16 @@ DependencyScanningWorkerFilesystem::computeAndStoreResult(StringRef Filename,
+ 
+ llvm::ErrorOr<EntryRef>
+ DependencyScanningWorkerFilesystem::getOrCreateFileSystemEntry(
+-    StringRef Filename, PathPolicy Policy) {
++    StringRef Filename, bool DisableDirectivesScanning) {
+   if (const auto *Entry = findEntryByFilenameWithWriteThrough(Filename))
+-    return scanForDirectivesIfNecessary(*Entry, Filename, Policy).unwrapError();
+-  auto MaybeEntry = computeAndStoreResult(Filename, Policy);
++    return scanForDirectivesIfNecessary(*Entry, Filename,
++                                        DisableDirectivesScanning)
++        .unwrapError();
++  auto MaybeEntry = computeAndStoreResult(Filename);
+   if (!MaybeEntry)
+     return MaybeEntry.getError();
+-  return scanForDirectivesIfNecessary(*MaybeEntry, Filename, Policy)
++  return scanForDirectivesIfNecessary(*MaybeEntry, Filename,
++                                      DisableDirectivesScanning)
+       .unwrapError();
+ }
+ 
+@@ -241,11 +261,8 @@ llvm::ErrorOr<llvm::vfs::Status>
+ DependencyScanningWorkerFilesystem::status(const Twine &Path) {
+   SmallString<256> OwnedFilename;
+   StringRef Filename = Path.toStringRef(OwnedFilename);
+-  PathPolicy Policy = getPolicy(Filename);
+-  if (!Policy.Enable)
+-    return getUnderlyingFS().status(Path);
+ 
+-  llvm::ErrorOr<EntryRef> Result = getOrCreateFileSystemEntry(Filename, Policy);
++  llvm::ErrorOr<EntryRef> Result = getOrCreateFileSystemEntry(Filename);
+   if (!Result)
+     return Result.getError();
+   return Result->getStatus();
+@@ -301,11 +318,8 @@ llvm::ErrorOr<std::unique_ptr<llvm::vfs::File>>
+ DependencyScanningWorkerFilesystem::openFileForRead(const Twine &Path) {
+   SmallString<256> OwnedFilename;
+   StringRef Filename = Path.toStringRef(OwnedFilename);
+-  PathPolicy Policy = getPolicy(Filename);
+-  if (!Policy.Enable)
+-    return getUnderlyingFS().openFileForRead(Path);
+ 
+-  llvm::ErrorOr<EntryRef> Result = getOrCreateFileSystemEntry(Filename, Policy);
++  llvm::ErrorOr<EntryRef> Result = getOrCreateFileSystemEntry(Filename);
+   if (!Result)
+     return Result.getError();
+   return DepScanFile::create(Result.get());
+diff --git a/clang/unittests/Tooling/DependencyScannerTest.cpp b/clang/unittests/Tooling/DependencyScannerTest.cpp
+index a7bd1ddbbdb5..abcc2c787b0d 100644
+--- a/clang/unittests/Tooling/DependencyScannerTest.cpp
++++ b/clang/unittests/Tooling/DependencyScannerTest.cpp
+@@ -239,130 +239,3 @@ TEST(DependencyScanner, ScanDepsWithFS) {
+   EXPECT_EQ(convert_to_slash(DepFile),
+             "test.cpp.o: /root/test.cpp /root/header.h\n");
+ }
+-
+-// Note: We want to test caching in DependencyScanningWorkerFilesystem. To do
+-// that, we need to be able to mutate the underlying file system. However,
+-// InMemoryFileSystem does not allow changing the contents of a file after it's
+-// been created.
+-// To simulate the behavior, we create two separate in-memory file systems, each
+-// containing different version of the same file. We pass those to two scanning
+-// file systems that share the same cache.
+-
+-TEST(DependencyScanningFileSystemTest, CacheFileContentsEnabled) {
+-  DependencyScanningFilesystemSharedCache SharedCache;
+-
+-  StringRef Path = "/root/source.c";
+-  auto Contents1 = llvm::MemoryBuffer::getMemBuffer("contents1");
+-  auto Contents2 = llvm::MemoryBuffer::getMemBuffer("contents2");
+-
+-  {
+-    auto InMemoryFS =
+-        llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+-    ASSERT_TRUE(InMemoryFS->addFile(Path, 0, std::move(Contents1)));
+-    DependencyScanningWorkerFilesystem ScanningFS(SharedCache, InMemoryFS);
+-    auto File = ScanningFS.openFileForRead(Path);
+-    ASSERT_TRUE(File);
+-    auto Buffer = (*File)->getBuffer("Buffer for /root/source.c.");
+-    ASSERT_TRUE(Buffer);
+-    auto Contents = (*Buffer)->getBuffer();
+-    EXPECT_EQ(Contents, "contents1");
+-  }
+-
+-  {
+-    auto InMemoryFS =
+-        llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+-    ASSERT_TRUE(InMemoryFS->addFile(Path, 0, std::move(Contents2)));
+-    DependencyScanningWorkerFilesystem ScanningFS(SharedCache, InMemoryFS);
+-    auto File = ScanningFS.openFileForRead(Path);
+-    ASSERT_TRUE(File);
+-    auto Buffer = (*File)->getBuffer("Buffer for /root/source.c.");
+-    ASSERT_TRUE(Buffer);
+-    auto Contents = (*Buffer)->getBuffer();
+-    EXPECT_EQ(Contents, "contents1");
+-  }
+-}
+-
+-TEST(DependencyScanningFileSystemTest, CacheFileContentsDisabled) {
+-  DependencyScanningFilesystemSharedCache SharedCache;
+-
+-  StringRef Path = "/root/module.pcm";
+-  auto Contents1 = llvm::MemoryBuffer::getMemBuffer("contents1");
+-  auto Contents2 = llvm::MemoryBuffer::getMemBuffer("contents2");
+-
+-  {
+-    auto InMemoryFS =
+-        llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+-    ASSERT_TRUE(InMemoryFS->addFile(Path, 0, std::move(Contents1)));
+-    DependencyScanningWorkerFilesystem ScanningFS(SharedCache, InMemoryFS);
+-    auto File = ScanningFS.openFileForRead(Path);
+-    ASSERT_TRUE(File);
+-    auto Buffer = (*File)->getBuffer("Buffer for /root/module.pcm.");
+-    ASSERT_TRUE(Buffer);
+-    auto Contents = (*Buffer)->getBuffer();
+-    EXPECT_EQ(Contents, "contents1");
+-  }
+-
+-  {
+-    auto InMemoryFS =
+-        llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+-    ASSERT_TRUE(InMemoryFS->addFile(Path, 0, std::move(Contents2)));
+-    DependencyScanningWorkerFilesystem ScanningFS(SharedCache, InMemoryFS);
+-    auto File = ScanningFS.openFileForRead(Path);
+-    ASSERT_TRUE(File);
+-    auto Buffer = (*File)->getBuffer("Buffer for /root/module.pcm.");
+-    ASSERT_TRUE(Buffer);
+-    auto Contents = (*Buffer)->getBuffer();
+-    EXPECT_EQ(Contents, "contents2");
+-  }
+-}
+-
+-TEST(DependencyScanningFileSystemTest, CacheStatFailureEnabled) {
+-  DependencyScanningFilesystemSharedCache SharedCache;
+-  auto InMemoryFS = llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+-  DependencyScanningWorkerFilesystem ScanningFS(SharedCache, InMemoryFS);
+-
+-  StringRef Path = "/root/source.c";
+-
+-  auto Stat1 = ScanningFS.status(Path);
+-  EXPECT_FALSE(Stat1);
+-
+-  auto Contents = llvm::MemoryBuffer::getMemBuffer("contents");
+-  InMemoryFS->addFile(Path, 0, std::move(Contents));
+-
+-  auto Stat2 = ScanningFS.status(Path);
+-  EXPECT_FALSE(Stat2);
+-}
+-
+-TEST(DependencyScanningFileSystemTest, CacheStatFailureDisabledFile) {
+-  DependencyScanningFilesystemSharedCache SharedCache;
+-  auto InMemoryFS = llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+-  DependencyScanningWorkerFilesystem ScanningFS(SharedCache, InMemoryFS);
+-
+-  StringRef Path = "/root/vector";
+-
+-  auto Stat1 = ScanningFS.status(Path);
+-  EXPECT_FALSE(Stat1);
+-
+-  auto Contents = llvm::MemoryBuffer::getMemBuffer("contents");
+-  InMemoryFS->addFile(Path, 0, std::move(Contents));
+-
+-  auto Stat2 = ScanningFS.status(Path);
+-  EXPECT_TRUE(Stat2);
+-}
+-
+-TEST(DependencyScanningFileSystemTest, CacheStatFailureDisabledDirectory) {
+-  DependencyScanningFilesystemSharedCache SharedCache;
+-  auto InMemoryFS = llvm::makeIntrusiveRefCnt<llvm::vfs::InMemoryFileSystem>();
+-  DependencyScanningWorkerFilesystem ScanningFS(SharedCache, InMemoryFS);
+-
+-  StringRef Path = "/root/dir";
+-
+-  auto Stat1 = ScanningFS.status(Path);
+-  EXPECT_FALSE(Stat1);
+-
+-  auto Contents = llvm::MemoryBuffer::getMemBuffer("contents");
+-  InMemoryFS->addFile("/root/dir/file", 0, std::move(Contents));
+-
+-  auto Stat2 = ScanningFS.status(Path);
+-  EXPECT_TRUE(Stat2);
+-}
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

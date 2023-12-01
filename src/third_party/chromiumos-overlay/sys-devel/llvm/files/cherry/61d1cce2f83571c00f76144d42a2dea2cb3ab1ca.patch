@@ -1,0 +1,146 @@
+commit 61d1cce2f83571c00f76144d42a2dea2cb3ab1ca
+Author: Yuanfang Chen <yuanfang.chen@sony.com>
+Date:   Tue Sep 7 15:28:19 2021 -0700
+
+    PR45881: Properly use CXXThisOverride for templated lambda
+    
+    - `this` used in lambda expression parameter declarations needs no capture.
+    - Set up CXXThisOverride for default template arguments of a lambda.
+    
+    A similar fix to this is c3d2ebb60f604.
+    
+    Reviewed By: aaron.ballman
+    
+    Differential Revision: https://reviews.llvm.org/D102531
+---
+ clang/lib/Sema/SemaExprCXX.cpp                    |  9 +++----
+ clang/lib/Sema/SemaTemplate.cpp                   |  6 ++++-
+ clang/lib/Sema/SemaTemplateDeduction.cpp          | 21 ++++++++++++---
+ clang/test/SemaCXX/cxx1z-lambda-star-this.cpp     | 10 ++++++++
+ clang/test/SemaCXX/cxx20-lambda-decltype-this.cpp | 31 +++++++++++++++++++++++
+ 5 files changed, 68 insertions(+), 9 deletions(-)
+
+diff --git a/clang/lib/Sema/SemaExprCXX.cpp b/clang/lib/Sema/SemaExprCXX.cpp
+index ba2e17c4a631..e30e1bb7df78 100644
+--- a/clang/lib/Sema/SemaExprCXX.cpp
++++ b/clang/lib/Sema/SemaExprCXX.cpp
+@@ -1137,11 +1137,10 @@ static QualType adjustCVQualifiersForCXXThisWithinLambda(
+     }
+   }
+ 
+-  // 2) We've run out of ScopeInfos but check if CurDC is a lambda (which can
+-  // happen during instantiation of its nested generic lambda call operator)
+-  if (isLambdaCallOperator(CurDC)) {
+-    assert(CurLSI && "While computing 'this' capture-type for a generic "
+-                     "lambda, we must have a corresponding LambdaScopeInfo");
++  // 2) We've run out of ScopeInfos but check 1. if CurDC is a lambda (which
++  //    can happen during instantiation of its nested generic lambda call
++  //    operator); 2. if we're in a lambda scope (lambda body).
++  if (CurLSI && isLambdaCallOperator(CurDC)) {
+     assert(isGenericLambdaCallOperatorSpecialization(CurLSI->CallOperator) &&
+            "While computing 'this' capture-type for a generic lambda, when we "
+            "run out of enclosing LSI's, yet the enclosing DC is a "
+diff --git a/clang/lib/Sema/SemaTemplate.cpp b/clang/lib/Sema/SemaTemplate.cpp
+index 5d26f2d2c11a..6682b17f4e14 100644
+--- a/clang/lib/Sema/SemaTemplate.cpp
++++ b/clang/lib/Sema/SemaTemplate.cpp
+@@ -5110,7 +5110,11 @@ SubstDefaultTemplateArgument(Sema &SemaRef,
+     for (unsigned i = 0, e = Param->getDepth(); i != e; ++i)
+       TemplateArgLists.addOuterTemplateArguments(None);
+ 
+-    Sema::ContextRAII SavedContext(SemaRef, Template->getDeclContext());
++    bool ForLambdaCallOperator = false;
++    if (const auto *Rec = dyn_cast<CXXRecordDecl>(Template->getDeclContext()))
++      ForLambdaCallOperator = Rec->isLambda();
++    Sema::ContextRAII SavedContext(SemaRef, Template->getDeclContext(),
++                                   !ForLambdaCallOperator);
+     ArgType =
+         SemaRef.SubstType(ArgType, TemplateArgLists,
+                           Param->getDefaultArgumentLoc(), Param->getDeclName());
+diff --git a/clang/lib/Sema/SemaTemplateDeduction.cpp b/clang/lib/Sema/SemaTemplateDeduction.cpp
+index 5d93a1792226..f0a9e820c028 100644
+--- a/clang/lib/Sema/SemaTemplateDeduction.cpp
++++ b/clang/lib/Sema/SemaTemplateDeduction.cpp
+@@ -2858,9 +2858,24 @@ static Sema::TemplateDeductionResult ConvertDeducedTemplateArguments(
+       return Sema::TDK_Incomplete;
+     }
+ 
+-    TemplateArgumentLoc DefArg = S.SubstDefaultTemplateArgumentIfAvailable(
+-        TD, TD->getLocation(), TD->getSourceRange().getEnd(), Param, Builder,
+-        HasDefaultArg);
++    TemplateArgumentLoc DefArg;
++    {
++      Qualifiers ThisTypeQuals;
++      CXXRecordDecl *ThisContext = nullptr;
++      if (auto *Rec = dyn_cast<CXXRecordDecl>(TD->getDeclContext()))
++        if (Rec->isLambda())
++          if (auto *Method = dyn_cast<CXXMethodDecl>(Rec->getDeclContext())) {
++            ThisContext = Method->getParent();
++            ThisTypeQuals = Method->getMethodQualifiers();
++          }
++
++      Sema::CXXThisScopeRAII ThisScope(S, ThisContext, ThisTypeQuals,
++                                       S.getLangOpts().CPlusPlus17);
++
++      DefArg = S.SubstDefaultTemplateArgumentIfAvailable(
++          TD, TD->getLocation(), TD->getSourceRange().getEnd(), Param, Builder,
++          HasDefaultArg);
++    }
+ 
+     // If there was no default argument, deduction is incomplete.
+     if (DefArg.getArgument().isNull()) {
+diff --git a/clang/test/SemaCXX/cxx1z-lambda-star-this.cpp b/clang/test/SemaCXX/cxx1z-lambda-star-this.cpp
+index 2426e8f5a207..5a471fd6b694 100644
+--- a/clang/test/SemaCXX/cxx1z-lambda-star-this.cpp
++++ b/clang/test/SemaCXX/cxx1z-lambda-star-this.cpp
+@@ -298,3 +298,13 @@ class A {
+ 
+ } // namespace PR32831
+ 
++namespace PR45881 {
++struct A {
++    void f();
++};
++int id(A*);
++void A::f() {
++    auto z = [*this](auto z2, decltype(z2(this)) z3){};
++    z(id,3);
++}
++} // namespace PR45881
+diff --git a/clang/test/SemaCXX/cxx20-lambda-decltype-this.cpp b/clang/test/SemaCXX/cxx20-lambda-decltype-this.cpp
+new file mode 100644
+index 000000000000..161a2bcb25d7
+--- /dev/null
++++ b/clang/test/SemaCXX/cxx20-lambda-decltype-this.cpp
+@@ -0,0 +1,31 @@
++// RUN: %clang_cc1 -std=c++2a -fsyntax-only -emit-llvm-only %s
++// RUN: %clang_cc1 -std=c++2a -fsyntax-only -fdelayed-template-parsing %s
++// RUN: %clang_cc1 -std=c++2a -fsyntax-only -fms-extensions %s
++// RUN: %clang_cc1 -std=c++2a -fsyntax-only -fdelayed-template-parsing -fms-extensions %s
++
++namespace PR45881 {
++struct A {
++    void f();
++};
++int id(A*);
++void A::f() {
++    auto z = [*this](auto z2, decltype(z2(this)) z3){};
++    z(id,3);
++}
++
++struct B {
++    void f();
++};
++void B::f() {
++    auto z = []<typename TT, typename TTT=decltype(TT()(this))>(){return 0;};
++    z.template operator()<int(*)(B*)>();
++}
++
++struct C {
++    void f();
++};
++void C::f() {
++    auto z = []<typename TT, decltype(TT()(this)) n>(){return 0;};
++    z.template operator()<int(*)(C*), 8>();
++}
++} // namespace PR45881

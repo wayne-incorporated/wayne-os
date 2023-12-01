@@ -1,0 +1,38 @@
+[package]
+name = "libchromeos"
+version = "0.1.0"
+authors = ["The ChromiumOS Authors"]
+edition = "2018"
+
+[build-dependencies]
+pkg-config = { version = "0.3.11", optional = true }
+
+[dependencies]
+crosvm-base = { version = "0.1.0" }
+dbus = { version = "0.9", optional = true }
+lazy_static = { version = "1.4.0", optional = true }
+libc = "0.2"
+log = "0.4"
+multi_log = "0.1.2"
+poll_token_derive = { path = "./src/deprecated/poll_token_derive" } # provided by ebuild
+serde = { version = "1.0.114", features = ["derive"] }
+stderrlog = "0.5.0"
+sync = "*"
+syslog = "6.0.1"
+system_api = { path = "../system_api", optional = true } # provided by ebuild
+thiserror = "1.0.20"
+vboot_reference-sys = { path = "../../platform/vboot_reference/rust/vboot_reference-sys", optional = true } # provided by ebuild
+zerocopy = "0.6.1"
+zeroize = { version = "1.2.0", features = ["zeroize_derive"] }
+
+[features]
+default = []
+chromeos-module = ["dbus", "lazy_static", "pkg-config", "system_api", "vboot_reference-sys"]
+
+[patch.crates-io] # ignored by ebuild
+audio_streams = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/audio_streams-0.1.0/" } # ignored by ebuild
+base_event_token_derive = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/base_event_token_derive-0.1.0/" } # ignored by ebuild
+crosvm-base = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/crosvm-base-0.1.0/" } # ignored by ebuild
+data_model = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/data_model-0.1.50/" } # ignored by ebuild
+minijail = { path = "../../platform/minijail/rust/minijail/" } # ignored by ebuild
+sync = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/sync-0.1.149/" } # ignored by ebuild

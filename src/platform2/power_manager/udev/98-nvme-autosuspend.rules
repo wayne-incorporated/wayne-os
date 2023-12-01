@@ -1,0 +1,14 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+ACTION!="add", GOTO="autosuspend_end"
+
+SUBSYSTEM=="pci", DRIVER=="nvme", GOTO="autosuspend_enable"
+GOTO="autosuspend_end"
+
+# Enable autosuspend
+LABEL="autosuspend_enable"
+TEST=="power/control", ATTR{power/control}="auto", GOTO="autosuspend_end"
+
+LABEL="autosuspend_end"

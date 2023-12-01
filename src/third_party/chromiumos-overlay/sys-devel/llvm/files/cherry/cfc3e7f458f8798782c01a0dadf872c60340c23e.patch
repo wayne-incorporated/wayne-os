@@ -1,0 +1,64 @@
+From cfc3e7f458f8798782c01a0dadf872c60340c23e Mon Sep 17 00:00:00 2001
+From: George Burgess IV <george.burgess.iv@gmail.com>
+Date: Mon, 9 Mar 2020 15:48:19 -0700
+Subject: [PATCH] [cmake] Strip quotes in compiler-rt/lib/crt; error if checks
+ fail
+
+Patch by Zhizhou Yang!
+
+In his own words:
+
+"""
+Similar change to CMakeLists as r372312.
+
+After r372209, compiler command line may include argument with quotes:
+
+```
+-fprofile-instr-use="/foo/bar.profdata"
+```
+
+And it causes a hidden failure with execute_process later: Could not
+read profile "/foo/bar.profdata": No such file or directory.
+
+In this particular case, the check for .init_array will fail silently
+and creates a PGO-ed binary with bad .init_array section in compiler-rt.
+
+Bug details can be found in PR45022
+"""
+
+Differential Revision: https://reviews.llvm.org/D75065
+---
+ compiler-rt/lib/crt/CMakeLists.txt | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/compiler-rt/lib/crt/CMakeLists.txt b/compiler-rt/lib/crt/CMakeLists.txt
+index 38be9caf059..0f8689268b9 100644
+--- a/compiler-rt/lib/crt/CMakeLists.txt
++++ b/compiler-rt/lib/crt/CMakeLists.txt
+@@ -53,6 +53,10 @@ function(check_cxx_section_exists section output)
+     endif()
+   endforeach()
+ 
++  # Strip quotes from the compile command, as the compiler is not expecting
++  # quoted arguments (potential quotes added from D62063).
++  string(REPLACE "\"" "" test_compile_command "${test_compile_command}")
++
+   string(REPLACE " " ";" test_compile_command "${test_compile_command}")
+ 
+   execute_process(
+@@ -62,6 +66,12 @@ function(check_cxx_section_exists section output)
+     ERROR_VARIABLE TEST_ERROR
+   )
+ 
++  # Explicitly throw a fatal error message if test_compile_command fails.
++  if(TEST_RESULT)
++    message(FATAL_ERROR "${TEST_ERROR}")
++    return()
++  endif()
++
+   execute_process(
+     COMMAND ${CMAKE_OBJDUMP} -h "${TARGET_NAME}/CheckSectionExists.o"
+     RESULT_VARIABLE CHECK_RESULT
+-- 
+2.25.1.481.gfbce0eb801-goog
+

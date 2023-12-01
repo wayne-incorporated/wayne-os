@@ -1,0 +1,34 @@
+From 895da9b5fb45871e30caadd0e12653e1043c4252 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <maskray@google.com>
+Date: Tue, 12 Jul 2022 11:14:32 -0700
+Subject: [PATCH 006/163] i386: Remove -Wa,-mtune=i686
+
+gas -mtune= may change NOP generating patterns but -mtune=i686 has no
+difference from the default by inspecting .o and .os files.
+
+Note: Clang doesn't support -Wa,-mtune=i686.
+(cherry picked from commit c5bec9d491c5d066dd238ccafcdec78cd4592e8e)
+---
+ sysdeps/i386/i686/Makefile | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/sysdeps/i386/i686/Makefile b/sysdeps/i386/i686/Makefile
+index 311042787b..6b5fc8a59c 100644
+--- a/sysdeps/i386/i686/Makefile
++++ b/sysdeps/i386/i686/Makefile
+@@ -1,12 +1,2 @@
+ # So that we can test __m128's alignment
+ stack-align-test-flags += -msse
+-
+-CFLAGS-.o += -Wa,-mtune=i686
+-CFLAGS-.os += -Wa,-mtune=i686
+-CFLAGS-.op += -Wa,-mtune=i686
+-CFLAGS-.oS += -Wa,-mtune=i686
+-
+-ASFLAGS-.o += -Wa,-mtune=i686
+-ASFLAGS-.os += -Wa,-mtune=i686
+-ASFLAGS-.op += -Wa,-mtune=i686
+-ASFLAGS-.oS += -Wa,-mtune=i686
+-- 
+2.37.2
+

@@ -1,0 +1,48 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+LINUX_FIRMWARE=""
+USE=""
+
+# WiFi driver firmware
+LINUX_FIRMWARE="${LINUX_FIRMWARE} iwlwifi-7265D"
+
+# BT driver firmware
+LINUX_FIRMWARE="${LINUX_FIRMWARE} ibt-hw"
+
+# Google USBPD peripheral firmwares
+LINUX_FIRMWARE="${LINUX_FIRMWARE} cros-pd"
+
+# Onboard Ethernet RTL8168h/8111h firmware patch
+LINUX_FIRMWARE="${LINUX_FIRMWARE} rtl8168h-2"
+
+USE="${USE} ac_only -display_backlight -internal_mic -internal_speaker"
+USE="${USE} -subpixel_rendering -tpm tpm2"
+
+USE="${USE} cros_ec cr50_onboard"
+
+# Add EC logging
+USE="${USE} eclog"
+
+# Add NVMe support"
+USE="${USE} nvme"
+
+# Enable VMs
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Non Chromebook device, smart dim is disabled.
+USE="${USE} -smartdim"
+
+# Enable Downloadable Content (DLC) Test
+USE="${USE} dlc_test"
+
+# Disable hardware overlays in chrome. This is same as setting
+# # ("HW overlay strategies" to None in chrome://flags), and is
+# # achieved by passing --enable-hardware-overlays="" to chrome.
+USE="${USE} set_hw_overlay_strategy_none"
+
+# Enable PCI rescan for Intel wifi NIC disappearing from the bus.
+# See b/191183621 and crbug.com/922232 for details.
+USE="${USE} iwlwifi_rescan"

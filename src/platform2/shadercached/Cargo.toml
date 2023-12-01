@@ -1,0 +1,36 @@
+[package]
+name = "shadercached"
+version = "0.2.1"
+authors = ["The ChromiumOS Authors"]
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.56"
+base64 = "0.13.0"
+dbus = "0.9.3"
+dbus-crossroads = "0.5.0"
+dbus-tokio = "0.7.5"
+hex = "0.4.3"
+lazy_static = "1.4.0"
+libc = "0.2.139"
+openssl = "0.10.41"
+protobuf = "3.2"
+regex = "1.6.0"
+sys-info = "0.9.1"
+tokio = { version = "1.19.2", features = [
+  "macros",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+] }
+libchromeos = { path = "../libchromeos-rs" } # provided by ebuild
+system_api = { path = "../system_api" } # provided by ebuild
+
+# All patches required for sys_util
+[patch.crates-io] # ignored by ebuild
+audio_streams = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/audio_streams-0.1.0/" }                     # ignored by ebuild
+base_event_token_derive = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/base_event_token_derive-0.1.0/" } # ignored by ebuild
+crosvm-base = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/crosvm-base-0.1.0/" }                         # ignored by ebuild
+data_model = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/data_model-0.1.50/" }                          # ignored by ebuild
+minijail = { path = "../../platform/minijail/rust/minijail" }                                                             # ignored by ebuild
+sync = { path = "../../../chroot/usr/lib/cros_rust_registry/registry/sync-0.1.149/" }                                     # ignored by ebuild

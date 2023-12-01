@@ -1,0 +1,59 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Use LLVM amdgpu target when building LLVM.
+LLVM_TARGETS="AMDGPU"
+
+# Initial value just for style purposes.
+USE=""
+
+USE="${USE} grunt"
+
+USE="${USE} cros_ec"
+
+USE="${USE} touchview"
+
+USE="${USE} unibuild has_chromeos_config_bsp"
+
+# Ability to run guest VMs.
+# crosvm-wl-dmabuf disabled due to b/176387875
+USE="${USE} kvm_host -crosvm-wl-dmabuf crosvm-gpu virtio_gpu"
+
+# Enable background blur.
+USE="${USE} background_blur"
+
+# Add g2touch firmware update tool
+INPUT_DEVICES="${INPUT_DEVICES} g2touch"
+
+# this indicates that this board has a -kernelnext overlay
+USE="${USE} has-kernelnext"
+
+# Include the pixart firmware updating tool
+INPUT_DEVICES="${INPUT_DEVICES} pixart"
+
+# Include the elan_i2chid firmware updating tool
+INPUT_DEVICES="${INPUT_DEVICES} elan_i2chid"
+
+# Disable Spectre v2 mitigation for Chrome processes
+USE="${USE} disable_spectre_variant2_mitigation"
+
+# Enable fs-verity support
+USE="${USE} fsverity"
+
+# Enable Downloadable Content (DLC) Test
+USE="${USE} dlc_test"
+
+USE="${USE} uprev-4-to-5"
+
+# Enable on-device grammar check
+USE="${USE} ondevice_grammar"
+
+# TODO(b/187516317): remove when the issue is resolved in FW.
+USE="${USE} broken_24hours_wake"
+
+# Enable Shimless RMA
+USE="${USE} rmad"
+
+# TODO(b/260945247): remove when this issue is resolved.
+USE="${USE} -federated_service"

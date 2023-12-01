@@ -1,0 +1,17 @@
+LLD uses the argv[0] to get the host system information.
+In standalone toolchain used by Simplechrome, real lld becomes
+lld.elf, so the LLD cannot get the host system informaction
+and dies. see crbug.com/701659
+
+diff --git a/lld/tools/lld/lld.cpp b/lld/tools/lld/lld.cpp
+index 37ef260495e..ecabfbb1898 100644
+--- a/lld/tools/lld/lld.cpp
++++ b/lld/tools/lld/lld.cpp
+@@ -57,6 +57,7 @@ LLVM_ATTRIBUTE_NORETURN static void die(const Twine &s) {
+ static Flavor getFlavor(StringRef s) {
+   return StringSwitch<Flavor>(s)
+       .CasesLower("ld", "ld.lld", "gnu", Gnu)
++      .CasesLower("lld.elf", "lld.real", "lld.real.elf", "gnu", Gnu)
+       .CasesLower("wasm", "ld-wasm", Wasm)
+       .CaseLower("link", WinLink)
+       .CasesLower("ld64", "ld64.lld", "darwin", Darwin)

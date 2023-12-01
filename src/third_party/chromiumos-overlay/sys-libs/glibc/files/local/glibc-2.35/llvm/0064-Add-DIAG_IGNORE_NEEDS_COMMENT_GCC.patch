@@ -1,0 +1,449 @@
+From cfdcb726f11287734f7acbdf5a854ae6bf4c67eb Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 9 Mar 2022 15:51:50 -0300
+Subject: [PATCH 064/163] Add DIAG_IGNORE_NEEDS_COMMENT_GCC
+
+To handle compilers that does not support GCC only options, such as
+-Wmaybe-uninitialized.
+---
+ hurd/hurdsig.c                        |  2 +-
+ include/libc-diag.h                   |  8 ++++++++
+ inet/net-internal.h                   |  2 +-
+ malloc/malloc-check.c                 |  2 +-
+ nis/nis_table.c                       |  2 +-
+ nptl/tst-thread-setspecific.c         |  9 +++++----
+ resolv/res_send.c                     | 10 +++++-----
+ stdio-common/vfscanf-internal.c       |  2 +-
+ stdlib/bug-getcontext.c               |  2 +-
+ sunrpc/clnt_udp.c                     |  2 +-
+ sysdeps/ieee754/dbl-64/e_lgamma_r.c   |  2 +-
+ sysdeps/ieee754/dbl-64/k_rem_pio2.c   |  2 +-
+ sysdeps/ieee754/flt-32/e_lgammaf_r.c  |  2 +-
+ sysdeps/ieee754/ldbl-128/k_tanl.c     |  2 +-
+ sysdeps/ieee754/ldbl-128ibm/k_tanl.c  |  2 +-
+ sysdeps/ieee754/ldbl-96/e_lgammal_r.c |  2 +-
+ sysdeps/ieee754/ldbl-96/k_tanl.c      |  2 +-
+ sysdeps/ieee754/soft-fp/s_ddivl.c     |  2 +-
+ sysdeps/ieee754/soft-fp/s_dfmal.c     |  2 +-
+ sysdeps/ieee754/soft-fp/s_dsqrtl.c    |  2 +-
+ sysdeps/ieee754/soft-fp/s_fdiv.c      |  2 +-
+ sysdeps/ieee754/soft-fp/s_fdivl.c     |  2 +-
+ sysdeps/ieee754/soft-fp/s_ffma.c      |  2 +-
+ sysdeps/ieee754/soft-fp/s_ffmal.c     |  2 +-
+ sysdeps/ieee754/soft-fp/s_fma.c       |  2 +-
+ sysdeps/ieee754/soft-fp/s_fmaf.c      |  2 +-
+ sysdeps/ieee754/soft-fp/s_fmal.c      |  2 +-
+ 27 files changed, 42 insertions(+), 33 deletions(-)
+
+diff --git a/hurd/hurdsig.c b/hurd/hurdsig.c
+index 2c7ea61c48..5f2ebd3a76 100644
+--- a/hurd/hurdsig.c
++++ b/hurd/hurdsig.c
+@@ -374,7 +374,7 @@ interrupted_reply_port_location (thread_t thread,
+   /* GCC 6 and before seem to be confused by the setjmp call inside
+      _hurdsig_catch_memory_fault and think that we may be returning a second
+      time to here with portloc uninitialized (but we never do). */
+-  DIAG_IGNORE_NEEDS_COMMENT (6, "-Wmaybe-uninitialized");
++  DIAG_IGNORE_NEEDS_COMMENT_GCC (6, "-Wmaybe-uninitialized");
+   /* Fault now if this pointer is bogus.  */
+   *(volatile mach_port_t *) portloc = *portloc;
+   DIAG_POP_NEEDS_COMMENT;
+diff --git a/include/libc-diag.h b/include/libc-diag.h
+index 271c5b8810..e1dbe99eb3 100644
+--- a/include/libc-diag.h
++++ b/include/libc-diag.h
+@@ -71,4 +71,12 @@
+ # define DIAG_IGNORE_Os_NEEDS_COMMENT(version, option)
+ #endif
+ 
++/* Some warnings are not support for all compilers.  */
++#ifndef __clang__
++# define DIAG_IGNORE_NEEDS_COMMENT_GCC(VERSION, WARNING) \
++    DIAG_IGNORE_NEEDS_COMMENT (VERSION, WARNING)
++#else
++# define DIAG_IGNORE_NEEDS_COMMENT_GCC(VERSION, WARNING)
++#endif
++
+ #endif /* libc-diag.h */
+diff --git a/inet/net-internal.h b/inet/net-internal.h
+index cdccdd3976..ff45064479 100644
+--- a/inet/net-internal.h
++++ b/inet/net-internal.h
+@@ -106,7 +106,7 @@ __deadline_is_infinite (struct deadline deadline)
+  *    https://gcc.gnu.org/bugzilla/show_bug.cgi?id=91691
+  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (9, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (9, "-Wmaybe-uninitialized");
+ 
+ /* Return true if the current time is at the deadline or past it.  */
+ static inline bool
+diff --git a/malloc/malloc-check.c b/malloc/malloc-check.c
+index 0299fe99a7..bf0c66e598 100644
+--- a/malloc/malloc-check.c
++++ b/malloc/malloc-check.c
+@@ -318,7 +318,7 @@ realloc_check (void *oldmem, size_t bytes)
+ #if __GNUC_PREREQ (7, 0)
+   /* GCC 7 warns about magic_p may be used uninitialized.  But we never
+      reach here if magic_p is uninitialized.  */
+-  DIAG_IGNORE_NEEDS_COMMENT (7, "-Wmaybe-uninitialized");
++  DIAG_IGNORE_NEEDS_COMMENT_GCC (7, "-Wmaybe-uninitialized");
+ #endif
+   /* mem2chunk_check changed the magic byte in the old chunk.
+      If newmem is NULL, then the old chunk will still be used though,
+diff --git a/nis/nis_table.c b/nis/nis_table.c
+index 31e763130e..0effc51d7c 100644
+--- a/nis/nis_table.c
++++ b/nis/nis_table.c
+@@ -180,7 +180,7 @@ __follow_path (char **tablepath, char **tableptr, struct ib_request *ibreq,
+   /* Since tableptr is only set here, and it's set when tablepath is NULL,
+      which it is initially defined as, we know it will always be set here.  */
+   DIAG_PUSH_NEEDS_COMMENT;
+-  DIAG_IGNORE_NEEDS_COMMENT (4.7, "-Wmaybe-uninitialized");
++  DIAG_IGNORE_NEEDS_COMMENT_GCC (4.7, "-Wmaybe-uninitialized");
+ 
+   if (*tableptr == NULL)
+     return NIS_NOTFOUND;
+diff --git a/nptl/tst-thread-setspecific.c b/nptl/tst-thread-setspecific.c
+index 8f25c6f7ce..2c59469f39 100644
+--- a/nptl/tst-thread-setspecific.c
++++ b/nptl/tst-thread-setspecific.c
+@@ -19,13 +19,14 @@
+ 
+ #include <pthread.h>
+ #include <stdlib.h>
++#include <libc-diag.h>
+ 
+ /* Turn uninitialized warnings into errors to detect the problem.
+    See BZ #27714.  */
+ 
+-#pragma GCC diagnostic push
+-#pragma GCC diagnostic error "-Wmaybe-uninitialized"
+-#pragma GCC diagnostic error "-Wuninitialized"
++DIAG_PUSH_NEEDS_COMMENT;
++DIAG_IGNORE_NEEDS_COMMENT_GCC (6, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT (6, "-Wuninitialized");
+ 
+ int do_test (void)
+ {
+@@ -37,7 +38,7 @@ int do_test (void)
+   return p == q;
+ }
+ 
+-#pragma GCC diagnostic pop
++DIAG_POP_NEEDS_COMMENT;
+ 
+ #define TEST_FUNCTION do_test ()
+ #include "../test-skeleton.c"
+diff --git a/resolv/res_send.c b/resolv/res_send.c
+index 5d6be4b82d..ae8ca3bbe2 100644
+--- a/resolv/res_send.c
++++ b/resolv/res_send.c
+@@ -266,7 +266,7 @@ __res_context_send (struct resolv_context *ctx,
+ 	   Here the variable n is set to the return value of send_vc.
+ 	   See below.  */
+ 	DIAG_PUSH_NEEDS_COMMENT;
+-	DIAG_IGNORE_NEEDS_COMMENT (9, "-Wmaybe-uninitialized");
++	DIAG_IGNORE_NEEDS_COMMENT_GCC (9, "-Wmaybe-uninitialized");
+ 	int n;
+ 	DIAG_POP_NEEDS_COMMENT;
+ 
+@@ -364,7 +364,7 @@ __res_context_send (struct resolv_context *ctx,
+ 				return (-1);
+ 			/* See comment at the declaration of n.  */
+ 			DIAG_PUSH_NEEDS_COMMENT;
+-			DIAG_IGNORE_NEEDS_COMMENT (9, "-Wmaybe-uninitialized");
++			DIAG_IGNORE_NEEDS_COMMENT_GCC (9, "-Wmaybe-uninitialized");
+ 			if (n == 0 && (buf2 == NULL || *resplen2 == 0))
+ 				goto next_ns;
+ 			DIAG_POP_NEEDS_COMMENT;
+@@ -388,7 +388,7 @@ __res_context_send (struct resolv_context *ctx,
+ 
+ 		/* See comment at the declaration of n.  Note: resplen = n;  */
+ 		DIAG_PUSH_NEEDS_COMMENT;
+-		DIAG_IGNORE_NEEDS_COMMENT (9, "-Wmaybe-uninitialized");
++		DIAG_IGNORE_NEEDS_COMMENT_GCC (9, "-Wmaybe-uninitialized");
+ 		/* Mask the AD bit in both responses unless it is
+ 		   marked trusted.  */
+ 		if (resplen > HFIXEDSZ)
+@@ -575,7 +575,7 @@ send_vc(res_state statp,
+ 	   a false-positive.
+ 	 */
+ 	DIAG_PUSH_NEEDS_COMMENT;
+-	DIAG_IGNORE_NEEDS_COMMENT (5, "-Wmaybe-uninitialized");
++	DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wmaybe-uninitialized");
+ 	int resplen;
+ 	DIAG_POP_NEEDS_COMMENT;
+ 	struct iovec iov[4];
+@@ -847,7 +847,7 @@ reopen (res_state statp, int *terrno, int ns)
+ 		   the function return -1 before control flow reaches
+ 		   the call to connect with slen.  */
+ 		DIAG_PUSH_NEEDS_COMMENT;
+-		DIAG_IGNORE_Os_NEEDS_COMMENT (5, "-Wmaybe-uninitialized");
++		DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wmaybe-uninitialized");
+ 		if (__connect (EXT (statp).nssocks[ns], nsap, slen) < 0) {
+ 		DIAG_POP_NEEDS_COMMENT;
+ 			__res_iclose(statp, false);
+diff --git a/stdio-common/vfscanf-internal.c b/stdio-common/vfscanf-internal.c
+index 2ad34050f3..5247a067b1 100644
+--- a/stdio-common/vfscanf-internal.c
++++ b/stdio-common/vfscanf-internal.c
+@@ -1535,7 +1535,7 @@ __vfscanf_internal (FILE *s, const char *format, va_list argptr,
+ 			 above, but the test for "map != NULL" is done
+ 			 inside the loop here and outside the loop there.  */
+ 		      DIAG_PUSH_NEEDS_COMMENT;
+-		      DIAG_IGNORE_NEEDS_COMMENT (4.7, "-Wmaybe-uninitialized");
++		      DIAG_IGNORE_NEEDS_COMMENT_GCC (4.7, "-Wmaybe-uninitialized");
+ 
+ 		      if (__glibc_unlikely (map != NULL))
+ 			wcdigits[n] = wcdigits_extended[n];
+diff --git a/stdlib/bug-getcontext.c b/stdlib/bug-getcontext.c
+index 55c681c480..9e5e6c7e1c 100644
+--- a/stdlib/bug-getcontext.c
++++ b/stdlib/bug-getcontext.c
+@@ -56,7 +56,7 @@ do_test (void)
+      in local variables being clobbered on the second return from
+      getcontext), in fact an uninitialized use is not possible.  */
+   DIAG_PUSH_NEEDS_COMMENT;
+-  DIAG_IGNORE_NEEDS_COMMENT (5, "-Wmaybe-uninitialized");
++  DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wmaybe-uninitialized");
+   int mask = fegetexcept ();
+   if (mask != except_mask)
+     {
+diff --git a/sunrpc/clnt_udp.c b/sunrpc/clnt_udp.c
+index ee79b09b40..4353e5da18 100644
+--- a/sunrpc/clnt_udp.c
++++ b/sunrpc/clnt_udp.c
+@@ -299,7 +299,7 @@ clntudp_call (/* client handle */
+      inet/net-internal.h because in some other configurations GCC
+      gives the warning in an inline function.  */
+   DIAG_PUSH_NEEDS_COMMENT;
+-  DIAG_IGNORE_NEEDS_COMMENT (10, "-Wmaybe-uninitialized");
++  DIAG_IGNORE_NEEDS_COMMENT_GCC (10, "-Wmaybe-uninitialized");
+   struct deadline total_deadline; /* Determined once by overall timeout.  */
+   DIAG_POP_NEEDS_COMMENT;
+   struct deadline response_deadline; /* Determined anew for each query.  */
+diff --git a/sysdeps/ieee754/dbl-64/e_lgamma_r.c b/sysdeps/ieee754/dbl-64/e_lgamma_r.c
+index 5ef289e8e8..f612174577 100644
+--- a/sysdeps/ieee754/dbl-64/e_lgamma_r.c
++++ b/sysdeps/ieee754/dbl-64/e_lgamma_r.c
+@@ -304,7 +304,7 @@ __ieee754_lgamma_r(double x, int *signgamp)
+ 	   although in the cases where it is used it has always been
+ 	   set.  */
+ 	DIAG_PUSH_NEEDS_COMMENT;
+-	DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++	DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 	if(hx<0) r = nadj - r;
+ 	DIAG_POP_NEEDS_COMMENT;
+ 	return r;
+diff --git a/sysdeps/ieee754/dbl-64/k_rem_pio2.c b/sysdeps/ieee754/dbl-64/k_rem_pio2.c
+index 6e2ef5d07b..78d1ea09ad 100644
+--- a/sysdeps/ieee754/dbl-64/k_rem_pio2.c
++++ b/sysdeps/ieee754/dbl-64/k_rem_pio2.c
+@@ -337,7 +337,7 @@ recompute:
+ 	 to full precision (this function is not called for zero
+ 	 arguments).  */
+       DIAG_PUSH_NEEDS_COMMENT;
+-      DIAG_IGNORE_NEEDS_COMMENT (9, "-Wmaybe-uninitialized");
++      DIAG_IGNORE_NEEDS_COMMENT_GCC (9, "-Wmaybe-uninitialized");
+       fv = math_narrow_eval (fq[0] - fv);
+       DIAG_POP_NEEDS_COMMENT;
+       for (i = 1; i <= jz; i++)
+diff --git a/sysdeps/ieee754/flt-32/e_lgammaf_r.c b/sysdeps/ieee754/flt-32/e_lgammaf_r.c
+index a1a3a60454..77dc54eaeb 100644
+--- a/sysdeps/ieee754/flt-32/e_lgammaf_r.c
++++ b/sysdeps/ieee754/flt-32/e_lgammaf_r.c
+@@ -239,7 +239,7 @@ __ieee754_lgammaf_r(float x, int *signgamp)
+ 	   although in the cases where it is used it has always been
+ 	   set.  */
+ 	DIAG_PUSH_NEEDS_COMMENT;
+-	DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++	DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 	if(hx<0) r = nadj - r;
+ 	DIAG_POP_NEEDS_COMMENT;
+ 	return r;
+diff --git a/sysdeps/ieee754/ldbl-128/k_tanl.c b/sysdeps/ieee754/ldbl-128/k_tanl.c
+index 8e93626a89..af10fbc64b 100644
+--- a/sysdeps/ieee754/ldbl-128/k_tanl.c
++++ b/sysdeps/ieee754/ldbl-128/k_tanl.c
+@@ -143,7 +143,7 @@ __kernel_tanl (_Float128 x, _Float128 y, int iy)
+ 	 uninitialized although in the cases where it is used it has
+ 	 always been set.  */
+       DIAG_PUSH_NEEDS_COMMENT;
+-      DIAG_IGNORE_NEEDS_COMMENT (5, "-Wmaybe-uninitialized");
++      DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wmaybe-uninitialized");
+       if (sign < 0)
+ 	w = -w;
+       DIAG_POP_NEEDS_COMMENT;
+diff --git a/sysdeps/ieee754/ldbl-128ibm/k_tanl.c b/sysdeps/ieee754/ldbl-128ibm/k_tanl.c
+index cd95e46089..7a42a18e55 100644
+--- a/sysdeps/ieee754/ldbl-128ibm/k_tanl.c
++++ b/sysdeps/ieee754/ldbl-128ibm/k_tanl.c
+@@ -143,7 +143,7 @@ __kernel_tanl (long double x, long double y, int iy)
+ 	 uninitialized although in the cases where it is used it has
+ 	 always been set.  */
+       DIAG_PUSH_NEEDS_COMMENT;
+-      DIAG_IGNORE_NEEDS_COMMENT (5, "-Wmaybe-uninitialized");
++      DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wmaybe-uninitialized");
+       if (sign < 0)
+ 	w = -w;
+       DIAG_POP_NEEDS_COMMENT;
+diff --git a/sysdeps/ieee754/ldbl-96/e_lgammal_r.c b/sysdeps/ieee754/ldbl-96/e_lgammal_r.c
+index c6f0e77057..f4d6e1f814 100644
+--- a/sysdeps/ieee754/ldbl-96/e_lgammal_r.c
++++ b/sysdeps/ieee754/ldbl-96/e_lgammal_r.c
+@@ -431,7 +431,7 @@ __ieee754_lgammal_r (long double x, int *signgamp)
+      in warnings that it may be used uninitialized although in the
+      cases where it is used it has always been set.  */
+   DIAG_PUSH_NEEDS_COMMENT;
+-  DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++  DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+   if (se & 0x8000)
+     r = nadj - r;
+   DIAG_POP_NEEDS_COMMENT;
+diff --git a/sysdeps/ieee754/ldbl-96/k_tanl.c b/sysdeps/ieee754/ldbl-96/k_tanl.c
+index 43a5aa4423..462795574f 100644
+--- a/sysdeps/ieee754/ldbl-96/k_tanl.c
++++ b/sysdeps/ieee754/ldbl-96/k_tanl.c
+@@ -140,7 +140,7 @@ __kernel_tanl (long double x, long double y, int iy)
+         uninitialized although in the cases where it is used it has
+         always been set.  */
+       DIAG_PUSH_NEEDS_COMMENT;
+-      DIAG_IGNORE_NEEDS_COMMENT (4.8, "-Wmaybe-uninitialized");
++      DIAG_IGNORE_NEEDS_COMMENT_GCC (4.8, "-Wmaybe-uninitialized");
+       if (sign < 0)
+ 	w = -w;
+       DIAG_POP_NEEDS_COMMENT;
+diff --git a/sysdeps/ieee754/soft-fp/s_ddivl.c b/sysdeps/ieee754/soft-fp/s_ddivl.c
+index 2f80cca0ab..8ff222e298 100644
+--- a/sysdeps/ieee754/soft-fp/s_ddivl.c
++++ b/sysdeps/ieee754/soft-fp/s_ddivl.c
+@@ -37,7 +37,7 @@
+    versions of GCC, it may be where R is defined using a macro or it
+    may be where the macro is defined.  This happens only with -O1.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (8, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (8, "-Wmaybe-uninitialized");
+ #include <soft-fp.h>
+ #include <double.h>
+ #include <quad.h>
+diff --git a/sysdeps/ieee754/soft-fp/s_dfmal.c b/sysdeps/ieee754/soft-fp/s_dfmal.c
+index 208ad445a0..906c665426 100644
+--- a/sysdeps/ieee754/soft-fp/s_dfmal.c
++++ b/sysdeps/ieee754/soft-fp/s_dfmal.c
+@@ -37,7 +37,7 @@
+    it may be where R is defined using a macro or it may be where the
+    macro is defined.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 
+ #include <soft-fp.h>
+ #include <double.h>
+diff --git a/sysdeps/ieee754/soft-fp/s_dsqrtl.c b/sysdeps/ieee754/soft-fp/s_dsqrtl.c
+index 22c0d0cc63..8848e3076b 100644
+--- a/sysdeps/ieee754/soft-fp/s_dsqrtl.c
++++ b/sysdeps/ieee754/soft-fp/s_dsqrtl.c
+@@ -35,7 +35,7 @@
+    does not see that they are set in all cases where they are used,
+    resulting in warnings that they may be used uninitialized.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (7, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (7, "-Wmaybe-uninitialized");
+ #include <soft-fp.h>
+ #include <double.h>
+ #include <quad.h>
+diff --git a/sysdeps/ieee754/soft-fp/s_fdiv.c b/sysdeps/ieee754/soft-fp/s_fdiv.c
+index 4c4eb7cae9..1d2c9cd090 100644
+--- a/sysdeps/ieee754/soft-fp/s_fdiv.c
++++ b/sysdeps/ieee754/soft-fp/s_fdiv.c
+@@ -34,7 +34,7 @@
+    versions of GCC, it may be where R is defined using a macro or it
+    may be where the macro is defined.  This happens only with -O1.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (8, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (8, "-Wmaybe-uninitialized");
+ #include <soft-fp.h>
+ #include <single.h>
+ #include <double.h>
+diff --git a/sysdeps/ieee754/soft-fp/s_fdivl.c b/sysdeps/ieee754/soft-fp/s_fdivl.c
+index 07196ee787..9dcaf8e36c 100644
+--- a/sysdeps/ieee754/soft-fp/s_fdivl.c
++++ b/sysdeps/ieee754/soft-fp/s_fdivl.c
+@@ -33,7 +33,7 @@
+    versions of GCC, it may be where R is defined using a macro or it
+    may be where the macro is defined.  This happens only with -O1.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (8, "-Wmaybe-uninitialized");
++(8);
+ #include <soft-fp.h>
+ #include <single.h>
+ #include <quad.h>
+diff --git a/sysdeps/ieee754/soft-fp/s_ffma.c b/sysdeps/ieee754/soft-fp/s_ffma.c
+index 3f750be219..8517d53900 100644
+--- a/sysdeps/ieee754/soft-fp/s_ffma.c
++++ b/sysdeps/ieee754/soft-fp/s_ffma.c
+@@ -35,7 +35,7 @@
+    it may be where R is defined using a macro or it may be where the
+    macro is defined.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 
+ #include <soft-fp.h>
+ #include <single.h>
+diff --git a/sysdeps/ieee754/soft-fp/s_ffmal.c b/sysdeps/ieee754/soft-fp/s_ffmal.c
+index 97f4e68782..4c0a8e9321 100644
+--- a/sysdeps/ieee754/soft-fp/s_ffmal.c
++++ b/sysdeps/ieee754/soft-fp/s_ffmal.c
+@@ -33,7 +33,7 @@
+    it may be where R is defined using a macro or it may be where the
+    macro is defined.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 
+ #include <soft-fp.h>
+ #include <single.h>
+diff --git a/sysdeps/ieee754/soft-fp/s_fma.c b/sysdeps/ieee754/soft-fp/s_fma.c
+index dde16148c4..7b5b3bb08a 100644
+--- a/sysdeps/ieee754/soft-fp/s_fma.c
++++ b/sysdeps/ieee754/soft-fp/s_fma.c
+@@ -42,7 +42,7 @@
+    it may be where R is defined using a macro or it may be where the
+    macro is defined.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 
+ #include "soft-fp.h"
+ #include "double.h"
+diff --git a/sysdeps/ieee754/soft-fp/s_fmaf.c b/sysdeps/ieee754/soft-fp/s_fmaf.c
+index 5617cec0b7..1e9cb3ea42 100644
+--- a/sysdeps/ieee754/soft-fp/s_fmaf.c
++++ b/sysdeps/ieee754/soft-fp/s_fmaf.c
+@@ -37,7 +37,7 @@
+    it may be where R is defined using a macro or it may be where the
+    macro is defined.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 
+ #include "soft-fp.h"
+ #include "single.h"
+diff --git a/sysdeps/ieee754/soft-fp/s_fmal.c b/sysdeps/ieee754/soft-fp/s_fmal.c
+index 3ca60a8df7..6021af8595 100644
+--- a/sysdeps/ieee754/soft-fp/s_fmal.c
++++ b/sysdeps/ieee754/soft-fp/s_fmal.c
+@@ -40,7 +40,7 @@
+    it may be where R is defined using a macro or it may be where the
+    macro is defined.  */
+ DIAG_PUSH_NEEDS_COMMENT;
+-DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wmaybe-uninitialized");
++DIAG_IGNORE_NEEDS_COMMENT_GCC (4.9, "-Wmaybe-uninitialized");
+ 
+ #include "soft-fp.h"
+ #include "quad.h"
+-- 
+2.37.2
+

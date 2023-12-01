@@ -1,0 +1,498 @@
+commit d29fc6e7d24f9bf67512180c0be3f08526049a27
+Author: Karl Meakin <karl.meakin@arm.com>
+Date:   Thu May 12 22:16:21 2022 +0100
+
+    [AArch64] Replace `performANDSCombine` with `performFlagSettingCombine`.
+    
+    `performFlagSettingCombine` is a generalised version of `performANDSCombine` which also works on  `ADCS` and `SBCS`.
+    
+    Differential revision: https://reviews.llvm.org/D124464
+
+diff --git a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+index c10303b71b7c..a651f8a682c4 100644
+--- a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+@@ -17684,11 +17684,11 @@ static SDValue performSETCCCombine(SDNode *N, SelectionDAG &DAG) {
+   return SDValue();
+ }
+ 
+-// Combines for S forms of generic opcodes (AArch64ISD::ANDS into ISD::AND for
+-// example). NOTE: This could be used for ADDS and SUBS too, if we can find test
+-// cases.
+-static SDValue performANDSCombine(SDNode *N,
+-                                  TargetLowering::DAGCombinerInfo &DCI) {
++// Replace a flag-setting operator (eg ANDS) with the generic version
++// (eg AND) if the flag is unused.
++static SDValue performFlagSettingCombine(SDNode *N,
++                                         TargetLowering::DAGCombinerInfo &DCI,
++                                         unsigned GenericOpcode) {
+   SDLoc DL(N);
+   SDValue LHS = N->getOperand(0);
+   SDValue RHS = N->getOperand(1);
+@@ -17696,15 +17696,15 @@ static SDValue performANDSCombine(SDNode *N,
+ 
+   // If the flag result isn't used, convert back to a generic opcode.
+   if (!N->hasAnyUseOfValue(1)) {
+-    SDValue Res = DCI.DAG.getNode(ISD::AND, DL, VT, LHS, RHS);
++    SDValue Res = DCI.DAG.getNode(GenericOpcode, DL, VT, N->ops());
+     return DCI.DAG.getMergeValues({Res, DCI.DAG.getConstant(0, DL, MVT::i32)},
+                                   DL);
+   }
+ 
+   // Combine identical generic nodes into this node, re-using the result.
+-  if (SDNode *GenericAddSub =
+-          DCI.DAG.getNodeIfExists(ISD::AND, DCI.DAG.getVTList(VT), {LHS, RHS}))
+-    DCI.CombineTo(GenericAddSub, SDValue(N, 0));
++  if (SDNode *Generic = DCI.DAG.getNodeIfExists(
++          GenericOpcode, DCI.DAG.getVTList(VT), {LHS, RHS}))
++    DCI.CombineTo(Generic, SDValue(N, 0));
+ 
+   return SDValue();
+ }
+@@ -18718,12 +18718,20 @@ SDValue AArch64TargetLowering::PerformDAGCombine(SDNode *N,
+   case ISD::ADD:
+   case ISD::SUB:
+     return performAddSubCombine(N, DCI, DAG);
++  case AArch64ISD::ANDS:
++    return performFlagSettingCombine(N, DCI, ISD::AND);
+   case AArch64ISD::ADC:
+-  case AArch64ISD::ADCS:
+     return foldOverflowCheck(N, DAG, /* IsAdd */ true);
+   case AArch64ISD::SBC:
+-  case AArch64ISD::SBCS:
+     return foldOverflowCheck(N, DAG, /* IsAdd */ false);
++  case AArch64ISD::ADCS:
++    if (auto R = foldOverflowCheck(N, DAG, /* IsAdd */ true))
++      return R;
++    return performFlagSettingCombine(N, DCI, AArch64ISD::ADC);
++  case AArch64ISD::SBCS:
++    if (auto R = foldOverflowCheck(N, DAG, /* IsAdd */ false))
++      return R;
++    return performFlagSettingCombine(N, DCI, AArch64ISD::SBC);
+   case ISD::XOR:
+     return performXorCombine(N, DAG, DCI, Subtarget);
+   case ISD::MUL:
+@@ -18782,8 +18790,6 @@ SDValue AArch64TargetLowering::PerformDAGCombine(SDNode *N,
+     return performTBZCombine(N, DCI, DAG);
+   case AArch64ISD::CSEL:
+     return performCSELCombine(N, DCI, DAG);
+-  case AArch64ISD::ANDS:
+-    return performANDSCombine(N, DCI);
+   case AArch64ISD::DUP:
+     return performPostLD1Combine(N, DCI, false);
+   case AArch64ISD::NVCAST:
+diff --git a/llvm/test/CodeGen/AArch64/adc.ll b/llvm/test/CodeGen/AArch64/adc.ll
+index aa129da8db26..faa43d665d25 100644
+--- a/llvm/test/CodeGen/AArch64/adc.ll
++++ b/llvm/test/CodeGen/AArch64/adc.ll
+@@ -6,17 +6,17 @@ define i128 @test_simple(i128 %a, i128 %b, i128 %c) {
+ ; CHECK-LE-LABEL: test_simple:
+ ; CHECK-LE:       ; %bb.0:
+ ; CHECK-LE-NEXT:    adds x8, x0, x2
+-; CHECK-LE-NEXT:    adcs x9, x1, x3
++; CHECK-LE-NEXT:    adc x9, x1, x3
+ ; CHECK-LE-NEXT:    subs x0, x8, x4
+-; CHECK-LE-NEXT:    sbcs x1, x9, x5
++; CHECK-LE-NEXT:    sbc x1, x9, x5
+ ; CHECK-LE-NEXT:    ret
+ ;
+ ; CHECK-BE-LABEL: test_simple:
+ ; CHECK-BE:       // %bb.0:
+ ; CHECK-BE-NEXT:    adds x8, x1, x3
+-; CHECK-BE-NEXT:    adcs x9, x0, x2
++; CHECK-BE-NEXT:    adc x9, x0, x2
+ ; CHECK-BE-NEXT:    subs x1, x8, x5
+-; CHECK-BE-NEXT:    sbcs x0, x9, x4
++; CHECK-BE-NEXT:    sbc x0, x9, x4
+ ; CHECK-BE-NEXT:    ret
+ 
+   %valadd = add i128 %a, %b
+@@ -30,13 +30,13 @@ define i128 @test_imm(i128 %a) {
+ ; CHECK-LE-LABEL: test_imm:
+ ; CHECK-LE:       ; %bb.0:
+ ; CHECK-LE-NEXT:    adds x0, x0, #12
+-; CHECK-LE-NEXT:    adcs x1, x1, xzr
++; CHECK-LE-NEXT:    adc x1, x1, xzr
+ ; CHECK-LE-NEXT:    ret
+ ;
+ ; CHECK-BE-LABEL: test_imm:
+ ; CHECK-BE:       // %bb.0:
+ ; CHECK-BE-NEXT:    adds x1, x1, #12
+-; CHECK-BE-NEXT:    adcs x0, x0, xzr
++; CHECK-BE-NEXT:    adc x0, x0, xzr
+ ; CHECK-BE-NEXT:    ret
+ 
+   %val = add i128 %a, 12
+@@ -49,14 +49,14 @@ define i128 @test_shifted(i128 %a, i128 %b) {
+ ; CHECK-LE:       ; %bb.0:
+ ; CHECK-LE-NEXT:    extr x8, x3, x2, #19
+ ; CHECK-LE-NEXT:    adds x0, x0, x2, lsl #45
+-; CHECK-LE-NEXT:    adcs x1, x1, x8
++; CHECK-LE-NEXT:    adc x1, x1, x8
+ ; CHECK-LE-NEXT:    ret
+ ;
+ ; CHECK-BE-LABEL: test_shifted:
+ ; CHECK-BE:       // %bb.0:
+ ; CHECK-BE-NEXT:    extr x8, x2, x3, #19
+ ; CHECK-BE-NEXT:    adds x1, x1, x3, lsl #45
+-; CHECK-BE-NEXT:    adcs x0, x0, x8
++; CHECK-BE-NEXT:    adc x0, x0, x8
+ ; CHECK-BE-NEXT:    ret
+ 
+   %rhs = shl i128 %b, 45
+@@ -74,7 +74,7 @@ define i128 @test_extended(i128 %a, i16 %b) {
+ ; CHECK-LE-NEXT:    adds x0, x0, w2, sxth #3
+ ; CHECK-LE-NEXT:    asr x9, x8, #63
+ ; CHECK-LE-NEXT:    extr x8, x9, x8, #61
+-; CHECK-LE-NEXT:    adcs x1, x1, x8
++; CHECK-LE-NEXT:    adc x1, x1, x8
+ ; CHECK-LE-NEXT:    ret
+ ;
+ ; CHECK-BE-LABEL: test_extended:
+@@ -84,7 +84,7 @@ define i128 @test_extended(i128 %a, i16 %b) {
+ ; CHECK-BE-NEXT:    adds x1, x1, w2, sxth #3
+ ; CHECK-BE-NEXT:    asr x9, x8, #63
+ ; CHECK-BE-NEXT:    extr x8, x9, x8, #61
+-; CHECK-BE-NEXT:    adcs x0, x0, x8
++; CHECK-BE-NEXT:    adc x0, x0, x8
+ ; CHECK-BE-NEXT:    ret
+ 
+   %ext = sext i16 %b to i128
+diff --git a/llvm/test/CodeGen/AArch64/addcarry-crash.ll b/llvm/test/CodeGen/AArch64/addcarry-crash.ll
+index 4830281cda13..be48fb79e704 100644
+--- a/llvm/test/CodeGen/AArch64/addcarry-crash.ll
++++ b/llvm/test/CodeGen/AArch64/addcarry-crash.ll
+@@ -9,7 +9,7 @@ define i64 @foo(i64* nocapture readonly %ptr, i64 %a, i64 %b, i64 %c) local_unna
+ ; CHECK-NEXT:    lsr x9, x1, #32
+ ; CHECK-NEXT:    cmn x3, x2
+ ; CHECK-NEXT:    mul x8, x8, x9
+-; CHECK-NEXT:    adcs x0, x8, xzr
++; CHECK-NEXT:    adc x0, x8, xzr
+ ; CHECK-NEXT:    ret
+ entry:
+   %0 = lshr i64 %a, 32
+diff --git a/llvm/test/CodeGen/AArch64/arm64-atomic-128.ll b/llvm/test/CodeGen/AArch64/arm64-atomic-128.ll
+index 2f8d06e13355..b00dad42d455 100644
+--- a/llvm/test/CodeGen/AArch64/arm64-atomic-128.ll
++++ b/llvm/test/CodeGen/AArch64/arm64-atomic-128.ll
+@@ -260,7 +260,7 @@ define void @fetch_and_add(i128* %p, i128 %bits) {
+ ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    ldaxp x9, x8, [x0]
+ ; CHECK-NEXT:    adds x10, x9, x2
+-; CHECK-NEXT:    adcs x11, x8, x3
++; CHECK-NEXT:    adc x11, x8, x3
+ ; CHECK-NEXT:    stlxp w12, x10, x11, [x0]
+ ; CHECK-NEXT:    cbnz w12, .LBB6_1
+ ; CHECK-NEXT:  // %bb.2: // %atomicrmw.end
+@@ -281,7 +281,7 @@ define void @fetch_and_sub(i128* %p, i128 %bits) {
+ ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    ldaxp x9, x8, [x0]
+ ; CHECK-NEXT:    subs x10, x9, x2
+-; CHECK-NEXT:    sbcs x11, x8, x3
++; CHECK-NEXT:    sbc x11, x8, x3
+ ; CHECK-NEXT:    stlxp w12, x10, x11, [x0]
+ ; CHECK-NEXT:    cbnz w12, .LBB7_1
+ ; CHECK-NEXT:  // %bb.2: // %atomicrmw.end
+diff --git a/llvm/test/CodeGen/AArch64/arm64-vabs.ll b/llvm/test/CodeGen/AArch64/arm64-vabs.ll
+index ef0d3ffc9405..cbe9dea42e14 100644
+--- a/llvm/test/CodeGen/AArch64/arm64-vabs.ll
++++ b/llvm/test/CodeGen/AArch64/arm64-vabs.ll
+@@ -1748,28 +1748,28 @@ define <2 x i64> @uabd_i32(<2 x i32> %a, <2 x i32> %b) {
+ define <2 x i128> @uabd_i64(<2 x i64> %a, <2 x i64> %b) {
+ ; CHECK-LABEL: uabd_i64:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    fmov x9, d0
+-; CHECK-NEXT:    fmov x11, d1
+ ; CHECK-NEXT:    mov.d x8, v0[1]
++; CHECK-NEXT:    fmov x9, d0
+ ; CHECK-NEXT:    mov.d x10, v1[1]
++; CHECK-NEXT:    fmov x11, d1
+ ; CHECK-NEXT:    asr x12, x9, #63
+ ; CHECK-NEXT:    asr x13, x11, #63
+ ; CHECK-NEXT:    subs x9, x9, x11
+-; CHECK-NEXT:    sbcs x11, x12, x13
++; CHECK-NEXT:    sbc x11, x12, x13
+ ; CHECK-NEXT:    asr x12, x8, #63
+ ; CHECK-NEXT:    asr x13, x10, #63
+ ; CHECK-NEXT:    subs x8, x8, x10
+-; CHECK-NEXT:    sbcs x10, x12, x13
+-; CHECK-NEXT:    asr x13, x11, #63
+-; CHECK-NEXT:    asr x12, x10, #63
+-; CHECK-NEXT:    eor x8, x8, x12
+-; CHECK-NEXT:    eor x10, x10, x12
+-; CHECK-NEXT:    subs x2, x8, x12
+-; CHECK-NEXT:    eor x8, x9, x13
+-; CHECK-NEXT:    sbcs x3, x10, x12
+-; CHECK-NEXT:    eor x9, x11, x13
+-; CHECK-NEXT:    subs x8, x8, x13
+-; CHECK-NEXT:    sbcs x1, x9, x13
++; CHECK-NEXT:    sbc x10, x12, x13
++; CHECK-NEXT:    asr x12, x11, #63
++; CHECK-NEXT:    asr x13, x10, #63
++; CHECK-NEXT:    eor x9, x9, x12
++; CHECK-NEXT:    eor x8, x8, x13
++; CHECK-NEXT:    eor x10, x10, x13
++; CHECK-NEXT:    subs x2, x8, x13
++; CHECK-NEXT:    sbc x3, x10, x13
++; CHECK-NEXT:    subs x8, x9, x12
++; CHECK-NEXT:    eor x9, x11, x12
++; CHECK-NEXT:    sbc x1, x9, x12
+ ; CHECK-NEXT:    fmov d0, x8
+ ; CHECK-NEXT:    mov.d v0[1], x1
+ ; CHECK-NEXT:    fmov x0, d0
+diff --git a/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll b/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll
+index 06be6209f023..71a4ed000c7e 100644
+--- a/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll
++++ b/llvm/test/CodeGen/AArch64/atomicrmw-O0.ll
+@@ -220,7 +220,7 @@ define i128 @test_rmw_add_128(i128* %dst)   {
+ ; NOLSE-NEXT:    ldr x13, [sp, #24] // 8-byte Folded Reload
+ ; NOLSE-NEXT:    adds x14, x8, #1
+ ; NOLSE-NEXT:    mov x9, xzr
+-; NOLSE-NEXT:    adcs x15, x11, x9
++; NOLSE-NEXT:    adc x15, x11, x9
+ ; NOLSE-NEXT:  .LBB4_2: // %atomicrmw.start
+ ; NOLSE-NEXT:    // Parent Loop BB4_1 Depth=1
+ ; NOLSE-NEXT:    // => This Inner Loop Header: Depth=2
+@@ -273,7 +273,7 @@ define i128 @test_rmw_add_128(i128* %dst)   {
+ ; LSE-NEXT:    ldr x9, [sp, #56] // 8-byte Folded Reload
+ ; LSE-NEXT:    adds x2, x8, #1
+ ; LSE-NEXT:    mov x11, xzr
+-; LSE-NEXT:    adcs x11, x10, x11
++; LSE-NEXT:    adc x11, x10, x11
+ ; LSE-NEXT:    // kill: def $x2 killed $x2 def $x2_x3
+ ; LSE-NEXT:    mov x3, x11
+ ; LSE-NEXT:    mov x0, x8
+diff --git a/llvm/test/CodeGen/AArch64/i128-math.ll b/llvm/test/CodeGen/AArch64/i128-math.ll
+index 4dfdab71a18e..7ac419621382 100644
+--- a/llvm/test/CodeGen/AArch64/i128-math.ll
++++ b/llvm/test/CodeGen/AArch64/i128-math.ll
+@@ -23,7 +23,7 @@ define i128 @u128_add(i128 %x, i128 %y) {
+ ; CHECK-LABEL: u128_add:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    adds x0, x0, x2
+-; CHECK-NEXT:    adcs x1, x1, x3
++; CHECK-NEXT:    adc x1, x1, x3
+ ; CHECK-NEXT:    ret
+   %1 = add i128 %x, %y
+   ret i128 %1
+@@ -81,7 +81,7 @@ define i128 @u128_sub(i128 %x, i128 %y) {
+ ; CHECK-LABEL: u128_sub:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    subs x0, x0, x2
+-; CHECK-NEXT:    sbcs x1, x1, x3
++; CHECK-NEXT:    sbc x1, x1, x3
+ ; CHECK-NEXT:    ret
+   %1 = sub i128 %x, %y
+   ret i128 %1
+@@ -139,7 +139,7 @@ define i128 @i128_add(i128 %x, i128 %y) {
+ ; CHECK-LABEL: i128_add:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    adds x0, x0, x2
+-; CHECK-NEXT:    adcs x1, x1, x3
++; CHECK-NEXT:    adc x1, x1, x3
+ ; CHECK-NEXT:    ret
+   %1 = add i128 %x, %y
+   ret i128 %1
+@@ -199,7 +199,7 @@ define i128 @i128_sub(i128 %x, i128 %y) {
+ ; CHECK-LABEL: i128_sub:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    subs x0, x0, x2
+-; CHECK-NEXT:    sbcs x1, x1, x3
++; CHECK-NEXT:    sbc x1, x1, x3
+ ; CHECK-NEXT:    ret
+   %1 = sub i128 %x, %y
+   ret i128 %1
+diff --git a/llvm/test/CodeGen/AArch64/i256-math.ll b/llvm/test/CodeGen/AArch64/i256-math.ll
+index 6e5afb4dc311..9d8ae7b3fc09 100644
+--- a/llvm/test/CodeGen/AArch64/i256-math.ll
++++ b/llvm/test/CodeGen/AArch64/i256-math.ll
+@@ -19,7 +19,7 @@ define i256 @u256_add(i256 %x, i256 %y) {
+ ; CHECK-NEXT:    adds x0, x0, x4
+ ; CHECK-NEXT:    adcs x1, x1, x5
+ ; CHECK-NEXT:    adcs x2, x2, x6
+-; CHECK-NEXT:    adcs x3, x3, x7
++; CHECK-NEXT:    adc x3, x3, x7
+ ; CHECK-NEXT:    ret
+   %1 = add i256 %x, %y
+   ret i256 %1
+@@ -87,7 +87,7 @@ define i256 @u256_sub(i256 %x, i256 %y) {
+ ; CHECK-NEXT:    subs x0, x0, x4
+ ; CHECK-NEXT:    sbcs x1, x1, x5
+ ; CHECK-NEXT:    sbcs x2, x2, x6
+-; CHECK-NEXT:    sbcs x3, x3, x7
++; CHECK-NEXT:    sbc x3, x3, x7
+ ; CHECK-NEXT:    ret
+   %1 = sub i256 %x, %y
+   ret i256 %1
+@@ -163,7 +163,7 @@ define i256 @i256_add(i256 %x, i256 %y) {
+ ; CHECK-NEXT:    adds x0, x0, x4
+ ; CHECK-NEXT:    adcs x1, x1, x5
+ ; CHECK-NEXT:    adcs x2, x2, x6
+-; CHECK-NEXT:    adcs x3, x3, x7
++; CHECK-NEXT:    adc x3, x3, x7
+ ; CHECK-NEXT:    ret
+   %1 = add i256 %x, %y
+   ret i256 %1
+@@ -233,7 +233,7 @@ define i256 @i256_sub(i256 %x, i256 %y) {
+ ; CHECK-NEXT:    subs x0, x0, x4
+ ; CHECK-NEXT:    sbcs x1, x1, x5
+ ; CHECK-NEXT:    sbcs x2, x2, x6
+-; CHECK-NEXT:    sbcs x3, x3, x7
++; CHECK-NEXT:    sbc x3, x3, x7
+ ; CHECK-NEXT:    ret
+   %1 = sub i256 %x, %y
+   ret i256 %1
+diff --git a/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll b/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll
+index 368246dbb242..f095ee8a4abe 100644
+--- a/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll
++++ b/llvm/test/CodeGen/AArch64/icmp-shift-opt.ll
+@@ -11,7 +11,7 @@ define i128 @opt_setcc_lt_power_of_2(i128 %a) nounwind {
+ ; CHECK-NEXT:  .LBB0_1: // %loop
+ ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    adds x0, x0, #1
+-; CHECK-NEXT:    adcs x1, x1, xzr
++; CHECK-NEXT:    adc x1, x1, xzr
+ ; CHECK-NEXT:    orr x8, x1, x0, lsr #60
+ ; CHECK-NEXT:    cbnz x8, .LBB0_1
+ ; CHECK-NEXT:  // %bb.2: // %exit
+diff --git a/llvm/test/CodeGen/AArch64/neg-abs.ll b/llvm/test/CodeGen/AArch64/neg-abs.ll
+index 12c76fe20ab2..9be0d1a123eb 100644
+--- a/llvm/test/CodeGen/AArch64/neg-abs.ll
++++ b/llvm/test/CodeGen/AArch64/neg-abs.ll
+@@ -52,7 +52,7 @@ define i128 @neg_abs128(i128 %x) {
+ ; CHECK-NEXT:    eor x9, x0, x8
+ ; CHECK-NEXT:    eor x10, x1, x8
+ ; CHECK-NEXT:    subs x0, x8, x9
+-; CHECK-NEXT:    sbcs x1, x8, x10
++; CHECK-NEXT:    sbc x1, x8, x10
+ ; CHECK-NEXT:    ret
+   %abs = tail call i128 @llvm.abs.i128(i128 %x, i1 true)
+   %neg = sub nsw i128 0, %abs
+@@ -99,7 +99,7 @@ define i128 @abs128(i128 %x) {
+ ; CHECK-NEXT:    eor x9, x0, x8
+ ; CHECK-NEXT:    eor x10, x1, x8
+ ; CHECK-NEXT:    subs x0, x9, x8
+-; CHECK-NEXT:    sbcs x1, x10, x8
++; CHECK-NEXT:    sbc x1, x10, x8
+ ; CHECK-NEXT:    ret
+   %abs = tail call i128 @llvm.abs.i128(i128 %x, i1 true)
+   ret i128 %abs
+diff --git a/llvm/test/CodeGen/AArch64/neon-abd.ll b/llvm/test/CodeGen/AArch64/neon-abd.ll
+index 3782f98113ea..92d1d734fae5 100644
+--- a/llvm/test/CodeGen/AArch64/neon-abd.ll
++++ b/llvm/test/CodeGen/AArch64/neon-abd.ll
+@@ -147,23 +147,23 @@ define <2 x i64> @sabd_2d(<2 x i64> %a, <2 x i64> %b) #0 {
+ ; CHECK-NEXT:    mov x8, v0.d[1]
+ ; CHECK-NEXT:    fmov x10, d0
+ ; CHECK-NEXT:    mov x9, v1.d[1]
+-; CHECK-NEXT:    asr x11, x10, #63
+-; CHECK-NEXT:    asr x12, x8, #63
+-; CHECK-NEXT:    asr x13, x9, #63
++; CHECK-NEXT:    fmov x11, d1
++; CHECK-NEXT:    asr x12, x10, #63
++; CHECK-NEXT:    asr x14, x8, #63
++; CHECK-NEXT:    asr x15, x9, #63
+ ; CHECK-NEXT:    subs x8, x8, x9
+-; CHECK-NEXT:    fmov x9, d1
+-; CHECK-NEXT:    sbcs x12, x12, x13
+-; CHECK-NEXT:    asr x13, x9, #63
+-; CHECK-NEXT:    subs x9, x10, x9
+-; CHECK-NEXT:    sbcs x10, x11, x13
+-; CHECK-NEXT:    asr x11, x12, #63
+-; CHECK-NEXT:    asr x10, x10, #63
+-; CHECK-NEXT:    eor x8, x8, x11
+-; CHECK-NEXT:    eor x9, x9, x10
+-; CHECK-NEXT:    sub x8, x8, x11
+-; CHECK-NEXT:    sub x9, x9, x10
++; CHECK-NEXT:    asr x13, x11, #63
++; CHECK-NEXT:    sbc x9, x14, x15
++; CHECK-NEXT:    subs x10, x10, x11
++; CHECK-NEXT:    asr x9, x9, #63
++; CHECK-NEXT:    sbc x11, x12, x13
++; CHECK-NEXT:    eor x8, x8, x9
++; CHECK-NEXT:    asr x11, x11, #63
++; CHECK-NEXT:    sub x8, x8, x9
++; CHECK-NEXT:    eor x10, x10, x11
++; CHECK-NEXT:    sub x10, x10, x11
+ ; CHECK-NEXT:    fmov d1, x8
+-; CHECK-NEXT:    fmov d0, x9
++; CHECK-NEXT:    fmov d0, x10
+ ; CHECK-NEXT:    mov v0.d[1], v1.d[0]
+ ; CHECK-NEXT:    ret
+   %a.sext = sext <2 x i64> %a to <2 x i128>
+@@ -327,19 +327,19 @@ define <2 x i64> @uabd_2d(<2 x i64> %a, <2 x i64> %b) #0 {
+ ; CHECK-NEXT:    mov x8, v0.d[1]
+ ; CHECK-NEXT:    fmov x10, d0
+ ; CHECK-NEXT:    mov x9, v1.d[1]
++; CHECK-NEXT:    fmov x11, d1
+ ; CHECK-NEXT:    subs x8, x8, x9
+-; CHECK-NEXT:    fmov x9, d1
+-; CHECK-NEXT:    ngcs x11, xzr
++; CHECK-NEXT:    ngc x9, xzr
++; CHECK-NEXT:    subs x10, x10, x11
++; CHECK-NEXT:    ngc x11, xzr
++; CHECK-NEXT:    asr x9, x9, #63
+ ; CHECK-NEXT:    asr x11, x11, #63
+-; CHECK-NEXT:    subs x9, x10, x9
+-; CHECK-NEXT:    eor x8, x8, x11
+-; CHECK-NEXT:    ngcs x10, xzr
+-; CHECK-NEXT:    sub x8, x8, x11
+-; CHECK-NEXT:    asr x10, x10, #63
+-; CHECK-NEXT:    eor x9, x9, x10
+-; CHECK-NEXT:    sub x9, x9, x10
++; CHECK-NEXT:    eor x8, x8, x9
++; CHECK-NEXT:    eor x10, x10, x11
++; CHECK-NEXT:    sub x8, x8, x9
++; CHECK-NEXT:    sub x10, x10, x11
+ ; CHECK-NEXT:    fmov d1, x8
+-; CHECK-NEXT:    fmov d0, x9
++; CHECK-NEXT:    fmov d0, x10
+ ; CHECK-NEXT:    mov v0.d[1], v1.d[0]
+ ; CHECK-NEXT:    ret
+   %a.zext = zext <2 x i64> %a to <2 x i128>
+diff --git a/llvm/test/CodeGen/AArch64/nzcv-save.ll b/llvm/test/CodeGen/AArch64/nzcv-save.ll
+index 9f7b3d3fa42c..ddb1d3219f78 100644
+--- a/llvm/test/CodeGen/AArch64/nzcv-save.ll
++++ b/llvm/test/CodeGen/AArch64/nzcv-save.ll
+@@ -8,20 +8,18 @@ define void @f(i256* nocapture %a, i256* nocapture %b, i256* nocapture %cc, i256
+ ; CHECK:       // %bb.0: // %entry
+ ; CHECK-NEXT:    ldp x9, x8, [x2]
+ ; CHECK-NEXT:    ldp x11, x10, [x3]
++; CHECK-NEXT:    ldp x13, x12, [x2, #16]
++; CHECK-NEXT:    ldp x14, x15, [x3, #16]
+ ; CHECK-NEXT:    adds x9, x9, x11
+-; CHECK-NEXT:    ldp x12, x11, [x2, #16]
+ ; CHECK-NEXT:    adcs x8, x8, x10
+-; CHECK-NEXT:    ldp x13, x10, [x3, #16]
+-; CHECK-NEXT:    adcs x12, x12, x13
+-; CHECK-NEXT:    mrs x13, NZCV
+-; CHECK-NEXT:    adcs x14, x11, x10
+-; CHECK-NEXT:    orr x11, x11, #0x100
+-; CHECK-NEXT:    msr NZCV, x13
++; CHECK-NEXT:    adcs x10, x13, x14
++; CHECK-NEXT:    adc x11, x12, x15
++; CHECK-NEXT:    orr x12, x12, #0x100
++; CHECK-NEXT:    adc x12, x12, x15
+ ; CHECK-NEXT:    stp x9, x8, [x0]
+-; CHECK-NEXT:    adcs x10, x11, x10
+-; CHECK-NEXT:    stp x12, x14, [x0, #16]
++; CHECK-NEXT:    stp x10, x11, [x0, #16]
++; CHECK-NEXT:    stp x10, x12, [x1, #16]
+ ; CHECK-NEXT:    stp x9, x8, [x1]
+-; CHECK-NEXT:    stp x12, x10, [x1, #16]
+ ; CHECK-NEXT:    ret
+ entry:
+   %c = load i256, i256* %cc
+diff --git a/llvm/test/CodeGen/AArch64/vecreduce-add-legalization.ll b/llvm/test/CodeGen/AArch64/vecreduce-add-legalization.ll
+index 36ec218e4e20..bd3543f75e5e 100644
+--- a/llvm/test/CodeGen/AArch64/vecreduce-add-legalization.ll
++++ b/llvm/test/CodeGen/AArch64/vecreduce-add-legalization.ll
+@@ -149,7 +149,7 @@ define i128 @test_v2i128(<2 x i128> %a) nounwind {
+ ; CHECK-LABEL: test_v2i128:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    adds x0, x0, x2
+-; CHECK-NEXT:    adcs x1, x1, x3
++; CHECK-NEXT:    adc x1, x1, x3
+ ; CHECK-NEXT:    ret
+   %b = call i128 @llvm.vector.reduce.add.v2i128(<2 x i128> %a)
+   ret i128 %b

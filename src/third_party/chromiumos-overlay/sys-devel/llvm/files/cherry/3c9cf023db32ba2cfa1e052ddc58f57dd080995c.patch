@@ -1,0 +1,43 @@
+From a427b06addb8c6cb0b52fadf62f3df1da0afe787 Mon Sep 17 00:00:00 2001
+From: Nikita Popov <npopov@redhat.com>
+Date: Mon, 5 Jun 2023 17:23:07 +0200
+Subject: [PATCH] Revert "[LCSSA] Don't invalidate SCEV"
+
+This reverts commit 5cbb9f7a58d98ba432c6ddeefa581f6fc521315c.
+
+Causes verifier error reported at
+https://reviews.llvm.org/D149331#4387931.
+
+Change-Id: I33fdfa378023cbe419ef3065cbf568c1134f60ac
+---
+ llvm/lib/Transforms/Utils/LCSSA.cpp | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/llvm/lib/Transforms/Utils/LCSSA.cpp b/llvm/lib/Transforms/Utils/LCSSA.cpp
+index e20ae9548fa4..743c6667dbcc 100644
+--- a/llvm/lib/Transforms/Utils/LCSSA.cpp
++++ b/llvm/lib/Transforms/Utils/LCSSA.cpp
+@@ -77,7 +77,7 @@ static bool isExitBlock(BasicBlock *BB,
+ /// rewrite the uses.
+ bool llvm::formLCSSAForInstructions(SmallVectorImpl<Instruction *> &Worklist,
+                                     const DominatorTree &DT, const LoopInfo &LI,
+-                                    ScalarEvolution *Se, IRBuilderBase &Builder,
++                                    ScalarEvolution *SE, IRBuilderBase &Builder,
+                                     SmallVectorImpl<PHINode *> *PHIsToRemove) {
+   SmallVector<Use *, 16> UsesToRewrite;
+   SmallSetVector<PHINode *, 16> LocalPHIsToRemove;
+@@ -150,6 +150,11 @@ bool llvm::formLCSSAForInstructions(SmallVectorImpl<Instruction *> &Worklist,
+     SSAUpdater SSAUpdate(&InsertedPHIs);
+     SSAUpdate.Initialize(I->getType(), I->getName());
+ 
++    // Force re-computation of I, as some users now need to use the new PHI
++    // node.
++    if (SE)
++      SE->forgetValue(I);
++
+     // Insert the LCSSA phi's into all of the exit blocks dominated by the
+     // value, and add them to the Phi's map.
+     for (BasicBlock *ExitBB : ExitBlocks) {
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

@@ -1,0 +1,158 @@
+This patch applies the changes from
+https://android-review.googlesource.com/c/toolchain/gdb/+/676496, to add
+support for SHT_RELR sections. It does not contain the common.h changes
+from that patch, as they are added in the gdb-9.2-sht_relr.patch (in this
+directory).
+
+This patch was copied/created by Caroline Tice (cmtice@chromium.org)
+Date: 26-Jan-2021
+diff --git a/bfd/elf.c b/bfd/elf.c
+index 1aa2603..e5e5fbf 100644
+--- a/bfd/elf.c
++++ b/bfd/elf.c
+@@ -1761,6 +1761,9 @@ _bfd_elf_print_private_bfd_data (bfd *abfd, void *farg)
+ 	    case DT_RELA: name = "RELA"; break;
+ 	    case DT_RELASZ: name = "RELASZ"; break;
+ 	    case DT_RELAENT: name = "RELAENT"; break;
++	    case DT_RELR: name = "RELR"; break;
++	    case DT_RELRSZ: name = "RELRSZ"; break;
++	    case DT_RELRENT: name = "RELRENT"; break;
+ 	    case DT_STRSZ: name = "STRSZ"; break;
+ 	    case DT_SYMENT: name = "SYMENT"; break;
+ 	    case DT_INIT: name = "INIT"; break;
+@@ -1798,6 +1801,7 @@ _bfd_elf_print_private_bfd_data (bfd *abfd, void *farg)
+ 	    case DT_PLTPAD: name = "PLTPAD"; break;
+ 	    case DT_MOVETAB: name = "MOVETAB"; break;
+ 	    case DT_SYMINFO: name = "SYMINFO"; break;
++	    case DT_RELRCOUNT: name = "RELRCOUNT"; break;
+ 	    case DT_RELACOUNT: name = "RELACOUNT"; break;
+ 	    case DT_RELCOUNT: name = "RELCOUNT"; break;
+ 	    case DT_FLAGS_1: name = "FLAGS_1"; break;
+@@ -2364,16 +2368,30 @@ bfd_section_from_shdr (bfd *abfd, unsigned int shindex)
+ 
+     case SHT_REL:
+     case SHT_RELA:
++    case SHT_RELR:
+       /* *These* do a lot of work -- but build no sections!  */
+       {
+ 	asection *target_sect;
+ 	Elf_Internal_Shdr *hdr2, **p_hdr;
+ 	unsigned int num_sec = elf_numsections (abfd);
+ 	struct bfd_elf_section_data *esdt;
++	bfd_size_type size;
+ 
+-	if (hdr->sh_entsize
+-	    != (bfd_size_type) (hdr->sh_type == SHT_REL
+-				? bed->s->sizeof_rel : bed->s->sizeof_rela))
++	switch (hdr->sh_type)
++	{
++        case SHT_REL:
++	  size = bed->s->sizeof_rel;
++	  break;
++        case SHT_RELA:
++	  size = bed->s->sizeof_rela;
++	  break;
++        case SHT_RELR:
++	  size = bed->s->sizeof_relr;
++	  break;
++        default:
++	  goto fail;
++        }
++	if (hdr->sh_entsize  != size)
+ 	  goto fail;
+ 
+ 	/* Check for a bogus link to avoid crashing.  */
+@@ -2443,7 +2461,8 @@ bfd_section_from_shdr (bfd *abfd, unsigned int shindex)
+ 	    || hdr->sh_info == SHN_UNDEF
+ 	    || hdr->sh_info >= num_sec
+ 	    || elf_elfsections (abfd)[hdr->sh_info]->sh_type == SHT_REL
+-	    || elf_elfsections (abfd)[hdr->sh_info]->sh_type == SHT_RELA)
++	    || elf_elfsections (abfd)[hdr->sh_info]->sh_type == SHT_RELA
++	    || elf_elfsections (abfd)[hdr->sh_info]->sh_type == SHT_RELR)
+ 	  {
+ 	    ret = _bfd_elf_make_section_from_shdr (abfd, hdr, name,
+ 						   shindex);
+diff --git a/bfd/elf-bfd.h b/bfd/elf-bfd.h
+index 6cfd1ac..78d2d74 100644
+--- a/bfd/elf-bfd.h
++++ b/bfd/elf-bfd.h
+@@ -696,7 +696,8 @@ struct sym_cache
+ 
+ struct elf_size_info {
+   unsigned char sizeof_ehdr, sizeof_phdr, sizeof_shdr;
+-  unsigned char sizeof_rel, sizeof_rela, sizeof_sym, sizeof_dyn, sizeof_note;
++  unsigned char sizeof_rel, sizeof_rela, sizeof_relr, sizeof_sym, sizeof_dyn,
++    sizeof_note;
+ 
+   /* The size of entries in the .hash section.  */
+   unsigned char sizeof_hash_entry;
+diff --git a/bfd/elf32-arm.c b/bfd/elf32-arm.c
+index ebe199c..1e0d2d7 100644
+--- a/bfd/elf32-arm.c
++++ b/bfd/elf32-arm.c
+@@ -20008,6 +20008,7 @@ const struct elf_size_info elf32_arm_size_info =
+   sizeof (Elf32_External_Shdr),
+   sizeof (Elf32_External_Rel),
+   sizeof (Elf32_External_Rela),
++  sizeof (Elf32_External_Relr),
+   sizeof (Elf32_External_Sym),
+   sizeof (Elf32_External_Dyn),
+   sizeof (Elf_External_Note),
+diff --git a/bfd/elfcode.h b/bfd/elfcode.h
+index 625ae99..8cef7d1 100644
+--- a/bfd/elfcode.h
++++ b/bfd/elfcode.h
+@@ -80,6 +80,7 @@
+ #define Elf_External_Phdr	NAME(Elf,External_Phdr)
+ #define Elf_External_Rel	NAME(Elf,External_Rel)
+ #define Elf_External_Rela	NAME(Elf,External_Rela)
++#define Elf_External_Relr	NAME(Elf,External_Relr)
+ #define Elf_External_Dyn	NAME(Elf,External_Dyn)
+ 
+ #define elf_core_file_failing_command	NAME(bfd_elf,core_file_failing_command)
+@@ -1917,6 +1918,7 @@ const struct elf_size_info NAME(_bfd_elf,size_info) = {
+   sizeof (Elf_External_Shdr),
+   sizeof (Elf_External_Rel),
+   sizeof (Elf_External_Rela),
++  sizeof (Elf_External_Relr),
+   sizeof (Elf_External_Sym),
+   sizeof (Elf_External_Dyn),
+   sizeof (Elf_External_Note),
+diff --git a/bfd/elfnn-aarch64.c b/bfd/elfnn-aarch64.c
+index 51d7526..251362c 100644
+--- a/bfd/elfnn-aarch64.c
++++ b/bfd/elfnn-aarch64.c
+@@ -9984,6 +9984,7 @@ const struct elf_size_info elfNN_aarch64_size_info =
+   sizeof (ElfNN_External_Shdr),
+   sizeof (ElfNN_External_Rel),
+   sizeof (ElfNN_External_Rela),
++  sizeof (ElfNN_External_Relr),
+   sizeof (ElfNN_External_Sym),
+   sizeof (ElfNN_External_Dyn),
+   sizeof (Elf_External_Note),
+diff --git a/include/elf/external.h b/include/elf/external.h
+index 73e3cbf..9d67981 100644
+--- a/include/elf/external.h
++++ b/include/elf/external.h
+@@ -211,6 +211,10 @@ typedef struct {
+   unsigned char	r_addend[4];	/* Constant addend used to compute value */
+ } Elf32_External_Rela;
+ 
++typedef struct {
++  unsigned char r_data[4];	/* jump and bitmap for relative relocations */
++} Elf32_External_Relr;
++
+ typedef struct {
+   unsigned char r_offset[8];	/* Location at which to apply the action */
+   unsigned char	r_info[8];	/* index and type of relocation */
+@@ -222,6 +226,10 @@ typedef struct {
+   unsigned char	r_addend[8];	/* Constant addend used to compute value */
+ } Elf64_External_Rela;
+ 
++typedef struct {
++  unsigned char r_data[8];	/* jump and bitmap for relative relocations */
++} Elf64_External_Relr;
++
+ /* dynamic section structure */
+ 
+ typedef struct {

@@ -1,0 +1,16 @@
+On arm devices the server runs as a 32-bit executable and has no way to pass a
+a 64-bit time value to the kernel.  Mark these tests as TODO so that the test
+framework doesn't consider a failure to be an error.
+
+diff --git a/tests/utimensat/09.t b/tests/utimensat/09.t
+index ec7acbe..a3500b9 100644
+--- a/tests/utimensat/09.t
++++ b/tests/utimensat/09.t
+@@ -25,7 +25,9 @@ cd ${n1}
+
+ create_file regular ${n0}
+ expect 0 open . O_RDONLY : utimensat 0 ${n0} $DATE1 0 $DATE2 0 0
++todo Linux "Fix 2038 problem before 2038"
+ expect $DATE1 lstat ${n0} atime
++todo Linux "Fix 2038 problem before 2038"
+ expect $DATE2 lstat ${n0} mtime

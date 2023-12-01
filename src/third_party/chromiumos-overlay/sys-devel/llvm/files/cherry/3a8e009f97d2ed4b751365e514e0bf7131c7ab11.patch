@@ -1,0 +1,2349 @@
+From 3a8e009f97d2ed4b751365e514e0bf7131c7ab11 Mon Sep 17 00:00:00 2001
+From: Roman Lebedev <lebedev.ri@gmail.com>
+Date: Tue, 20 Dec 2022 18:25:37 +0300
+Subject: [PATCH] Revert "Reland "[SimplifyCFG] `FoldBranchToCommonDest()`:
+ deal with mismatched IV's in PHI's in common successor block""
+
+One of these two changes is exposing (or causing) some more miscompiles.
+A reproducer is in progress, so reverting until resolved.
+
+This reverts commit 428f36401b1b695fd501ebfdc8773bed8ced8d4e.
+---
+ llvm/lib/Transforms/Utils/SimplifyCFG.cpp     | 157 +---------
+ llvm/test/CodeGen/AArch64/rm_redundant_cmp.ll |  56 ++--
+ .../CodeGen/AArch64/tailmerging_in_mbp.ll     |  33 +-
+ .../CodeGen/AArch64/typepromotion-cost.ll     |  51 +--
+ .../test/CodeGen/PowerPC/ppc-ctr-dead-code.ll |  72 +++--
+ llvm/test/CodeGen/PowerPC/pr48527.ll          |  48 +--
+ llvm/test/CodeGen/X86/loop-search.ll          |  27 +-
+ .../Transforms/InstCombine/unused-nonnull.ll  |   6 +-
+ llvm/test/Transforms/LICM/hoist-phi.ll        |  55 +++-
+ llvm/test/Transforms/LICM/sinking.ll          |  40 ++-
+ .../AArch64/small-constant.ll                 |  42 ++-
+ .../LoopUnroll/runtime-loop-multiple-exits.ll | 295 ++++++++++++++----
+ llvm/test/Transforms/LoopUnroll/scevunroll.ll |  16 +-
+ .../LoopUnroll/unroll-after-peel.ll           |   8 +-
+ ...iting-with-phis-multiple-exiting-blocks.ll |  58 +++-
+ .../2008-07-13-InfLoopMiscompile.ll           |  13 +-
+ .../SimplifyCFG/X86/SpeculativeExec.ll        |  34 +-
+ .../SimplifyCFG/X86/switch_to_lookup_table.ll |   5 +-
+ .../fold-branch-to-common-dest-phis.ll        | 264 ++++++++--------
+ .../SimplifyCFG/fold-branch-to-common-dest.ll | 102 +++---
+ .../Transforms/SimplifyCFG/hoist-dbgvalue.ll  |  16 +-
+ .../SimplifyCFG/switch-on-const-select.ll     |  18 +-
+ 22 files changed, 767 insertions(+), 649 deletions(-)
+
+diff --git a/llvm/lib/Transforms/Utils/SimplifyCFG.cpp b/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
+index 10959311ba08..870dc2b16a09 100644
+--- a/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
++++ b/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
+@@ -3566,67 +3566,7 @@ shouldFoldCondBranchesToCommonDestination(BranchInst *BI, BranchInst *PBI,
+   return std::nullopt;
+ }
+ 
+-struct CompatibleIncomingValue {
+-  Value *V;
+-  CompatibleIncomingValue() = default;
+-  CompatibleIncomingValue(Value *V_) : V(V_) {}
+-  operator Value *() const { return V; }
+-};
+-struct SelectMaterializationRecipe {
+-  Value *Cond = nullptr;
+-  Value *TrueVal = nullptr;
+-  Value *FalseVal = nullptr;
+-};
+-// Maintain recipes on how to deal with each of the PHI nodes in the common
+-// successor block when coming from it's two predecessors, one of which also
+-// branches to the other one. For each PHI, we may either have an preexisting
+-// Value that we can use when branching from the common predecessor, or we have
+-// (an uniqued!) recipe on how to compute such a value via a select.
+-// This cache is unique, and is maintained per the predecessor block.
+-struct SelectCache {
+-  using UniqueSelectIndex = unsigned;
+-  SmallDenseMap<SelectMaterializationRecipe, UniqueSelectIndex, 2> SelectCSE;
+-  SmallVector<std::variant<CompatibleIncomingValue, UniqueSelectIndex>, 2> Phis;
+-};
+-
+-static bool operator==(const SelectMaterializationRecipe &A,
+-                       const SelectMaterializationRecipe &B) {
+-  return std::tie(A.Cond, A.TrueVal, A.FalseVal) ==
+-         std::tie(B.Cond, B.TrueVal, B.FalseVal);
+-}
+-
+-namespace llvm {
+-template <> struct DenseMapInfo<SelectMaterializationRecipe> {
+-  static SelectMaterializationRecipe getEmptyKey() {
+-    SelectMaterializationRecipe R;
+-    for (Value **E : {&R.Cond, &R.TrueVal, &R.FalseVal})
+-      *E = DenseMapInfo<Value *>::getEmptyKey();
+-    return R;
+-  }
+-
+-  static SelectMaterializationRecipe getTombstoneKey() {
+-    SelectMaterializationRecipe R;
+-    for (Value **E : {&R.Cond, &R.TrueVal, &R.FalseVal})
+-      *E = DenseMapInfo<Value *>::getTombstoneKey();
+-    return R;
+-  }
+-
+-  static unsigned getHashValue(SelectMaterializationRecipe R) {
+-    return static_cast<unsigned>(
+-        hash_combine(DenseMapInfo<Value *>::getHashValue(R.Cond),
+-                     DenseMapInfo<Value *>::getHashValue(R.TrueVal),
+-                     DenseMapInfo<Value *>::getHashValue(R.FalseVal)));
+-  }
+-
+-  static bool isEqual(SelectMaterializationRecipe LHS,
+-                      SelectMaterializationRecipe RHS) {
+-    return LHS == RHS;
+-  }
+-};
+-} // namespace llvm
+-
+ static bool performBranchToCommonDestFolding(BranchInst *BI, BranchInst *PBI,
+-                                             SelectCache *Cache,
+                                              DomTreeUpdater *DTU,
+                                              MemorySSAUpdater *MSSAU,
+                                              const TargetTransformInfo *TTI) {
+@@ -3655,7 +3595,6 @@ static bool performBranchToCommonDestFolding(BranchInst *BI, BranchInst *PBI,
+     if (NewCond->hasOneUse() && isa<CmpInst>(NewCond)) {
+       CmpInst *CI = cast<CmpInst>(NewCond);
+       CI->setPredicate(CI->getInversePredicate());
+-      CI->setName(CI->getName() + ".not");
+     } else {
+       NewCond =
+           Builder.CreateNot(NewCond, PBI->getCondition()->getName() + ".not");
+@@ -3663,14 +3602,6 @@ static bool performBranchToCommonDestFolding(BranchInst *BI, BranchInst *PBI,
+ 
+     PBI->setCondition(NewCond);
+     PBI->swapSuccessors();
+-
+-    if (Cache) {
+-      // And likewise, for the select recipes.
+-      for (auto &I : Cache->SelectCSE) {
+-        I.first.Cond = NewCond;
+-        std::swap(I.first.TrueVal, I.first.FalseVal);
+-      }
+-    }
+   }
+ 
+   BasicBlock *UniqueSucc =
+@@ -3736,45 +3667,6 @@ static bool performBranchToCommonDestFolding(BranchInst *BI, BranchInst *PBI,
+   ValueToValueMapTy VMap; // maps original values to cloned values
+   CloneInstructionsIntoPredecessorBlockAndUpdateSSAUses(BB, PredBlock, VMap);
+ 
+-  assert((bool)Cache == !std::empty(CommonSucc->phis()));
+-  if (Cache) {
+-    SmallVector<std::pair<SelectMaterializationRecipe, Value *>, 2>
+-        UniqueSelects;
+-    UniqueSelects.resize(Cache->SelectCSE.size());
+-    for (auto I : Cache->SelectCSE)
+-      UniqueSelects[I.second].first = I.first;
+-
+-    for (auto I : zip(CommonSucc->phis(), Cache->Phis)) {
+-      PHINode &PN = std::get<0>(I);
+-      std::variant<CompatibleIncomingValue, SelectCache::UniqueSelectIndex>
+-          &PhiRecipe = std::get<1>(I);
+-
+-      // Now, we have a recipe on how to deal with this PHI node. Either, there
+-      // is an existing Value that we can use as an Incoming Value for the new
+-      // predecessor we add, or we have a recipe for a select that will compute
+-      // the Value the PHI node would have taken when coming from old BB's.
+-      Value **MaterializedSelect;
+-      if (auto *V = std::get_if<CompatibleIncomingValue>(&PhiRecipe)) {
+-        MaterializedSelect = &V->V;
+-      } else {
+-        unsigned UniqSelIdx =
+-            std::get<SelectCache::UniqueSelectIndex>(PhiRecipe);
+-        const SelectMaterializationRecipe &SelRecipe =
+-            UniqueSelects[UniqSelIdx].first;
+-        MaterializedSelect = &UniqueSelects[UniqSelIdx].second;
+-        if (!*MaterializedSelect) {
+-          *MaterializedSelect =
+-              Builder.CreateSelect(SelRecipe.Cond, SelRecipe.TrueVal,
+-                                   SelRecipe.FalseVal, PN.getName() + ".sel");
+-          if (auto *I = dyn_cast<Instruction>(*MaterializedSelect))
+-            RemapInstruction(I, VMap,
+-                             RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+-        }
+-      }
+-      PN.setIncomingValueForBlock(PredBlock, *MaterializedSelect);
+-    }
+-  }
+-
+   // Now that the Cond was cloned into the predecessor basic block,
+   // or/and the two conditions together.
+   Value *BICond = VMap[BI->getCondition()];
+@@ -3832,11 +3724,6 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, DomTreeUpdater *DTU,
+   if (is_contained(successors(BB), BB))
+     return false;
+ 
+-  SmallDenseMap<BasicBlock *, SelectCache> PerPredBBCaches;
+-
+-  unsigned NumSelectsNeeded = 0;
+-  bool SawVectorSelect = false;
+-
+   // With which predecessors will we want to deal with?
+   SmallVector<BasicBlock *, 8> Preds;
+   for (BasicBlock *PredBlock : predecessors(BB)) {
+@@ -3845,7 +3732,7 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, DomTreeUpdater *DTU,
+     // Check that we have two conditional branches.  If there is a PHI node in
+     // the common successor, verify that the same value flows in from both
+     // blocks.
+-    if (!PBI || PBI->isUnconditional())
++    if (!PBI || PBI->isUnconditional() || !SafeToMergeTerminators(BI, PBI))
+       continue;
+ 
+     // Determine if the two branches share a common destination.
+@@ -3870,38 +3757,6 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, DomTreeUpdater *DTU,
+         continue;
+     }
+ 
+-    SelectCache *Cache = nullptr;
+-    if (!std::empty(CommonSucc->phis()))
+-      Cache = &PerPredBBCaches.insert({PredBlock, SelectCache()})
+-                   .first->getSecond();
+-    auto getIncomingBlockInCommonSuccessor = [CommonSucc, PredBlock,
+-                                              BB](BasicBlock *SuccOfPredBB) {
+-      if (SuccOfPredBB == CommonSucc)
+-        return PredBlock;
+-      assert(SuccOfPredBB == BB);
+-      return BB;
+-    };
+-    for (PHINode &PN : CommonSucc->phis()) {
+-      SelectMaterializationRecipe R;
+-      R.Cond = PBI->getCondition();
+-      R.TrueVal = PN.getIncomingValueForBlock(
+-          getIncomingBlockInCommonSuccessor(PBI->getSuccessor(0)));
+-      R.FalseVal = PN.getIncomingValueForBlock(
+-          getIncomingBlockInCommonSuccessor(PBI->getSuccessor(1)));
+-      if (R.TrueVal == R.FalseVal) {
+-        Cache->Phis.emplace_back(R.TrueVal); // CompatibleIncomingValue
+-        continue;
+-      }
+-      // FIXME: can we get better results by using InstSimplify here?
+-      auto [iterator, NewUniqueSelect] =
+-          Cache->SelectCSE.insert({R, Cache->SelectCSE.size()});
+-      Cache->Phis.emplace_back(iterator->second); // UniqueSelectIndex
+-      if (!NewUniqueSelect)
+-        continue;
+-      ++NumSelectsNeeded;
+-      SawVectorSelect |= PN.getType()->isVectorTy();
+-    }
+-
+     // Ok, we do want to deal with this predecessor. Record it.
+     Preds.emplace_back(PredBlock);
+   }
+@@ -3917,8 +3772,8 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, DomTreeUpdater *DTU,
+   // as "bonus instructions", and only allow this transformation when the
+   // number of the bonus instructions we'll need to create when cloning into
+   // each predecessor does not exceed a certain threshold.
+-  unsigned NumBonusInsts = NumSelectsNeeded;
+-  bool SawVectorOp = SawVectorSelect;
++  unsigned NumBonusInsts = 0;
++  bool SawVectorOp = false;
+   const unsigned PredCount = Preds.size();
+   for (Instruction &I : *BB) {
+     // Don't check the branch condition comparison itself.
+@@ -3963,11 +3818,7 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, DomTreeUpdater *DTU,
+   // Ok, we have the budget. Perform the transformation.
+   for (BasicBlock *PredBlock : Preds) {
+     auto *PBI = cast<BranchInst>(PredBlock->getTerminator());
+-
+-    SelectCache *Cache = nullptr;
+-    if (auto it = PerPredBBCaches.find(PredBlock); it != PerPredBBCaches.end())
+-      Cache = &it->second;
+-    return performBranchToCommonDestFolding(BI, PBI, Cache, DTU, MSSAU, TTI);
++    return performBranchToCommonDestFolding(BI, PBI, DTU, MSSAU, TTI);
+   }
+   return false;
+ }
+diff --git a/llvm/test/CodeGen/AArch64/rm_redundant_cmp.ll b/llvm/test/CodeGen/AArch64/rm_redundant_cmp.ll
+index 3240ef0a40dd..9e3bb8ce8efc 100644
+--- a/llvm/test/CodeGen/AArch64/rm_redundant_cmp.ll
++++ b/llvm/test/CodeGen/AArch64/rm_redundant_cmp.ll
+@@ -49,16 +49,16 @@ define void @test_i16_2cmp_signed_2() {
+ ; CHECK:       // %bb.0: // %entry
+ ; CHECK-NEXT:    adrp x8, :got:cost_s_i8_i16
+ ; CHECK-NEXT:    ldr x8, [x8, :got_lo12:cost_s_i8_i16]
+-; CHECK-NEXT:    ldrh w10, [x8, #2]
+-; CHECK-NEXT:    ldrh w11, [x8, #4]
+-; CHECK-NEXT:    sxth w9, w10
+-; CHECK-NEXT:    cmp w9, w11, sxth
+-; CHECK-NEXT:    csel w9, w10, w11, gt
+-; CHECK-NEXT:    cmp w10, w11
+-; CHECK-NEXT:    b.eq .LBB1_2
+-; CHECK-NEXT:  // %bb.1: // %if.end8.sink.split
++; CHECK-NEXT:    ldrsh w9, [x8, #2]
++; CHECK-NEXT:    ldrsh w10, [x8, #4]
++; CHECK-NEXT:    cmp w9, w10
++; CHECK-NEXT:    b.gt .LBB1_2
++; CHECK-NEXT:  // %bb.1: // %if.else
++; CHECK-NEXT:    mov w9, w10
++; CHECK-NEXT:    b.ge .LBB1_3
++; CHECK-NEXT:  .LBB1_2: // %if.end8.sink.split
+ ; CHECK-NEXT:    strh w9, [x8]
+-; CHECK-NEXT:  .LBB1_2: // %if.end8
++; CHECK-NEXT:  .LBB1_3: // %if.end8
+ ; CHECK-NEXT:    ret
+ entry:
+   %0 = load i16, ptr getelementptr inbounds (%struct.s_signed_i16, ptr @cost_s_i8_i16, i64 0, i32 1), align 2
+@@ -125,11 +125,13 @@ define void @test_i16_2cmp_unsigned_2() {
+ ; CHECK-NEXT:    ldrh w9, [x8, #2]
+ ; CHECK-NEXT:    ldrh w10, [x8, #4]
+ ; CHECK-NEXT:    cmp w9, w10
+-; CHECK-NEXT:    csel w9, w9, w10, hi
+-; CHECK-NEXT:    b.eq .LBB3_2
+-; CHECK-NEXT:  // %bb.1: // %if.end8.sink.split
++; CHECK-NEXT:    b.hi .LBB3_2
++; CHECK-NEXT:  // %bb.1: // %if.else
++; CHECK-NEXT:    mov w9, w10
++; CHECK-NEXT:    b.hs .LBB3_3
++; CHECK-NEXT:  .LBB3_2: // %if.end8.sink.split
+ ; CHECK-NEXT:    strh w9, [x8]
+-; CHECK-NEXT:  .LBB3_2: // %if.end8
++; CHECK-NEXT:  .LBB3_3: // %if.end8
+ ; CHECK-NEXT:    ret
+ entry:
+   %0 = load i16, ptr getelementptr inbounds (%struct.s_unsigned_i16, ptr @cost_u_i16, i64 0, i32 1), align 2
+@@ -202,16 +204,16 @@ define void @test_i8_2cmp_signed_2() {
+ ; CHECK:       // %bb.0: // %entry
+ ; CHECK-NEXT:    adrp x8, :got:cost_s
+ ; CHECK-NEXT:    ldr x8, [x8, :got_lo12:cost_s]
+-; CHECK-NEXT:    ldrb w10, [x8, #1]
+-; CHECK-NEXT:    ldrb w11, [x8, #2]
+-; CHECK-NEXT:    sxtb w9, w10
+-; CHECK-NEXT:    cmp w9, w11, sxtb
+-; CHECK-NEXT:    csel w9, w10, w11, gt
+-; CHECK-NEXT:    cmp w10, w11
+-; CHECK-NEXT:    b.eq .LBB5_2
+-; CHECK-NEXT:  // %bb.1: // %if.end8.sink.split
++; CHECK-NEXT:    ldrsb w9, [x8, #1]
++; CHECK-NEXT:    ldrsb w10, [x8, #2]
++; CHECK-NEXT:    cmp w9, w10
++; CHECK-NEXT:    b.gt .LBB5_2
++; CHECK-NEXT:  // %bb.1: // %if.else
++; CHECK-NEXT:    mov w9, w10
++; CHECK-NEXT:    b.ge .LBB5_3
++; CHECK-NEXT:  .LBB5_2: // %if.end8.sink.split
+ ; CHECK-NEXT:    strb w9, [x8]
+-; CHECK-NEXT:  .LBB5_2: // %if.end8
++; CHECK-NEXT:  .LBB5_3: // %if.end8
+ ; CHECK-NEXT:    ret
+ entry:
+   %0 = load i8, ptr getelementptr inbounds (%struct.s_signed_i8, ptr @cost_s, i64 0, i32 1), align 2
+@@ -278,11 +280,13 @@ define void @test_i8_2cmp_unsigned_2() {
+ ; CHECK-NEXT:    ldrb w9, [x8, #1]
+ ; CHECK-NEXT:    ldrb w10, [x8, #2]
+ ; CHECK-NEXT:    cmp w9, w10
+-; CHECK-NEXT:    csel w9, w9, w10, hi
+-; CHECK-NEXT:    b.eq .LBB7_2
+-; CHECK-NEXT:  // %bb.1: // %if.end8.sink.split
++; CHECK-NEXT:    b.hi .LBB7_2
++; CHECK-NEXT:  // %bb.1: // %if.else
++; CHECK-NEXT:    mov w9, w10
++; CHECK-NEXT:    b.hs .LBB7_3
++; CHECK-NEXT:  .LBB7_2: // %if.end8.sink.split
+ ; CHECK-NEXT:    strb w9, [x8]
+-; CHECK-NEXT:  .LBB7_2: // %if.end8
++; CHECK-NEXT:  .LBB7_3: // %if.end8
+ ; CHECK-NEXT:    ret
+ entry:
+   %0 = load i8, ptr getelementptr inbounds (%struct.s_unsigned_i8, ptr @cost_u_i8, i64 0, i32 1), align 2
+diff --git a/llvm/test/CodeGen/AArch64/tailmerging_in_mbp.ll b/llvm/test/CodeGen/AArch64/tailmerging_in_mbp.ll
+index 9c20aed6cf9c..52540bc9c027 100644
+--- a/llvm/test/CodeGen/AArch64/tailmerging_in_mbp.ll
++++ b/llvm/test/CodeGen/AArch64/tailmerging_in_mbp.ll
+@@ -1,11 +1,12 @@
+-; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+ ; RUN: llc <%s -mtriple=aarch64-eabi -verify-machine-dom-info | FileCheck %s
+ 
+ ; CHECK-LABEL: test:
+ ; CHECK-LABEL: %cond.false12.i
+-; CHECK:       csel x10, x8, x9, gt
+-; CHECK-NEXT:  b.le .LBB0_11
+-define i64 @test(i64 %n, ptr %a, ptr %b, ptr %c, ptr %d, ptr %e, ptr %f) {
++; CHECK:         b.gt
++; CHECK-NEXT:  LBB0_8:
++; CHECK-NEXT:    mov	 x8, x9
++; CHECK-NEXT:  LBB0_9:
++define i64 @test(i64 %n, i64* %a, i64* %b, i64* %c, i64* %d, i64* %e, i64* %f) {
+ entry:
+   %cmp28 = icmp sgt i64 %n, 1
+   br i1 %cmp28, label %for.body, label %for.end
+@@ -13,10 +14,10 @@ entry:
+ for.body:                                         ; preds = %for.body.lr.ph, %if.end
+   %j = phi i64 [ %n, %entry ], [ %div, %if.end ]
+   %div = lshr i64 %j, 1
+-  %a.arrayidx = getelementptr inbounds i64, ptr %a, i64 %div
+-  %a.j = load i64, ptr %a.arrayidx
+-  %b.arrayidx = getelementptr inbounds i64, ptr %b, i64 %div
+-  %b.j = load i64, ptr %b.arrayidx
++  %a.arrayidx = getelementptr inbounds i64, i64* %a, i64 %div
++  %a.j = load i64, i64* %a.arrayidx
++  %b.arrayidx = getelementptr inbounds i64, i64* %b, i64 %div
++  %b.j = load i64, i64* %b.arrayidx
+   %cmp.i = icmp slt i64 %a.j, %b.j
+   br i1 %cmp.i, label %for.end.loopexit, label %cond.false.i
+ 
+@@ -25,10 +26,10 @@ cond.false.i:                                     ; preds = %for.body
+   br i1 %cmp4.i, label %if.end, label %cond.false6.i
+ 
+ cond.false6.i:                                    ; preds = %cond.false.i
+-  %c.arrayidx = getelementptr inbounds i64, ptr %c, i64 %div
+-  %c.j = load i64, ptr %c.arrayidx
+-  %d.arrayidx = getelementptr inbounds i64, ptr %d, i64 %div
+-  %d.j = load i64, ptr %d.arrayidx
++  %c.arrayidx = getelementptr inbounds i64, i64* %c, i64 %div
++  %c.j = load i64, i64* %c.arrayidx
++  %d.arrayidx = getelementptr inbounds i64, i64* %d, i64 %div
++  %d.j = load i64, i64* %d.arrayidx
+   %cmp9.i = icmp slt i64 %c.j, %d.j
+   br i1 %cmp9.i, label %for.end.loopexit, label %cond.false11.i
+ 
+@@ -37,10 +38,10 @@ cond.false11.i:                                   ; preds = %cond.false6.i
+   br i1 %cmp14.i, label %if.end, label %cond.false12.i
+ 
+ cond.false12.i:                           ; preds = %cond.false11.i
+-  %e.arrayidx = getelementptr inbounds i64, ptr %e, i64 %div
+-  %e.j = load i64, ptr %e.arrayidx
+-  %f.arrayidx = getelementptr inbounds i64, ptr %f, i64 %div
+-  %f.j = load i64, ptr %f.arrayidx
++  %e.arrayidx = getelementptr inbounds i64, i64* %e, i64 %div
++  %e.j = load i64, i64* %e.arrayidx
++  %f.arrayidx = getelementptr inbounds i64, i64* %f, i64 %div
++  %f.j = load i64, i64* %f.arrayidx
+   %cmp19.i = icmp sgt i64 %e.j, %f.j
+   br i1 %cmp19.i, label %if.end, label %for.end.loopexit
+ 
+diff --git a/llvm/test/CodeGen/AArch64/typepromotion-cost.ll b/llvm/test/CodeGen/AArch64/typepromotion-cost.ll
+index 12bc70c80ac6..c1b3057bfbfd 100644
+--- a/llvm/test/CodeGen/AArch64/typepromotion-cost.ll
++++ b/llvm/test/CodeGen/AArch64/typepromotion-cost.ll
+@@ -6,30 +6,41 @@
+ define i32 @needless_promotion(ptr nocapture noundef readonly %S, i64 noundef %red_cost) {
+ ; CHECK-O2-LABEL: needless_promotion:
+ ; CHECK-O2:       // %bb.0: // %entry
+-; CHECK-O2-NEXT:    ldrsh w9, [x0, #4]
+-; CHECK-O2-NEXT:    mov w8, #1
+-; CHECK-O2-NEXT:    mov w10, #-1
+-; CHECK-O2-NEXT:    cmp w9, #0
+-; CHECK-O2-NEXT:    cinc w8, w8, ge
+-; CHECK-O2-NEXT:    cmp w8, w9, uxth
+-; CHECK-O2-NEXT:    cset w8, eq
+-; CHECK-O2-NEXT:    cmp x1, #0
+-; CHECK-O2-NEXT:    ccmp w9, w10, #4, eq
+-; CHECK-O2-NEXT:    csel w0, wzr, w8, gt
++; CHECK-O2-NEXT:    ldrsh w8, [x0, #4]
++; CHECK-O2-NEXT:    tbnz w8, #31, .LBB0_3
++; CHECK-O2-NEXT:  // %bb.1: // %lor.rhs
++; CHECK-O2-NEXT:    cbz x1, .LBB0_5
++; CHECK-O2-NEXT:  // %bb.2:
++; CHECK-O2-NEXT:    mov w9, #2
++; CHECK-O2-NEXT:    b .LBB0_4
++; CHECK-O2-NEXT:  .LBB0_3:
++; CHECK-O2-NEXT:    mov w9, #1
++; CHECK-O2-NEXT:  .LBB0_4: // %lor.end.sink.split
++; CHECK-O2-NEXT:    cmp w8, w9
++; CHECK-O2-NEXT:    cset w0, eq
++; CHECK-O2-NEXT:    ret
++; CHECK-O2-NEXT:  .LBB0_5:
++; CHECK-O2-NEXT:    mov w0, wzr
+ ; CHECK-O2-NEXT:    ret
+ ;
+ ; CHECK-O3-LABEL: needless_promotion:
+ ; CHECK-O3:       // %bb.0: // %entry
+-; CHECK-O3-NEXT:    ldrsh w9, [x0, #4]
+-; CHECK-O3-NEXT:    mov w8, #1
+-; CHECK-O3-NEXT:    mov w10, #-1
+-; CHECK-O3-NEXT:    cmp w9, #0
+-; CHECK-O3-NEXT:    cinc w8, w8, ge
+-; CHECK-O3-NEXT:    cmp w8, w9, uxth
+-; CHECK-O3-NEXT:    cset w8, eq
+-; CHECK-O3-NEXT:    cmp x1, #0
+-; CHECK-O3-NEXT:    ccmp w9, w10, #4, eq
+-; CHECK-O3-NEXT:    csel w0, wzr, w8, gt
++; CHECK-O3-NEXT:    ldrsh w8, [x0, #4]
++; CHECK-O3-NEXT:    tbnz w8, #31, .LBB0_3
++; CHECK-O3-NEXT:  // %bb.1: // %lor.rhs
++; CHECK-O3-NEXT:    cbz x1, .LBB0_4
++; CHECK-O3-NEXT:  // %bb.2:
++; CHECK-O3-NEXT:    mov w9, #2
++; CHECK-O3-NEXT:    cmp w8, w9
++; CHECK-O3-NEXT:    cset w0, eq
++; CHECK-O3-NEXT:    ret
++; CHECK-O3-NEXT:  .LBB0_3:
++; CHECK-O3-NEXT:    mov w9, #1
++; CHECK-O3-NEXT:    cmp w8, w9
++; CHECK-O3-NEXT:    cset w0, eq
++; CHECK-O3-NEXT:    ret
++; CHECK-O3-NEXT:  .LBB0_4:
++; CHECK-O3-NEXT:    mov w0, wzr
+ ; CHECK-O3-NEXT:    ret
+ entry:
+   %ident = getelementptr inbounds %struct.S, ptr %S, i64 0, i32 1
+diff --git a/llvm/test/CodeGen/PowerPC/ppc-ctr-dead-code.ll b/llvm/test/CodeGen/PowerPC/ppc-ctr-dead-code.ll
+index aceac8bb69b8..f3a568a6de44 100644
+--- a/llvm/test/CodeGen/PowerPC/ppc-ctr-dead-code.ll
++++ b/llvm/test/CodeGen/PowerPC/ppc-ctr-dead-code.ll
+@@ -6,30 +6,51 @@
+ 
+ ; Function Attrs: norecurse nounwind readonly
+ define signext i32 @limit_loop(i32 signext %iters, ptr nocapture readonly %vec, i32 signext %limit) local_unnamed_addr {
+-; CHECK-LABEL: limit_loop:
+-; CHECK:       # %bb.0: # %entry
+-; CHECK-NEXT:    cmpwi 3, 0
+-; CHECK-NEXT:    ble 0, .LBB0_4
+-; CHECK-NEXT:  # %bb.1: # %for.body.preheader
+-; CHECK-NEXT:    addi 4, 4, -4
+-; CHECK-NEXT:    li 6, 1
+-; CHECK-NEXT:    .p2align 5
+-; CHECK-NEXT:  .LBB0_2: # %for.body
+-; CHECK-NEXT:    #
+-; CHECK-NEXT:    lwzu 7, 4(4)
+-; CHECK-NEXT:    cmpd 1, 6, 3
+-; CHECK-NEXT:    addi 6, 6, 1
+-; CHECK-NEXT:    cmpw 7, 5
+-; CHECK-NEXT:    crand 20, 0, 4
+-; CHECK-NEXT:    bc 12, 20, .LBB0_2
+-; CHECK-NEXT:  # %bb.3: # %cleanup.loopexit
+-; CHECK-NEXT:    li 3, 1
+-; CHECK-NEXT:    isellt 3, 0, 3
+-; CHECK-NEXT:    clrldi 3, 3, 32
+-; CHECK-NEXT:    blr
+-; CHECK-NEXT:  .LBB0_4:
+-; CHECK-NEXT:    li 3, 0
+-; CHECK-NEXT:    blr
++; V01-LABEL: limit_loop:
++; V01:       # %bb.0: # %entry
++; V01-NEXT:    mr 6, 3
++; V01-NEXT:    li 3, 0
++; V01-NEXT:    cmpwi 6, 0
++; V01-NEXT:    blelr 0
++; V01-NEXT:  # %bb.1: # %for.body.preheader
++; V01-NEXT:    mtctr 6
++; V01-NEXT:    addi 4, 4, -4
++; V01-NEXT:    b .LBB0_3
++; V01-NEXT:    .p2align 4
++; V01-NEXT:  .LBB0_2: # %for.cond
++; V01-NEXT:    #
++; V01-NEXT:    bdzlr
++; V01-NEXT:  .LBB0_3: # %for.body
++; V01-NEXT:    #
++; V01-NEXT:    lwzu 6, 4(4)
++; V01-NEXT:    cmpw 6, 5
++; V01-NEXT:    blt 0, .LBB0_2
++; V01-NEXT:  # %bb.4:
++; V01-NEXT:    li 3, 1
++; V01-NEXT:    blr
++;
++; V23-LABEL: limit_loop:
++; V23:       # %bb.0: # %entry
++; V23-NEXT:    mr 6, 3
++; V23-NEXT:    li 3, 0
++; V23-NEXT:    cmpwi 6, 0
++; V23-NEXT:    blelr 0
++; V23-NEXT:  # %bb.1: # %for.body.preheader
++; V23-NEXT:    addi 4, 4, -4
++; V23-NEXT:    mtctr 6
++; V23-NEXT:    b .LBB0_3
++; V23-NEXT:    .p2align 4
++; V23-NEXT:  .LBB0_2: # %for.cond
++; V23-NEXT:    #
++; V23-NEXT:    bdzlr
++; V23-NEXT:  .LBB0_3: # %for.body
++; V23-NEXT:    #
++; V23-NEXT:    lwzu 6, 4(4)
++; V23-NEXT:    cmpw 6, 5
++; V23-NEXT:    blt 0, .LBB0_2
++; V23-NEXT:  # %bb.4:
++; V23-NEXT:    li 3, 1
++; V23-NEXT:    blr
+ entry:
+   %cmp5 = icmp sgt i32 %iters, 0
+   br i1 %cmp5, label %for.body.preheader, label %cleanup
+@@ -57,9 +78,8 @@ cleanup:                                          ; preds = %for.body, %for.cond
+ 
+ 
+ ;; NOTE: These prefixes are unused and the list is autogenerated. Do not add tests below this line:
++; CHECK: {{.*}}
+ ; CHECK-V0: {{.*}}
+ ; CHECK-V1: {{.*}}
+ ; CHECK-V2: {{.*}}
+ ; CHECK-V3: {{.*}}
+-; V01: {{.*}}
+-; V23: {{.*}}
+diff --git a/llvm/test/CodeGen/PowerPC/pr48527.ll b/llvm/test/CodeGen/PowerPC/pr48527.ll
+index c3265a48d28f..262f7a9805fd 100644
+--- a/llvm/test/CodeGen/PowerPC/pr48527.ll
++++ b/llvm/test/CodeGen/PowerPC/pr48527.ll
+@@ -11,36 +11,38 @@ define void @_ZNK1q1rEv() local_unnamed_addr #0 align 2 {
+ ; CHECK-LABEL: _ZNK1q1rEv:
+ ; CHECK:       # %bb.0: # %entry
+ ; CHECK-NEXT:    mflr 0
++; CHECK-NEXT:    std 29, -24(1) # 8-byte Folded Spill
+ ; CHECK-NEXT:    std 30, -16(1) # 8-byte Folded Spill
+-; CHECK-NEXT:    stdu 1, -48(1)
+-; CHECK-NEXT:    std 0, 64(1)
+-; CHECK-NEXT:    addis 4, 2, .LC0@toc@ha
+-; CHECK-NEXT:    lwz 3, 0(3)
+-; CHECK-NEXT:    ld 4, .LC0@toc@l(4)
+-; CHECK-NEXT:    addi 3, 3, -1
+-; CHECK-NEXT:    .p2align 5
+-; CHECK-NEXT:  .LBB0_1: # %monotonic.i
+-; CHECK-NEXT:    #
+-; CHECK-NEXT:    lwz 5, 0(4)
+-; CHECK-NEXT:    cmpwi 1, 3, 0
+-; CHECK-NEXT:    addi 3, 3, -1
+-; CHECK-NEXT:    andi. 5, 5, 255
+-; CHECK-NEXT:    crorc 20, 6, 2
+-; CHECK-NEXT:    bc 4, 20, .LBB0_1
+-; CHECK-NEXT:  # %bb.2: # %if.end
+-; CHECK-NEXT:    crnot 20, 2
+-; CHECK-NEXT:    li 3, 0
+-; CHECK-NEXT:    li 4, 8
+-; CHECK-NEXT:    isel 30, 4, 3, 20
++; CHECK-NEXT:    stdu 1, -64(1)
++; CHECK-NEXT:    std 0, 80(1)
++; CHECK-NEXT:    lwz 30, 0(3)
++; CHECK-NEXT:    addis 3, 2, .LC0@toc@ha
++; CHECK-NEXT:    ld 29, .LC0@toc@l(3)
+ ; CHECK-NEXT:    addis 3, 2, aj@got@tlsgd@ha
+ ; CHECK-NEXT:    addi 3, 3, aj@got@tlsgd@l
+ ; CHECK-NEXT:    bl __tls_get_addr(aj@tlsgd)
+ ; CHECK-NEXT:    nop
+-; CHECK-NEXT:    li 4, 1
+-; CHECK-NEXT:    stdx 4, 3, 30
+-; CHECK-NEXT:    addi 1, 1, 48
++; CHECK-NEXT:    addi 4, 3, 8
++; CHECK-NEXT:    .p2align 5
++; CHECK-NEXT:  .LBB0_1: # %monotonic.i
++; CHECK-NEXT:    #
++; CHECK-NEXT:    lwz 5, 0(29)
++; CHECK-NEXT:    andi. 5, 5, 255
++; CHECK-NEXT:    bne 0, .LBB0_4
++; CHECK-NEXT:  # %bb.2: # %for.cond.i
++; CHECK-NEXT:    #
++; CHECK-NEXT:    addi 30, 30, -1
++; CHECK-NEXT:    cmplwi 30, 0
++; CHECK-NEXT:    bne 0, .LBB0_1
++; CHECK-NEXT:  # %bb.3:
++; CHECK-NEXT:    mr 4, 3
++; CHECK-NEXT:  .LBB0_4: # %if.end
++; CHECK-NEXT:    li 3, 1
++; CHECK-NEXT:    std 3, 0(4)
++; CHECK-NEXT:    addi 1, 1, 64
+ ; CHECK-NEXT:    ld 0, 16(1)
+ ; CHECK-NEXT:    ld 30, -16(1) # 8-byte Folded Reload
++; CHECK-NEXT:    ld 29, -24(1) # 8-byte Folded Reload
+ ; CHECK-NEXT:    mtlr 0
+ ; CHECK-NEXT:    blr
+ entry:
+diff --git a/llvm/test/CodeGen/X86/loop-search.ll b/llvm/test/CodeGen/X86/loop-search.ll
+index 8c09acdd9ee7..4646452ffdc6 100644
+--- a/llvm/test/CodeGen/X86/loop-search.ll
++++ b/llvm/test/CodeGen/X86/loop-search.ll
+@@ -10,29 +10,24 @@ define zeroext i1 @search(i32 %needle, ptr nocapture readonly %haystack, i32 %co
+ ; CHECK-NEXT:    testl %edx, %edx
+ ; CHECK-NEXT:    jle LBB0_5
+ ; CHECK-NEXT:  ## %bb.1: ## %for.body.preheader
+-; CHECK-NEXT:    movslq %edx, %rcx
+-; CHECK-NEXT:    movl $1, %edx
++; CHECK-NEXT:    movslq %edx, %rax
++; CHECK-NEXT:    xorl %ecx, %ecx
+ ; CHECK-NEXT:    .p2align 4, 0x90
+ ; CHECK-NEXT:  LBB0_2: ## %for.body
+ ; CHECK-NEXT:    ## =>This Inner Loop Header: Depth=1
+-; CHECK-NEXT:    movl -4(%rsi,%rdx,4), %r8d
+-; CHECK-NEXT:    cmpl %edi, %r8d
+-; CHECK-NEXT:    sete %al
+-; CHECK-NEXT:    negb %al
+-; CHECK-NEXT:    cmpl %edi, %r8d
+-; CHECK-NEXT:    je LBB0_4
+-; CHECK-NEXT:  ## %bb.3: ## %for.body
++; CHECK-NEXT:    cmpl %edi, (%rsi,%rcx,4)
++; CHECK-NEXT:    je LBB0_6
++; CHECK-NEXT:  ## %bb.3: ## %for.cond
+ ; CHECK-NEXT:    ## in Loop: Header=BB0_2 Depth=1
+-; CHECK-NEXT:    cmpq %rcx, %rdx
+-; CHECK-NEXT:    leaq 1(%rdx), %rdx
++; CHECK-NEXT:    incq %rcx
++; CHECK-NEXT:    cmpq %rax, %rcx
+ ; CHECK-NEXT:    jl LBB0_2
+-; CHECK-NEXT:  LBB0_4: ## %cleanup
+-; CHECK-NEXT:    andb $1, %al
+-; CHECK-NEXT:    ## kill: def $al killed $al killed $eax
+-; CHECK-NEXT:    retq
+ ; CHECK-NEXT:  LBB0_5:
+ ; CHECK-NEXT:    xorl %eax, %eax
+-; CHECK-NEXT:    andb $1, %al
++; CHECK-NEXT:    ## kill: def $al killed $al killed $eax
++; CHECK-NEXT:    retq
++; CHECK-NEXT:  LBB0_6:
++; CHECK-NEXT:    movb $1, %al
+ ; CHECK-NEXT:    ## kill: def $al killed $al killed $eax
+ ; CHECK-NEXT:    retq
+ entry:
+diff --git a/llvm/test/Transforms/InstCombine/unused-nonnull.ll b/llvm/test/Transforms/InstCombine/unused-nonnull.ll
+index c38fc29542a9..32dd65977ea8 100644
+--- a/llvm/test/Transforms/InstCombine/unused-nonnull.ll
++++ b/llvm/test/Transforms/InstCombine/unused-nonnull.ll
+@@ -11,9 +11,9 @@ define i32 @main(i32 %argc, ptr %argv) #0 {
+ ; CHECK-LABEL: define {{[^@]+}}@main
+ ; CHECK-SAME: (i32 [[ARGC:%.*]], ptr nocapture readonly [[ARGV:%.*]]) local_unnamed_addr #[[ATTR0:[0-9]+]] {
+ ; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[DOTNOT:%.*]] = icmp sgt i32 [[ARGC]], 1
+-; CHECK-NEXT:    [[RETVAL_SEL:%.*]] = select i1 [[DOTNOT]], i32 [[ARGC]], i32 0
+-; CHECK-NEXT:    ret i32 [[RETVAL_SEL]]
++; CHECK-NEXT:    [[TMP0:%.*]] = icmp slt i32 [[ARGC]], 2
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[TMP0]], i32 0, i32 [[ARGC]]
++; CHECK-NEXT:    ret i32 [[SPEC_SELECT]]
+ ;
+ entry:
+   %ptr = load ptr, ptr %argv
+diff --git a/llvm/test/Transforms/LICM/hoist-phi.ll b/llvm/test/Transforms/LICM/hoist-phi.ll
+index a02b319b84a5..4d8752d79073 100644
+--- a/llvm/test/Transforms/LICM/hoist-phi.ll
++++ b/llvm/test/Transforms/LICM/hoist-phi.ll
+@@ -625,22 +625,45 @@ end:
+ ; We can hoist blocks that contain an edge that exits the loop by ignoring that
+ ; edge in the hoisted block.
+ define void @triangle_phi_loopexit(i32 %x, ptr %p) {
+-; CHECK-LABEL: @triangle_phi_loopexit(
+-; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[ADD:%.*]] = add i32 [[X:%.*]], 1
+-; CHECK-NEXT:    [[CMP1_NOT:%.*]] = icmp sle i32 [[X]], 0
+-; CHECK-NEXT:    [[CMP2:%.*]] = icmp sgt i32 10, [[ADD]]
+-; CHECK-NEXT:    [[PHI_SEL:%.*]] = select i1 [[CMP1_NOT]], i32 [[X]], i32 [[ADD]]
+-; CHECK-NEXT:    [[OR_COND:%.*]] = or i1 [[CMP1_NOT]], [[CMP2]]
+-; CHECK-NEXT:    [[CMP3:%.*]] = icmp ne i32 [[PHI_SEL]], 0
+-; CHECK-NEXT:    br label [[LOOP:%.*]]
+-; CHECK:       loop:
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[THEN:%.*]], label [[END:%.*]]
+-; CHECK:       then:
+-; CHECK-NEXT:    store i32 [[PHI_SEL]], ptr [[P:%.*]], align 4
+-; CHECK-NEXT:    br i1 [[CMP3]], label [[LOOP]], label [[END]]
+-; CHECK:       end:
+-; CHECK-NEXT:    ret void
++; CHECK-DISABLED-LABEL: @triangle_phi_loopexit(
++; CHECK-DISABLED-NEXT:  entry:
++; CHECK-DISABLED-NEXT:    [[ADD:%.*]] = add i32 [[X:%.*]], 1
++; CHECK-DISABLED-NEXT:    [[CMP1:%.*]] = icmp sgt i32 [[X]], 0
++; CHECK-DISABLED-NEXT:    [[CMP2:%.*]] = icmp sgt i32 10, [[ADD]]
++; CHECK-DISABLED-NEXT:    br label [[LOOP:%.*]]
++; CHECK-DISABLED:       loop:
++; CHECK-DISABLED-NEXT:    br i1 [[CMP1]], label [[IF:%.*]], label [[THEN:%.*]]
++; CHECK-DISABLED:       if:
++; CHECK-DISABLED-NEXT:    br i1 [[CMP2]], label [[THEN]], label [[END:%.*]]
++; CHECK-DISABLED:       then:
++; CHECK-DISABLED-NEXT:    [[PHI:%.*]] = phi i32 [ [[ADD]], [[IF]] ], [ [[X]], [[LOOP]] ]
++; CHECK-DISABLED-NEXT:    store i32 [[PHI]], ptr [[P:%.*]], align 4
++; CHECK-DISABLED-NEXT:    [[CMP3:%.*]] = icmp ne i32 [[PHI]], 0
++; CHECK-DISABLED-NEXT:    br i1 [[CMP3]], label [[LOOP]], label [[END]]
++; CHECK-DISABLED:       end:
++; CHECK-DISABLED-NEXT:    ret void
++;
++; CHECK-ENABLED-LABEL: @triangle_phi_loopexit(
++; CHECK-ENABLED-NEXT:  entry:
++; CHECK-ENABLED-NEXT:    [[ADD:%.*]] = add i32 [[X:%.*]], 1
++; CHECK-ENABLED-NEXT:    [[CMP1:%.*]] = icmp sgt i32 [[X]], 0
++; CHECK-ENABLED-NEXT:    [[CMP2:%.*]] = icmp sgt i32 10, [[ADD]]
++; CHECK-ENABLED-NEXT:    br i1 [[CMP1]], label [[IF_LICM:%.*]], label [[THEN_LICM:%.*]]
++; CHECK-ENABLED:       if.licm:
++; CHECK-ENABLED-NEXT:    br label [[THEN_LICM]]
++; CHECK-ENABLED:       then.licm:
++; CHECK-ENABLED-NEXT:    [[PHI:%.*]] = phi i32 [ [[ADD]], [[IF_LICM]] ], [ [[X]], [[ENTRY:%.*]] ]
++; CHECK-ENABLED-NEXT:    [[CMP3:%.*]] = icmp ne i32 [[PHI]], 0
++; CHECK-ENABLED-NEXT:    br label [[LOOP:%.*]]
++; CHECK-ENABLED:       loop:
++; CHECK-ENABLED-NEXT:    br i1 [[CMP1]], label [[IF:%.*]], label [[THEN:%.*]]
++; CHECK-ENABLED:       if:
++; CHECK-ENABLED-NEXT:    br i1 [[CMP2]], label [[THEN]], label [[END:%.*]]
++; CHECK-ENABLED:       then:
++; CHECK-ENABLED-NEXT:    store i32 [[PHI]], ptr [[P:%.*]], align 4
++; CHECK-ENABLED-NEXT:    br i1 [[CMP3]], label [[LOOP]], label [[END]]
++; CHECK-ENABLED:       end:
++; CHECK-ENABLED-NEXT:    ret void
+ ;
+ entry:
+   br label %loop
+diff --git a/llvm/test/Transforms/LICM/sinking.ll b/llvm/test/Transforms/LICM/sinking.ll
+index 5274d6f43e47..153601ac642d 100644
+--- a/llvm/test/Transforms/LICM/sinking.ll
++++ b/llvm/test/Transforms/LICM/sinking.ll
+@@ -534,17 +534,24 @@ define i32 @test14(i32 %N, i32 %N2, i1 %C) {
+ ; CHECK-NEXT:  Entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       Loop:
+-; CHECK-NEXT:    [[N_ADDR_0_PN:%.*]] = phi i32 [ [[N:%.*]], [[ENTRY:%.*]] ], [ [[DEC:%.*]], [[LOOP]] ]
++; CHECK-NEXT:    [[N_ADDR_0_PN:%.*]] = phi i32 [ [[DEC:%.*]], [[CONTLOOP:%.*]] ], [ [[N:%.*]], [[ENTRY:%.*]] ]
+ ; CHECK-NEXT:    [[DEC]] = add i32 [[N_ADDR_0_PN]], -1
++; CHECK-NEXT:    br i1 [[C:%.*]], label [[CONTLOOP]], label [[OUT12_SPLIT_LOOP_EXIT1:%.*]]
++; CHECK:       ContLoop:
+ ; CHECK-NEXT:    [[TMP_1:%.*]] = icmp ne i32 [[N_ADDR_0_PN]], 1
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C:%.*]], i1 [[TMP_1]], i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[LOOP]], label [[OUT12:%.*]]
+-; CHECK:       Out12:
++; CHECK-NEXT:    br i1 [[TMP_1]], label [[LOOP]], label [[OUT12_SPLIT_LOOP_EXIT:%.*]]
++; CHECK:       Out12.split.loop.exit:
++; CHECK-NEXT:    [[N_ADDR_0_PN_LCSSA4:%.*]] = phi i32 [ [[N_ADDR_0_PN]], [[CONTLOOP]] ]
++; CHECK-NEXT:    [[SINK_MUL_LE3:%.*]] = mul i32 [[N]], [[N_ADDR_0_PN_LCSSA4]]
++; CHECK-NEXT:    br label [[OUT12:%.*]]
++; CHECK:       Out12.split.loop.exit1:
+ ; CHECK-NEXT:    [[N_ADDR_0_PN_LCSSA:%.*]] = phi i32 [ [[N_ADDR_0_PN]], [[LOOP]] ]
+ ; CHECK-NEXT:    [[SINK_MUL_LE:%.*]] = mul i32 [[N]], [[N_ADDR_0_PN_LCSSA]]
+ ; CHECK-NEXT:    [[SINK_SUB_LE:%.*]] = sub i32 [[SINK_MUL_LE]], [[N]]
+-; CHECK-NEXT:    [[TMP_SEL_LE:%.*]] = select i1 [[C]], i32 [[SINK_MUL_LE]], i32 [[SINK_SUB_LE]]
+-; CHECK-NEXT:    ret i32 [[TMP_SEL_LE]]
++; CHECK-NEXT:    br label [[OUT12]]
++; CHECK:       Out12:
++; CHECK-NEXT:    [[TMP:%.*]] = phi i32 [ [[SINK_MUL_LE3]], [[OUT12_SPLIT_LOOP_EXIT]] ], [ [[SINK_SUB_LE]], [[OUT12_SPLIT_LOOP_EXIT1]] ]
++; CHECK-NEXT:    ret i32 [[TMP]]
+ ;
+ Entry:
+   br label %Loop
+@@ -573,18 +580,25 @@ define i32 @test15(i32 %N, i32 %N2, i1 %C) {
+ ; CHECK-NEXT:  Entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       Loop:
+-; CHECK-NEXT:    [[N_ADDR_0_PN:%.*]] = phi i32 [ [[N:%.*]], [[ENTRY:%.*]] ], [ [[DEC:%.*]], [[LOOP]] ]
++; CHECK-NEXT:    [[N_ADDR_0_PN:%.*]] = phi i32 [ [[DEC:%.*]], [[CONTLOOP:%.*]] ], [ [[N:%.*]], [[ENTRY:%.*]] ]
+ ; CHECK-NEXT:    [[DEC]] = add i32 [[N_ADDR_0_PN]], -1
++; CHECK-NEXT:    br i1 [[C:%.*]], label [[CONTLOOP]], label [[OUT12_SPLIT_LOOP_EXIT1:%.*]]
++; CHECK:       ContLoop:
+ ; CHECK-NEXT:    [[TMP_1:%.*]] = icmp ne i32 [[N_ADDR_0_PN]], 1
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C:%.*]], i1 [[TMP_1]], i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[LOOP]], label [[OUT12:%.*]]
+-; CHECK:       Out12:
++; CHECK-NEXT:    br i1 [[TMP_1]], label [[LOOP]], label [[OUT12_SPLIT_LOOP_EXIT:%.*]]
++; CHECK:       Out12.split.loop.exit:
++; CHECK-NEXT:    [[N_ADDR_0_PN_LCSSA5:%.*]] = phi i32 [ [[N_ADDR_0_PN]], [[CONTLOOP]] ]
++; CHECK-NEXT:    [[SINK_MUL_LE4:%.*]] = mul i32 [[N]], [[N_ADDR_0_PN_LCSSA5]]
++; CHECK-NEXT:    [[SINK_SUB2_LE:%.*]] = sub i32 [[SINK_MUL_LE4]], [[N2:%.*]]
++; CHECK-NEXT:    br label [[OUT12:%.*]]
++; CHECK:       Out12.split.loop.exit1:
+ ; CHECK-NEXT:    [[N_ADDR_0_PN_LCSSA:%.*]] = phi i32 [ [[N_ADDR_0_PN]], [[LOOP]] ]
+ ; CHECK-NEXT:    [[SINK_MUL_LE:%.*]] = mul i32 [[N]], [[N_ADDR_0_PN_LCSSA]]
+ ; CHECK-NEXT:    [[SINK_SUB_LE:%.*]] = sub i32 [[SINK_MUL_LE]], [[N]]
+-; CHECK-NEXT:    [[SINK_SUB2_LE:%.*]] = sub i32 [[SINK_MUL_LE]], [[N2:%.*]]
+-; CHECK-NEXT:    [[TMP_SEL_LE:%.*]] = select i1 [[C]], i32 [[SINK_SUB2_LE]], i32 [[SINK_SUB_LE]]
+-; CHECK-NEXT:    ret i32 [[TMP_SEL_LE]]
++; CHECK-NEXT:    br label [[OUT12]]
++; CHECK:       Out12:
++; CHECK-NEXT:    [[TMP:%.*]] = phi i32 [ [[SINK_SUB2_LE]], [[OUT12_SPLIT_LOOP_EXIT]] ], [ [[SINK_SUB_LE]], [[OUT12_SPLIT_LOOP_EXIT1]] ]
++; CHECK-NEXT:    ret i32 [[TMP]]
+ ;
+ Entry:
+   br label %Loop
+diff --git a/llvm/test/Transforms/LoopStrengthReduce/AArch64/small-constant.ll b/llvm/test/Transforms/LoopStrengthReduce/AArch64/small-constant.ll
+index c5cc22655b0f..3b5de4fa0840 100644
+--- a/llvm/test/Transforms/LoopStrengthReduce/AArch64/small-constant.ll
++++ b/llvm/test/Transforms/LoopStrengthReduce/AArch64/small-constant.ll
+@@ -20,22 +20,21 @@ define float @test1(float* nocapture readonly %arr, i64 %start, float %threshold
+ ; CHECK-NEXT:    cbz x1, .LBB0_4
+ ; CHECK-NEXT:  // %bb.1: // %for.body.preheader
+ ; CHECK-NEXT:    add x8, x0, #28
+-; CHECK-NEXT:    fmov s2, #-7.00000000
+ ; CHECK-NEXT:  .LBB0_2: // %for.body
+ ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+ ; CHECK-NEXT:    ldr s1, [x8, x1, lsl #2]
+-; CHECK-NEXT:    adds x1, x1, #1
+-; CHECK-NEXT:    cset w9, hs
+ ; CHECK-NEXT:    fcmp s1, s0
+-; CHECK-NEXT:    fcsel s1, s1, s2, gt
+-; CHECK-NEXT:    ccmp w9, #0, #0, le
+-; CHECK-NEXT:    b.eq .LBB0_2
+-; CHECK-NEXT:  // %bb.3: // %cleanup2
+-; CHECK-NEXT:    fmov s0, s1
+-; CHECK-NEXT:    ret
++; CHECK-NEXT:    b.gt .LBB0_5
++; CHECK-NEXT:  // %bb.3: // %for.cond
++; CHECK-NEXT:    // in Loop: Header=BB0_2 Depth=1
++; CHECK-NEXT:    add x1, x1, #1
++; CHECK-NEXT:    cbnz x1, .LBB0_2
+ ; CHECK-NEXT:  .LBB0_4:
+ ; CHECK-NEXT:    fmov s0, #-7.00000000
+ ; CHECK-NEXT:    ret
++; CHECK-NEXT:  .LBB0_5: // %cleanup2
++; CHECK-NEXT:    fmov s0, s1
++; CHECK-NEXT:    ret
+ entry:
+   %cmp11 = icmp eq i64 %start, 0
+   br i1 %cmp11, label %cleanup2, label %for.body
+@@ -66,24 +65,23 @@ define float @test2(float* nocapture readonly %arr, i64 %start, float %threshold
+ ; CHECK-NEXT:    cbz x1, .LBB1_4
+ ; CHECK-NEXT:  // %bb.1: // %for.body.preheader
+ ; CHECK-NEXT:    add x8, x0, #28
+-; CHECK-NEXT:    fmov s2, #-7.00000000
+ ; CHECK-NEXT:  .LBB1_2: // %for.body
+ ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+-; CHECK-NEXT:    scvtf s1, x1
+-; CHECK-NEXT:    ldr s3, [x8, x1, lsl #2]
+-; CHECK-NEXT:    adds x1, x1, #1
+-; CHECK-NEXT:    cset w9, hs
+-; CHECK-NEXT:    fadd s1, s1, s0
+-; CHECK-NEXT:    fcmp s3, s1
+-; CHECK-NEXT:    fcsel s1, s3, s2, gt
+-; CHECK-NEXT:    ccmp w9, #0, #0, le
+-; CHECK-NEXT:    b.eq .LBB1_2
+-; CHECK-NEXT:  // %bb.3: // %cleanup4
+-; CHECK-NEXT:    fmov s0, s1
+-; CHECK-NEXT:    ret
++; CHECK-NEXT:    scvtf s2, x1
++; CHECK-NEXT:    ldr s1, [x8, x1, lsl #2]
++; CHECK-NEXT:    fadd s2, s2, s0
++; CHECK-NEXT:    fcmp s1, s2
++; CHECK-NEXT:    b.gt .LBB1_5
++; CHECK-NEXT:  // %bb.3: // %for.cond
++; CHECK-NEXT:    // in Loop: Header=BB1_2 Depth=1
++; CHECK-NEXT:    add x1, x1, #1
++; CHECK-NEXT:    cbnz x1, .LBB1_2
+ ; CHECK-NEXT:  .LBB1_4:
+ ; CHECK-NEXT:    fmov s0, #-7.00000000
+ ; CHECK-NEXT:    ret
++; CHECK-NEXT:  .LBB1_5: // %cleanup4
++; CHECK-NEXT:    fmov s0, s1
++; CHECK-NEXT:    ret
+ entry:
+   %cmp14 = icmp eq i64 %start, 0
+   br i1 %cmp14, label %cleanup4, label %for.body
+diff --git a/llvm/test/Transforms/LoopUnroll/runtime-loop-multiple-exits.ll b/llvm/test/Transforms/LoopUnroll/runtime-loop-multiple-exits.ll
+index f9ae34d64172..597690d6357c 100644
+--- a/llvm/test/Transforms/LoopUnroll/runtime-loop-multiple-exits.ll
++++ b/llvm/test/Transforms/LoopUnroll/runtime-loop-multiple-exits.ll
+@@ -3055,9 +3055,14 @@ define void @non_loop(i32 %arg) {
+ ; CHECK:       preheader:
+ ; CHECK-NEXT:    br label %header
+ ; CHECK:       header:
++; CHECK-NEXT:    br i1 true, label %latchExit, label %latch
++; CHECK:       latch:
++; CHECK-NEXT:    br label %latchExit
++; CHECK:       latchExit:
++; CHECK-NEXT:    %i2.ph = phi i32 [ %arg, %header ], [ -1, %latch ]
+ ; CHECK-NEXT:    br label %returnblock
+ ; CHECK:       returnblock:
+-; CHECK-NEXT:    %i2 = phi i32 [ -1, %entry ], [ %arg, %header ]
++; CHECK-NEXT:    %i2 = phi i32 [ -1, %entry ], [ %i2.ph, %latchExit ]
+ ; CHECK-NEXT:    ret void
+ ;
+ 
+@@ -3090,105 +3095,275 @@ returnblock:                                         ; preds = %latchExit, %entr
+ define void @unique_exit(i32 %N, i32 %M) {
+ ; EPILOG-LABEL: @unique_exit(
+ ; EPILOG-NEXT:  preheader:
+-; EPILOG-NEXT:    %M.shifted = shl nuw i32 %M, 3
++; EPILOG-NEXT:    %M.shifted = shl i32 %M, 3
++; EPILOG-NEXT:    %umax = call i32 @llvm.umax.i32(i32 %M.shifted, i32 1)
++; EPILOG-NEXT:    %0 = freeze i32 %umax
++; EPILOG-NEXT:    %1 = add i32 %0, -1
++; EPILOG-NEXT:    %xtraiter = and i32 %0, 7
++; EPILOG-NEXT:    %2 = icmp ult i32 %1, 7
++; EPILOG-NEXT:    br i1 %2, label %latchExit.unr-lcssa, label %preheader.new
++; EPILOG:       preheader.new:
++; EPILOG-NEXT:    %unroll_iter = sub i32 %0, %xtraiter
+ ; EPILOG-NEXT:    br label %header
+ ; EPILOG:       header:
+-; EPILOG-NEXT:    %i4 = phi i32 [ 0, %preheader ], [ %inc, %header ]
+-; EPILOG-NEXT:    %inc = add nuw i32 %i4, 1
++; EPILOG-NEXT:    %i4 = phi i32 [ 0, %preheader.new ], [ %inc.7, %latch.7 ]
++; EPILOG-NEXT:    %niter = phi i32 [ 0, %preheader.new ], [ %niter.next.7, %latch.7 ]
++; EPILOG-NEXT:    %inc = add nuw nsw i32 %i4, 1
+ ; EPILOG-NEXT:    %cmp1 = icmp ult i32 %inc, %N
+-; EPILOG-NEXT:    %cmp = icmp ult i32 %inc, %M.shifted
+-; EPILOG-NEXT:    %i2.ph.sel = select i1 %cmp1, i32 -1, i32 %i4
+-; EPILOG-NEXT:    %or.cond = select i1 %cmp1, i1 %cmp, i1 false
+-; EPILOG-NEXT:    br i1 %or.cond, label %header, label %latchExit
++; EPILOG-NEXT:    br i1 %cmp1, label %latch, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch:
++; EPILOG-NEXT:    %niter.next = add nuw nsw i32 %niter, 1
++; EPILOG-NEXT:    %inc.1 = add nuw nsw i32 %inc, 1
++; EPILOG-NEXT:    %cmp1.1 = icmp ult i32 %inc.1, %N
++; EPILOG-NEXT:    br i1 %cmp1.1, label %latch.1, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch.1:
++; EPILOG-NEXT:    %niter.next.1 = add nuw nsw i32 %niter.next, 1
++; EPILOG-NEXT:    %inc.2 = add nuw nsw i32 %inc.1, 1
++; EPILOG-NEXT:    %cmp1.2 = icmp ult i32 %inc.2, %N
++; EPILOG-NEXT:    br i1 %cmp1.2, label %latch.2, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch.2:
++; EPILOG-NEXT:    %niter.next.2 = add nuw nsw i32 %niter.next.1, 1
++; EPILOG-NEXT:    %inc.3 = add nuw nsw i32 %inc.2, 1
++; EPILOG-NEXT:    %cmp1.3 = icmp ult i32 %inc.3, %N
++; EPILOG-NEXT:    br i1 %cmp1.3, label %latch.3, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch.3:
++; EPILOG-NEXT:    %niter.next.3 = add nuw nsw i32 %niter.next.2, 1
++; EPILOG-NEXT:    %inc.4 = add nuw nsw i32 %inc.3, 1
++; EPILOG-NEXT:    %cmp1.4 = icmp ult i32 %inc.4, %N
++; EPILOG-NEXT:    br i1 %cmp1.4, label %latch.4, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch.4:
++; EPILOG-NEXT:    %niter.next.4 = add nuw nsw i32 %niter.next.3, 1
++; EPILOG-NEXT:    %inc.5 = add nuw nsw i32 %inc.4, 1
++; EPILOG-NEXT:    %cmp1.5 = icmp ult i32 %inc.5, %N
++; EPILOG-NEXT:    br i1 %cmp1.5, label %latch.5, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch.5:
++; EPILOG-NEXT:    %niter.next.5 = add nuw nsw i32 %niter.next.4, 1
++; EPILOG-NEXT:    %inc.6 = add nuw nsw i32 %inc.5, 1
++; EPILOG-NEXT:    %cmp1.6 = icmp ult i32 %inc.6, %N
++; EPILOG-NEXT:    br i1 %cmp1.6, label %latch.6, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch.6:
++; EPILOG-NEXT:    %niter.next.6 = add nuw nsw i32 %niter.next.5, 1
++; EPILOG-NEXT:    %inc.7 = add nuw i32 %inc.6, 1
++; EPILOG-NEXT:    %cmp1.7 = icmp ult i32 %inc.7, %N
++; EPILOG-NEXT:    br i1 %cmp1.7, label %latch.7, label %latchExit.epilog-lcssa.loopexit
++; EPILOG:       latch.7:
++; EPILOG-NEXT:    %niter.next.7 = add nuw i32 %niter.next.6, 1
++; EPILOG-NEXT:    %niter.ncmp.7 = icmp ne i32 %niter.next.7, %unroll_iter
++; EPILOG-NEXT:    br i1 %niter.ncmp.7, label %header, label %latchExit.unr-lcssa.loopexit
++; EPILOG:       latchExit.unr-lcssa.loopexit:
++; EPILOG-NEXT:    %i2.ph.ph.ph = phi i32 [ -1, %latch.7 ]
++; EPILOG-NEXT:    %i4.unr.ph = phi i32 [ %inc.7, %latch.7 ]
++; EPILOG-NEXT:    br label %latchExit.unr-lcssa
++; EPILOG:       latchExit.unr-lcssa:
++; EPILOG-NEXT:    %i2.ph.ph = phi i32 [ undef, %preheader ], [ %i2.ph.ph.ph, %latchExit.unr-lcssa.loopexit ]
++; EPILOG-NEXT:    %i4.unr = phi i32 [ 0, %preheader ], [ %i4.unr.ph, %latchExit.unr-lcssa.loopexit ]
++; EPILOG-NEXT:    %lcmp.mod = icmp ne i32 %xtraiter, 0
++; EPILOG-NEXT:    br i1 %lcmp.mod, label %header.epil.preheader, label %latchExit
++; EPILOG:       header.epil.preheader:
++; EPILOG-NEXT:    br label %header.epil
++; EPILOG:       header.epil:
++; EPILOG-NEXT:    %i4.epil = phi i32 [ %inc.epil, %latch.epil ], [ %i4.unr, %header.epil.preheader ]
++; EPILOG-NEXT:    %epil.iter = phi i32 [ 0, %header.epil.preheader ], [ %epil.iter.next, %latch.epil ]
++; EPILOG-NEXT:    %inc.epil = add nuw i32 %i4.epil, 1
++; EPILOG-NEXT:    %cmp1.epil = icmp ult i32 %inc.epil, %N
++; EPILOG-NEXT:    br i1 %cmp1.epil, label %latch.epil, label %latchExit.epilog-lcssa.loopexit2
++; EPILOG:       latch.epil:
++; EPILOG-NEXT:    %cmp.epil = icmp ult i32 %inc.epil, %M.shifted
++; EPILOG-NEXT:    %epil.iter.next = add i32 %epil.iter, 1
++; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i32 %epil.iter.next, %xtraiter
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %header.epil, label %latchExit.epilog-lcssa.loopexit2, !llvm.loop !8
++; EPILOG:       latchExit.epilog-lcssa.loopexit:
++; EPILOG-NEXT:    %i2.ph.ph1.ph = phi i32 [ %i4, %header ], [ %inc, %latch ], [ %inc.1, %latch.1 ], [ %inc.2, %latch.2 ], [ %inc.3, %latch.3 ], [ %inc.4, %latch.4 ], [ %inc.5, %latch.5 ], [ %inc.6, %latch.6 ]
++; EPILOG-NEXT:    br label %latchExit.epilog-lcssa
++; EPILOG:       latchExit.epilog-lcssa.loopexit2:
++; EPILOG-NEXT:    %i2.ph.ph1.ph3 = phi i32 [ %i4.epil, %header.epil ], [ -1, %latch.epil ]
++; EPILOG-NEXT:    br label %latchExit.epilog-lcssa
++; EPILOG:       latchExit.epilog-lcssa:
++; EPILOG-NEXT:    %i2.ph.ph1 = phi i32 [ %i2.ph.ph1.ph, %latchExit.epilog-lcssa.loopexit ], [ %i2.ph.ph1.ph3, %latchExit.epilog-lcssa.loopexit2 ]
++; EPILOG-NEXT:    br label %latchExit
+ ; EPILOG:       latchExit:
++; EPILOG-NEXT:    %i2.ph = phi i32 [ %i2.ph.ph, %latchExit.unr-lcssa ], [ %i2.ph.ph1, %latchExit.epilog-lcssa ]
+ ; EPILOG-NEXT:    ret void
+ ;
+ ; EPILOG-BLOCK-LABEL: @unique_exit(
+ ; EPILOG-BLOCK-NEXT:  preheader:
+ ; EPILOG-BLOCK-NEXT:    %M.shifted = shl i32 %M, 3
+ ; EPILOG-BLOCK-NEXT:    %umax = call i32 @llvm.umax.i32(i32 %M.shifted, i32 1)
+-; EPILOG-BLOCK-NEXT:    %0 = add i32 %umax, -1
+-; EPILOG-BLOCK-NEXT:    %1 = freeze i32 %0
+-; EPILOG-BLOCK-NEXT:    %umax1 = call i32 @llvm.umax.i32(i32 %N, i32 1)
+-; EPILOG-BLOCK-NEXT:    %2 = add i32 %umax1, -1
+-; EPILOG-BLOCK-NEXT:    %umin = call i32 @llvm.umin.i32(i32 %1, i32 %2)
+-; EPILOG-BLOCK-NEXT:    %3 = add nuw i32 %umin, 1
+-; EPILOG-BLOCK-NEXT:    %xtraiter = and i32 %3, 1
+-; EPILOG-BLOCK-NEXT:    %4 = icmp ult i32 %umin, 1
+-; EPILOG-BLOCK-NEXT:    br i1 %4, label %latchExit.unr-lcssa, label %preheader.new
++; EPILOG-BLOCK-NEXT:    %0 = freeze i32 %umax
++; EPILOG-BLOCK-NEXT:    %1 = add i32 %0, -1
++; EPILOG-BLOCK-NEXT:    %xtraiter = and i32 %0, 1
++; EPILOG-BLOCK-NEXT:    %2 = icmp ult i32 %1, 1
++; EPILOG-BLOCK-NEXT:    br i1 %2, label %latchExit.unr-lcssa, label %preheader.new
+ ; EPILOG-BLOCK:       preheader.new:
+-; EPILOG-BLOCK-NEXT:    %unroll_iter = sub i32 %3, %xtraiter
++; EPILOG-BLOCK-NEXT:    %unroll_iter = sub i32 %0, %xtraiter
+ ; EPILOG-BLOCK-NEXT:    br label %header
+ ; EPILOG-BLOCK:       header:
+-; EPILOG-BLOCK-NEXT:    %i4 = phi i32 [ 0, %preheader.new ], [ %inc.1, %header ]
+-; EPILOG-BLOCK-NEXT:    %niter = phi i32 [ 0, %preheader.new ], [ %niter.next.1, %header ]
++; EPILOG-BLOCK-NEXT:    %i4 = phi i32 [ 0, %preheader.new ], [ %inc.1, %latch.1 ]
++; EPILOG-BLOCK-NEXT:    %niter = phi i32 [ 0, %preheader.new ], [ %niter.next.1, %latch.1 ]
+ ; EPILOG-BLOCK-NEXT:    %inc = add nuw nsw i32 %i4, 1
++; EPILOG-BLOCK-NEXT:    %cmp1 = icmp ult i32 %inc, %N
++; EPILOG-BLOCK-NEXT:    br i1 %cmp1, label %latch, label %latchExit.epilog-lcssa.loopexit
++; EPILOG-BLOCK:       latch:
+ ; EPILOG-BLOCK-NEXT:    %niter.next = add nuw nsw i32 %niter, 1
+ ; EPILOG-BLOCK-NEXT:    %inc.1 = add nuw i32 %inc, 1
+-; EPILOG-BLOCK-NEXT:    %niter.next.1 = add i32 %niter.next, 1
++; EPILOG-BLOCK-NEXT:    %cmp1.1 = icmp ult i32 %inc.1, %N
++; EPILOG-BLOCK-NEXT:    br i1 %cmp1.1, label %latch.1, label %latchExit.epilog-lcssa.loopexit
++; EPILOG-BLOCK:       latch.1:
++; EPILOG-BLOCK-NEXT:    %niter.next.1 = add nuw i32 %niter.next, 1
+ ; EPILOG-BLOCK-NEXT:    %niter.ncmp.1 = icmp ne i32 %niter.next.1, %unroll_iter
+ ; EPILOG-BLOCK-NEXT:    br i1 %niter.ncmp.1, label %header, label %latchExit.unr-lcssa.loopexit, !llvm.loop !8
+ ; EPILOG-BLOCK:       latchExit.unr-lcssa.loopexit:
++; EPILOG-BLOCK-NEXT:    %i2.ph.ph.ph = phi i32 [ -1, %latch.1 ]
++; EPILOG-BLOCK-NEXT:    %i4.unr.ph = phi i32 [ %inc.1, %latch.1 ]
+ ; EPILOG-BLOCK-NEXT:    br label %latchExit.unr-lcssa
+ ; EPILOG-BLOCK:       latchExit.unr-lcssa:
++; EPILOG-BLOCK-NEXT:    %i2.ph.ph = phi i32 [ undef, %preheader ], [ %i2.ph.ph.ph, %latchExit.unr-lcssa.loopexit ]
++; EPILOG-BLOCK-NEXT:    %i4.unr = phi i32 [ 0, %preheader ], [ %i4.unr.ph, %latchExit.unr-lcssa.loopexit ]
+ ; EPILOG-BLOCK-NEXT:    %lcmp.mod = icmp ne i32 %xtraiter, 0
+ ; EPILOG-BLOCK-NEXT:    br i1 %lcmp.mod, label %header.epil.preheader, label %latchExit
+ ; EPILOG-BLOCK:       header.epil.preheader:
+ ; EPILOG-BLOCK-NEXT:    br label %header.epil
+ ; EPILOG-BLOCK:       header.epil:
++; EPILOG-BLOCK-NEXT:    %inc.epil = add nuw i32 %i4.unr, 1
++; EPILOG-BLOCK-NEXT:    %cmp1.epil = icmp ult i32 %inc.epil, %N
++; EPILOG-BLOCK-NEXT:    br i1 %cmp1.epil, label %latch.epil, label %latchExit.epilog-lcssa
++; EPILOG-BLOCK:       latch.epil:
++; EPILOG-BLOCK-NEXT:    br label %latchExit.epilog-lcssa
++; EPILOG-BLOCK:       latchExit.epilog-lcssa.loopexit:
++; EPILOG-BLOCK-NEXT:    %i2.ph.ph1.ph = phi i32 [ %i4, %header ], [ %inc, %latch ]
++; EPILOG-BLOCK-NEXT:    br label %latchExit.epilog-lcssa
++; EPILOG-BLOCK:       latchExit.epilog-lcssa:
++; EPILOG-BLOCK-NEXT:    %i2.ph.ph1 = phi i32 [ -1, %latch.epil ], [ %i4.unr, %header.epil ], [ %i2.ph.ph1.ph, %latchExit.epilog-lcssa.loopexit ]
+ ; EPILOG-BLOCK-NEXT:    br label %latchExit
+ ; EPILOG-BLOCK:       latchExit:
++; EPILOG-BLOCK-NEXT:    %i2.ph = phi i32 [ %i2.ph.ph, %latchExit.unr-lcssa ], [ %i2.ph.ph1, %latchExit.epilog-lcssa ]
+ ; EPILOG-BLOCK-NEXT:    ret void
+ ;
+ ; PROLOG-LABEL: @unique_exit(
+ ; PROLOG-NEXT:  preheader:
+-; PROLOG-NEXT:    %M.shifted = shl nuw i32 %M, 3
++; PROLOG-NEXT:    %M.shifted = shl i32 %M, 3
++; PROLOG-NEXT:    %umax = call i32 @llvm.umax.i32(i32 %M.shifted, i32 1)
++; PROLOG-NEXT:    %0 = freeze i32 %umax
++; PROLOG-NEXT:    %1 = add i32 %0, -1
++; PROLOG-NEXT:    %xtraiter = and i32 %0, 7
++; PROLOG-NEXT:    %lcmp.mod = icmp ne i32 %xtraiter, 0
++; PROLOG-NEXT:    br i1 %lcmp.mod, label %header.prol.preheader, label %header.prol.loopexit
++; PROLOG:       header.prol.preheader:
++; PROLOG-NEXT:    br label %header.prol
++; PROLOG:       header.prol:
++; PROLOG-NEXT:    %i4.prol = phi i32 [ %inc.prol, %latch.prol ], [ 0, %header.prol.preheader ]
++; PROLOG-NEXT:    %prol.iter = phi i32 [ 0, %header.prol.preheader ], [ %prol.iter.next, %latch.prol ]
++; PROLOG-NEXT:    %inc.prol = add nuw i32 %i4.prol, 1
++; PROLOG-NEXT:    %cmp1.prol = icmp ult i32 %inc.prol, %N
++; PROLOG-NEXT:    br i1 %cmp1.prol, label %latch.prol, label %latchExit.unr-lcssa.loopexit1
++; PROLOG:       latch.prol:
++; PROLOG-NEXT:    %cmp.prol = icmp ult i32 %inc.prol, %M.shifted
++; PROLOG-NEXT:    %prol.iter.next = add i32 %prol.iter, 1
++; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i32 %prol.iter.next, %xtraiter
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %header.prol, label %header.prol.loopexit.unr-lcssa, !llvm.loop !8
++; PROLOG:       header.prol.loopexit.unr-lcssa:
++; PROLOG-NEXT:    %i4.unr.ph = phi i32 [ %inc.prol, %latch.prol ]
++; PROLOG-NEXT:    %i2.ph.unr.ph = phi i32 [ -1, %latch.prol ]
++; PROLOG-NEXT:    br label %header.prol.loopexit
++; PROLOG:       header.prol.loopexit:
++; PROLOG-NEXT:    %i4.unr = phi i32 [ 0, %preheader ], [ %i4.unr.ph, %header.prol.loopexit.unr-lcssa ]
++; PROLOG-NEXT:    %i2.ph.unr = phi i32 [ undef, %preheader ], [ %i2.ph.unr.ph, %header.prol.loopexit.unr-lcssa ]
++; PROLOG-NEXT:    %2 = icmp ult i32 %1, 7
++; PROLOG-NEXT:    br i1 %2, label %latchExit, label %preheader.new
++; PROLOG:       preheader.new:
+ ; PROLOG-NEXT:    br label %header
+ ; PROLOG:       header:
+-; PROLOG-NEXT:    %i4 = phi i32 [ 0, %preheader ], [ %inc, %header ]
++; PROLOG-NEXT:    %i4 = phi i32 [ %i4.unr, %preheader.new ], [ %inc.7, %latch.7 ]
+ ; PROLOG-NEXT:    %inc = add nuw i32 %i4, 1
+ ; PROLOG-NEXT:    %cmp1 = icmp ult i32 %inc, %N
+-; PROLOG-NEXT:    %cmp = icmp ult i32 %inc, %M.shifted
+-; PROLOG-NEXT:    %i2.ph.sel = select i1 %cmp1, i32 -1, i32 %i4
+-; PROLOG-NEXT:    %or.cond = select i1 %cmp1, i1 %cmp, i1 false
+-; PROLOG-NEXT:    br i1 %or.cond, label %header, label %latchExit
++; PROLOG-NEXT:    br i1 %cmp1, label %latch, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch:
++; PROLOG-NEXT:    %inc.1 = add nuw i32 %inc, 1
++; PROLOG-NEXT:    %cmp1.1 = icmp ult i32 %inc.1, %N
++; PROLOG-NEXT:    br i1 %cmp1.1, label %latch.1, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch.1:
++; PROLOG-NEXT:    %inc.2 = add nuw i32 %inc.1, 1
++; PROLOG-NEXT:    %cmp1.2 = icmp ult i32 %inc.2, %N
++; PROLOG-NEXT:    br i1 %cmp1.2, label %latch.2, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch.2:
++; PROLOG-NEXT:    %inc.3 = add nuw i32 %inc.2, 1
++; PROLOG-NEXT:    %cmp1.3 = icmp ult i32 %inc.3, %N
++; PROLOG-NEXT:    br i1 %cmp1.3, label %latch.3, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch.3:
++; PROLOG-NEXT:    %inc.4 = add nuw i32 %inc.3, 1
++; PROLOG-NEXT:    %cmp1.4 = icmp ult i32 %inc.4, %N
++; PROLOG-NEXT:    br i1 %cmp1.4, label %latch.4, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch.4:
++; PROLOG-NEXT:    %inc.5 = add nuw i32 %inc.4, 1
++; PROLOG-NEXT:    %cmp1.5 = icmp ult i32 %inc.5, %N
++; PROLOG-NEXT:    br i1 %cmp1.5, label %latch.5, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch.5:
++; PROLOG-NEXT:    %inc.6 = add nuw i32 %inc.5, 1
++; PROLOG-NEXT:    %cmp1.6 = icmp ult i32 %inc.6, %N
++; PROLOG-NEXT:    br i1 %cmp1.6, label %latch.6, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch.6:
++; PROLOG-NEXT:    %inc.7 = add nuw i32 %inc.6, 1
++; PROLOG-NEXT:    %cmp1.7 = icmp ult i32 %inc.7, %N
++; PROLOG-NEXT:    br i1 %cmp1.7, label %latch.7, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latch.7:
++; PROLOG-NEXT:    %cmp.7 = icmp ult i32 %inc.7, %M.shifted
++; PROLOG-NEXT:    br i1 %cmp.7, label %header, label %latchExit.unr-lcssa.loopexit
++; PROLOG:       latchExit.unr-lcssa.loopexit:
++; PROLOG-NEXT:    %i2.ph.ph.ph = phi i32 [ %i4, %header ], [ %inc, %latch ], [ %inc.1, %latch.1 ], [ %inc.2, %latch.2 ], [ %inc.3, %latch.3 ], [ %inc.4, %latch.4 ], [ %inc.5, %latch.5 ], [ %inc.6, %latch.6 ], [ -1, %latch.7 ]
++; PROLOG-NEXT:    br label %latchExit.unr-lcssa
++; PROLOG:       latchExit.unr-lcssa.loopexit1:
++; PROLOG-NEXT:    %i2.ph.ph.ph2 = phi i32 [ %i4.prol, %header.prol ]
++; PROLOG-NEXT:    br label %latchExit.unr-lcssa
++; PROLOG:       latchExit.unr-lcssa:
++; PROLOG-NEXT:    %i2.ph.ph = phi i32 [ %i2.ph.ph.ph, %latchExit.unr-lcssa.loopexit ], [ %i2.ph.ph.ph2, %latchExit.unr-lcssa.loopexit1 ]
++; PROLOG-NEXT:    br label %latchExit
+ ; PROLOG:       latchExit:
++; PROLOG-NEXT:    %i2.ph = phi i32 [ %i2.ph.unr, %header.prol.loopexit ], [ %i2.ph.ph, %latchExit.unr-lcssa ]
+ ; PROLOG-NEXT:    ret void
+ ;
+ ; PROLOG-BLOCK-LABEL: @unique_exit(
+ ; PROLOG-BLOCK-NEXT:  preheader:
+ ; PROLOG-BLOCK-NEXT:    %M.shifted = shl i32 %M, 3
+ ; PROLOG-BLOCK-NEXT:    %umax = call i32 @llvm.umax.i32(i32 %M.shifted, i32 1)
+-; PROLOG-BLOCK-NEXT:    %0 = add i32 %umax, -1
+-; PROLOG-BLOCK-NEXT:    %1 = freeze i32 %0
+-; PROLOG-BLOCK-NEXT:    %umax1 = call i32 @llvm.umax.i32(i32 %N, i32 1)
+-; PROLOG-BLOCK-NEXT:    %2 = add i32 %umax1, -1
+-; PROLOG-BLOCK-NEXT:    %umin = call i32 @llvm.umin.i32(i32 %1, i32 %2)
+-; PROLOG-BLOCK-NEXT:    %3 = add nuw i32 %umin, 1
+-; PROLOG-BLOCK-NEXT:    %xtraiter = and i32 %3, 1
++; PROLOG-BLOCK-NEXT:    %0 = freeze i32 %umax
++; PROLOG-BLOCK-NEXT:    %1 = add i32 %0, -1
++; PROLOG-BLOCK-NEXT:    %xtraiter = and i32 %0, 1
+ ; PROLOG-BLOCK-NEXT:    %lcmp.mod = icmp ne i32 %xtraiter, 0
+ ; PROLOG-BLOCK-NEXT:    br i1 %lcmp.mod, label %header.prol.preheader, label %header.prol.loopexit
+ ; PROLOG-BLOCK:       header.prol.preheader:
+ ; PROLOG-BLOCK-NEXT:    br label %header.prol
+ ; PROLOG-BLOCK:       header.prol:
++; PROLOG-BLOCK-NEXT:    %cmp1.prol = icmp ult i32 1, %N
++; PROLOG-BLOCK-NEXT:    br i1 %cmp1.prol, label %latch.prol, label %latchExit.unr-lcssa
++; PROLOG-BLOCK:       latch.prol:
+ ; PROLOG-BLOCK-NEXT:    br label %header.prol.loopexit
+ ; PROLOG-BLOCK:       header.prol.loopexit:
+-; PROLOG-BLOCK-NEXT:    %i4.unr = phi i32 [ 0, %preheader ], [ 1, %header.prol ]
+-; PROLOG-BLOCK-NEXT:    %4 = icmp ult i32 %umin, 1
+-; PROLOG-BLOCK-NEXT:    br i1 %4, label %latchExit, label %preheader.new
++; PROLOG-BLOCK-NEXT:    %i4.unr = phi i32 [ 0, %preheader ], [ 1, %latch.prol ]
++; PROLOG-BLOCK-NEXT:    %i2.ph.unr = phi i32 [ undef, %preheader ], [ -1, %latch.prol ]
++; PROLOG-BLOCK-NEXT:    %2 = icmp ult i32 %1, 1
++; PROLOG-BLOCK-NEXT:    br i1 %2, label %latchExit, label %preheader.new
+ ; PROLOG-BLOCK:       preheader.new:
+ ; PROLOG-BLOCK-NEXT:    br label %header
+ ; PROLOG-BLOCK:       header:
+-; PROLOG-BLOCK-NEXT:    %i4 = phi i32 [ %i4.unr, %preheader.new ], [ %inc.1, %header ]
++; PROLOG-BLOCK-NEXT:    %i4 = phi i32 [ %i4.unr, %preheader.new ], [ %inc.1, %latch.1 ]
+ ; PROLOG-BLOCK-NEXT:    %inc = add nuw i32 %i4, 1
++; PROLOG-BLOCK-NEXT:    %cmp1 = icmp ult i32 %inc, %N
++; PROLOG-BLOCK-NEXT:    br i1 %cmp1, label %latch, label %latchExit.unr-lcssa.loopexit
++; PROLOG-BLOCK:       latch:
+ ; PROLOG-BLOCK-NEXT:    %inc.1 = add nuw i32 %inc, 1
+ ; PROLOG-BLOCK-NEXT:    %cmp1.1 = icmp ult i32 %inc.1, %N
++; PROLOG-BLOCK-NEXT:    br i1 %cmp1.1, label %latch.1, label %latchExit.unr-lcssa.loopexit
++; PROLOG-BLOCK:       latch.1:
+ ; PROLOG-BLOCK-NEXT:    %cmp.1 = icmp ult i32 %inc.1, %M.shifted
+-; PROLOG-BLOCK-NEXT:    %or.cond.1 = select i1 %cmp1.1, i1 %cmp.1, i1 false
+-; PROLOG-BLOCK-NEXT:    br i1 %or.cond.1, label %header, label %latchExit.unr-lcssa, !llvm.loop !8
++; PROLOG-BLOCK-NEXT:    br i1 %cmp.1, label %header, label %latchExit.unr-lcssa.loopexit, !llvm.loop !8
++; PROLOG-BLOCK:       latchExit.unr-lcssa.loopexit:
++; PROLOG-BLOCK-NEXT:    %i2.ph.ph.ph = phi i32 [ %i4, %header ], [ %inc, %latch ], [ -1, %latch.1 ]
++; PROLOG-BLOCK-NEXT:    br label %latchExit.unr-lcssa
+ ; PROLOG-BLOCK:       latchExit.unr-lcssa:
++; PROLOG-BLOCK-NEXT:    %i2.ph.ph = phi i32 [ 0, %header.prol ], [ %i2.ph.ph.ph, %latchExit.unr-lcssa.loopexit ]
+ ; PROLOG-BLOCK-NEXT:    br label %latchExit
+ ; PROLOG-BLOCK:       latchExit:
++; PROLOG-BLOCK-NEXT:    %i2.ph = phi i32 [ %i2.ph.unr, %header.prol.loopexit ], [ %i2.ph.ph, %latchExit.unr-lcssa ]
+ ; PROLOG-BLOCK-NEXT:    ret void
+ ;
+ 
+@@ -3358,7 +3533,7 @@ define i64 @test5(i64 %trip, i64 %add, i1 %cond) {
+ ; EPILOG-NEXT:    %cmp.epil = icmp ne i64 %iv_next.epil, %trip
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %latchexit.epilog-lcssa, !llvm.loop !8
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %latchexit.epilog-lcssa, !llvm.loop !9
+ ; EPILOG:       latchexit.epilog-lcssa:
+ ; EPILOG-NEXT:    %sum.next.lcssa.ph1 = phi i64 [ %sum.next.epil, %loop_latch.epil ]
+ ; EPILOG-NEXT:    br label %latchexit
+@@ -3464,7 +3639,7 @@ define i64 @test5(i64 %trip, i64 %add, i1 %cond) {
+ ; PROLOG-NEXT:    %cmp.prol = icmp ne i64 %iv_next.prol, %trip
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !8
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !9
+ ; PROLOG:       loop_header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %iv.unr.ph = phi i64 [ %iv_next.prol, %loop_latch.prol ]
+ ; PROLOG-NEXT:    %sum.unr.ph = phi i64 [ %sum.next.prol, %loop_latch.prol ]
+@@ -3800,7 +3975,7 @@ define i32 @test6(i32* nocapture %a, i64 %n, i1 %cond, i32 %x) {
+ ; EPILOG-NEXT:    %exitcond.epil = icmp eq i64 %indvars.iv.next.epil, %n
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %header.epil, label %latch_exit.epilog-lcssa, !llvm.loop !9
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %header.epil, label %latch_exit.epilog-lcssa, !llvm.loop !10
+ ; EPILOG:       latch_exit.epilog-lcssa:
+ ; EPILOG-NEXT:    %sum.0.lcssa.ph1 = phi i32 [ %add.epil, %latch.epil ]
+ ; EPILOG-NEXT:    br label %latch_exit
+@@ -3921,7 +4096,7 @@ define i32 @test6(i32* nocapture %a, i64 %n, i1 %cond, i32 %x) {
+ ; PROLOG-NEXT:    %exitcond.prol = icmp eq i64 %indvars.iv.next.prol, %n
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %header.prol, label %header.prol.loopexit.unr-lcssa, !llvm.loop !9
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %header.prol, label %header.prol.loopexit.unr-lcssa, !llvm.loop !10
+ ; PROLOG:       header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %sum.0.lcssa.unr.ph = phi i32 [ %add.prol, %latch.prol ]
+ ; PROLOG-NEXT:    %indvars.iv.unr.ph = phi i64 [ %indvars.iv.next.prol, %latch.prol ]
+@@ -4209,7 +4384,7 @@ define i32 @test7(i32 %arg, i32 %arg1, i32 %arg2) {
+ ; EPILOG-NEXT:    %i9.epil = icmp slt i64 %add.epil, %sext
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %header.epil, label %latchexit.epilog-lcssa, !llvm.loop !10
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %header.epil, label %latchexit.epilog-lcssa, !llvm.loop !11
+ ; EPILOG:       latchexit.epilog-lcssa:
+ ; EPILOG-NEXT:    br label %latchexit
+ ; EPILOG:       latchexit:
+@@ -4301,7 +4476,7 @@ define i32 @test7(i32 %arg, i32 %arg1, i32 %arg2) {
+ ; PROLOG-NEXT:    %i9.prol = icmp slt i64 %add.prol, %sext
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %header.prol, label %header.prol.loopexit.unr-lcssa, !llvm.loop !10
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %header.prol, label %header.prol.loopexit.unr-lcssa, !llvm.loop !11
+ ; PROLOG:       header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %i6.unr.ph = phi i64 [ %add.prol, %latch.prol ]
+ ; PROLOG-NEXT:    br label %header.prol.loopexit
+@@ -4510,7 +4685,7 @@ define void @test8() {
+ ; EPILOG-NEXT:    %i6.epil = icmp ult i64 %i4.epil, 100
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %innerH.epil, label %exit.epilog-lcssa, !llvm.loop !11
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %innerH.epil, label %exit.epilog-lcssa, !llvm.loop !12
+ ; EPILOG:       exit.epilog-lcssa:
+ ; EPILOG-NEXT:    br label %exit
+ ; EPILOG:       exit.loopexit:
+@@ -4618,7 +4793,7 @@ define void @test8() {
+ ; PROLOG-NEXT:    %i6.prol = icmp ult i64 %i4.prol, 100
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %innerH.prol, label %innerH.prol.loopexit.unr-lcssa, !llvm.loop !11
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %innerH.prol, label %innerH.prol.loopexit.unr-lcssa, !llvm.loop !12
+ ; PROLOG:       innerH.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %i3.unr.ph = phi i64 [ %i4.prol, %latch.prol ]
+ ; PROLOG-NEXT:    br label %innerH.prol.loopexit
+@@ -4847,7 +5022,7 @@ define i8 addrspace(1)* @test9(i8* nocapture readonly %arg, i32 %n) {
+ ; EPILOG-NEXT:    %iv.next.epil = add nuw nsw i64 %phi.epil, 1
+ ; EPILOG-NEXT:    %epil.iter.next = add i32 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i32 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %header.epil, label %outerLatch.loopexit.epilog-lcssa, !llvm.loop !12
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %header.epil, label %outerLatch.loopexit.epilog-lcssa, !llvm.loop !13
+ ; EPILOG:       outerLatch.loopexit.epilog-lcssa:
+ ; EPILOG-NEXT:    br label %outerLatch.loopexit
+ ; EPILOG:       outerLatch.loopexit:
+@@ -4984,7 +5159,7 @@ define i8 addrspace(1)* @test9(i8* nocapture readonly %arg, i32 %n) {
+ ; PROLOG-NEXT:    %iv.next.prol = add nuw nsw i64 %phi.prol, 1
+ ; PROLOG-NEXT:    %prol.iter.next = add i32 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i32 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %header.prol, label %header.prol.loopexit.unr-lcssa, !llvm.loop !12
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %header.prol, label %header.prol.loopexit.unr-lcssa, !llvm.loop !13
+ ; PROLOG:       header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %phi.unr.ph = phi i64 [ %iv.next.prol, %latch.prol ]
+ ; PROLOG-NEXT:    br label %header.prol.loopexit
+@@ -5266,7 +5441,7 @@ define void @test10(i64 %trip, i64 %trip2) {
+ ; EPILOG-NEXT:    %cmp.epil = icmp ne i64 %iv_next.epil, %trip
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit2.epilog-lcssa, !llvm.loop !13
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit2.epilog-lcssa, !llvm.loop !14
+ ; EPILOG:       exit2.epilog-lcssa:
+ ; EPILOG-NEXT:    br label %exit2
+ ; EPILOG:       exit2:
+@@ -5341,7 +5516,7 @@ define void @test10(i64 %trip, i64 %trip2) {
+ ; PROLOG-NEXT:    %cmp.prol = icmp ne i64 %iv_next.prol, %trip
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !13
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !14
+ ; PROLOG:       loop_header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %iv.unr.ph = phi i64 [ %iv_next.prol, %loop_latch.prol ]
+ ; PROLOG-NEXT:    br label %loop_header.prol.loopexit
+@@ -5554,7 +5729,7 @@ define void @test11(i64 %trip, i1 %cond) {
+ ; EPILOG-NEXT:    %cmp.epil = icmp ne i64 %iv_next.epil, %trip
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit2.epilog-lcssa, !llvm.loop !14
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit2.epilog-lcssa, !llvm.loop !15
+ ; EPILOG:       exit2.epilog-lcssa:
+ ; EPILOG-NEXT:    br label %exit2
+ ; EPILOG:       exit2:
+@@ -5623,7 +5798,7 @@ define void @test11(i64 %trip, i1 %cond) {
+ ; PROLOG-NEXT:    %cmp.prol = icmp ne i64 %iv_next.prol, %trip
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !14
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !15
+ ; PROLOG:       loop_header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %iv.unr.ph = phi i64 [ %iv_next.prol, %loop_latch.prol ]
+ ; PROLOG-NEXT:    br label %loop_header.prol.loopexit
+@@ -5845,7 +6020,7 @@ define void @test12(i64 %trip, i64 %trip2, i1 %cond) {
+ ; EPILOG-NEXT:    %cmp.epil = icmp ne i64 %iv_next.epil, %trip
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit1.epilog-lcssa.loopexit1, !llvm.loop !15
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit1.epilog-lcssa.loopexit1, !llvm.loop !16
+ ; EPILOG:       exit1.epilog-lcssa.loopexit:
+ ; EPILOG-NEXT:    br label %exit1.epilog-lcssa
+ ; EPILOG:       exit1.epilog-lcssa.loopexit1:
+@@ -5932,7 +6107,7 @@ define void @test12(i64 %trip, i64 %trip2, i1 %cond) {
+ ; PROLOG-NEXT:    %cmp.prol = icmp ne i64 %iv_next.prol, %trip
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !15
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !16
+ ; PROLOG:       loop_header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %iv.unr.ph = phi i64 [ %iv_next.prol, %loop_latch.prol ]
+ ; PROLOG-NEXT:    br label %loop_header.prol.loopexit
+@@ -6194,7 +6369,7 @@ define void @test13(i64 %trip, i64 %trip2) {
+ ; EPILOG-NEXT:    %cmp.epil = icmp ne i64 %iv_next.epil, %trip
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit1.epilog-lcssa.loopexit1, !llvm.loop !16
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit1.epilog-lcssa.loopexit1, !llvm.loop !17
+ ; EPILOG:       exit1.epilog-lcssa.loopexit:
+ ; EPILOG-NEXT:    br label %exit1.epilog-lcssa
+ ; EPILOG:       exit1.epilog-lcssa.loopexit1:
+@@ -6285,7 +6460,7 @@ define void @test13(i64 %trip, i64 %trip2) {
+ ; PROLOG-NEXT:    %cmp.prol = icmp ne i64 %iv_next.prol, %trip
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !16
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !17
+ ; PROLOG:       loop_header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %iv.unr.ph = phi i64 [ %iv_next.prol, %loop_latch.prol ]
+ ; PROLOG-NEXT:    br label %loop_header.prol.loopexit
+@@ -6548,7 +6723,7 @@ define void @test14(i64 %trip, i1 %cond) {
+ ; EPILOG-NEXT:    %cmp.epil = icmp ne i64 %iv_next.epil, %trip
+ ; EPILOG-NEXT:    %epil.iter.next = add i64 %epil.iter, 1
+ ; EPILOG-NEXT:    %epil.iter.cmp = icmp ne i64 %epil.iter.next, %xtraiter
+-; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit1.epilog-lcssa.loopexit1, !llvm.loop !17
++; EPILOG-NEXT:    br i1 %epil.iter.cmp, label %loop_header.epil, label %exit1.epilog-lcssa.loopexit1, !llvm.loop !18
+ ; EPILOG:       exit1.epilog-lcssa.loopexit:
+ ; EPILOG-NEXT:    br label %exit1.epilog-lcssa
+ ; EPILOG:       exit1.epilog-lcssa.loopexit1:
+@@ -6633,7 +6808,7 @@ define void @test14(i64 %trip, i1 %cond) {
+ ; PROLOG-NEXT:    %cmp.prol = icmp ne i64 %iv_next.prol, %trip
+ ; PROLOG-NEXT:    %prol.iter.next = add i64 %prol.iter, 1
+ ; PROLOG-NEXT:    %prol.iter.cmp = icmp ne i64 %prol.iter.next, %xtraiter
+-; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !17
++; PROLOG-NEXT:    br i1 %prol.iter.cmp, label %loop_header.prol, label %loop_header.prol.loopexit.unr-lcssa, !llvm.loop !18
+ ; PROLOG:       loop_header.prol.loopexit.unr-lcssa:
+ ; PROLOG-NEXT:    %iv.unr.ph = phi i64 [ %iv_next.prol, %loop_latch.prol ]
+ ; PROLOG-NEXT:    br label %loop_header.prol.loopexit
+diff --git a/llvm/test/Transforms/LoopUnroll/scevunroll.ll b/llvm/test/Transforms/LoopUnroll/scevunroll.ll
+index 9a242038bd7e..297760dfac35 100644
+--- a/llvm/test/Transforms/LoopUnroll/scevunroll.ll
++++ b/llvm/test/Transforms/LoopUnroll/scevunroll.ll
+@@ -310,14 +310,16 @@ define void @nsw_latch(i32* %a) nounwind {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[FOR_BODY:%.*]]
+ ; CHECK:       for.body:
+-; CHECK-NEXT:    [[B_03:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[ADD:%.*]], [[FOR_BODY]] ]
+-; CHECK-NEXT:    [[TOBOOL_NOT:%.*]] = icmp ne i32 [[B_03]], 0
+-; CHECK-NEXT:    [[ADD]] = add nuw nsw i32 [[B_03]], 8
+-; CHECK-NEXT:    [[RETVAL_0_SEL:%.*]] = select i1 [[TOBOOL_NOT]], i32 1, i32 0
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[TOBOOL_NOT]], i1 true, i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[RETURN:%.*]], label [[FOR_BODY]]
++; CHECK-NEXT:    br label [[FOR_COND:%.*]]
++; CHECK:       for.cond:
++; CHECK-NEXT:    br i1 false, label [[RETURN:%.*]], label [[FOR_BODY_1:%.*]]
++; CHECK:       for.body.1:
++; CHECK-NEXT:    br i1 false, label [[FOR_COND_1:%.*]], label [[RETURN]]
++; CHECK:       for.cond.1:
++; CHECK-NEXT:    br label [[RETURN]]
+ ; CHECK:       return:
+-; CHECK-NEXT:    [[B_03_LCSSA:%.*]] = phi i32 [ [[B_03]], [[FOR_BODY]] ]
++; CHECK-NEXT:    [[B_03_LCSSA:%.*]] = phi i32 [ 0, [[FOR_COND]] ], [ 8, [[FOR_BODY_1]] ], [ 0, [[FOR_COND_1]] ]
++; CHECK-NEXT:    [[RETVAL_0:%.*]] = phi i32 [ 0, [[FOR_COND]] ], [ 1, [[FOR_BODY_1]] ], [ 0, [[FOR_COND_1]] ]
+ ; CHECK-NEXT:    store i32 [[B_03_LCSSA]], i32* [[A:%.*]], align 4
+ ; CHECK-NEXT:    ret void
+ ;
+diff --git a/llvm/test/Transforms/LoopUnroll/unroll-after-peel.ll b/llvm/test/Transforms/LoopUnroll/unroll-after-peel.ll
+index 6f6fc124799f..504abafd23bf 100644
+--- a/llvm/test/Transforms/LoopUnroll/unroll-after-peel.ll
++++ b/llvm/test/Transforms/LoopUnroll/unroll-after-peel.ll
+@@ -8,10 +8,10 @@ define i64 @hoge(i1 %c) {
+ ; CHECK:       bb1.peel.begin:
+ ; CHECK-NEXT:    br label [[BB1_PEEL:%.*]]
+ ; CHECK:       bb1.peel:
++; CHECK-NEXT:    br i1 [[C:%.*]], label [[BB2_PEEL:%.*]], label [[BB4:%.*]]
++; CHECK:       bb2.peel:
+ ; CHECK-NEXT:    [[TMP3_PEEL:%.*]] = icmp slt i32 0, 9
+-; CHECK-NEXT:    [[TMP5_SEL_PEEL:%.*]] = select i1 [[C:%.*]], i32 8, i32 0
+-; CHECK-NEXT:    [[OR_COND_PEEL:%.*]] = and i1 [[C]], [[TMP3_PEEL]]
+-; CHECK-NEXT:    br i1 [[OR_COND_PEEL]], label [[BB1_PEEL_NEXT:%.*]], label [[BB4:%.*]]
++; CHECK-NEXT:    br i1 [[TMP3_PEEL]], label [[BB1_PEEL_NEXT:%.*]], label [[BB4]]
+ ; CHECK:       bb1.peel.next:
+ ; CHECK-NEXT:    br label [[BB1_PEEL_NEXT1:%.*]]
+ ; CHECK:       bb1.peel.next1:
+@@ -21,8 +21,10 @@ define i64 @hoge(i1 %c) {
+ ; CHECK:       bb1:
+ ; CHECK-NEXT:    br i1 [[C]], label [[BB1]], label [[BB4_LOOPEXIT:%.*]], !llvm.loop [[LOOP0:![0-9]+]]
+ ; CHECK:       bb4.loopexit:
++; CHECK-NEXT:    [[TMP5_PH:%.*]] = phi i32 [ 8, [[BB1]] ]
+ ; CHECK-NEXT:    br label [[BB4]]
+ ; CHECK:       bb4:
++; CHECK-NEXT:    [[TMP5:%.*]] = phi i32 [ 0, [[BB1_PEEL]] ], [ 8, [[BB2_PEEL]] ], [ [[TMP5_PH]], [[BB4_LOOPEXIT]] ]
+ ; CHECK-NEXT:    [[TMP6:%.*]] = call i64 (...) @llvm.experimental.deoptimize.i64(i32 10) [ "deopt"() ]
+ ; CHECK-NEXT:    ret i64 [[TMP6]]
+ ;
+diff --git a/llvm/test/Transforms/LoopUnroll/unroll-header-exiting-with-phis-multiple-exiting-blocks.ll b/llvm/test/Transforms/LoopUnroll/unroll-header-exiting-with-phis-multiple-exiting-blocks.ll
+index 67bfdf9456b4..e2ca21675e40 100644
+--- a/llvm/test/Transforms/LoopUnroll/unroll-header-exiting-with-phis-multiple-exiting-blocks.ll
++++ b/llvm/test/Transforms/LoopUnroll/unroll-header-exiting-with-phis-multiple-exiting-blocks.ll
+@@ -8,25 +8,53 @@ define i16 @full_unroll_multiple_exiting_blocks(i16* %A, i16 %x, i16 %y) {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[HEADER:%.*]]
+ ; CHECK:       header:
+-; CHECK-NEXT:    [[RES:%.*]] = phi i16 [ 123, [[ENTRY:%.*]] ], [ [[RES_NEXT:%.*]], [[LATCH:%.*]] ]
+-; CHECK-NEXT:    [[I_0:%.*]] = phi i64 [ 0, [[ENTRY]] ], [ [[INC9:%.*]], [[LATCH]] ]
+-; CHECK-NEXT:    [[PTR:%.*]] = getelementptr inbounds i16, i16* [[A:%.*]], i64 [[I_0]]
+-; CHECK-NEXT:    [[LV:%.*]] = load i16, i16* [[PTR]], align 2
+-; CHECK-NEXT:    [[RES_NEXT]] = add i16 [[RES]], [[LV]]
+-; CHECK-NEXT:    [[CMP_NOT:%.*]] = icmp uge i64 [[I_0]], 3
++; CHECK-NEXT:    [[LV:%.*]] = load i16, i16* [[A:%.*]], align 2
++; CHECK-NEXT:    [[RES_NEXT:%.*]] = add i16 123, [[LV]]
++; CHECK-NEXT:    br label [[EXITING_1:%.*]]
++; CHECK:       exiting.1:
+ ; CHECK-NEXT:    [[EC_1:%.*]] = icmp eq i16 [[LV]], [[X:%.*]]
+-; CHECK-NEXT:    [[RES_LCSSA_SEL:%.*]] = select i1 [[CMP_NOT]], i16 [[RES_NEXT]], i16 0
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[CMP_NOT]], i1 true, i1 [[EC_1]]
++; CHECK-NEXT:    br i1 [[EC_1]], label [[EXIT:%.*]], label [[EXITING_2:%.*]]
++; CHECK:       exiting.2:
+ ; CHECK-NEXT:    [[EC_2:%.*]] = icmp eq i16 [[LV]], [[Y:%.*]]
+-; CHECK-NEXT:    [[RES_LCSSA_SEL1:%.*]] = select i1 [[OR_COND]], i16 [[RES_LCSSA_SEL]], i16 1
+-; CHECK-NEXT:    [[OR_COND2:%.*]] = select i1 [[OR_COND]], i1 true, i1 [[EC_2]]
+-; CHECK-NEXT:    br i1 [[OR_COND2]], label [[EXIT:%.*]], label [[LATCH]]
++; CHECK-NEXT:    br i1 [[EC_2]], label [[EXIT]], label [[LATCH:%.*]]
+ ; CHECK:       latch:
+-; CHECK-NEXT:    [[INC9]] = add i64 [[I_0]], 1
+-; CHECK-NEXT:    br label [[HEADER]]
++; CHECK-NEXT:    [[PTR_1:%.*]] = getelementptr inbounds i16, i16* [[A]], i64 1
++; CHECK-NEXT:    [[LV_1:%.*]] = load i16, i16* [[PTR_1]], align 2
++; CHECK-NEXT:    [[RES_NEXT_1:%.*]] = add i16 [[RES_NEXT]], [[LV_1]]
++; CHECK-NEXT:    br label [[EXITING_1_1:%.*]]
++; CHECK:       exiting.1.1:
++; CHECK-NEXT:    [[EC_1_1:%.*]] = icmp eq i16 [[LV_1]], [[X]]
++; CHECK-NEXT:    br i1 [[EC_1_1]], label [[EXIT]], label [[EXITING_2_1:%.*]]
++; CHECK:       exiting.2.1:
++; CHECK-NEXT:    [[EC_2_1:%.*]] = icmp eq i16 [[LV_1]], [[Y]]
++; CHECK-NEXT:    br i1 [[EC_2_1]], label [[EXIT]], label [[LATCH_1:%.*]]
++; CHECK:       latch.1:
++; CHECK-NEXT:    [[PTR_2:%.*]] = getelementptr inbounds i16, i16* [[A]], i64 2
++; CHECK-NEXT:    [[LV_2:%.*]] = load i16, i16* [[PTR_2]], align 2
++; CHECK-NEXT:    [[RES_NEXT_2:%.*]] = add i16 [[RES_NEXT_1]], [[LV_2]]
++; CHECK-NEXT:    br label [[EXITING_1_2:%.*]]
++; CHECK:       exiting.1.2:
++; CHECK-NEXT:    [[EC_1_2:%.*]] = icmp eq i16 [[LV_2]], [[X]]
++; CHECK-NEXT:    br i1 [[EC_1_2]], label [[EXIT]], label [[EXITING_2_2:%.*]]
++; CHECK:       exiting.2.2:
++; CHECK-NEXT:    [[EC_2_2:%.*]] = icmp eq i16 [[LV_2]], [[Y]]
++; CHECK-NEXT:    br i1 [[EC_2_2]], label [[EXIT]], label [[LATCH_2:%.*]]
++; CHECK:       latch.2:
++; CHECK-NEXT:    [[PTR_3:%.*]] = getelementptr inbounds i16, i16* [[A]], i64 3
++; CHECK-NEXT:    [[LV_3:%.*]] = load i16, i16* [[PTR_3]], align 2
++; CHECK-NEXT:    [[RES_NEXT_3:%.*]] = add i16 [[RES_NEXT_2]], [[LV_3]]
++; CHECK-NEXT:    br i1 false, label [[EXITING_1_3:%.*]], label [[EXIT]]
++; CHECK:       exiting.1.3:
++; CHECK-NEXT:    [[EC_1_3:%.*]] = icmp eq i16 [[LV_3]], [[X]]
++; CHECK-NEXT:    br i1 [[EC_1_3]], label [[EXIT]], label [[EXITING_2_3:%.*]]
++; CHECK:       exiting.2.3:
++; CHECK-NEXT:    [[EC_2_3:%.*]] = icmp eq i16 [[LV_3]], [[Y]]
++; CHECK-NEXT:    br i1 [[EC_2_3]], label [[EXIT]], label [[LATCH_3:%.*]]
++; CHECK:       latch.3:
++; CHECK-NEXT:    unreachable
+ ; CHECK:       exit:
+-; CHECK-NEXT:    [[RES_LCSSA_SEL1_LCSSA:%.*]] = phi i16 [ [[RES_LCSSA_SEL1]], [[HEADER]] ]
+-; CHECK-NEXT:    ret i16 [[RES_LCSSA_SEL1_LCSSA]]
++; CHECK-NEXT:    [[RES_LCSSA:%.*]] = phi i16 [ 0, [[EXITING_1]] ], [ 1, [[EXITING_2]] ], [ 0, [[EXITING_1_1]] ], [ 1, [[EXITING_2_1]] ], [ 0, [[EXITING_1_2]] ], [ 1, [[EXITING_2_2]] ], [ [[RES_NEXT_3]], [[LATCH_2]] ], [ 0, [[EXITING_1_3]] ], [ 1, [[EXITING_2_3]] ]
++; CHECK-NEXT:    ret i16 [[RES_LCSSA]]
+ ;
+ entry:
+   br label %header
+diff --git a/llvm/test/Transforms/SimplifyCFG/2008-07-13-InfLoopMiscompile.ll b/llvm/test/Transforms/SimplifyCFG/2008-07-13-InfLoopMiscompile.ll
+index 345e96e2e745..2e9e7b19c73e 100644
+--- a/llvm/test/Transforms/SimplifyCFG/2008-07-13-InfLoopMiscompile.ll
++++ b/llvm/test/Transforms/SimplifyCFG/2008-07-13-InfLoopMiscompile.ll
+@@ -13,14 +13,15 @@ define i32 @main() nounwind  {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[L:%.*]] = load i32, ptr @g_37, align 4
+ ; CHECK-NEXT:    [[CMPA:%.*]] = icmp ne i32 [[L]], 0
++; CHECK-NEXT:    br i1 [[CMPA]], label [[FUNC_1_EXIT:%.*]], label [[MOOSEBLOCK:%.*]]
++; CHECK:       mooseblock:
+ ; CHECK-NEXT:    [[CMPB:%.*]] = icmp eq i1 [[CMPA]], false
+-; CHECK-NEXT:    [[OUTVAL_SEL:%.*]] = select i1 [[CMPA]], i32 1, i32 0
+-; CHECK-NEXT:    [[OR_COND:%.*]] = or i1 [[CMPA]], [[CMPB]]
+-; CHECK-NEXT:    [[BRMERGE:%.*]] = or i1 [[OR_COND]], [[CMPA]]
+-; CHECK-NEXT:    [[OUTVAL_SEL_MUX:%.*]] = select i1 [[OR_COND]], i32 [[OUTVAL_SEL]], i32 2
+-; CHECK-NEXT:    br i1 [[BRMERGE]], label [[FUNC_1_EXIT:%.*]], label [[INFLOOP:%.*]]
++; CHECK-NEXT:    [[BRMERGE:%.*]] = or i1 [[CMPB]], [[CMPA]]
++; CHECK-NEXT:    [[DOTMUX:%.*]] = select i1 [[CMPB]], i32 0, i32 2
++; CHECK-NEXT:    br i1 [[BRMERGE]], label [[FUNC_1_EXIT]], label [[INFLOOP:%.*]]
+ ; CHECK:       func_1.exit:
+-; CHECK-NEXT:    [[POUT:%.*]] = tail call i32 (ptr, ...) @printf(ptr noalias @.str, i32 [[OUTVAL_SEL_MUX]]) #[[ATTR0:[0-9]+]]
++; CHECK-NEXT:    [[OUTVAL:%.*]] = phi i32 [ 1, [[ENTRY:%.*]] ], [ [[DOTMUX]], [[MOOSEBLOCK]] ]
++; CHECK-NEXT:    [[POUT:%.*]] = tail call i32 (ptr, ...) @printf(ptr noalias @.str, i32 [[OUTVAL]]) #[[ATTR0:[0-9]+]]
+ ; CHECK-NEXT:    ret i32 0
+ ; CHECK:       infloop:
+ ; CHECK-NEXT:    br label [[INFLOOP]]
+diff --git a/llvm/test/Transforms/SimplifyCFG/X86/SpeculativeExec.ll b/llvm/test/Transforms/SimplifyCFG/X86/SpeculativeExec.ll
+index 44797074388c..2de1c72c4007 100644
+--- a/llvm/test/Transforms/SimplifyCFG/X86/SpeculativeExec.ll
++++ b/llvm/test/Transforms/SimplifyCFG/X86/SpeculativeExec.ll
+@@ -9,10 +9,9 @@ define i32 @test1(i32 %a, i32 %b, i32 %c) {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[T1:%.*]] = icmp eq i32 [[B:%.*]], 0
+ ; CHECK-NEXT:    [[T2:%.*]] = icmp sgt i32 [[C:%.*]], 1
+-; CHECK-NEXT:    [[T4_SEL:%.*]] = select i1 [[T1]], i32 [[A:%.*]], i32 [[B]]
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[T1]], i1 [[T2]], i1 false
+-; CHECK-NEXT:    [[T3:%.*]] = add i32 [[A]], 1
+-; CHECK-NEXT:    [[T4:%.*]] = select i1 [[OR_COND]], i32 [[T3]], i32 [[T4_SEL]]
++; CHECK-NEXT:    [[T3:%.*]] = add i32 [[A:%.*]], 1
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[T2]], i32 [[T3]], i32 [[A]]
++; CHECK-NEXT:    [[T4:%.*]] = select i1 [[T1]], i32 [[SPEC_SELECT]], i32 [[B]]
+ ; CHECK-NEXT:    [[T5:%.*]] = sub i32 [[T4]], 1
+ ; CHECK-NEXT:    ret i32 [[T5]]
+ ;
+@@ -38,11 +37,15 @@ define float @spec_select_fp1(float %a, float %b, float %c) {
+ ; CHECK-LABEL: @spec_select_fp1(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[T1:%.*]] = fcmp oeq float [[B:%.*]], 0.000000e+00
++; CHECK-NEXT:    br i1 [[T1]], label [[BB1:%.*]], label [[BB3:%.*]]
++; CHECK:       bb1:
+ ; CHECK-NEXT:    [[T2:%.*]] = fcmp ogt float [[C:%.*]], 1.000000e+00
+-; CHECK-NEXT:    [[T4_SEL:%.*]] = select i1 [[T1]], float [[A:%.*]], float [[B]]
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[T1]], i1 [[T2]], i1 false
+-; CHECK-NEXT:    [[T3:%.*]] = fadd float [[A]], 1.000000e+00
+-; CHECK-NEXT:    [[T4:%.*]] = select ninf i1 [[OR_COND]], float [[T3]], float [[T4_SEL]]
++; CHECK-NEXT:    br i1 [[T2]], label [[BB2:%.*]], label [[BB3]]
++; CHECK:       bb2:
++; CHECK-NEXT:    [[T3:%.*]] = fadd float [[A:%.*]], 1.000000e+00
++; CHECK-NEXT:    br label [[BB3]]
++; CHECK:       bb3:
++; CHECK-NEXT:    [[T4:%.*]] = phi ninf float [ [[B]], [[ENTRY:%.*]] ], [ [[A]], [[BB1]] ], [ [[T3]], [[BB2]] ]
+ ; CHECK-NEXT:    [[T5:%.*]] = fsub float [[T4]], 1.000000e+00
+ ; CHECK-NEXT:    ret float [[T5]]
+ ;
+@@ -121,10 +124,9 @@ define ptr @test5(i32 %a, i32 %b, i32 %c, ptr dereferenceable(10) %ptr1, ptr der
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[T1:%.*]] = icmp eq i32 [[B:%.*]], 0
+ ; CHECK-NEXT:    [[T2:%.*]] = icmp sgt i32 [[C:%.*]], 1
+-; CHECK-NEXT:    [[T4_SEL:%.*]] = select i1 [[T1]], ptr [[PTR2:%.*]], ptr [[PTR1:%.*]]
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[T1]], i1 [[T2]], i1 false
+ ; CHECK-NEXT:    [[T3:%.*]] = load ptr, ptr [[PTR3:%.*]], align 8
+-; CHECK-NEXT:    [[T4:%.*]] = select i1 [[OR_COND]], ptr [[T3]], ptr [[T4_SEL]]
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[T2]], ptr [[T3]], ptr [[PTR2:%.*]]
++; CHECK-NEXT:    [[T4:%.*]] = select i1 [[T1]], ptr [[SPEC_SELECT]], ptr [[PTR1:%.*]]
+ ; CHECK-NEXT:    ret ptr [[T4]]
+ ;
+ entry:
+@@ -148,10 +150,14 @@ define float @spec_select_fp5(float %a, float %b, float %c) {
+ ; CHECK-LABEL: @spec_select_fp5(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[T1:%.*]] = fcmp oeq float [[B:%.*]], 0.000000e+00
++; CHECK-NEXT:    br i1 [[T1]], label [[BB1:%.*]], label [[BB3:%.*]]
++; CHECK:       bb1:
+ ; CHECK-NEXT:    [[T2:%.*]] = fcmp ogt float [[C:%.*]], 1.000000e+00
+-; CHECK-NEXT:    [[T4_SEL:%.*]] = select i1 [[T1]], float [[B]], float [[A:%.*]]
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[T1]], i1 [[T2]], i1 false
+-; CHECK-NEXT:    [[T4:%.*]] = select nsz i1 [[OR_COND]], float [[C]], float [[T4_SEL]]
++; CHECK-NEXT:    br i1 [[T2]], label [[BB2:%.*]], label [[BB3]]
++; CHECK:       bb2:
++; CHECK-NEXT:    br label [[BB3]]
++; CHECK:       bb3:
++; CHECK-NEXT:    [[T4:%.*]] = phi nsz float [ [[A:%.*]], [[ENTRY:%.*]] ], [ [[B]], [[BB1]] ], [ [[C]], [[BB2]] ]
+ ; CHECK-NEXT:    ret float [[T4]]
+ ;
+ entry:
+diff --git a/llvm/test/Transforms/SimplifyCFG/X86/switch_to_lookup_table.ll b/llvm/test/Transforms/SimplifyCFG/X86/switch_to_lookup_table.ll
+index 0b0f4c124bde..07edb3f6c8ae 100644
+--- a/llvm/test/Transforms/SimplifyCFG/X86/switch_to_lookup_table.ll
++++ b/llvm/test/Transforms/SimplifyCFG/X86/switch_to_lookup_table.ll
+@@ -1434,10 +1434,9 @@ define i32 @no_reuse_cmp2(i32 %x, i32 %y) {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[EC:%.*]] = icmp ne i32 [[Y:%.*]], 0
+ ; CHECK-NEXT:    [[TMP0:%.*]] = icmp ult i32 [[X:%.*]], 4
+-; CHECK-NEXT:    [[R_0_SEL:%.*]] = select i1 [[EC]], i32 0, i32 100
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[EC]], i1 [[TMP0]], i1 false
+ ; CHECK-NEXT:    [[SWITCH_OFFSET:%.*]] = add i32 [[X]], 10
+-; CHECK-NEXT:    [[R_0:%.*]] = select i1 [[OR_COND]], i32 [[SWITCH_OFFSET]], i32 [[R_0_SEL]]
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[TMP0]], i32 [[SWITCH_OFFSET]], i32 0
++; CHECK-NEXT:    [[R_0:%.*]] = select i1 [[EC]], i32 [[SPEC_SELECT]], i32 100
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[R_0]], 0
+ ; CHECK-NEXT:    [[DOTR_0:%.*]] = select i1 [[CMP]], i32 100, i32 [[R_0]]
+ ; CHECK-NEXT:    ret i32 [[DOTR_0]]
+diff --git a/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest-phis.ll b/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest-phis.ll
+index c257ad84afe9..150bdfcff92a 100644
+--- a/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest-phis.ll
++++ b/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest-phis.ll
+@@ -12,17 +12,19 @@ define void @incompatible_ivs_of_single_phi.falsedest.falsedest(i8 %v0, i8 %v1,
+ ; ALL-LABEL: @incompatible_ivs_of_single_phi.falsedest.falsedest(
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 [[C1]], i1 false
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -46,17 +48,19 @@ define void @incompatible_ivs_of_single_phi.falsedest.falsedest.extrause(i8 %v0,
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+ ; ALL-NEXT:    call void @use1(i1 [[C0]])
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 [[C1]], i1 false
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -79,18 +83,20 @@ final_right:
+ define void @incompatible_ivs_of_single_phi.falsedest.truedest(i8 %v0, i8 %v1, i8 %iv.of.final_left.from.dispatch, i8 %iv.of.final_right.from.pred, i8 %iv.of.final_right.from.dispatch) {
+ ; ALL-LABEL: @incompatible_ivs_of_single_phi.falsedest.truedest(
+ ; ALL-NEXT:  pred:
+-; ALL-NEXT:    [[C0_NOT:%.*]] = icmp ne i8 [[V0:%.*]], 0
++; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0_NOT]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0_NOT]], i1 true, i1 [[C1]]
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_RIGHT:%.*]], label [[FINAL_LEFT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_RIGHT]], label [[FINAL_LEFT:%.*]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -114,18 +120,19 @@ define void @incompatible_ivs_of_single_phi.falsedest.truedest.extrause(i8 %v0,
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+ ; ALL-NEXT:    call void @use1(i1 [[C0]])
+-; ALL-NEXT:    [[C0_NOT:%.*]] = xor i1 [[C0]], true
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0_NOT]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0_NOT]], i1 true, i1 [[C1]]
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_RIGHT:%.*]], label [[FINAL_LEFT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_RIGHT]], label [[FINAL_LEFT:%.*]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -148,18 +155,20 @@ final_right:
+ define void @incompatible_ivs_of_single_phi.truedest.falsedest(i8 %v0, i8 %v1, i8 %iv.of.final_left.from.dispatch, i8 %iv.of.final_right.from.pred, i8 %iv.of.final_right.from.dispatch) {
+ ; ALL-LABEL: @incompatible_ivs_of_single_phi.truedest.falsedest(
+ ; ALL-NEXT:  pred:
+-; ALL-NEXT:    [[C0_NOT:%.*]] = icmp ne i8 [[V0:%.*]], 0
++; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[FINAL_RIGHT:%.*]], label [[DISPATCH:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0_NOT]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0_NOT]], i1 [[C1]], i1 false
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -183,18 +192,19 @@ define void @incompatible_ivs_of_single_phi.truedest.falsedest.extrause(i8 %v0,
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+ ; ALL-NEXT:    call void @use1(i1 [[C0]])
+-; ALL-NEXT:    [[C0_NOT:%.*]] = xor i1 [[C0]], true
++; ALL-NEXT:    br i1 [[C0]], label [[FINAL_RIGHT:%.*]], label [[DISPATCH:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0_NOT]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0_NOT]], i1 [[C1]], i1 false
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -218,17 +228,19 @@ define void @incompatible_ivs_of_single_phi.truedest.truedest(i8 %v0, i8 %v1, i8
+ ; ALL-LABEL: @incompatible_ivs_of_single_phi.truedest.truedest(
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[FINAL_RIGHT:%.*]], label [[DISPATCH:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 true, i1 [[C1]]
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_RIGHT:%.*]], label [[FINAL_LEFT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_RIGHT]], label [[FINAL_LEFT:%.*]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -252,17 +264,19 @@ define void @incompatible_ivs_of_single_phi.truedest.truedest.extrause(i8 %v0, i
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+ ; ALL-NEXT:    call void @use1(i1 [[C0]])
++; ALL-NEXT:    br i1 [[C0]], label [[FINAL_RIGHT:%.*]], label [[DISPATCH:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 true, i1 [[C1]]
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_RIGHT:%.*]], label [[FINAL_LEFT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_RIGHT]], label [[FINAL_LEFT:%.*]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -285,43 +299,25 @@ final_right:
+ ;; -----------------------------------------------------------------------------
+ 
+ define void @incompatible_ivs_of_single_phi.insertpos(i8 %v0, i8 %v1, i8 %iv.of.final_left.from.dispatch, ptr dereferenceable(1) %src0, ptr dereferenceable(1) %src1) {
+-; CHEAP-LABEL: @incompatible_ivs_of_single_phi.insertpos(
+-; CHEAP-NEXT:  pred:
+-; CHEAP-NEXT:    [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]] = load i8, ptr [[SRC0:%.*]], align 1
+-; CHEAP-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+-; CHEAP-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
+-; CHEAP:       dispatch:
+-; CHEAP-NEXT:    [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]] = load i8, ptr [[SRC1:%.*]], align 1
+-; CHEAP-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; CHEAP-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+-; CHEAP:       common.ret:
+-; CHEAP-NEXT:    ret void
+-; CHEAP:       final_left:
+-; CHEAP-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
+-; CHEAP-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+-; CHEAP-NEXT:    br label [[COMMON_RET:%.*]]
+-; CHEAP:       final_right:
+-; CHEAP-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH]], [[DISPATCH]] ]
+-; CHEAP-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
+-; CHEAP-NEXT:    br label [[COMMON_RET]]
+-;
+-; COSTLY-LABEL: @incompatible_ivs_of_single_phi.insertpos(
+-; COSTLY-NEXT:  pred:
+-; COSTLY-NEXT:    [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]] = load i8, ptr [[SRC0:%.*]], align 1
+-; COSTLY-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+-; COSTLY-NEXT:    [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]] = load i8, ptr [[SRC1:%.*]], align 1
+-; COSTLY-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; COSTLY-NEXT:    [[FINAL_RIGHT_PHI_SEL:%.*]] = select i1 [[C0]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED]]
+-; COSTLY-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 [[C1]], i1 false
+-; COSTLY-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
+-; COSTLY:       common.ret:
+-; COSTLY-NEXT:    ret void
+-; COSTLY:       final_left:
+-; COSTLY-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
+-; COSTLY-NEXT:    br label [[COMMON_RET:%.*]]
+-; COSTLY:       final_right:
+-; COSTLY-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_SEL]])
+-; COSTLY-NEXT:    br label [[COMMON_RET]]
++; ALL-LABEL: @incompatible_ivs_of_single_phi.insertpos(
++; ALL-NEXT:  pred:
++; ALL-NEXT:    [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]] = load i8, ptr [[SRC0:%.*]], align 1
++; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
++; ALL-NEXT:    [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]] = load i8, ptr [[SRC1:%.*]], align 1
++; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
++; ALL:       common.ret:
++; ALL-NEXT:    ret void
++; ALL:       final_left:
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
++; ALL-NEXT:    br label [[COMMON_RET:%.*]]
++; ALL:       final_right:
++; ALL-NEXT:    [[FINAL_RIGHT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI]])
++; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+   %iv.of.final_right.from.pred = load i8, ptr %src0
+@@ -345,18 +341,21 @@ define void @incompatible_ivs_of_one_of_two_phis(i8 %v0, i8 %v1, i8 %iv.of.final
+ ; ALL-LABEL: @incompatible_ivs_of_one_of_two_phis(
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_0_SEL:%.*]] = select i1 [[C0]], i8 [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], i8 [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 [[C1]], i1 false
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_0_SEL]])
+-; ALL-NEXT:    call void @sideeffect1(i8 42)
++; ALL-NEXT:    [[FINAL_RIGHT_PHI_0:%.*]] = phi i8 [ [[IV_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    [[FINAL_RIGHT_PHI_1:%.*]] = phi i8 [ 42, [[PRED]] ], [ 42, [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_0]])
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_1]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -378,43 +377,25 @@ final_right:
+ }
+ 
+ define void @incompatible_ivs_of_two_phis(i8 %v0, i8 %v1, i8 %iv.of.final_left.from.dispatch, i8 %iv0.of.final_right.from.pred, i8 %iv0.of.final_right.from.dispatch, i8 %iv1.of.final_right.from.pred, i8 %iv1.of.final_right.from.dispatch) {
+-; CHEAP-LABEL: @incompatible_ivs_of_two_phis(
+-; CHEAP-NEXT:  pred:
+-; CHEAP-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+-; CHEAP-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
+-; CHEAP:       dispatch:
+-; CHEAP-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; CHEAP-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+-; CHEAP:       common.ret:
+-; CHEAP-NEXT:    ret void
+-; CHEAP:       final_left:
+-; CHEAP-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
+-; CHEAP-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+-; CHEAP-NEXT:    br label [[COMMON_RET:%.*]]
+-; CHEAP:       final_right:
+-; CHEAP-NEXT:    [[FINAL_RIGHT_PHI_0:%.*]] = phi i8 [ [[IV0_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV0_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
+-; CHEAP-NEXT:    [[FINAL_RIGHT_PHI_1:%.*]] = phi i8 [ [[IV1_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED]] ], [ [[IV1_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
+-; CHEAP-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_0]])
+-; CHEAP-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_1]])
+-; CHEAP-NEXT:    br label [[COMMON_RET]]
+-;
+-; COSTLY-LABEL: @incompatible_ivs_of_two_phis(
+-; COSTLY-NEXT:  pred:
+-; COSTLY-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
+-; COSTLY-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; COSTLY-NEXT:    [[FINAL_RIGHT_PHI_0_SEL:%.*]] = select i1 [[C0]], i8 [[IV0_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], i8 [[IV0_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; COSTLY-NEXT:    [[FINAL_RIGHT_PHI_1_SEL:%.*]] = select i1 [[C0]], i8 [[IV1_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], i8 [[IV1_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; COSTLY-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 [[C1]], i1 false
+-; COSTLY-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
+-; COSTLY:       common.ret:
+-; COSTLY-NEXT:    ret void
+-; COSTLY:       final_left:
+-; COSTLY-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
+-; COSTLY-NEXT:    br label [[COMMON_RET:%.*]]
+-; COSTLY:       final_right:
+-; COSTLY-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_0_SEL]])
+-; COSTLY-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_1_SEL]])
+-; COSTLY-NEXT:    br label [[COMMON_RET]]
++; ALL-LABEL: @incompatible_ivs_of_two_phis(
++; ALL-NEXT:  pred:
++; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
++; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
++; ALL:       common.ret:
++; ALL-NEXT:    ret void
++; ALL:       final_left:
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
++; ALL-NEXT:    br label [[COMMON_RET:%.*]]
++; ALL:       final_right:
++; ALL-NEXT:    [[FINAL_RIGHT_PHI_0:%.*]] = phi i8 [ [[IV0_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV0_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    [[FINAL_RIGHT_PHI_1:%.*]] = phi i8 [ [[IV1_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED]] ], [ [[IV1_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_0]])
++; ALL-NEXT:    call void @sideeffect1(i8 [[FINAL_RIGHT_PHI_1]])
++; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+   %c0 = icmp eq i8 %v0, 0
+@@ -438,19 +419,21 @@ define void @incompatible_ivs_of_two_phis.vec(i8 %v0, i8 %v1, i8 %iv.of.final_le
+ ; ALL-LABEL: @incompatible_ivs_of_two_phis.vec(
+ ; ALL-NEXT:  pred:
+ ; ALL-NEXT:    [[C0:%.*]] = icmp eq i8 [[V0:%.*]], 0
++; ALL-NEXT:    br i1 [[C0]], label [[DISPATCH:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL:       dispatch:
+ ; ALL-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_0_SEL:%.*]] = select i1 [[C0]], <2 x i8> [[IV0_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], <2 x i8> [[IV0_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; ALL-NEXT:    [[FINAL_RIGHT_PHI_1_SEL:%.*]] = select i1 [[C0]], <2 x i8> [[IV1_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], <2 x i8> [[IV1_OF_FINAL_RIGHT_FROM_PRED:%.*]]
+-; ALL-NEXT:    [[OR_COND:%.*]] = select i1 [[C0]], i1 [[C1]], i1 false
+-; ALL-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; ALL-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT]]
+ ; ALL:       common.ret:
+ ; ALL-NEXT:    ret void
+ ; ALL:       final_left:
+-; ALL-NEXT:    call void @sideeffect0(i8 [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]])
++; ALL-NEXT:    [[FINAL_LEFT_PHI:%.*]] = phi i8 [ [[IV_OF_FINAL_LEFT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect0(i8 [[FINAL_LEFT_PHI]])
+ ; ALL-NEXT:    br label [[COMMON_RET:%.*]]
+ ; ALL:       final_right:
+-; ALL-NEXT:    call void @sideeffect1.vec(<2 x i8> [[FINAL_RIGHT_PHI_0_SEL]])
+-; ALL-NEXT:    call void @sideeffect1.vec(<2 x i8> [[FINAL_RIGHT_PHI_1_SEL]])
++; ALL-NEXT:    [[FINAL_RIGHT_PHI_0:%.*]] = phi <2 x i8> [ [[IV0_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED:%.*]] ], [ [[IV0_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    [[FINAL_RIGHT_PHI_1:%.*]] = phi <2 x i8> [ [[IV1_OF_FINAL_RIGHT_FROM_PRED:%.*]], [[PRED]] ], [ [[IV1_OF_FINAL_RIGHT_FROM_DISPATCH:%.*]], [[DISPATCH]] ]
++; ALL-NEXT:    call void @sideeffect1.vec(<2 x i8> [[FINAL_RIGHT_PHI_0]])
++; ALL-NEXT:    call void @sideeffect1.vec(<2 x i8> [[FINAL_RIGHT_PHI_1]])
+ ; ALL-NEXT:    br label [[COMMON_RET]]
+ ;
+ pred:
+@@ -476,15 +459,18 @@ define float @D139275_c4001580(float %val) {
+ ; ALL-LABEL: @D139275_c4001580(
+ ; ALL-NEXT:  entry:
+ ; ALL-NEXT:    [[CMP:%.*]] = fcmp ugt float [[VAL:%.*]], 0.000000e+00
++; ALL-NEXT:    br i1 [[CMP]], label [[IF_END:%.*]], label [[RETURN:%.*]]
++; ALL:       if.end:
+ ; ALL-NEXT:    [[CMP1:%.*]] = fcmp ult float [[VAL]], 1.000000e+00
+-; ALL-NEXT:    [[RETVAL_0_SEL:%.*]] = select i1 [[CMP]], float 0x3FB99999A0000000, float 0.000000e+00
+-; ALL-NEXT:    [[OR_COND:%.*]] = and i1 [[CMP]], [[CMP1]]
+-; ALL-NEXT:    [[OR_COND_NOT:%.*]] = xor i1 [[OR_COND]], true
++; ALL-NEXT:    br i1 [[CMP1]], label [[IF_END3:%.*]], label [[RETURN]]
++; ALL:       if.end3:
+ ; ALL-NEXT:    [[CMP4:%.*]] = fcmp olt float [[VAL]], 0x3FC99999A0000000
+-; ALL-NEXT:    [[RETVAL_0_SEL1:%.*]] = select i1 [[OR_COND_NOT]], float [[RETVAL_0_SEL]], float 0.000000e+00
+-; ALL-NEXT:    [[OR_COND2:%.*]] = select i1 [[OR_COND_NOT]], i1 true, i1 [[CMP4]]
++; ALL-NEXT:    br i1 [[CMP4]], label [[RETURN]], label [[IF_END6:%.*]]
++; ALL:       if.end6:
+ ; ALL-NEXT:    [[SUB:%.*]] = fadd float [[VAL]], 0xBFB99999A0000000
+-; ALL-NEXT:    [[RETVAL_0:%.*]] = select i1 [[OR_COND2]], float [[RETVAL_0_SEL1]], float [[SUB]]
++; ALL-NEXT:    br label [[RETURN]]
++; ALL:       return:
++; ALL-NEXT:    [[RETVAL_0:%.*]] = phi float [ [[SUB]], [[IF_END6]] ], [ 0.000000e+00, [[ENTRY:%.*]] ], [ 0x3FB99999A0000000, [[IF_END]] ], [ 0.000000e+00, [[IF_END3]] ]
+ ; ALL-NEXT:    ret float [[RETVAL_0]]
+ ;
+ entry:
+@@ -507,3 +493,7 @@ return:
+   %retval.0 = phi float [ %sub, %if.end6 ], [ 0.000000e+00, %entry ], [ 0x3FB99999A0000000, %if.end ], [ 0.000000e+00, %if.end3 ]
+   ret float %retval.0
+ }
++
++;; NOTE: These prefixes are unused and the list is autogenerated. Do not add tests below this line:
++; CHEAP: {{.*}}
++; COSTLY: {{.*}}
+diff --git a/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest.ll b/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest.ll
+index cb8a5bd3b50a..d90b87d9a240 100644
+--- a/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest.ll
++++ b/llvm/test/Transforms/SimplifyCFG/fold-branch-to-common-dest.ll
+@@ -449,21 +449,21 @@ define void @two_preds_with_extra_op_liveout(i8 %v0, i8 %v1, i8 %v2, i8 %v3) {
+ ; CHECK-NEXT:    br i1 [[C0]], label [[PRED0:%.*]], label [[PRED1:%.*]]
+ ; CHECK:       pred0:
+ ; CHECK-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2:%.*]]
+-; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3_ADJ_OLD]], 0
+-; CHECK-NEXT:    [[MERGE_LEFT_SEL:%.*]] = select i1 [[C1]], i8 0, i8 [[V3_ADJ_OLD]]
+-; CHECK-NEXT:    [[OR_COND1:%.*]] = select i1 [[C1]], i1 true, i1 [[C3_OLD]]
+-; CHECK-NEXT:    br i1 [[OR_COND1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; CHECK-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[DISPATCH:%.*]]
+ ; CHECK:       pred1:
+-; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2]], 0
++; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2:%.*]], 0
+ ; CHECK-NEXT:    [[V3_ADJ:%.*]] = add i8 [[V1]], [[V2]]
+ ; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3_ADJ]], 0
+ ; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C2]], i1 [[C3]], i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
++; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT:%.*]]
++; CHECK:       dispatch:
++; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2]]
++; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3_ADJ_OLD]], 0
++; CHECK-NEXT:    br i1 [[C3_OLD]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
+ ; CHECK:       common.ret:
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       final_left:
+-; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[MERGE_LEFT_SEL]], [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
++; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[V3_ADJ_OLD]], [[DISPATCH]] ], [ 0, [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
+ ; CHECK-NEXT:    call void @use8(i8 [[MERGE_LEFT]])
+ ; CHECK-NEXT:    call void @sideeffect0()
+ ; CHECK-NEXT:    br label [[COMMON_RET:%.*]]
+@@ -501,23 +501,22 @@ define void @two_preds_with_extra_op_liveout_multiuse(i8 %v0, i8 %v1, i8 %v2, i8
+ ; CHECK-NEXT:    br i1 [[C0]], label [[PRED0:%.*]], label [[PRED1:%.*]]
+ ; CHECK:       pred0:
+ ; CHECK-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2:%.*]]
+-; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3_ADJ_OLD]], 0
+-; CHECK-NEXT:    [[MERGE_LEFT_SEL:%.*]] = select i1 [[C1]], i8 0, i8 [[V3_ADJ_OLD]]
+-; CHECK-NEXT:    [[MERGE_LEFT_2_SEL:%.*]] = select i1 [[C1]], i8 42, i8 [[V3_ADJ_OLD]]
+-; CHECK-NEXT:    [[OR_COND1:%.*]] = select i1 [[C1]], i1 true, i1 [[C3_OLD]]
+-; CHECK-NEXT:    br i1 [[OR_COND1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; CHECK-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[DISPATCH:%.*]]
+ ; CHECK:       pred1:
+-; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2]], 0
++; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2:%.*]], 0
+ ; CHECK-NEXT:    [[V3_ADJ:%.*]] = add i8 [[V1]], [[V2]]
+ ; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3_ADJ]], 0
+ ; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C2]], i1 [[C3]], i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
++; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT:%.*]]
++; CHECK:       dispatch:
++; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2]]
++; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3_ADJ_OLD]], 0
++; CHECK-NEXT:    br i1 [[C3_OLD]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
+ ; CHECK:       common.ret:
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       final_left:
+-; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[MERGE_LEFT_SEL]], [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
+-; CHECK-NEXT:    [[MERGE_LEFT_2:%.*]] = phi i8 [ [[MERGE_LEFT_2_SEL]], [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
++; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[V3_ADJ_OLD]], [[DISPATCH]] ], [ 0, [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
++; CHECK-NEXT:    [[MERGE_LEFT_2:%.*]] = phi i8 [ [[V3_ADJ_OLD]], [[DISPATCH]] ], [ 42, [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
+ ; CHECK-NEXT:    call void @use8(i8 [[MERGE_LEFT]])
+ ; CHECK-NEXT:    call void @use8(i8 [[MERGE_LEFT_2]])
+ ; CHECK-NEXT:    call void @sideeffect0()
+@@ -632,21 +631,21 @@ define void @two_preds_with_extra_op_externally_used_only(i8 %v0, i8 %v1, i8 %v2
+ ; CHECK-NEXT:    br i1 [[C0]], label [[PRED0:%.*]], label [[PRED1:%.*]]
+ ; CHECK:       pred0:
+ ; CHECK-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2:%.*]]
+-; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3:%.*]], 0
+-; CHECK-NEXT:    [[MERGE_LEFT_SEL:%.*]] = select i1 [[C1]], i8 0, i8 [[V3_ADJ_OLD]]
+-; CHECK-NEXT:    [[OR_COND1:%.*]] = select i1 [[C1]], i1 true, i1 [[C3_OLD]]
+-; CHECK-NEXT:    br i1 [[OR_COND1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; CHECK-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[DISPATCH:%.*]]
+ ; CHECK:       pred1:
+-; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2]], 0
++; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2:%.*]], 0
+ ; CHECK-NEXT:    [[V3_ADJ:%.*]] = add i8 [[V1]], [[V2]]
+-; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3]], 0
++; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3:%.*]], 0
+ ; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C2]], i1 [[C3]], i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
++; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT:%.*]]
++; CHECK:       dispatch:
++; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2]]
++; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3]], 0
++; CHECK-NEXT:    br i1 [[C3_OLD]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
+ ; CHECK:       common.ret:
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       final_left:
+-; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[MERGE_LEFT_SEL]], [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
++; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[V3_ADJ_OLD]], [[DISPATCH]] ], [ 0, [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
+ ; CHECK-NEXT:    call void @use8(i8 [[MERGE_LEFT]])
+ ; CHECK-NEXT:    call void @sideeffect0()
+ ; CHECK-NEXT:    br label [[COMMON_RET:%.*]]
+@@ -684,23 +683,22 @@ define void @two_preds_with_extra_op_externally_used_only_multiuse(i8 %v0, i8 %v
+ ; CHECK-NEXT:    br i1 [[C0]], label [[PRED0:%.*]], label [[PRED1:%.*]]
+ ; CHECK:       pred0:
+ ; CHECK-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2:%.*]]
+-; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3:%.*]], 0
+-; CHECK-NEXT:    [[MERGE_LEFT_SEL:%.*]] = select i1 [[C1]], i8 0, i8 [[V3_ADJ_OLD]]
+-; CHECK-NEXT:    [[MERGE_LEFT_2_SEL:%.*]] = select i1 [[C1]], i8 42, i8 [[V3_ADJ_OLD]]
+-; CHECK-NEXT:    [[OR_COND1:%.*]] = select i1 [[C1]], i1 true, i1 [[C3_OLD]]
+-; CHECK-NEXT:    br i1 [[OR_COND1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; CHECK-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[DISPATCH:%.*]]
+ ; CHECK:       pred1:
+-; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2]], 0
++; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2:%.*]], 0
+ ; CHECK-NEXT:    [[V3_ADJ:%.*]] = add i8 [[V1]], [[V2]]
+-; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3]], 0
++; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3:%.*]], 0
+ ; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C2]], i1 [[C3]], i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
++; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT:%.*]]
++; CHECK:       dispatch:
++; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V1]], [[V2]]
++; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3]], 0
++; CHECK-NEXT:    br i1 [[C3_OLD]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
+ ; CHECK:       common.ret:
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       final_left:
+-; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[MERGE_LEFT_SEL]], [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
+-; CHECK-NEXT:    [[MERGE_LEFT_2:%.*]] = phi i8 [ [[MERGE_LEFT_2_SEL]], [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
++; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[V3_ADJ_OLD]], [[DISPATCH]] ], [ 0, [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
++; CHECK-NEXT:    [[MERGE_LEFT_2:%.*]] = phi i8 [ [[V3_ADJ_OLD]], [[DISPATCH]] ], [ 42, [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
+ ; CHECK-NEXT:    call void @use8(i8 [[MERGE_LEFT]])
+ ; CHECK-NEXT:    call void @use8(i8 [[MERGE_LEFT_2]])
+ ; CHECK-NEXT:    call void @sideeffect0()
+@@ -792,21 +790,21 @@ define void @two_preds_with_extra_op_externally_used_only_after_cond(i8 %v0, i8
+ ; CHECK-NEXT:    br i1 [[C0]], label [[PRED0:%.*]], label [[PRED1:%.*]]
+ ; CHECK:       pred0:
+ ; CHECK-NEXT:    [[C1:%.*]] = icmp eq i8 [[V1:%.*]], 0
+-; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3:%.*]], 0
+-; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V4:%.*]], [[V5:%.*]]
+-; CHECK-NEXT:    [[MERGE_LEFT_SEL:%.*]] = select i1 [[C1]], i8 0, i8 [[V3_ADJ_OLD]]
+-; CHECK-NEXT:    [[OR_COND1:%.*]] = select i1 [[C1]], i1 true, i1 [[C3_OLD]]
+-; CHECK-NEXT:    br i1 [[OR_COND1]], label [[FINAL_LEFT:%.*]], label [[FINAL_RIGHT:%.*]]
++; CHECK-NEXT:    br i1 [[C1]], label [[FINAL_LEFT:%.*]], label [[DISPATCH:%.*]]
+ ; CHECK:       pred1:
+ ; CHECK-NEXT:    [[C2:%.*]] = icmp eq i8 [[V2:%.*]], 0
+-; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3]], 0
+-; CHECK-NEXT:    [[V3_ADJ:%.*]] = add i8 [[V4]], [[V5]]
++; CHECK-NEXT:    [[C3:%.*]] = icmp eq i8 [[V3:%.*]], 0
++; CHECK-NEXT:    [[V3_ADJ:%.*]] = add i8 [[V4:%.*]], [[V5:%.*]]
+ ; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C2]], i1 [[C3]], i1 false
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
++; CHECK-NEXT:    br i1 [[OR_COND]], label [[FINAL_LEFT]], label [[FINAL_RIGHT:%.*]]
++; CHECK:       dispatch:
++; CHECK-NEXT:    [[C3_OLD:%.*]] = icmp eq i8 [[V3]], 0
++; CHECK-NEXT:    [[V3_ADJ_OLD:%.*]] = add i8 [[V4]], [[V5]]
++; CHECK-NEXT:    br i1 [[C3_OLD]], label [[FINAL_LEFT]], label [[FINAL_RIGHT]]
+ ; CHECK:       common.ret:
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       final_left:
+-; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[MERGE_LEFT_SEL]], [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
++; CHECK-NEXT:    [[MERGE_LEFT:%.*]] = phi i8 [ [[V3_ADJ_OLD]], [[DISPATCH]] ], [ 0, [[PRED0]] ], [ [[V3_ADJ]], [[PRED1]] ]
+ ; CHECK-NEXT:    call void @use8(i8 [[MERGE_LEFT]])
+ ; CHECK-NEXT:    call void @sideeffect0()
+ ; CHECK-NEXT:    br label [[COMMON_RET:%.*]]
+@@ -1123,13 +1121,13 @@ define i32 @test_builtin_fpclassify(float %x) {
+ ; CHECK-LABEL: @test_builtin_fpclassify(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[ISZERO:%.*]] = fcmp oeq float [[X:%.*]], 0.000000e+00
+-; CHECK-NEXT:    [[CMP:%.*]] = fcmp uno float [[X]], 0.000000e+00
+-; CHECK-NEXT:    [[FPCLASSIFY_RESULT_SEL:%.*]] = select i1 [[ISZERO]], i32 2, i32 0
+-; CHECK-NEXT:    [[OR_COND:%.*]] = or i1 [[ISZERO]], [[CMP]]
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[FPCLASSIFY_END:%.*]], label [[FPCLASSIFY_NOT_NAN:%.*]]
++; CHECK-NEXT:    br i1 [[ISZERO]], label [[FPCLASSIFY_END:%.*]], label [[FPCLASSIFY_NOT_ZERO:%.*]]
+ ; CHECK:       fpclassify_end:
+-; CHECK-NEXT:    [[FPCLASSIFY_RESULT:%.*]] = phi i32 [ [[FPCLASSIFY_RESULT_SEL]], [[ENTRY:%.*]] ], [ 1, [[FPCLASSIFY_NOT_NAN]] ], [ [[NORMAL_OR_SUBNORMAL:%.*]], [[FPCLASSIFY_NOT_INF:%.*]] ]
++; CHECK-NEXT:    [[FPCLASSIFY_RESULT:%.*]] = phi i32 [ 2, [[ENTRY:%.*]] ], [ 0, [[FPCLASSIFY_NOT_ZERO]] ], [ 1, [[FPCLASSIFY_NOT_NAN:%.*]] ], [ [[NORMAL_OR_SUBNORMAL:%.*]], [[FPCLASSIFY_NOT_INF:%.*]] ]
+ ; CHECK-NEXT:    ret i32 [[FPCLASSIFY_RESULT]]
++; CHECK:       fpclassify_not_zero:
++; CHECK-NEXT:    [[CMP:%.*]] = fcmp uno float [[X]], 0.000000e+00
++; CHECK-NEXT:    br i1 [[CMP]], label [[FPCLASSIFY_END]], label [[FPCLASSIFY_NOT_NAN]]
+ ; CHECK:       fpclassify_not_nan:
+ ; CHECK-NEXT:    [[X_ABS:%.*]] = tail call float @llvm.fabs.f32(float [[X]])
+ ; CHECK-NEXT:    [[ISINF:%.*]] = fcmp oeq float [[X_ABS]], 0x7FF0000000000000
+diff --git a/llvm/test/Transforms/SimplifyCFG/hoist-dbgvalue.ll b/llvm/test/Transforms/SimplifyCFG/hoist-dbgvalue.ll
+index ca9bdad83da1..1979c5096ab6 100644
+--- a/llvm/test/Transforms/SimplifyCFG/hoist-dbgvalue.ll
++++ b/llvm/test/Transforms/SimplifyCFG/hoist-dbgvalue.ll
+@@ -71,16 +71,14 @@ exit:
+ define i16 @hoist_with_debug3_pr49982(i32 %x, i1 %c.2) !dbg !26 {
+ ; CHECK-LABEL: @hoist_with_debug3_pr49982(
+ ; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[C_0_OLD:%.*]] = icmp sgt i32 [[X:%.*]], 0
+-; CHECK-NEXT:    br i1 [[C_0_OLD]], label [[COMMON_RET:%.*]], label [[LATCH:%.*]]
+-; CHECK:       latch:
+-; CHECK-NEXT:    [[C_0:%.*]] = icmp sgt i32 [[X]], 0
+-; CHECK-NEXT:    [[COMMON_RET_OP_SEL:%.*]] = select i1 [[C_2:%.*]], i16 20, i16 0
+-; CHECK-NEXT:    [[OR_COND:%.*]] = select i1 [[C_2]], i1 true, i1 [[C_0]]
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[COMMON_RET]], label [[LATCH]]
++; CHECK-NEXT:    br label [[FOR_COND:%.*]]
++; CHECK:       for.cond:
++; CHECK-NEXT:    [[C_0:%.*]] = icmp sgt i32 [[X:%.*]], 0
++; CHECK-NEXT:    [[BRMERGE:%.*]] = select i1 [[C_0]], i1 true, i1 [[C_2:%.*]]
++; CHECK-NEXT:    [[DOTMUX:%.*]] = select i1 [[C_0]], i16 0, i16 20
++; CHECK-NEXT:    br i1 [[BRMERGE]], label [[COMMON_RET:%.*]], label [[FOR_COND]]
+ ; CHECK:       common.ret:
+-; CHECK-NEXT:    [[COMMON_RET_OP:%.*]] = phi i16 [ [[COMMON_RET_OP_SEL]], [[LATCH]] ], [ 0, [[ENTRY:%.*]] ]
+-; CHECK-NEXT:    ret i16 [[COMMON_RET_OP]]
++; CHECK-NEXT:    ret i16 [[DOTMUX]]
+ ;
+ entry:
+   br label %for.cond
+diff --git a/llvm/test/Transforms/SimplifyCFG/switch-on-const-select.ll b/llvm/test/Transforms/SimplifyCFG/switch-on-const-select.ll
+index 09aba91ba076..c48fbb512276 100644
+--- a/llvm/test/Transforms/SimplifyCFG/switch-on-const-select.ll
++++ b/llvm/test/Transforms/SimplifyCFG/switch-on-const-select.ll
+@@ -5,18 +5,19 @@
+ define i32 @foo(i64 %x, i64 %y) nounwind {
+ ; CHECK-LABEL: @foo(
+ ; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[EQ_NOT:%.*]] = icmp ne i64 [[X:%.*]], [[Y:%.*]]
++; CHECK-NEXT:    [[EQ:%.*]] = icmp eq i64 [[X:%.*]], [[Y:%.*]]
++; CHECK-NEXT:    br i1 [[EQ]], label [[B:%.*]], label [[SWITCH:%.*]]
++; CHECK:       switch:
+ ; CHECK-NEXT:    [[LT:%.*]] = icmp slt i64 [[X]], [[Y]]
+-; CHECK-NEXT:    [[RETVAL_SEL:%.*]] = select i1 [[EQ_NOT]], i32 0, i32 2
+-; CHECK-NEXT:    [[OR_COND:%.*]] = and i1 [[EQ_NOT]], [[LT]]
+-; CHECK-NEXT:    br i1 [[OR_COND]], label [[A:%.*]], label [[B:%.*]]
++; CHECK-NEXT:    br i1 [[LT]], label [[A:%.*]], label [[B]]
+ ; CHECK:       common.ret:
+-; CHECK-NEXT:    [[COMMON_RET_OP:%.*]] = phi i32 [ 1, [[A]] ], [ [[RETVAL_SEL]], [[B]] ]
++; CHECK-NEXT:    [[COMMON_RET_OP:%.*]] = phi i32 [ 1, [[A]] ], [ [[RETVAL:%.*]], [[B]] ]
+ ; CHECK-NEXT:    ret i32 [[COMMON_RET_OP]]
+ ; CHECK:       a:
+ ; CHECK-NEXT:    tail call void @bees.a() #[[ATTR0:[0-9]+]]
+ ; CHECK-NEXT:    br label [[COMMON_RET:%.*]]
+ ; CHECK:       b:
++; CHECK-NEXT:    [[RETVAL]] = phi i32 [ 0, [[SWITCH]] ], [ 2, [[ENTRY:%.*]] ]
+ ; CHECK-NEXT:    tail call void @bees.b() #[[ATTR0]]
+ ; CHECK-NEXT:    br label [[COMMON_RET]]
+ ;
+@@ -126,11 +127,10 @@ bees:
+ define i32 @xyzzy(i64 %x, i64 %y) {
+ ; CHECK-LABEL: @xyzzy(
+ ; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[EQ_NOT:%.*]] = icmp ne i64 [[X:%.*]], [[Y:%.*]]
++; CHECK-NEXT:    [[EQ:%.*]] = icmp eq i64 [[X:%.*]], [[Y:%.*]]
+ ; CHECK-NEXT:    [[LT:%.*]] = icmp slt i64 [[X]], [[Y]]
+-; CHECK-NEXT:    [[VAL_SEL:%.*]] = select i1 [[EQ_NOT]], i32 1, i32 0
+-; CHECK-NEXT:    [[OR_COND:%.*]] = and i1 [[EQ_NOT]], [[LT]]
+-; CHECK-NEXT:    [[COMMON_RET_OP:%.*]] = select i1 [[OR_COND]], i32 -1, i32 [[VAL_SEL]]
++; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[LT]], i32 -1, i32 1
++; CHECK-NEXT:    [[COMMON_RET_OP:%.*]] = select i1 [[EQ]], i32 0, i32 [[SPEC_SELECT]]
+ ; CHECK-NEXT:    ret i32 [[COMMON_RET_OP]]
+ ;
+ entry:
+-- 
+2.40.0.348.gf938b09366-goog
+

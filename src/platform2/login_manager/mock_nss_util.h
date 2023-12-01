@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,6 +42,7 @@ class MockNssUtil : public NssUtil {
   ScopedPK11SlotDescriptor OpenUserDB(
       const base::FilePath& user_homedir,
       const OptionalFilePath& ns_mnt_path) override;
+  ScopedPK11SlotDescriptor GetInternalSlot() override;
   MOCK_METHOD(std::unique_ptr<crypto::RSAPrivateKey>,
               GetPrivateKeyForUser,
               (const std::vector<uint8_t>&, PK11SlotDescriptor*),
@@ -59,7 +60,8 @@ class MockNssUtil : public NssUtil {
               Verify,
               (const std::vector<uint8_t>&,
                const std::vector<uint8_t>&,
-               const std::vector<uint8_t>&),
+               const std::vector<uint8_t>&,
+               const crypto::SignatureVerifier::SignatureAlgorithm),
               (override));
   MOCK_METHOD(bool,
               Sign,

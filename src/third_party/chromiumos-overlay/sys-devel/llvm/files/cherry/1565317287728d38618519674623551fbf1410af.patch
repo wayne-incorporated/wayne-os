@@ -1,0 +1,138 @@
+From 1565317287728d38618519674623551fbf1410af Mon Sep 17 00:00:00 2001
+From: Guillaume Chatelet <gchatelet@google.com>
+Date: Tue, 20 Dec 2022 10:56:08 +0000
+Subject: [PATCH] Revert D139181 "[lld][Alignment][NFC] Use Align instead of
+ log2 of alignment in Wasm Sections"
+
+As discussed on the patch the Align type is probably not a good fit for
+linkers.
+This reverts commit cfe77f23d6f190d54763a7575cee95aceb9216bc.
+---
+ lld/wasm/InputChunks.h         |  6 +++---
+ lld/wasm/OutputSegment.cpp     | 13 ++++++-------
+ lld/wasm/OutputSegment.h       |  2 +-
+ lld/wasm/SyntheticSections.cpp |  2 +-
+ lld/wasm/Writer.cpp            |  9 ++++-----
+ 5 files changed, 15 insertions(+), 17 deletions(-)
+
+diff --git a/lld/wasm/InputChunks.h b/lld/wasm/InputChunks.h
+index 34b1572584a1..ec9d2eb3c275 100644
+--- a/lld/wasm/InputChunks.h
++++ b/lld/wasm/InputChunks.h
+@@ -85,7 +85,7 @@ public:
+   OutputSection *outputSec = nullptr;
+   uint32_t comdat = UINT32_MAX;
+   uint32_t inputSectionOffset = 0;
+-  llvm::Align alignment;
++  uint32_t alignment;
+   uint32_t flags;
+ 
+   // Only applies to data segments.
+@@ -109,8 +109,8 @@ public:
+ protected:
+   InputChunk(ObjFile *f, Kind k, StringRef name, uint32_t alignment = 0,
+              uint32_t flags = 0)
+-      : name(name), file(f), alignment(1ULL << alignment), flags(flags),
+-        sectionKind(k), live(!config->gcSections), discarded(false) {}
++      : name(name), file(f), alignment(alignment), flags(flags), sectionKind(k),
++        live(!config->gcSections), discarded(false) {}
+   ArrayRef<uint8_t> data() const { return rawData; }
+   uint64_t getTombstone() const;
+ 
+diff --git a/lld/wasm/OutputSegment.cpp b/lld/wasm/OutputSegment.cpp
+index e7e9929e3d9c..86b538403391 100644
+--- a/lld/wasm/OutputSegment.cpp
++++ b/lld/wasm/OutputSegment.cpp
+@@ -22,10 +22,10 @@ namespace wasm {
+ void OutputSegment::addInputSegment(InputChunk *inSeg) {
+   alignment = std::max(alignment, inSeg->alignment);
+   inputSegments.push_back(inSeg);
+-  size = llvm::alignTo(size, inSeg->alignment);
++  size = llvm::alignTo(size, 1ULL << inSeg->alignment);
+   LLVM_DEBUG(dbgs() << "addInputSegment: " << inSeg->name << " oname=" << name
+-                    << " size=" << inSeg->getSize() << " align="
+-                    << Log2(inSeg->alignment) << " at:" << size << "\n");
++                    << " size=" << inSeg->getSize()
++                    << " align=" << inSeg->alignment << " at:" << size << "\n");
+   inSeg->outputSeg = this;
+   inSeg->outputSegmentOffset = size;
+   size += inSeg->getSize();
+@@ -56,9 +56,8 @@ void OutputSegment::finalizeInputSegments() {
+     });
+     if (i == mergedSegments.end()) {
+       LLVM_DEBUG(llvm::dbgs() << "new merge segment: " << name
+-                              << " alignment=" << Log2(ms->alignment) << "\n");
+-      auto *syn =
+-          make<SyntheticMergedChunk>(name, Log2(ms->alignment), ms->flags);
++                              << " alignment=" << ms->alignment << "\n");
++      auto *syn = make<SyntheticMergedChunk>(name, ms->alignment, ms->flags);
+       syn->outputSeg = this;
+       mergedSegments.push_back(syn);
+       i = std::prev(mergedSegments.end());
+@@ -75,7 +74,7 @@ void OutputSegment::finalizeInputSegments() {
+   inputSegments = newSegments;
+   size = 0;
+   for (InputChunk *seg : inputSegments) {
+-    size = llvm::alignTo(size, seg->alignment);
++    size = llvm::alignTo(size, 1ULL << seg->alignment);
+     LLVM_DEBUG(llvm::dbgs() << "outputSegmentOffset set: " << seg->name
+                             << " -> " << size << "\n");
+     seg->outputSegmentOffset = size;
+diff --git a/lld/wasm/OutputSegment.h b/lld/wasm/OutputSegment.h
+index 5be6a7184c37..3b7a0f50be94 100644
+--- a/lld/wasm/OutputSegment.h
++++ b/lld/wasm/OutputSegment.h
+@@ -38,7 +38,7 @@ public:
+   uint32_t linkingFlags = 0;
+   uint32_t initFlags = 0;
+   uint32_t sectionOffset = 0;
+-  llvm::Align alignment;
++  uint32_t alignment = 0;
+   uint64_t startVA = 0;
+   std::vector<InputChunk *> inputSegments;
+ 
+diff --git a/lld/wasm/SyntheticSections.cpp b/lld/wasm/SyntheticSections.cpp
+index bf32754e2991..27715d9bef33 100644
+--- a/lld/wasm/SyntheticSections.cpp
++++ b/lld/wasm/SyntheticSections.cpp
+@@ -668,7 +668,7 @@ void LinkingSection::writeBody() {
+     writeUleb128(sub.os, dataSegments.size(), "num data segments");
+     for (const OutputSegment *s : dataSegments) {
+       writeStr(sub.os, s->name, "segment name");
+-      writeUleb128(sub.os, Log2(s->alignment), "alignment");
++      writeUleb128(sub.os, s->alignment, "alignment");
+       writeUleb128(sub.os, s->linkingFlags, "flags");
+     }
+     sub.writeTo(os);
+diff --git a/lld/wasm/Writer.cpp b/lld/wasm/Writer.cpp
+index 5a0026b62b98..767b1ad6682b 100644
+--- a/lld/wasm/Writer.cpp
++++ b/lld/wasm/Writer.cpp
+@@ -288,12 +288,11 @@ void Writer::layoutMemory() {
+ 
+   out.dylinkSec->memAlign = 0;
+   for (OutputSegment *seg : segments) {
+-    out.dylinkSec->memAlign =
+-        std::max(out.dylinkSec->memAlign, Log2(seg->alignment));
+-    memoryPtr = alignTo(memoryPtr, seg->alignment);
++    out.dylinkSec->memAlign = std::max(out.dylinkSec->memAlign, seg->alignment);
++    memoryPtr = alignTo(memoryPtr, 1ULL << seg->alignment);
+     seg->startVA = memoryPtr;
+     log(formatv("mem: {0,-15} offset={1,-8} size={2,-8} align={3}", seg->name,
+-                memoryPtr, seg->size, Log2(seg->alignment)));
++                memoryPtr, seg->size, seg->alignment));
+ 
+     if (!config->relocatable && seg->isTLS()) {
+       if (WasmSym::tlsSize) {
+@@ -302,7 +301,7 @@ void Writer::layoutMemory() {
+       }
+       if (WasmSym::tlsAlign) {
+         auto *tlsAlign = cast<DefinedGlobal>(WasmSym::tlsAlign);
+-        setGlobalPtr(tlsAlign, seg->alignment.value());
++        setGlobalPtr(tlsAlign, int64_t{1} << seg->alignment);
+       }
+       if (!config->sharedMemory && WasmSym::tlsBase) {
+         auto *tlsBase = cast<DefinedGlobal>(WasmSym::tlsBase);
+-- 
+2.40.0.348.gf938b09366-goog
+

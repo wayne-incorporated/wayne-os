@@ -1,0 +1,39 @@
+# Copyright 2017 The ChromiumOS Authors
+# Distributed under the terms of the GNU General Public License v2
+
+# Initial value just for style purposes.
+USE=""
+
+CHROMEOS_KERNEL_SPLITCONFIG="chromeos-intel-pineview"
+CHROMEOS_KERNEL_ARCH="x86_64"
+
+# Skylake-y cpus, but do not have avx support.
+BOARD_COMPILER_FLAGS="-march=silvermont -maes"
+BOARD_RUSTFLAGS="-Ctarget-cpu=silvermont -Ctarget-feature=+aes"
+USE="${USE} march_silvermont"
+
+LINUX_FIRMWARE="i915_skl adsp_skl"
+
+USE="${USE} kernel-4_19"
+
+USE="${USE} skl_lpe intel_lpe"
+
+# Disable ACPI AC device and use USB PD power supply driver
+USE="${USE} -acpi_ac"
+
+# Identify the vendor
+USE="${USE} intel_cpu"
+
+# Enable GpuMemoryBuffers backed by dma-bufs.
+USE="${USE} native_gpu_memory_buffers"
+
+USE="${USE} android_aep"
+
+# Use legacy pre-Groot UI for initramfs and init script screens.
+USE="${USE} legacy_firmware_ui"
+
+# Enable iHD media driver
+USE="${USE} -video_cards_i965 video_cards_iHD video_cards_iHD_g9"
+
+# Allows Chrome to start in the presence of multiple threads.
+USE="${USE} gpu_sandbox_start_early"

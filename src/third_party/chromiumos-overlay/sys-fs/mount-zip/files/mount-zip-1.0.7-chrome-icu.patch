@@ -1,0 +1,73 @@
+From 904408599b32ee0d18ec614ae25f22b66989eda9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fran=C3=A7ois=20Degros?= <fdegros@chromium.org>
+Date: Mon, 22 Nov 2021 17:00:06 +1100
+Subject: [PATCH] Use chrome-icu
+
+Link and initialize the ChromeOS-specific version of ICU (chrome-icu).
+Don't build man page.
+---
+ Makefile     | 7 +++----
+ lib/Makefile | 4 +++-
+ lib/tree.cc  | 3 +++
+ 3 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index a12358b..4aafe55 100644
+--- a/Makefile
++++ b/Makefile
+@@ -20,9 +20,9 @@ prefix = /usr
+ exec_prefix = $(prefix)
+ bindir = $(exec_prefix)/bin
+ PKG_CONFIG ?= pkg-config
+-DEPS = fuse libzip icu-uc icu-i18n
++DEPS = fuse libzip
+ LIBS := -Llib -lfusezip $(shell $(PKG_CONFIG) --libs $(DEPS))
+-LIBS += -Llib -lfusezip
++LIBS += -Llib -lfusezip -licui18n-chrome -licuuc-chrome
+ CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(DEPS))
+ CXXFLAGS += -Wall -Wextra -Wno-sign-compare -Wno-missing-field-initializers -pedantic -std=c++20
+ ifeq ($(DEBUG), 1)
+@@ -65,9 +65,8 @@ all-clean:
+ $(MAN): README.md
+ 	pandoc $< -s -t man -o $@
+ 
+-install: $(DEST) $(MAN)
++install: $(DEST)
+ 	$(INSTALL_PROGRAM) "$(DEST)" "$(DESTDIR)$(bindir)/$(DEST)"
+-	$(INSTALL_DATA) $(MAN) "$(DESTDIR)$(MANDIR)/$(MAN)"
+ 
+ install-strip:
+ 	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install
+diff --git a/lib/Makefile b/lib/Makefile
+index cf26430..0a11b60 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -17,8 +17,10 @@
+ 
+ DEST = libfusezip.a
+ PKG_CONFIG ?= pkg-config
+-DEPS = fuse libzip icu-uc icu-i18n
++DEPS = fuse libzip
+ CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(DEPS))
++CXXFLAGS += -I"$(SYSROOT)/usr/include/icu-chrome/common"
++CXXFLAGS += -I"$(SYSROOT)/usr/include/icu-chrome/i18n"
+ CXXFLAGS += -Wall -Wextra -Wno-sign-compare -Wno-missing-field-initializers -pedantic -std=c++20
+ ifeq ($(DEBUG), 1)
+ CXXFLAGS += -O0 -g
+diff --git a/lib/tree.cc b/lib/tree.cc
+index e8702f2..b587b18 100644
+--- a/lib/tree.cc
++++ b/lib/tree.cc
+@@ -353,6 +353,9 @@ void Tree::BuildTree() {
+       need_prefix_ = name.starts_with('/') || name.starts_with("../");
+   }
+ 
++  // Initialize ICU library and ensure it will be cleaned up.
++  const IcuGuard guard("/opt/google/chrome/icudtl.dat");
++
+   // Detect filename encoding.
+   std::string encoding;
+   if (opts_.encoding)
+-- 
+2.37.2.789.g6183377224-goog
+

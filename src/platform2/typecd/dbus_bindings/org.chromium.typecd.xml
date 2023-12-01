@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<node name="/org/chromium/typecd"
+      xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+  <interface name="org.chromium.typecd">
+    <signal name="DeviceConnected">
+      <tp:docstring>
+        Signal sent out when a device is connected. Currently, the signal is only
+        sent out for devices that have Thunderbolt (TBT) capability. This signal
+        is sent out every time an alt mode is entered; this includes events like
+        login/logout/screen unlock.
+      </tp:docstring>
+      <arg name="type" type="u">
+        <tp:docstring>
+          Type of the device which was connected. It can be one of the enum
+          values of typecd::DeviceConnectedType.
+          See platform2/system_api/dbus/typecd/dbus-constants.h
+        </tp:docstring>
+      </arg>
+    </signal>
+    <signal name="CableWarning">
+      <tp:docstring>
+        Cable connected may limit partner's performance or support. It can
+        be the values of typecd::CableWarningType.
+        See platform2/system_api/dbus/typecd/dbus-constants.h
+      </tp:docstring>
+      <arg name="type" type="u">
+        <tp:docstring>
+          Type of limitation caused by cable. It can be one of the enum
+          values of typecd::CableWarningType.
+          See platform2/system_api/dbus/typecd/dbus-constants.h
+        </tp:docstring>
+      </arg>
+    </signal>
+    <method name="SetPeripheralDataAccess">
+      <tp:docstring>
+        Sets value in typecd to track the user's peripheral data access setting.
+      </tp:docstring>
+      <arg name="enabled" type="b" direction="in">
+        <tp:docstring>
+          Used to signal the user's peripheral data access setting. Set to true
+          if it is enabled and false if it is disabled.
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="SetPortsUsingDisplays">
+      <tp:docstring>
+        Sets value in typecd to track which ports are currently driving
+        displays.
+      </tp:docstring>
+      <arg name="enabled" type="au" direction="in">
+        <tp:docstring>
+          List of ports that have a display connected, either directly or
+          through a dock.
+        </tp:docstring>
+      </arg>
+    </method>
+  </interface>
+</node>

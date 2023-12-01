@@ -1,0 +1,53 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+LINUX_FIRMWARE=""
+USE=""
+
+# WiFi driver firmware
+LINUX_FIRMWARE="${LINUX_FIRMWARE} iwlwifi-7265D"
+
+# BT driver firmware
+LINUX_FIRMWARE="${LINUX_FIRMWARE} ibt-hw"
+
+# Google USBPD peripheral firmwares
+LINUX_FIRMWARE="${LINUX_FIRMWARE} cros-pd"
+
+# Add Intel Camera IMGU ipu3-fw.bin
+LINUX_FIRMWARE="${LINUX_FIRMWARE} ipu3_fw"
+
+# Add EC logging
+USE="${USE} eclog"
+
+# Declare TPM model.
+USE="${USE} -tpm tpm2"
+
+# Include prebuilt (&signed) CR50 FW
+USE="${USE} cr50_onboard"
+
+# Enable VMs
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Enable Chrome's tablet mode
+USE="${USE} touchview"
+
+# Disable AC ACPI driver
+USE="${USE} -acpi_ac"
+
+# Avoid inhibiting the keyboard (which reports events from side buttons).
+USE="${USE} keyboard_includes_side_buttons"
+
+# Add keyboard backlight detection
+USE="${USE} has_keyboard_backlight"
+
+# Enable Downloadable Content (DLC) Test
+USE="${USE} dlc_test"
+
+# Enable PCI rescan for Intel wifi NIC disappearing from the bus
+# See b/117960007 and crbug.com/922232 for details.
+USE="${USE} iwlwifi_rescan"
+
+# Enable eMMC tools
+USE="${USE} mmc"

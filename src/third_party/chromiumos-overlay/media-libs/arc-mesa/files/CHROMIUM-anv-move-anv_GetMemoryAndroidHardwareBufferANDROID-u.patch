@@ -1,0 +1,88 @@
+From e8aae4174630c9a3847117ceb5d23d318406d7b6 Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Tue, 19 Mar 2019 19:20:53 -0700
+Subject: [PATCH 05/10] anv: move anv_GetMemoryAndroidHardwareBufferANDROID up
+ a bit
+
+Change-Id: I9a6942e8c22efa355b00a6ba946740283d0e00d2
+---
+ src/intel/vulkan/anv_android.c | 56 +++++++++++++++++-----------------
+ 1 file changed, 28 insertions(+), 28 deletions(-)
+
+diff --git a/src/intel/vulkan/anv_android.c b/src/intel/vulkan/anv_android.c
+index 3272ddd85b1a..ef8f26b0c31a 100644
+--- a/src/intel/vulkan/anv_android.c
++++ b/src/intel/vulkan/anv_android.c
+@@ -215,6 +215,34 @@ anv_GetAndroidHardwareBufferPropertiesANDROID(
+    return VK_SUCCESS;
+ }
+ 
++VkResult
++anv_GetMemoryAndroidHardwareBufferANDROID(
++   VkDevice device_h,
++   const VkMemoryGetAndroidHardwareBufferInfoANDROID *pInfo,
++   struct AHardwareBuffer **pBuffer)
++{
++   ANV_FROM_HANDLE(anv_device_memory, mem, pInfo->memory);
++
++   /* Some quotes from Vulkan spec:
++    *
++    * "If the device memory was created by importing an Android hardware
++    * buffer, vkGetMemoryAndroidHardwareBufferANDROID must return that same
++    * Android hardware buffer object."
++    *
++    * "VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID must
++    * have been included in VkExportMemoryAllocateInfo::handleTypes when
++    * memory was created."
++    */
++   if (mem->ahw) {
++      *pBuffer = mem->ahw;
++      /* Increase refcount. */
++      AHardwareBuffer_acquire(mem->ahw);
++      return VK_SUCCESS;
++   }
++
++   return VK_ERROR_OUT_OF_HOST_MEMORY;
++}
++
+ /* Construct ahw usage mask from image usage bits, see
+  * 'AHardwareBuffer Usage Equivalence' in Vulkan spec.
+  */
+@@ -246,34 +274,6 @@ anv_ahw_usage_from_vk_usage(const VkImageCreateFlags vk_create,
+    return ahw_usage;
+ }
+ 
+-VkResult
+-anv_GetMemoryAndroidHardwareBufferANDROID(
+-   VkDevice device_h,
+-   const VkMemoryGetAndroidHardwareBufferInfoANDROID *pInfo,
+-   struct AHardwareBuffer **pBuffer)
+-{
+-   ANV_FROM_HANDLE(anv_device_memory, mem, pInfo->memory);
+-
+-   /* Some quotes from Vulkan spec:
+-    *
+-    * "If the device memory was created by importing an Android hardware
+-    * buffer, vkGetMemoryAndroidHardwareBufferANDROID must return that same
+-    * Android hardware buffer object."
+-    *
+-    * "VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID must
+-    * have been included in VkExportMemoryAllocateInfo::handleTypes when
+-    * memory was created."
+-    */
+-   if (mem->ahw) {
+-      *pBuffer = mem->ahw;
+-      /* Increase refcount. */
+-      AHardwareBuffer_acquire(mem->ahw);
+-      return VK_SUCCESS;
+-   }
+-
+-   return VK_ERROR_OUT_OF_HOST_MEMORY;
+-}
+-
+ /*
+  * Called from anv_AllocateMemory when import AHardwareBuffer.
+  */
+-- 
+2.20.1
+

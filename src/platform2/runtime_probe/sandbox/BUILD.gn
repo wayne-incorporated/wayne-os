@@ -1,0 +1,56 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/install_config.gni")
+import("//common-mk/install_seccomp_policy.gni")
+
+group("sandbox") {
+  deps = [
+    ":install_sandbox_args",
+    ":install_sandbox_seccomp",
+  ]
+}
+
+install_seccomp_policy("install_sandbox_seccomp") {
+  _arch = getenv("ARCH")
+  sources = [
+    "${_arch}/ata_storage-seccomp.policy",
+    "${_arch}/audio_codec-seccomp.policy",
+    "${_arch}/edid-seccomp.policy",
+    "${_arch}/ethernet_network-seccomp.policy",
+    "${_arch}/generic_battery-seccomp.policy",
+    "${_arch}/input_device-seccomp.policy",
+    "${_arch}/mipi_camera-seccomp.policy",
+    "${_arch}/mmc_host-seccomp.policy",
+    "${_arch}/mmc_storage-seccomp.policy",
+    "${_arch}/network-seccomp.policy",
+    "${_arch}/nvme_storage-seccomp.policy",
+    "${_arch}/tcpc-seccomp.policy",
+    "${_arch}/usb_camera-seccomp.policy",
+  ]
+  if (_arch == "amd64") {
+    sources += [
+      "${_arch}/ap_i2c-seccomp.policy",
+      "${_arch}/ec_i2c-seccomp.policy",
+      "${_arch}/gpu-seccomp.policy",
+      "${_arch}/memory-seccomp.policy",
+      "${_arch}/ufs_storage-seccomp.policy",
+      "${_arch}/vpd_cached-seccomp.policy",
+    ]
+  }
+  if (_arch == "amd64" || _arch == "arm") {
+    sources += [
+      "${_arch}/cellular_network-seccomp.policy",
+      "${_arch}/generic_network-seccomp.policy",
+      "${_arch}/wireless_network-seccomp.policy",
+    ]
+  }
+  install_path = "/etc/runtime_probe/sandbox"
+}
+
+install_config("install_sandbox_args") {
+  _arch = getenv("ARCH")
+  sources = [ "${_arch}/args.json" ]
+  install_path = "/etc/runtime_probe/sandbox"
+}

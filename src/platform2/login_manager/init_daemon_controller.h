@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,11 @@
 
 namespace dbus {
 class Response;
+class ScopedDBusError;
+}
+
+namespace base {
+class TimeDelta;
 }
 
 namespace login_manager {
@@ -36,6 +41,16 @@ class InitDaemonController {
       const std::string& name,
       const std::vector<std::string>& args_keyvals,
       TriggerMode mode) = 0;
+
+  // Asks the init daemon to emit a signal (Upstart) or start a unit (systemd)
+  // with a |timeout| and |error|. The response is null if the request failed
+  // or |mode| is ASYNC.
+  virtual std::unique_ptr<dbus::Response> TriggerImpulseWithTimeoutAndError(
+      const std::string& name,
+      const std::vector<std::string>& args_keyvals,
+      TriggerMode mode,
+      base::TimeDelta timeout,
+      dbus::ScopedDBusError* error) = 0;
 };
 
 }  // namespace login_manager

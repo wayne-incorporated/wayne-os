@@ -1,0 +1,106 @@
+commit 1ccde533425a4ba9d379510206ad680ff9702129
+Author: Fangrui Song <maskray@google.com>
+Date:   Tue Apr 28 18:53:12 2020 -0700
+
+    [ELF] --gdb-index: support .debug_loclists
+    
+    --gdb-index currently crashes when reading a translation unit with
+    DWARF v5 .debug_loclists . Call stack:
+    
+    ```
+    SyntheticSections.cpp GdbIndexSection::create
+    SyntheticSections.cpp readAddressAreas
+    DWARFUnit.cpp DWARFUnit::tryExtractDIEsIfNeeded
+    DWARFListTable.cpp DWARFListTableHeader::extract
+    ...
+    DWARFDataExtractor.cpp DWARFDataExtractor::getRelocatedValue
+    lld/ELF/DWARF.cpp LLDDwarfObj<ELFT>::find (sec.sec is nullptr)
+    ...
+    
+    ```
+    
+    This patch adds support for .debug_loclists to make `DWARFUnit::tryExtractDIEsIfNeeded` happy.
+    Building --gdb-index does not need .debug_loclists
+    
+    Reviewed By: dblaikie, grimar
+    
+    Differential Revision: https://reviews.llvm.org/D79061
+
+diff --git a/lld/ELF/DWARF.cpp b/lld/ELF/DWARF.cpp
+index bf4fff76c31..f1587d93e53 100644
+--- a/lld/ELF/DWARF.cpp
++++ b/lld/ELF/DWARF.cpp
+@@ -36,6 +36,7 @@ template <class ELFT> LLDDwarfObj<ELFT>::LLDDwarfObj(ObjFile<ELFT> *obj) {
+                 .Case(".debug_gnu_pubnames", &gnuPubnamesSection)
+                 .Case(".debug_gnu_pubtypes", &gnuPubtypesSection)
+                 .Case(".debug_info", &infoSection)
++                .Case(".debug_loclists", &loclistsSection)
+                 .Case(".debug_ranges", &rangesSection)
+                 .Case(".debug_rnglists", &rnglistsSection)
+                 .Case(".debug_str_offsets", &strOffsetsSection)
+diff --git a/lld/ELF/DWARF.h b/lld/ELF/DWARF.h
+index 51ec9092f17..8609e35faf9 100644
+--- a/lld/ELF/DWARF.h
++++ b/lld/ELF/DWARF.h
+@@ -32,6 +32,10 @@ public:
+     f(infoSection);
+   }
+ 
++  const llvm::DWARFSection &getLoclistsSection() const override {
++    return loclistsSection;
++  }
++
+   const llvm::DWARFSection &getRangesSection() const override {
+     return rangesSection;
+   }
+@@ -81,6 +85,7 @@ private:
+   LLDDWARFSection gnuPubnamesSection;
+   LLDDWARFSection gnuPubtypesSection;
+   LLDDWARFSection infoSection;
++  LLDDWARFSection loclistsSection;
+   LLDDWARFSection rangesSection;
+   LLDDWARFSection rnglistsSection;
+   LLDDWARFSection strOffsetsSection;
+diff --git a/lld/test/ELF/gdb-index-loclists.s b/lld/test/ELF/gdb-index-loclists.s
+new file mode 100644
+index 00000000000..e3769b69537
+--- /dev/null
++++ b/lld/test/ELF/gdb-index-loclists.s
+@@ -0,0 +1,37 @@
++# REQUIRES: x86
++## Regression test that we don't crash on DWARF v5 .debug_loclists
++
++# RUN: llvm-mc -filetype=obj -triple=x86_64 %s -o %t.o
++# RUN: ld.lld --gdb-index %t.o -o /dev/null
++
++.section .debug_abbrev,"",@progbits
++  .byte 1            # Abbreviation Code
++  .byte 17           # DW_TAG_compile_unit
++  .byte 0            # DW_CHILDREN_no
++  .ascii "\214\001"  # DW_AT_loclists_base
++  .byte 23           # DW_FORM_sec_offset
++  .byte 0            # EOM(1)
++  .byte 0            # EOM(2)
++  .byte 0
++
++.section .debug_info,"",@progbits
++.Lcu_begin0:
++  .long .Lcu_end0-.Lcu_begin0-4  # Length of Unit
++  .short 5                       # DWARF version number
++  .byte  1                       # DWARF Unit Type
++  .byte  8                       # Address Size
++  .long  0                       # Offset Into Abbrev. Section
++  .byte  1                       # Abbrev [1] DW_TAG_compile_unit
++  .long  .Lloclists_table_base0  # DW_AT_loclists_base
++.Lcu_end0:
++
++.section .debug_loclists,"",@progbits
++  .long .Ldebug_loclist_table_end0-.Ldebug_loclist_table_start0 # Length
++.Ldebug_loclist_table_start0:
++  .short 5                # Version
++  .byte  8                # Address size
++  .byte  0                # Segment selector size
++  .long  0                # Offset entry count
++.Lloclists_table_base0:
++  .byte  0                # DW_LLE_end_of_list
++.Ldebug_loclist_table_end0:

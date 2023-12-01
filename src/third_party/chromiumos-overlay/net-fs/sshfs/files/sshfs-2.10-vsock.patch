@@ -1,0 +1,123 @@
+From 736a4a686d44ed0050a5edbd96a648a1e2a40e74 Mon Sep 17 00:00:00 2001
+From: Emil Mikulic <easy@google.com>
+Date: Fri, 25 Mar 2022 11:24:39 +1100
+Subject: [PATCH] Implement connect to vsock.
+
+"sshfs -o vsock=CID:PORT" will cause sshfs to connect directly to the
+given vsock, bypassing ssh, and allowing high performance sshfs mounts
+of a VM guest.
+---
+ sshfs.c | 62 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 62 insertions(+)
+
+diff --git a/sshfs.c b/sshfs.c
+index 97eaf06..563240b 100644
+--- a/sshfs.c
++++ b/sshfs.c
+@@ -50,6 +50,9 @@
+ #  include <libgen.h>
+ #  include <darwin_compat.h>
+ #endif
++#ifdef __linux__
++#  include <linux/vm_sockets.h>
++#endif
+ 
+ #include "cache.h"
+ 
+@@ -275,6 +278,7 @@ struct sshfs {
+ 	int ext_fsync;
+ 	mode_t mnt_mode;
+ 	struct fuse_operations *op;
++	char *vsock;
+ 
+ 	/* statistics */
+ 	uint64_t bytes_sent;
+@@ -403,6 +407,7 @@ static struct fuse_opt sshfs_opts[] = {
+ 	SSHFS_OPT("delay_connect",     delay_connect, 1),
+ 	SSHFS_OPT("slave",             slave, 1),
+ 	SSHFS_OPT("disable_hardlink",  disable_hardlink, 1),
++	SSHFS_OPT("vsock=%s",          vsock, 0),
+ 
+ 	FUSE_OPT_KEY("-p ",            KEY_PORT),
+ 	FUSE_OPT_KEY("-C",             KEY_COMPRESS),
+@@ -1113,6 +1118,60 @@ static int connect_to(char *host, char *port)
+ 	return 0;
+ }
+ 
++static int connect_vsock(char *vsock)
++{
++#ifndef __linux__
++	fprintf(stderr, "vsock is not available\n");
++	return -1;
++#else
++	int err;
++	int sock;
++	struct sockaddr_vm addr;
++	unsigned int cid;
++	unsigned int port;
++	char *delim;
++
++	delim = strchr(vsock, ':');
++	if (delim == NULL) {
++		fprintf(stderr, "invalid vsock, expecting CID:PORT\n");
++		return -1;
++	}
++	*delim = '\0';
++	errno = 0;
++	cid = strtoul(vsock, NULL, 10);
++	if (errno) {
++		perror("invalid cid");
++		return -1;
++	}
++	errno = 0;
++	port = strtoul(delim + 1, NULL, 10);
++	if (errno) {
++		perror("invalid port");
++		return -1;
++	}
++
++	sock = socket(AF_VSOCK, SOCK_STREAM, 0);
++	if (sock == -1) {
++		perror("failed to create socket");
++		return -1;
++	}
++	memset(&addr, 0, sizeof(addr));
++	addr.svm_family = AF_VSOCK;
++	addr.svm_cid = cid;
++	addr.svm_port = port;
++	err = connect(sock, (const struct sockaddr *)&addr, sizeof(addr));
++	if (err == -1) {
++		perror("failed to connect vsock");
++		close(sock);
++		return -1;
++	}
++
++	sshfs.rfd = sock;
++	sshfs.wfd = sock;
++	return 0;
++#endif
++}
++
+ static int do_write(struct iovec *iov, size_t count)
+ {
+ 	int res;
+@@ -1661,6 +1720,8 @@ static int connect_remote(void)
+ 		err = connect_slave();
+ 	else if (sshfs.directport)
+ 		err = connect_to(sshfs.host, sshfs.directport);
++	else if (sshfs.vsock)
++		err = connect_vsock(sshfs.vsock);
+ 	else
+ 		err = start_ssh();
+ 	if (!err)
+@@ -3348,6 +3409,7 @@ static void usage(const char *progname)
+ "    -o follow_symlinks     follow symlinks on the server\n"
+ "    -o no_check_root       don't check for existence of 'dir' on server\n"
+ "    -o password_stdin      read password from stdin (only for pam_mount!)\n"
++"    -o vsock=CID:PORT      connect to the given vsock\n"
+ "    -o SSHOPT=VAL          ssh options (see man ssh_config)\n"
+ "\n", progname);
+ }
+-- 
+2.35.1.1021.g381101b075-goog
+

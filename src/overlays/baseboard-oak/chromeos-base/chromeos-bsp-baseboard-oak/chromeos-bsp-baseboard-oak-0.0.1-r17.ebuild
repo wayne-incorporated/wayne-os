@@ -1,0 +1,1 @@
+chromeos-bsp-baseboard-oak-0.0.1.ebuild

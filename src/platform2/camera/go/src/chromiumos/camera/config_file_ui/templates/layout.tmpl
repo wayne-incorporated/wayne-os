@@ -1,0 +1,94 @@
+<!doctype html>
+<!-- Copyright 2021 The Chromium Authors
+     Use of this source code is governed by a BSD-style license that can be
+     found in the LICENSE file. -->
+
+<html>
+  <head>
+  <title>Camera Feature Settings</title>
+  <script src='/js/ui.js'></script>
+  <link rel='stylesheet' href='/css/default.css'>
+  <link rel='stylesheet' href='/css/config_option.css'>
+  <link rel='stylesheet' href='/css/switch.css'>
+  <link rel='stylesheet' href='/css/range_slider.css'>
+  <link rel='stylesheet' href='/css/selection.css'>
+  <link rel='stylesheet' href='/css/map_textarea.css'>
+  <link rel='stylesheet' href='/css/pop_up_modal.css'>
+  <link rel='stylesheet' href='/css/sidebar.css'>
+  </head>
+  <body onload='onBodyLoaded()'>
+    <!-- Sidebar -->
+    <div class='sidebar'>
+    {{range .}}
+      <a href="#{{.Key}}">{{.Name}}</a>
+    {{end}}
+    </div>
+
+    <!-- Page Content -->
+    <div class='content'>
+    {{range .}}
+    <div class='config-container' id='{{.Key}}_container' style='display:none'>
+      <h1>{{.Name}}</h1>
+      <h4>{{.Summary}}</h4>
+
+      {{$configId := .Key}}
+      {{range .Options}}
+      <div class='option'>
+        <div class='option-info'>
+          <span class='option-name' id='{{.Key}}'><b>{{.Name}}</b></span>
+          <span class='option-summary'>{{.Summary}}</span>
+        </div>
+        <div class='option-control'>
+
+        {{if eq .Type "switch"}}
+          <label class="switch">
+            <input type="checkbox" {{if .Value}}checked{{end}} id='{{.Key}}_checkbox'
+                onchange='onSwitchInput({{$configId}}, {{.Key}})'>
+            <span class="slider round"></span>
+          </label>
+
+        {{else if eq .Type "number"}}
+          <input type='range' min={{getmin .ValueDescriptor}}
+              max={{getmax .ValueDescriptor}} step={{getstep .ValueDescriptor}}
+              value={{.Value}} id='{{.Key}}_range' class='range-slider'
+              oninput='onRangeInput({{$configId}}, {{.Key}})'>
+          <input type='text' size=3 value={{.Value}} id='{{.Key}}_text' class='text-input'
+              onchange='onTextInput({{$configId}}, {{.Key}})'>
+
+        {{else if eq .Type "map"}}
+          <textarea rows=10 cols=30 id='{{.Key}}_textarea' class='map-textarea'
+              onchange='onTextareaInput({{$configId}}, {{.Key}})'>{{getjs .Value}}</textarea>
+
+        {{else if eq .Type "selection"}}
+          <select value={{.Value}} id='{{.Key}}_select' class='selection'
+              onchange='onSelectInput({{$configId}}, {{.Key}})'>
+            {{$currValue := .Value}}
+            {{range getenums .ValueDescriptor}}
+              <option value={{.EnumValue}} {{if eq .EnumValue $currValue}}selected{{end}}>{{.Desc}}</option>
+            {{end}}
+          </select>
+        {{end}}
+
+        </div>
+        <p class='option-value' id='{{.Key}}_value' hidden>{{getjs .Value}}</p>
+      </div>
+      {{end}}
+
+      <!--
+      <br>
+      <div class='submit'>
+        <input type='submit' value='Apply' onclick='submit({{$configId}})'>
+      </div>
+      -->
+    </div>
+    {{end}}
+    </div>
+
+    <div id='popUp' class='modal'>
+      <div class='modal-content'>
+        <span class='close'>&times;</span>
+        <p class='modal-message'></p>
+      </div>
+    </div>
+  </body>
+</html>

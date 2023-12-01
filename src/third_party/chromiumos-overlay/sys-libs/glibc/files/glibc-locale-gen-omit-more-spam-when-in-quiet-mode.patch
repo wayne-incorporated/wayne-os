@@ -1,0 +1,35 @@
+From 7e7ec15d2c96b8b13923b470b4f5f31a993ab756 Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@gentoo.org>
+Date: Mon, 27 Sep 2021 01:38:10 -0400
+Subject: [PATCH] omit more spam when in quiet mode
+
+Signed-off-by: Mike Frysinger <vapier@gentoo.org>
+---
+ locale-gen | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/locale-gen b/locale-gen
+index 264cd23..d313c23 100755
+--- a/extra/locale/locale-gen
++++ b/extra/locale/locale-gen
+@@ -379,7 +379,7 @@ einfo "Generation complete"
+ if ${LOCALE_ARCHIVE} && [[ -z ${JUST_LIST} ]] ; then
+ 	# need to check that at least one locale has to be added
+ 	if [[ $(echo "${LOCALEDIR}"/*/) != "${LOCALEDIR}"'/*/' ]] ; then
+-		ebegin "Adding locales to archive"
++		[[ ${QUIET} -eq 0 ]] && ebegin "Adding locales to archive"
+ 		# The pattern ends with / on purpose: we don't care about files (like
+ 		# locale-archive) in the locale subdir, and we definitely don't want to
+ 		# delete them!
+@@ -416,7 +416,7 @@ if ${LOCALE_ARCHIVE} && [[ -z ${JUST_LIST} ]] ; then
+ 				exit ${ret}
+ 			)
+ 		done
+-		eend $ret
++		[[ ${QUIET} -eq 0 ]] && eend ${ret}
+ 	elif [[ ${QUIET} -eq 0 ]] ; then
+ 		einfo "No locales are to be added to the archive."
+ 	fi
+-- 
+2.33.0
+

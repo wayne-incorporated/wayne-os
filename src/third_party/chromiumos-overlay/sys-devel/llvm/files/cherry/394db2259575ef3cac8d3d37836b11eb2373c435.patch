@@ -1,0 +1,291 @@
+commit 394db2259575ef3cac8d3d37836b11eb2373c435
+Author: Amy Huang <akhuang@google.com>
+Date:   Tue Jul 28 11:23:59 2020 -0700
+
+    Revert "Switch to using -debug-info-kind=constructor as default (from =limited)"
+    
+    This reverts commit 227db86a1b7dd6f96f7df14890fcd071bc4fe1f5.
+    
+    Causing debug info errors in google3 LTO builds; also causes a
+    debuginfo-test failure.
+
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index b0de225f8ab..68e4eb0eedd 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -498,7 +498,7 @@ static codegenoptions::DebugInfoKind DebugLevelToInfoKind(const Arg &A) {
+     return codegenoptions::DebugLineTablesOnly;
+   if (A.getOption().matches(options::OPT_gline_directives_only))
+     return codegenoptions::DebugDirectivesOnly;
+-  return codegenoptions::DebugInfoConstructor;
++  return codegenoptions::LimitedDebugInfo;
+ }
+ 
+ static bool mustUseNonLeafFramePointerForTarget(const llvm::Triple &Triple) {
+@@ -2383,7 +2383,7 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
+           CmdArgs.push_back(Value.data());
+         } else {
+           RenderDebugEnablingArgs(Args, CmdArgs,
+-                                  codegenoptions::DebugInfoConstructor,
++                                  codegenoptions::LimitedDebugInfo,
+                                   DwarfVersion, llvm::DebuggerKind::Default);
+         }
+       } else if (Value.startswith("-mcpu") || Value.startswith("-mfpu") ||
+@@ -3656,7 +3656,7 @@ static void RenderDebugOptions(const ToolChain &TC, const Driver &D,
+   if (const Arg *A =
+           Args.getLastArg(options::OPT_g_Group, options::OPT_gsplit_dwarf,
+                           options::OPT_gsplit_dwarf_EQ)) {
+-    DebugInfoKind = codegenoptions::DebugInfoConstructor;
++    DebugInfoKind = codegenoptions::LimitedDebugInfo;
+ 
+     // If the last option explicitly specified a debug-info level, use it.
+     if (checkDebugInfoOption(A, Args, D, TC) &&
+@@ -3761,7 +3761,7 @@ static void RenderDebugOptions(const ToolChain &TC, const Driver &D,
+     if (checkDebugInfoOption(A, Args, D, TC)) {
+       if (DebugInfoKind != codegenoptions::DebugLineTablesOnly &&
+           DebugInfoKind != codegenoptions::DebugDirectivesOnly) {
+-        DebugInfoKind = codegenoptions::DebugInfoConstructor;
++        DebugInfoKind = codegenoptions::LimitedDebugInfo;
+         CmdArgs.push_back("-dwarf-ext-refs");
+         CmdArgs.push_back("-fmodule-format=obj");
+       }
+@@ -3781,9 +3781,7 @@ static void RenderDebugOptions(const ToolChain &TC, const Driver &D,
+           TC.GetDefaultStandaloneDebug());
+   if (const Arg *A = Args.getLastArg(options::OPT_fstandalone_debug))
+     (void)checkDebugInfoOption(A, Args, D, TC);
+-  if ((DebugInfoKind == codegenoptions::LimitedDebugInfo ||
+-       DebugInfoKind == codegenoptions::DebugInfoConstructor) &&
+-      NeedFullDebug)
++  if (DebugInfoKind == codegenoptions::LimitedDebugInfo && NeedFullDebug)
+     DebugInfoKind = codegenoptions::FullDebugInfo;
+ 
+   if (Args.hasFlag(options::OPT_gembed_source, options::OPT_gno_embed_source,
+@@ -6569,7 +6567,7 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
+                           options::OPT_gline_tables_only)) {
+     *EmitCodeView = true;
+     if (DebugInfoArg->getOption().matches(options::OPT__SLASH_Z7))
+-      *DebugInfoKind = codegenoptions::DebugInfoConstructor;
++      *DebugInfoKind = codegenoptions::LimitedDebugInfo;
+     else
+       *DebugInfoKind = codegenoptions::DebugLineTablesOnly;
+   } else {
+@@ -6866,7 +6864,7 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
+     // the guard for source type, however there is a test which asserts
+     // that some assembler invocation receives no -debug-info-kind,
+     // and it's not clear whether that test is just overly restrictive.
+-    DebugInfoKind = (WantDebug ? codegenoptions::DebugInfoConstructor
++    DebugInfoKind = (WantDebug ? codegenoptions::LimitedDebugInfo
+                                : codegenoptions::NoDebugInfo);
+     // Add the -fdebug-compilation-dir flag if needed.
+     addDebugCompDirArg(Args, CmdArgs, C.getDriver().getVFS());
+diff --git a/clang/test/Driver/cl-options.c b/clang/test/Driver/cl-options.c
+index 0dcaf610880..d0c48ae41d9 100644
+--- a/clang/test/Driver/cl-options.c
++++ b/clang/test/Driver/cl-options.c
+@@ -524,11 +524,11 @@
+ 
+ // RUN: %clang_cl /Zi /c -### -- %s 2>&1 | FileCheck -check-prefix=Zi %s
+ // Zi: "-gcodeview"
+-// Zi: "-debug-info-kind=constructor"
++// Zi: "-debug-info-kind=limited"
+ 
+ // RUN: %clang_cl /Z7 /c -### -- %s 2>&1 | FileCheck -check-prefix=Z7 %s
+ // Z7: "-gcodeview"
+-// Z7: "-debug-info-kind=constructor"
++// Z7: "-debug-info-kind=limited"
+ 
+ // RUN: %clang_cl /Zd /c -### -- %s 2>&1 | FileCheck -check-prefix=Z7GMLT %s
+ // Z7GMLT: "-gcodeview"
+@@ -557,7 +557,7 @@
+ // which made it "win". This test could not detect that bug.
+ // RUN: %clang_cl /Z7 -gdwarf /c -### -- %s 2>&1 | FileCheck -check-prefix=Z7_gdwarf %s
+ // Z7_gdwarf: "-gcodeview"
+-// Z7_gdwarf: "-debug-info-kind=constructor"
++// Z7_gdwarf: "-debug-info-kind=limited"
+ // Z7_gdwarf: "-dwarf-version=4"
+ 
+ // RUN: %clang_cl -fmsc-version=1800 -TP -### -- %s 2>&1 | FileCheck -check-prefix=CXX11 %s
+diff --git a/clang/test/Driver/clang-g-opts.c b/clang/test/Driver/clang-g-opts.c
+index 60c97790b7d..bc714b6c937 100644
+--- a/clang/test/Driver/clang-g-opts.c
++++ b/clang/test/Driver/clang-g-opts.c
+@@ -31,7 +31,7 @@
+ // RUN:             | FileCheck --check-prefix=CHECK-WITH-G-DWARF2 %s
+ 
+ // CHECK-WITHOUT-G-NOT: -debug-info-kind
+-// CHECK-WITH-G: "-debug-info-kind=constructor"
++// CHECK-WITH-G: "-debug-info-kind=limited"
+ // CHECK-WITH-G: "-dwarf-version=4"
+ // CHECK-WITH-G-DWARF2: "-dwarf-version=2"
+ 
+diff --git a/clang/test/Driver/cuda-dwarf-2.cu b/clang/test/Driver/cuda-dwarf-2.cu
+index 92b8919729f..bcfb2444bc5 100644
+--- a/clang/test/Driver/cuda-dwarf-2.cu
++++ b/clang/test/Driver/cuda-dwarf-2.cu
+@@ -49,7 +49,7 @@
+ 
+ // HAS_DEBUG-NOT: warning: debug
+ // HAS_DEBUG: "-fcuda-is-device"
+-// HAS_DEBUG-SAME: "-debug-info-kind={{constructor|line-tables-only}}"
++// HAS_DEBUG-SAME: "-debug-info-kind={{limited|line-tables-only}}"
+ // HAS_DEBUG-SAME: "-dwarf-version=2"
+ // HAS_DEBUG: ptxas
+ // HAS_DEBUG-SAME: "-g"
+diff --git a/clang/test/Driver/debug-options-as.c b/clang/test/Driver/debug-options-as.c
+index 4808219702e..51475680e9b 100644
+--- a/clang/test/Driver/debug-options-as.c
++++ b/clang/test/Driver/debug-options-as.c
+@@ -23,7 +23,7 @@
+ // RUN:   | FileCheck %s
+ //
+ // CHECK: "-cc1as"
+-// CHECK: "-debug-info-kind=constructor"
++// CHECK: "-debug-info-kind=limited"
+ 
+ // Check to make sure clang with -g on a .s file gets passed -dwarf-debug-producer.
+ // rdar://12955296
+diff --git a/clang/test/Driver/debug-options.c b/clang/test/Driver/debug-options.c
+index 2d1a0b2d5cd..189c1f9adde 100644
+--- a/clang/test/Driver/debug-options.c
++++ b/clang/test/Driver/debug-options.c
+@@ -274,18 +274,18 @@
+ // GLIO_ONLY_DWARF2: "-dwarf-version=2"
+ //
+ // G_ONLY: "-cc1"
+-// G_ONLY: "-debug-info-kind=constructor"
++// G_ONLY: "-debug-info-kind=limited"
+ //
+ // These tests assert that "-gline-tables-only" "-g" uses the latter,
+ // but otherwise not caring about the DebugInfoKind.
+ // G_ONLY_DWARF2: "-cc1"
+-// G_ONLY_DWARF2: "-debug-info-kind={{standalone|constructor}}"
++// G_ONLY_DWARF2: "-debug-info-kind={{standalone|limited}}"
+ // G_ONLY_DWARF2: "-dwarf-version=2"
+ //
+ // G_STANDALONE: "-cc1"
+ // G_STANDALONE: "-debug-info-kind=standalone"
+ // G_LIMITED: "-cc1"
+-// G_LIMITED: "-debug-info-kind=constructor"
++// G_LIMITED: "-debug-info-kind=limited"
+ // G_DWARF2: "-dwarf-version=2"
+ // G_DWARF4: "-dwarf-version=4"
+ //
+@@ -339,7 +339,7 @@
+ // NOCI: "-gno-column-info"
+ //
+ // GEXTREFS: "-dwarf-ext-refs" "-fmodule-format=obj"
+-// GEXTREFS: "-debug-info-kind={{standalone|constructor}}"
++// GEXTREFS: "-debug-info-kind={{standalone|limited}}"
+ 
+ // RUN: not %clang -cc1 -debug-info-kind=watkind 2>&1 | FileCheck -check-prefix=BADSTRING1 %s
+ // BADSTRING1: error: invalid value 'watkind' in '-debug-info-kind=watkind'
+diff --git a/clang/test/Driver/integrated-as.s b/clang/test/Driver/integrated-as.s
+index 05999cfe002..0194a3d5a43 100644
+--- a/clang/test/Driver/integrated-as.s
++++ b/clang/test/Driver/integrated-as.s
+@@ -27,19 +27,19 @@
+ // XA_INCLUDE2: "-Ifoo_dir"
+ 
+ // RUN: %clang -### -target x86_64--- -c -integrated-as %s -gdwarf-4 -gdwarf-2 2>&1 | FileCheck --check-prefix=DWARF2 %s
+-// DWARF2: "-debug-info-kind=constructor" "-dwarf-version=2"
++// DWARF2: "-debug-info-kind=limited" "-dwarf-version=2"
+ 
+ // RUN: %clang -### -target x86_64--- -c -integrated-as %s -gdwarf-3 2>&1 | FileCheck --check-prefix=DWARF3 %s
+-// DWARF3: "-debug-info-kind=constructor" "-dwarf-version=3"
++// DWARF3: "-debug-info-kind=limited" "-dwarf-version=3"
+ 
+ // RUN: %clang -### -target x86_64--- -c -integrated-as %s -gdwarf-4 2>&1 | FileCheck --check-prefix=DWARF4 %s
+-// DWARF4: "-debug-info-kind=constructor" "-dwarf-version=4"
++// DWARF4: "-debug-info-kind=limited" "-dwarf-version=4"
+ 
+ // RUN: %clang -### -target x86_64--- -c -integrated-as %s -Xassembler -gdwarf-2 2>&1 | FileCheck --check-prefix=DWARF2XASSEMBLER %s
+-// DWARF2XASSEMBLER: "-debug-info-kind=constructor" "-dwarf-version=2"
++// DWARF2XASSEMBLER: "-debug-info-kind=limited" "-dwarf-version=2"
+ 
+ // RUN: %clang -### -target x86_64--- -c -integrated-as %s -Wa,-gdwarf-2 2>&1 | FileCheck --check-prefix=DWARF2WA %s
+-// DWARF2WA: "-debug-info-kind=constructor" "-dwarf-version=2"
++// DWARF2WA: "-debug-info-kind=limited" "-dwarf-version=2"
+ 
+ // A dwarf version number that driver can't parse is just stuffed in.
+ // RUN: %clang -### -target x86_64--- -c -integrated-as %s -Wa,-gdwarf-huh 2>&1 | FileCheck --check-prefix=BOGODWARF %s
+diff --git a/clang/test/Driver/myriad-toolchain.c b/clang/test/Driver/myriad-toolchain.c
+index a4bd260a149..215a02fd0de 100644
+--- a/clang/test/Driver/myriad-toolchain.c
++++ b/clang/test/Driver/myriad-toolchain.c
+@@ -83,7 +83,7 @@
+ // NOSTDLIB-NOT: "-lc"
+ 
+ // RUN: %clang -### -c -g %s -target sparc-myriad 2>&1 | FileCheck -check-prefix=G_SPARC %s
+-// G_SPARC: "-debug-info-kind=constructor" "-dwarf-version=2"
++// G_SPARC: "-debug-info-kind=limited" "-dwarf-version=2"
+ 
+ // RUN: %clang -### -c %s -target sparc-myriad-rtems -fuse-init-array 2>&1 \
+ // RUN: | FileCheck -check-prefix=USE-INIT-ARRAY %s
+diff --git a/clang/test/Driver/openmp-offload-gpu.c b/clang/test/Driver/openmp-offload-gpu.c
+index 3ddd6446d11..6415f1d61b7 100644
+--- a/clang/test/Driver/openmp-offload-gpu.c
++++ b/clang/test/Driver/openmp-offload-gpu.c
+@@ -241,7 +241,7 @@
+ 
+ // HAS_DEBUG-NOT: warning: debug
+ // HAS_DEBUG: "-triple" "nvptx64-nvidia-cuda"
+-// HAS_DEBUG-SAME: "-debug-info-kind={{constructor|line-tables-only}}"
++// HAS_DEBUG-SAME: "-debug-info-kind={{limited|line-tables-only}}"
+ // HAS_DEBUG-SAME: "-dwarf-version=2"
+ // HAS_DEBUG-SAME: "-fopenmp-is-device"
+ // HAS_DEBUG: ptxas
+diff --git a/clang/test/Driver/split-debug.c b/clang/test/Driver/split-debug.c
+index 70f8d91d48e..d40207d5ae3 100644
+--- a/clang/test/Driver/split-debug.c
++++ b/clang/test/Driver/split-debug.c
+@@ -68,18 +68,18 @@
+ // RUN: FileCheck -check-prefix=CHECK-NOINLINE-WITHOUT-SPLIT < %t %s
+ //
+ // CHECK-NOINLINE-WITHOUT-SPLIT: "-fno-split-dwarf-inlining"
+-// CHECK-NOINLINE-WITHOUT-SPLIT: "-debug-info-kind=constructor"
++// CHECK-NOINLINE-WITHOUT-SPLIT: "-debug-info-kind=limited"
+ 
+ // RUN: %clang -target x86_64-unknown-linux-gnu -gmlt -gsplit-dwarf -fno-split-dwarf-inlining -S -### %s 2> %t
+ // RUN: FileCheck -check-prefix=CHECK-SPLIT-WITH-GMLT < %t %s
+ //
+-// CHECK-SPLIT-WITH-GMLT: "-debug-info-kind=constructor"
++// CHECK-SPLIT-WITH-GMLT: "-debug-info-kind=limited"
+ // CHECK-SPLIT-WITH-GMLT: "-split-dwarf-output"
+ 
+ // RUN: %clang -target x86_64-unknown-linux-gnu -gsplit-dwarf -fno-split-dwarf-inlining -S -### %s 2> %t
+ // RUN: FileCheck -check-prefix=CHECK-SPLIT-WITH-NOINL < %t %s
+ //
+-// CHECK-SPLIT-WITH-NOINL: "-debug-info-kind=constructor"
++// CHECK-SPLIT-WITH-NOINL: "-debug-info-kind=limited"
+ // CHECK-SPLIT-WITH-NOINL: "-split-dwarf-output"
+ 
+ // RUN: %clang -target x86_64-unknown-linux-gnu -gsplit-dwarf -gmlt -fsplit-dwarf-inlining -S -### %s 2> %t
+@@ -92,7 +92,7 @@
+ // RUN: %clang -target x86_64-unknown-linux-gnu -gmlt -gsplit-dwarf -S -### %s 2> %t
+ // RUN: FileCheck -check-prefix=CHECK-SPLIT-OVER-GMLT < %t %s
+ //
+-// CHECK-SPLIT-OVER-GMLT: "-debug-info-kind=constructor"
++// CHECK-SPLIT-OVER-GMLT: "-debug-info-kind=limited"
+ // CHECK-SPLIT-OVER-GMLT: "-split-dwarf-file"
+ // CHECK-SPLIT-OVER-GMLT: "-split-dwarf-output"
+ 
+@@ -117,6 +117,6 @@
+ // RUN: %clang -target x86_64-unknown-linux-gnu -g0 -gsplit-dwarf=split -S -### %s 2> %t
+ // RUN: FileCheck -check-prefix=CHECK-SPLIT-OVER-G0 < %t %s
+ //
+-// CHECK-SPLIT-OVER-G0: "-debug-info-kind=constructor"
++// CHECK-SPLIT-OVER-G0: "-debug-info-kind=limited"
+ // CHECK-SPLIT-OVER-G0: "-split-dwarf-file"
+ // CHECK-SPLIT-OVER-G0: "-split-dwarf-output"
+diff --git a/lldb/test/Shell/SymbolFile/PDB/Inputs/ClassLayoutTest.cpp b/lldb/test/Shell/SymbolFile/PDB/Inputs/ClassLayoutTest.cpp
+index 503939680c5..3c4b005cdf1 100644
+--- a/lldb/test/Shell/SymbolFile/PDB/Inputs/ClassLayoutTest.cpp
++++ b/lldb/test/Shell/SymbolFile/PDB/Inputs/ClassLayoutTest.cpp
+@@ -106,7 +106,6 @@ protected:
+ int main() {
+   MemberTest::Base B1;
+   B1.Get();
+-  MemberTest::Class C1;
+   MemberTest::Class::StaticMemberFunc(1, 10, 2);
+   return 0;
+ }

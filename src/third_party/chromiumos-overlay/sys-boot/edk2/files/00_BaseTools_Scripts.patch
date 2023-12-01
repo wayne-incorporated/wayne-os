@@ -1,0 +1,33 @@
+From b22b0eecf138f42b1dbdc0c34103b2e867b4726d Mon Sep 17 00:00:00 2001
+From: Evelyn Huang <evhuang@google.com>
+Date: Fri, 11 Aug 2017 13:22:53 -0600
+Subject: [PATCH] BaseTools/Scripts: Fix section address not aligned error
+
+Fix section address not aligned to its own alignment error
+that occured when building edk2 payload using CorebootPayloadPkg
+and caused the build to fail.
+
+BUG=none
+TEST=none
+
+Change-Id: Id75dd051d42701bd7bd8aa65832894cd11dc36f6
+Signed-off-by: Evelyn Huang <evhuang@google.com>
+Reviewed-on: https://chromium-review.googlesource.com/611966
+Commit-Ready: Stefan Reinauer <reinauer@google.com>
+Tested-by: Stefan Reinauer <reinauer@google.com>
+Reviewed-by: Stefan Reinauer <reinauer@chromium.org>
+---
+
+diff --git a/BaseTools/Scripts/GccBase.lds b/BaseTools/Scripts/GccBase.lds
+index a43e007..e8d50e6 100644
+--- a/BaseTools/Scripts/GccBase.lds
++++ b/BaseTools/Scripts/GccBase.lds
+@@ -48,7 +48,7 @@
+    * between these sections is the same in the ELF and the PE/COFF versions of
+    * this binary.
+    */
+-  .data ALIGN(ALIGNOF(.text)) : ALIGN(CONSTANT(COMMONPAGESIZE)) {
++  .data : ALIGN(CONSTANT(COMMONPAGESIZE)) {
+     *(.data .data.* .gnu.linkonce.d.*)
+     *(.bss .bss.*)
+   }

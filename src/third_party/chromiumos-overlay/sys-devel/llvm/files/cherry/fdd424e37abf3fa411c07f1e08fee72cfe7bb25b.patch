@@ -1,0 +1,71 @@
+commit fdd424e37abf3fa411c07f1e08fee72cfe7bb25b
+Author: Fangrui Song <i@maskray.me>
+Date:   Tue Apr 12 11:24:19 2022 -0700
+
+    [ubsan] Fix print_stacktrace=1:fast_unwind_on_fatal=0 to correctly fallback to fast unwinder
+    
+    ubsan_GetStackTrace (from 52b751088b11547e0f4ef0589ebbe5e57752c68c) called by
+    ~ScopeReport leaves top/bottom zeroes in the
+    `!WillUseFastUnwind(request_fast_unwind)` code path.
+    When BufferedStackTrace::Unwind falls back to UnwindFast,
+    `if (stack_top < 4096) return;` will return early, leaving just one frame in the stack trace.
+    
+    Fix this by always initializing top/bottom like 261d6e05d5574bec753ea6b7e9a7f99229927753.
+    
+    Reviewed By: eugenis, yln
+    
+    Differential Revision: https://reviews.llvm.org/D123562
+
+diff --git a/compiler-rt/lib/ubsan/ubsan_diag.cpp b/compiler-rt/lib/ubsan/ubsan_diag.cpp
+index 8de51bc18770..3673e66539d0 100644
+--- a/compiler-rt/lib/ubsan/ubsan_diag.cpp
++++ b/compiler-rt/lib/ubsan/ubsan_diag.cpp
+@@ -32,15 +32,13 @@ using namespace __ubsan;
+ // Windows.
+ // TODO(yln): This is a temporary workaround. GetStackTrace functions will be
+ // removed in the future.
+-void ubsan_GetStackTrace(BufferedStackTrace *stack, uptr max_depth,
+-                         uptr pc, uptr bp, void *context, bool fast) {
++void ubsan_GetStackTrace(BufferedStackTrace *stack, uptr max_depth, uptr pc,
++                         uptr bp, void *context, bool request_fast) {
+   uptr top = 0;
+   uptr bottom = 0;
+-  if (StackTrace::WillUseFastUnwind(fast)) {
+-    GetThreadStackTopAndBottom(false, &top, &bottom);
+-    stack->Unwind(max_depth, pc, bp, nullptr, top, bottom, true);
+-  } else
+-    stack->Unwind(max_depth, pc, bp, context, 0, 0, false);
++  GetThreadStackTopAndBottom(false, &top, &bottom);
++  bool fast = StackTrace::WillUseFastUnwind(request_fast);
++  stack->Unwind(max_depth, pc, bp, context, top, bottom, fast);
+ }
+ 
+ static void MaybePrintStackTrace(uptr pc, uptr bp) {
+diff --git a/compiler-rt/test/ubsan/TestCases/Misc/Linux/diag-stacktrace.cpp b/compiler-rt/test/ubsan/TestCases/Misc/Linux/diag-stacktrace.cpp
+new file mode 100644
+index 000000000000..02e7a3d9c12e
+--- /dev/null
++++ b/compiler-rt/test/ubsan/TestCases/Misc/Linux/diag-stacktrace.cpp
+@@ -0,0 +1,22 @@
++/// Fast unwinder does not work with Thumb code
++// UNSUPPORTED: thumb
++
++// RUN: %clangxx -fsanitize=return %gmlt -O2 -fno-omit-frame-pointer -fasynchronous-unwind-tables %s -o %t
++// RUN: %env_ubsan_opts=print_stacktrace=1:fast_unwind_on_fatal=0 not %run %t 2>&1 | FileCheck %s
++// RUN: %env_ubsan_opts=print_stacktrace=1:fast_unwind_on_fatal=1 not %run %t 2>&1 | FileCheck %s
++// RUN: %clangxx -fsanitize=return %gmlt -O2 -fno-omit-frame-pointer -fno-exceptions -fno-asynchronous-unwind-tables %s -o %t
++// RUN: %env_ubsan_opts=print_stacktrace=1:fast_unwind_on_fatal=0 not %run %t 2>&1 | FileCheck %s
++// RUN: %env_ubsan_opts=print_stacktrace=1:fast_unwind_on_fatal=1 not %run %t 2>&1 | FileCheck %s
++
++// CHECK:      runtime error: execution reached the end of a value-returning function without returning a value
++// CHECK-NEXT: #0 {{.*}}f() {{.*}}.cpp:[[#@LINE+1]]
++__attribute__((noinline)) int f() {}
++
++// CHECK-NEXT: #1 {{.*}}g() {{.*}}.cpp:[[#@LINE+1]]
++__attribute__((noinline)) void g() { f(); }
++
++// CHECK-NEXT: #2 {{.*}}h() {{.*}}.cpp:[[#@LINE+1]]
++__attribute__((noinline)) void h() { g(); }
++
++// CHECK-NEXT: #3 {{.*}}main {{.*}}.cpp:[[#@LINE+1]]
++int main() { h(); }

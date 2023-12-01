@@ -1,0 +1,35 @@
+From d74802c6412af9c62af0282c206c279ebbf172c6 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 26 Jul 2022 08:41:10 -0300
+Subject: [PATCH 100/163] i386: Move ___tls_get_addr hidden proto before its
+ first usage
+
+---
+ sysdeps/i386/dl-tls.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/i386/dl-tls.h b/sysdeps/i386/dl-tls.h
+index b9642dd82c..a148a97168 100644
+--- a/sysdeps/i386/dl-tls.h
++++ b/sysdeps/i386/dl-tls.h
+@@ -31,6 +31,8 @@ extern void *___tls_get_addr (tls_index *ti)
+      __attribute__ ((__regparm__ (1)));
+ extern void *___tls_get_addr_internal (tls_index *ti)
+      __attribute__ ((__regparm__ (1))) attribute_hidden;
++rtld_hidden_proto (___tls_get_addr)
++rtld_hidden_def (___tls_get_addr)
+ 
+ # if IS_IN (rtld)
+ /* The special thing about the x86 TLS ABI is that we have two
+@@ -50,8 +52,6 @@ __tls_get_addr (tls_index *ti)
+    version of this file.  */
+ # define __tls_get_addr __attribute__ ((__regparm__ (1))) ___tls_get_addr
+ strong_alias (___tls_get_addr, ___tls_get_addr_internal)
+-rtld_hidden_proto (___tls_get_addr)
+-rtld_hidden_def (___tls_get_addr)
+ #else
+ 
+ /* Users should get the better interface.  */
+-- 
+2.37.2
+

@@ -1,0 +1,75 @@
+Patches to allow for android-base/logging to work without requiring liblog to be
+linked at compile time.
+
+This configures base logging to write to stderr by default, which is a good
+start for the logging we want for NNAPI.
+
+diff --git a/platform2/aosp/system/libbase/logging_test.cpp b/platform2/aosp/system/libbase/logging_test.cpp
+index be2e042..cbe6650 100644
+--- a/platform2/aosp/system/libbase/logging_test.cpp
++++ b/platform2/aosp/system/libbase/logging_test.cpp
+@@ -99,25 +99,25 @@ TEST(logging, CHECK) {
+
+ TEST(logging, DCHECK) {
+   if (android::base::kEnableDChecks) {
+-    ASSERT_DEATH({SuppressAbortUI(); DCHECK(false);}, "DCheck failed: false ");
++    ASSERT_DEATH({SuppressAbortUI(); DCHECK(false);}, "Check failed: false ");
+   }
+   DCHECK(true);
+
+   if (android::base::kEnableDChecks) {
+-    ASSERT_DEATH({SuppressAbortUI(); DCHECK_EQ(0, 1);}, "DCheck failed: 0 == 1 ");
++    ASSERT_DEATH({SuppressAbortUI(); DCHECK_EQ(0, 1);}, "Check failed: 0 == 1 ");
+   }
+   DCHECK_EQ(0, 0);
+
+   std::unique_ptr<int> p;
+   if (android::base::kEnableDChecks) {
+-    ASSERT_DEATH(DCHECK_NE(p, nullptr), "DCheck failed");
++    ASSERT_DEATH(DCHECK_NE(p, nullptr), "Check failed");
+   }
+   DCHECK_EQ(p, nullptr);
+   DCHECK_EQ(p, p);
+
+   if (android::base::kEnableDChecks) {
+     ASSERT_DEATH({SuppressAbortUI(); DCHECK_STREQ("foo", "bar");},
+-                 R"(DCheck failed: "foo" == "bar")");
++                 R"(Check failed: "foo" == "bar")");
+   }
+   DCHECK_STREQ("foo", "foo");
+
+@@ -208,6 +208,7 @@ TEST(logging, WOULD_LOG_VERBOSE_enabled) {
+ #undef CHECK_WOULD_LOG_ENABLED
+
+
++#if 0
+ #if !defined(_WIN32)
+ static std::string make_log_pattern(android::base::LogSeverity severity,
+                                     const char* message) {
+@@ -221,8 +222,9 @@ static std::string make_log_pattern(android::base::LogSeverity severity,
+       log_char, basename(&holder[0]), message);
+ }
+ #endif
++#endif
+
+-static void CheckMessage(const std::string& output, android::base::LogSeverity severity,
++static void CheckMessage(const std::string& output, android::base::LogSeverity /*severity*/,
+                          const char* expected, const char* expected_tag = nullptr) {
+   // We can't usefully check the output of any of these on Windows because we
+   // don't have std::regex, but we can at least make sure we printed at least as
+@@ -233,6 +235,7 @@ static void CheckMessage(const std::string& output, android::base::LogSeverity s
+     ASSERT_NE(nullptr, strstr(output.c_str(), expected_tag)) << output;
+   }
+
++#if 0
+ #if !defined(_WIN32)
+   std::string regex_str;
+   if (expected_tag != nullptr) {
+@@ -243,6 +246,7 @@ static void CheckMessage(const std::string& output, android::base::LogSeverity s
+   std::regex message_regex(regex_str);
+   ASSERT_TRUE(std::regex_search(output, message_regex)) << output;
+ #endif
++#endif
+ }
+
+ static void CheckMessage(CapturedStderr& cap, android::base::LogSeverity severity,

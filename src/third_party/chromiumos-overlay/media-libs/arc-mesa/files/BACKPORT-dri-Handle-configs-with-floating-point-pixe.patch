@@ -1,0 +1,67 @@
+From 82fde479a9e02ee8559ae1f1c1c8eb76c8eb7ee7 Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Thu, 24 Jan 2019 16:44:06 -0800
+Subject: [PATCH 07/12] BACKPORT: dri: Handle configs with floating point pixel
+ data
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In order to handle pixel formats that consist of floating point data, enable
+floatMode field in the dri config, and set __DRI_ATTRIB_FLOAT_BIT in the
+render type attribute.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Adam Jackson <ajax@redhat.com>
+Reviewed-by: Marek Olšák <marek.olsak@amd.com>
+Reviewed-by: Emil Velikov <emil.velikov@collabora.com>
+(cherry picked from commit 86d31c2c120c458a8df99921ba49773f9e44651a)
+
+ Conflicts:Trivial change from upstream.
+	src/mesa/drivers/dri/common/utils.c
+
+Change-Id: Ibd18361abafead7b646ceedc56c78fc3bfa5cea3
+---
+ src/mesa/drivers/dri/common/utils.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/mesa/drivers/dri/common/utils.c b/src/mesa/drivers/dri/common/utils.c
+index 62780e2b1dc..97955d7aa99 100644
+--- a/src/mesa/drivers/dri/common/utils.c
++++ b/src/mesa/drivers/dri/common/utils.c
+@@ -226,6 +226,7 @@ driCreateConfigs(mesa_format format,
+    int blue_bits;
+    int alpha_bits;
+    bool is_srgb;
++   bool is_float;
+ 
+    switch (format) {
+    case MESA_FORMAT_B5G6R5_UNORM:
+@@ -279,6 +280,7 @@ driCreateConfigs(mesa_format format,
+    blue_bits = _mesa_get_format_bits(format, GL_BLUE_BITS);
+    alpha_bits = _mesa_get_format_bits(format, GL_ALPHA_BITS);
+    is_srgb = _mesa_get_format_color_encoding(format) == GL_SRGB;
++   is_float = _mesa_get_format_datatype(format) == GL_FLOAT;
+ 
+    num_modes = num_depth_stencil_bits * num_db_modes * num_accum_bits * num_msaa_modes;
+    configs = calloc(num_modes + 1, sizeof *configs);
+@@ -308,6 +310,7 @@ driCreateConfigs(mesa_format format,
+ 		    c++;
+ 
+ 		    memset(modes, 0, sizeof *modes);
++		    modes->floatMode = is_float;
+ 		    modes->redBits   = red_bits;
+ 		    modes->greenBits = green_bits;
+ 		    modes->blueBits  = blue_bits;
+@@ -481,6 +484,8 @@ driGetConfigAttribIndex(const __DRIconfig *config,
+     case __DRI_ATTRIB_RENDER_TYPE:
+         /* no support for color index mode */
+ 	*value = __DRI_ATTRIB_RGBA_BIT;
++        if (config->modes.floatMode)
++            *value |= __DRI_ATTRIB_FLOAT_BIT;
+ 	break;
+     case __DRI_ATTRIB_CONFIG_CAVEAT:
+ 	if (config->modes.visualRating == GLX_NON_CONFORMANT_CONFIG)
+-- 
+2.21.0
+

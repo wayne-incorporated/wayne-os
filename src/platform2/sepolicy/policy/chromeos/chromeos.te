@@ -1,0 +1,28 @@
+# chromeos domain
+type chromeos, chromeos_domain, domain, mlstrustedsubject;
+net_domain(chromeos)
+
+permissive chromeos;
+
+domain_auto_trans(cros_init, cros_unconfined_exec, chromeos)
+domain_auto_trans(cros_init_scripts, cros_unconfined_exec, chromeos)
+domain_auto_trans(cros_session_manager, cros_unconfined_exec, chromeos)
+
+r_dir_file(chromeos, sysfs)
+
+allow kernel chromeos:process { share };
+allow chromeos kernel:fd { use };
+
+allow chromeos device:chr_file ioctl;
+allow chromeos proc:file write;
+
+# Android app data files which are labeled by the Android policy should never be relabeled by
+# ChromeOS policy. Otherwise it'll break the apps.
+neverallow chromeos_domain { arc_files -unlabeled }:{
+  file
+  blk_file
+  chr_file
+  fifo_file
+  lnk_file
+  sock_file
+} { relabelfrom relabelto };

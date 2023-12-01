@@ -1,0 +1,60 @@
+From 2b042cce4bd22392acf013f10a7effcfbaf8b513 Mon Sep 17 00:00:00 2001
+From: George Burgess IV <gbiv@google.com>
+Date: Fri, 30 Jul 2021 01:01:54 +0000
+Subject: [PATCH 4/8] cc.patch
+
+---
+ compiler/rustc_codegen_ssa/src/back/link.rs | 25 ++++++++++++---------
+ 1 file changed, 14 insertions(+), 11 deletions(-)
+
+diff --git a/compiler/rustc_codegen_ssa/src/back/link.rs.orig b/compiler/rustc_codegen_ssa/src/back/link.rs
+index 58e0667..61f6788 100644
+--- a/compiler/rustc_codegen_ssa/src/back/link.rs.orig
++++ b/compiler/rustc_codegen_ssa/src/back/link.rs
+@@ -1123,12 +1123,12 @@ pub fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
+             (Some(linker), Some(flavor)) => Some((linker, flavor)),
+             // only the linker flavor is known; use the default linker for the selected flavor
+             (None, Some(flavor)) => Some((
+-                PathBuf::from(match flavor {
++                match flavor {
+                     LinkerFlavor::Em => {
+                         if cfg!(windows) {
+-                            "emcc.bat"
++                            "emcc.bat".into()
+                         } else {
+-                            "emcc"
++                            "emcc".into()
+                         }
+                     }
+                     LinkerFlavor::Gcc => {
+@@ -1139,18 +1139,21 @@ pub fn linker_and_flavor(sess: &Session) -> (PathBuf, LinkerFlavor) {
+                             // and many modern illumos distributions today
+                             // ship GCC as "gcc" without also making it
+                             // available as "cc".
+-                            "gcc"
++                            "gcc".into()
+                         } else {
+-                            "cc"
++                            match env::var_os("CC") {
++                                Some(path) => path.into(),
++                                None => "cc".into(),
++                            }
+                         }
+                     }
+-                    LinkerFlavor::Ld => "ld",
+-                    LinkerFlavor::Msvc => "link.exe",
+-                    LinkerFlavor::Lld(_) => "lld",
+-                    LinkerFlavor::PtxLinker => "rust-ptx-linker",
+-                    LinkerFlavor::BpfLinker => "bpf-linker",
+-                    LinkerFlavor::L4Bender => "l4-bender",
+-                }),
++                    LinkerFlavor::Ld => "ld".into(),
++                    LinkerFlavor::Msvc => "link.exe".into(),
++                    LinkerFlavor::Lld(_) => "lld".into(),
++                    LinkerFlavor::PtxLinker => "rust-ptx-linker".into(),
++                    LinkerFlavor::BpfLinker => "bpf-linker".into(),
++                    LinkerFlavor::L4Bender => "l4-bender".into(),
++                 },
+                 flavor,
+             )),
+             (Some(linker), None) => {

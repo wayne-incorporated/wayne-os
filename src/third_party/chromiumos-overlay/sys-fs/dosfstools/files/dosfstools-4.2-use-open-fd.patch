@@ -1,0 +1,23 @@
+diff --git a/src/mkfs.fat.c b/src/mkfs.fat.c
+index 91eb5d8..7165dce 100644
+--- a/src/mkfs.fat.c
++++ b/src/mkfs.fat.c
+@@ -1860,7 +1860,17 @@ int main(int argc, char **argv)
+ 
+     if (!create) {
+ 	check_mount(device_name);	/* Is the device already mounted? */
+-	dev = open(device_name, O_EXCL | O_RDWR);	/* Is it a suitable device to build the FS on? */
++
++	/* skip calling open() if fd path is provided */
++	int fd = -1;
++	int len = 0;
++	if (sscanf(device_name, "/dev/fd/%u%n", &fd, &len) == 1 && len == strlen(device_name)) {
++		dev = fd;
++		printf("skipping open and using provided fd: %d\n", dev);
++	}
++	if (dev == -1) {
++		dev = open(device_name, O_EXCL | O_RDWR);	/* Is it a suitable device to build the FS on? */
++	}
+ 	if (dev < 0) {
+ 	    fprintf(stderr, "%s: unable to open %s: %s\n", program_name,
+ 		    device_name, strerror(errno));

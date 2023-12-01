@@ -1,0 +1,37 @@
+From db8902a20e0d1e03bb7acb0b7e8cbde357a52814 Mon Sep 17 00:00:00 2001
+From: Che-Liang Chiou <clchiou@chromium.org>
+Date: Wed, 24 Apr 2013 11:52:45 -0700
+Subject: [PATCH] Read device name that contains space characters
+
+BUG=none
+TEST=create touchtests with magic mouse, and check it parse platform.dat
+     correctly
+---
+ src/evemu.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/evemu.c b/src/evemu.c
+index 0dd1cab..3a4c716 100644
+--- a/src/evemu.c
++++ b/src/evemu.c
+@@ -51,6 +51,7 @@
+ #include <unistd.h>
+ #include <sys/time.h>
+ #include <time.h>
++#include <assert.h>
+ 
+ #ifndef UI_SET_PROPBIT
+ #define UI_SET_PROPBIT		_IOW(UINPUT_IOCTL_BASE, 110, int)
+@@ -301,7 +302,8 @@ int evemu_read(struct evemu_device *dev, FILE *fp)
+ 
+ 	memset(dev, 0, sizeof(*dev));
+ 
+-	ret = fscanf(fp, "N: %s\n", dev->name);
++	assert(79 < sizeof(dev->name));
++	ret = fscanf(fp, "N: %79[^\n]\n", dev->name);
+ 	if (ret <= 0)
+ 		return ret;
+ 
+-- 
+1.8.2.1
+

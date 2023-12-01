@@ -1,0 +1,53 @@
+From f7e8949bf0acaf5cab61d5e154e87748ad125626 Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@chromium.org>
+Date: Wed, 10 Jan 2018 00:41:43 -0500
+Subject: [PATCH] dtdiff: change to POSIX shell
+
+This changes from the bash-specific process substitution feature to
+reading with pipes.  It relies on /dev/fd or /proc/self/fd existing.
+
+URL: https://crbug.com/756559
+Signed-off-by: Mike Frysinger <vapier@chromium.org>
+Signed-off-by: Simon Glass <sjg@chromium.org>
+---
+
+ dtdiff | 20 +++++++++++++-------
+ 1 file changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/dtdiff b/dtdiff
+index cdbf079..7699e7a 100644
+--- a/dtdiff
++++ b/dtdiff
+@@ -1,11 +1,6 @@
+-#! /bin/bash
++#! /bin/sh
+ # SPDX-License-Identifier: GPL-2.0-or-later
+ 
+-# This script uses the bash <(...) extension.
+-# If you want to change this to work with a generic /bin/sh, make sure
+-# you fix that.
+-
+-
+ DTC=dtc
+ 
+ source_and_sort () {
+@@ -36,4 +31,15 @@ if [ $# != 2 ]; then
+     exit 1
+ fi
+ 
+-diff -u <(source_and_sort "$1") <(source_and_sort "$2")
++for dir in /dev/fd /proc/self/fd; do
++    if [ -d "${dir}" ]; then
++        break
++    fi
++done
++
++source_and_sort "$1" | (
++    # Duplicate current stdin from the first file to fd 3 so we can change fd 0
++    # to the second file.
++    exec 3<&0
++    source_and_sort "$2" | diff -u "${dir}/3" "${dir}/0"
++)
+-- 
+2.17.1
+

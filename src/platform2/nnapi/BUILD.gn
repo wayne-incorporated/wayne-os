@@ -1,0 +1,548 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+# The majority of this code is a fork of upstream repo's in AOSP.
+# We are selectively pulling in the pieces of those libs and building
+# them into a shared library to use in our system, and to make those
+# symbols visible from the lib, we use //common-mk:visibility_default.
+# The linter suggests we should explicitly export the symbols we need,
+# but in this case we are achieving that by only pulling in the files we
+# need, and additionally, upstream will not want to accept us annotating
+# all of their code for our fairly specific purpose of build architecture.
+# So we disable the linter in this case.
+
+# gnlint: disable=GnLintVisibilityFlags
+
+arect_src = "../aosp/frameworks/native/libs/arect"
+libbase_src = "../aosp/system/libbase"
+libcutils_src = "../aosp/system/core/libcutils"
+libfmq_src = "../aosp/system/libfmq"
+libhidl_src = "../aosp/system/libhidl"
+liblog_src = "../aosp/system/logging/liblog"
+libutils_src = "../aosp/system/core/libutils"
+native_src = "../aosp/frameworks/native"
+nativewindow_src = "${native_src}/libs/nativewindow"
+
+group("all") {
+  deps = [
+    ":libnnapi-support",
+    ":libnnapi-support_pc",
+  ]
+  if (use.test) {
+    deps += [
+      ":libbase_testrunner",
+      ":libcutils_testrunner",
+      ":libfmq_testrunner",
+      ":libhidl_testrunner",
+      ":libhwbuf_testrunner",
+      ":liblog_testrunner",
+      ":libnative_testrunner",
+      ":libutils_testrunner",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  cflags = [
+    "-Wall",
+    "-Werror",
+    "-Wextra",
+  ]
+  cflags_cc = [ "-std=c++17" ]
+  include_dirs = [
+    "includes",
+    "${libbase_src}/include",
+    "${libcutils_src}/include",
+    "${liblog_src}/include",
+    "${libutils_src}/include",
+    "${libfmq_src}/base",
+  ]
+  defines = [
+    "__ANDROID_API__=30",  # Android R
+    "NNAPI_CHROMEOS",
+  ]
+  pkg_deps = [ "libchrome" ]
+}
+
+shared_library("libnnapi-support") {
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":libbase",
+    ":libcutils",
+    ":libfmq",
+    ":libhidl",
+    ":libhwbuf",
+    ":liblog",
+    ":libnative",
+    ":libutils",
+    ":neuralnetworks",
+  ]
+}
+
+generate_pkg_config("libnnapi-support_pc") {
+  deps = [ ":libnnapi-support" ]
+  output_name = "libnnapi-support"
+  description = "Support libraries for Neural Networks API"
+  version = "0.1"
+  libs = [ "-lnnapi-support" ]
+}
+
+static_library("libbase") {
+  sources = [
+    "${libbase_src}/abi_compatibility.cpp",
+    "${libbase_src}/chrono_utils.cpp",
+    "${libbase_src}/cmsg.cpp",
+    "${libbase_src}/errors_unix.cpp",
+    "${libbase_src}/file.cpp",
+    "${libbase_src}/hex.cpp",
+    "${libbase_src}/logging.cpp",
+    "${libbase_src}/mapped_file.cpp",
+    "${libbase_src}/parsebool.cpp",
+    "${libbase_src}/parsenetaddress.cpp",
+    "${libbase_src}/posix_strerror_r.cpp",
+    "${libbase_src}/process.cpp",
+    "${libbase_src}/properties.cpp",
+    "${libbase_src}/stringprintf.cpp",
+    "${libbase_src}/strings.cpp",
+    "${libbase_src}/test_utils.cpp",
+    "${libbase_src}/threads.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+}
+
+if (use.test) {
+  executable("libbase_testrunner") {
+    sources = [
+      "${libbase_src}/chrono_utils_test.cpp",
+      "${libbase_src}/endian_test.cpp",
+      "${libbase_src}/errors_test.cpp",
+      "${libbase_src}/logging_test.cpp",
+      "${libbase_src}/macros_test.cpp",
+      "${libbase_src}/mapped_file_test.cpp",
+      "${libbase_src}/no_destructor_test.cpp",
+      "${libbase_src}/parsebool_test.cpp",
+      "${libbase_src}/parsedouble_test.cpp",
+      "${libbase_src}/parseint_test.cpp",
+      "${libbase_src}/process_test.cpp",
+      "${libbase_src}/properties_test.cpp",
+      "${libbase_src}/scopeguard_test.cpp",
+      "${libbase_src}/stringprintf_test.cpp",
+      "${libbase_src}/strings_test.cpp",
+      "libbase/tests/properties_test.cpp",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [
+      "${libbase_src}/include",
+      "${liblog_src}/include",
+    ]
+    cflags_cc = [
+      # For logging_test.cc
+      "-Wno-unreachable-code",
+    ]
+    deps = [
+      ":libbase",
+      ":liblog",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("libcutils") {
+  sources = [
+    "${libcutils_src}/config_utils.cpp",
+    "${libcutils_src}/hashmap.cpp",
+    "${libcutils_src}/load_file.cpp",
+    "${libcutils_src}/native_handle.cpp",
+    "${libcutils_src}/threads.cpp",
+    "${libcutils_src}/trace-host.cpp",
+    "libcutils/ashmem_chromeos.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  include_dirs = [ "${libcutils_src}/include" ]
+  libs = [ "rt" ]
+  deps = [ ":liblog" ]
+}
+
+if (use.test) {
+  executable("libcutils_testrunner") {
+    sources = [
+      "${libcutils_src}/ashmem_test.cpp",
+      "${libcutils_src}/native_handle_test.cpp",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [ "${libcutils_src}/include" ]
+    deps = [
+      ":libcutils",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("libfmq") {
+  sources = [
+    "${libfmq_src}/EventFlag.cpp",
+    "${libfmq_src}/FmqInternal.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  include_dirs = [ "${libfmq_src}/include" ]
+  deps = [
+    ":libcutils",
+    ":libutils",
+  ]
+}
+
+if (use.test) {
+  executable("libfmq_testrunner") {
+    sources = [ "libfmq/tests/fmq_unit_tests.cpp" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [
+      "${libfmq_src}/include",
+      "${libhidl_src}/base/include",
+    ]
+    deps = [
+      ":libfmq",
+      ":libhidl",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("libhidl") {
+  sources = [
+    "${libhidl_src}/base/HidlInternal.cpp",
+    "${libhidl_src}/base/HidlSupport.cpp",
+    "${libhidl_src}/base/Status.cpp",
+    "${libhidl_src}/libhidlmemory/mapping.cpp",
+    "${libhidl_src}/transport/HidlTransportUtils.cpp",
+    "${libhidl_src}/transport/allocator/1.0/default/AshmemAllocator.cpp",
+    "${libhidl_src}/transport/memory/1.0/default/AshmemMapper.cpp",
+    "${libhidl_src}/transport/memory/1.0/default/AshmemMemory.cpp",
+    "libhidl/adapter/HidlAdapterUtil.cpp",
+    "libhidl/allocator/IAllocator.cpp",
+    "libhidl/allocator/ashmem_allocator.cpp",
+    "libhidl/base/IBase.cpp",
+    "libhidl/memory/IMapper.cpp",
+    "libhidl/memory/IMemory.cpp",
+    "libhidl/memory/ashmem_mapper.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  include_dirs = [
+    "${libbase_src}/include",
+    "${libhidl_src}/adapter/include",
+    "${libhidl_src}/base/include",
+    "${libhidl_src}/libhidlmemory/include",
+    "${libhidl_src}/transport/allocator/1.0/default",
+    "${libhidl_src}/transport/memory/1.0/default",
+    "${libhidl_src}/transport/include",
+    "libhidl",
+  ]
+  deps = [
+    ":libbase",
+    ":libutils",
+  ]
+}
+
+if (use.test) {
+  executable("libhidl_testrunner") {
+    sources = [
+      "libhidl/tests/ashmem_allocator_test.cpp",
+      "libhidl/tests/ashmem_mapper_test.cpp",
+      "libhidl/tests/hidl_support_test.cpp",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [
+      "${libhidl_src}/include",
+      "${libhidl_src}/base/include",
+    ]
+    deps = [
+      ":libcutils",
+      ":libhidl",
+      ":liblog",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("libhwbuf") {
+  sources = [ "hardware_buffer/AHardwareBuffer.cpp" ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  include_dirs = [
+    "${arect_src}/include",
+    "${nativewindow_src}/include",
+  ]
+  deps = []
+}
+
+if (use.test) {
+  executable("libhwbuf_testrunner") {
+    sources = [ "hardware_buffer/AHardwareBufferTest.cpp" ]
+    cflags_cc = [ "-Wno-nonnull" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [
+      "${arect_src}/include",
+      "${nativewindow_src}/include",
+    ]
+    deps = [
+      ":libhwbuf",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("liblog") {
+  sources = [
+    "${liblog_src}/log_event_list.cpp",
+    "${liblog_src}/log_event_write.cpp",
+    "${liblog_src}/log_time.cpp",
+    "${liblog_src}/logger_write.cpp",
+    "${liblog_src}/logprint.cpp",
+    "${liblog_src}/properties.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  include_dirs = [ "${liblog_src}/include" ]
+  deps = [ ":libbase" ]
+}
+
+if (use.test) {
+  executable("liblog_testrunner") {
+    sources = [
+      "${liblog_src}/tests/liblog_default_tag.cpp",
+      "${liblog_src}/tests/log_time_test.cpp",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [ "${liblog_src}/include" ]
+    deps = [
+      ":libbase",
+      ":liblog",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("libnative") {
+  sources = [
+    "native/NativeHandle.cpp",
+    "native/binder_stubs.cpp",
+    "native/shared_memory.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  include_dirs = [ "${native_src}/include" ]
+  deps = [ ":libcutils" ]
+}
+
+if (use.test) {
+  executable("libnative_testrunner") {
+    sources = [ "native/NativeHandle_test.cpp" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [ "${liblog_src}/include" ]
+    deps = [
+      ":libnative",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("libutils") {
+  sources = [
+    "${libutils_src}/Errors.cpp",
+    "${libutils_src}/JenkinsHash.cpp",
+    "${libutils_src}/LightRefBase.cpp",
+    "${libutils_src}/NativeHandle.cpp",
+    "${libutils_src}/RefBase.cpp",
+    "${libutils_src}/SharedBuffer.cpp",
+    "${libutils_src}/StrongPointer.cpp",
+    "${libutils_src}/SystemClock.cpp",
+    "${libutils_src}/Timers.cpp",
+    "${libutils_src}/VectorImpl.cpp",
+    "${libutils_src}/misc.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  include_dirs = [
+    "${libbase_src}/include",
+    "${libcutils_src}/include",
+    "${libutils_src}/include",
+  ]
+  deps = [ ":liblog" ]
+}
+
+if (use.test) {
+  executable("libutils_testrunner") {
+    sources = [
+      "${libutils_src}/Mutex_test.cpp",
+      "${libutils_src}/RefBase_test.cpp",
+      "${libutils_src}/SharedBuffer_test.cpp",
+      "${libutils_src}/StrongPointer_test.cpp",
+      "${libutils_src}/SystemClock_test.cpp",
+      "${libutils_src}/Vector_test.cpp",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    include_dirs = [ "${libutils_src}/include" ]
+    deps = [
+      ":libutils",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+static_library("neuralnetworks") {
+  sources = [
+    "neuralnetworks/1.0/ADevice.cpp",
+    "neuralnetworks/1.0/AExecutionCallback.cpp",
+    "neuralnetworks/1.0/APreparedModel.cpp",
+    "neuralnetworks/1.0/APreparedModelCallback.cpp",
+    "neuralnetworks/1.0/Device.cpp",
+    "neuralnetworks/1.0/ExecutionCallback.cpp",
+    "neuralnetworks/1.0/PreparedModel.cpp",
+    "neuralnetworks/1.0/PreparedModelCallback.cpp",
+    "neuralnetworks/1.1/ADevice.cpp",
+    "neuralnetworks/1.1/Device.cpp",
+    "neuralnetworks/1.2/ABurstCallback.cpp",
+    "neuralnetworks/1.2/ABurstContext.cpp",
+    "neuralnetworks/1.2/ADevice.cpp",
+    "neuralnetworks/1.2/AExecutionCallback.cpp",
+    "neuralnetworks/1.2/APreparedModel.cpp",
+    "neuralnetworks/1.2/APreparedModelCallback.cpp",
+    "neuralnetworks/1.2/BurstCallback.cpp",
+    "neuralnetworks/1.2/BurstContext.cpp",
+    "neuralnetworks/1.2/Device.cpp",
+    "neuralnetworks/1.2/ExecutionCallback.cpp",
+    "neuralnetworks/1.2/PreparedModel.cpp",
+    "neuralnetworks/1.2/PreparedModelCallback.cpp",
+    "neuralnetworks/1.2/types.cpp",
+    "neuralnetworks/1.3/ABuffer.cpp",
+    "neuralnetworks/1.3/ADevice.cpp",
+    "neuralnetworks/1.3/AExecutionCallback.cpp",
+    "neuralnetworks/1.3/AFencedExecutionCallback.cpp",
+    "neuralnetworks/1.3/APreparedModel.cpp",
+    "neuralnetworks/1.3/APreparedModelCallback.cpp",
+    "neuralnetworks/1.3/Buffer.cpp",
+    "neuralnetworks/1.3/Device.cpp",
+    "neuralnetworks/1.3/ExecutionCallback.cpp",
+    "neuralnetworks/1.3/FencedExecutionCallback.cpp",
+    "neuralnetworks/1.3/PreparedModel.cpp",
+    "neuralnetworks/1.3/PreparedModelCallback.cpp",
+    "neuralnetworks/1.3/types.cpp",
+    "neuralnetworks/aidl/BufferDesc.cpp",
+    "neuralnetworks/aidl/BufferRole.cpp",
+    "neuralnetworks/aidl/Capabilities.cpp",
+    "neuralnetworks/aidl/DataLocation.cpp",
+    "neuralnetworks/aidl/DeviceBuffer.cpp",
+    "neuralnetworks/aidl/DeviceType.cpp",
+    "neuralnetworks/aidl/ErrorStatus.cpp",
+    "neuralnetworks/aidl/ExecutionConfig.cpp",
+    "neuralnetworks/aidl/ExecutionPreference.cpp",
+    "neuralnetworks/aidl/ExecutionResult.cpp",
+    "neuralnetworks/aidl/Extension.cpp",
+    "neuralnetworks/aidl/ExtensionNameAndPrefix.cpp",
+    "neuralnetworks/aidl/ExtensionOperandTypeInformation.cpp",
+    "neuralnetworks/aidl/FencedExecutionResult.cpp",
+    "neuralnetworks/aidl/FusedActivationFunc.cpp",
+    "neuralnetworks/aidl/IBuffer.cpp",
+    "neuralnetworks/aidl/IBurst.cpp",
+    "neuralnetworks/aidl/IDevice.cpp",
+    "neuralnetworks/aidl/IExecution.cpp",
+    "neuralnetworks/aidl/IFencedExecutionCallback.cpp",
+    "neuralnetworks/aidl/IPreparedModel.cpp",
+    "neuralnetworks/aidl/IPreparedModelCallback.cpp",
+    "neuralnetworks/aidl/IPreparedModelParcel.cpp",
+    "neuralnetworks/aidl/Memory.cpp",
+    "neuralnetworks/aidl/Model.cpp",
+    "neuralnetworks/aidl/NumberOfCacheFiles.cpp",
+    "neuralnetworks/aidl/Operand.cpp",
+    "neuralnetworks/aidl/OperandExtraParams.cpp",
+    "neuralnetworks/aidl/OperandLifeTime.cpp",
+    "neuralnetworks/aidl/OperandPerformance.cpp",
+    "neuralnetworks/aidl/OperandType.cpp",
+    "neuralnetworks/aidl/Operation.cpp",
+    "neuralnetworks/aidl/OperationType.cpp",
+    "neuralnetworks/aidl/OutputShape.cpp",
+    "neuralnetworks/aidl/PerformanceInfo.cpp",
+    "neuralnetworks/aidl/PrepareModelConfig.cpp",
+    "neuralnetworks/aidl/Priority.cpp",
+    "neuralnetworks/aidl/Request.cpp",
+    "neuralnetworks/aidl/RequestArgument.cpp",
+    "neuralnetworks/aidl/RequestMemoryPool.cpp",
+    "neuralnetworks/aidl/Subgraph.cpp",
+    "neuralnetworks/aidl/SymmPerChannelQuantParams.cpp",
+    "neuralnetworks/aidl/Timing.cpp",
+    "neuralnetworks/aidl/TokenValuePair.cpp",
+  ]
+  configs += [
+    "//common-mk:pic",
+    "//common-mk:visibility_default",
+    ":target_defaults",
+  ]
+  cflags_cc = [
+    # All of the HIDL generated interfaces are missing override directives.
+    "-Wno-inconsistent-missing-override",
+  ]
+  include_dirs = [
+    "${libhidl_src}/base/include",
+    "${libhidl_src}/adapter/include",
+    "${libhidl_src}/transport/include",
+  ]
+  deps = [
+    ":libcutils",
+    ":libhidl",
+    ":liblog",
+  ]
+}

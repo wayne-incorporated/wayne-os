@@ -1,0 +1,30 @@
+commit 0d0b90105f92f6cd9cc7004d565834f4429183fb
+Author: David Blaikie <dblaikie@gmail.com>
+Date:   Sun Mar 22 18:43:39 2020 -0700
+
+    Revert "[FIX] Do not copy an llvm::function_ref if it has to be reused"
+    
+    This fix doesn't seem to be right (function_ref can/should be passed by
+    value) so I'm reverted it to see if the buildbots decide to explain
+    what's wrong.
+    
+    This reverts commit 857bf5da35af8e1f9425e1865dab5f5fce5e38f2.
+
+diff --git a/clang/include/clang/AST/OpenMPClause.h b/clang/include/clang/AST/OpenMPClause.h
+index 38485cb1ad7..548328d36a7 100644
+--- a/clang/include/clang/AST/OpenMPClause.h
++++ b/clang/include/clang/AST/OpenMPClause.h
+@@ -7060,10 +7060,10 @@ struct OMPTraitInfo {
+   llvm::SmallVector<OMPTraitSet, 4> Sets;
+ 
+   bool anyScoreOrCondition(
+-      const llvm::function_ref<bool(Expr *&, bool /* IsScore */)> &Cond) {
+-    return llvm::any_of(Sets, [&Cond](OMPTraitInfo::OMPTraitSet &Set) {
++      llvm::function_ref<bool(Expr *&, bool /* IsScore */)> Cond) {
++    return llvm::any_of(Sets, [Cond](OMPTraitInfo::OMPTraitSet &Set) {
+       return llvm::any_of(
+-          Set.Selectors, [&Cond](OMPTraitInfo::OMPTraitSelector &Selector) {
++          Set.Selectors, [Cond](OMPTraitInfo::OMPTraitSelector &Selector) {
+             return Cond(Selector.ScoreOrCondition,
+                         /* IsScore */ Selector.Kind !=
+                             llvm::omp::TraitSelector::user_condition);

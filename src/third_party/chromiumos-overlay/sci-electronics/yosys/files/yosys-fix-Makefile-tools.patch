@@ -1,0 +1,29 @@
+# These two changes are (respectively):
+# * pass CC to ABC since clang is expected instead of clang++,
+# * remove hardcoded CXX and LD to use environment-based tools instead.
+#
+# Both of these changes are required to build Yosys.
+
+--- a/Makefile
++++ b/Makefile
+@@ -156,7 +156,7 @@ bumpversion:
+ ABCREV = 5f40c47
+ ABCPULL = 1
+ ABCURL ?= https://github.com/YosysHQ/abc
+-ABCMKARGS = CC="$(CXX)" CXX="$(CXX)" ABC_USE_LIBSTDCXX=1 ABC_USE_NAMESPACE=abc VERBOSE=$(Q)
++ABCMKARGS = CC="$(CC)" CXX="$(CXX)" ABC_USE_LIBSTDCXX=1 ABC_USE_NAMESPACE=abc VERBOSE=$(Q)
+ 
+ # set ABCEXTERNAL = <abc-command> to use an external ABC instance
+ # Note: The in-tree ABC (yosys-abc) will not be installed when ABCEXTERNAL is set.
+@@ -198,10 +198,8 @@ endif
+ endif
+ 
+ ifeq ($(CONFIG),clang)
+-CXX = clang
+-LD = clang++
+ CXXFLAGS += -std=$(CXXSTD) -Os
+-ABCMKARGS += ARCHFLAGS="-DABC_USE_STDINT_H -Wno-c++11-narrowing"
++ABCMKARGS += ARCHFLAGS="-DABC_USE_STDINT_H -Wno-c++11-narrowing -Wno-register"
+ 
+ ifneq ($(SANITIZER),)
+ $(info [Clang Sanitizer] $(SANITIZER))

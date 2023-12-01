@@ -1,0 +1,60 @@
+From 76136547a2326bbe89be99ad4a85ed337c0dd3fb Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 09:03:03 -0300
+Subject: [PATCH 134/163] dirent: Remove variable lenght array structure for
+ tst-getdents64.c
+
+Clang emits the following warnings:
+
+  ../sysdeps/unix/sysv/linux/tst-getdents64.c:111:18: error: fields must
+  have a constant size: 'variable length array in structure' extension
+  will never be supported
+              char buffer[buffer_size];
+                   ^
+---
+ sysdeps/unix/sysv/linux/tst-getdents64.c | 16 +++++-----------
+ 1 file changed, 5 insertions(+), 11 deletions(-)
+
+diff --git a/sysdeps/unix/sysv/linux/tst-getdents64.c b/sysdeps/unix/sysv/linux/tst-getdents64.c
+index 62cfa97d06..9546a03944 100644
+--- a/sysdeps/unix/sysv/linux/tst-getdents64.c
++++ b/sysdeps/unix/sysv/linux/tst-getdents64.c
+@@ -96,6 +96,8 @@ do_test_by_size (size_t buffer_size)
+   int fd = xopen (".", O_RDONLY | O_DIRECTORY, 0);
+   TEST_VERIFY (fd >= 0);
+ 
++  char *data = xposix_memalign (_Alignof (struct dirent64), buffer_size);
++
+   /* Perform two passes, with a rewind operating between passes.  */
+   for (int pass = 0; pass < 2; ++pass)
+     {
+@@ -104,23 +106,15 @@ do_test_by_size (size_t buffer_size)
+ 
+       while (true)
+         {
+-          /* Simple way to make sure that the memcpy below does not read
+-             non-existing data.  */
+-          struct
+-          {
+-            char buffer[buffer_size];
+-            struct dirent64 pad;
+-          } data;
+-
+-          ssize_t ret = getdents64 (fd, &data.buffer, sizeof (data.buffer));
++          ssize_t ret = getdents64 (fd, data, buffer_size);
+           if (ret < 0)
+             FAIL_EXIT1 ("getdents64: %m");
+           if (ret == 0)
+             break;
+           ++read_count;
+ 
+-          char *current = data.buffer;
+-          char *end = data.buffer + ret;
++          char *current = data;
++          char *end = data + ret;
+           while (current != end)
+             {
+               struct dirent64 entry;
+-- 
+2.37.2
+

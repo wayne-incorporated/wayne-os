@@ -1,0 +1,56 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "openssl",
+    "re2",
+  ]
+
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+static_library("health_module") {
+  sources = [
+    "health_module.cc",
+    "health_module.h",
+    "health_module_delegate.cc",
+    "health_module_delegate.h",
+    "health_module_delegate_impl.cc",
+    "health_module_delegate_impl.h",
+    "health_module_files.cc",
+    "health_module_files.h",
+  ]
+  configs += [ ":target_defaults" ]
+
+  deps = [
+    "//missive/proto:libmissiveprotohealth",
+    "//missive/proto:libmissiveprotorecord",
+    "//missive/proto:libmissiveprotorecordconstants",
+    "//missive/proto:libmissiveprotostatus",
+    "//missive/util:file",
+    "//missive/util:status",
+    "//missive/util:status_macros",
+  ]
+}
+
+source_set("unit_tests") {
+  sources = [
+    "health_module_delegate_impl_test.cc",
+    "health_module_files_test.cc",
+    "health_module_test.cc",
+  ]
+  configs += [ ":target_defaults" ]
+
+  deps = [ ":health_module" ]
+}

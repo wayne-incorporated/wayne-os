@@ -1,0 +1,1 @@
+autotest-capability-chipset-cml-1.0.2.ebuild

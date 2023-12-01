@@ -1,0 +1,43 @@
+# Copyright (c) 2023 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+KERNEL!="event*", GOTO="arcinput_end"
+
+# Work-around for CTS compliance of R Container (not needed for P or ARCVM)
+
+ACTION=="remove", RUN+="/bin/rm /dev/arc_input/%k", GOTO="arcinput_end"
+ACTION!="add", GOTO="arcinput_end"
+
+# Skip devices that are not part of CTS tests (b/277541769 and b/279539420)
+# Sony virtual devices added by CTS did not have a space before the opening
+# paren.
+ATTRS{name}!="com.google.android.init.test", \
+	ATTRS{name}!="*(Test)*", \
+	ATTRS{name}!="*(USB Test)*", \
+	ATTRS{name}!="*(Bluetooth Test)*", \
+	GOTO="arcinput_end"
+
+# Prevent Chrome from seeing the device and forwarding it to ARC via Wayland.
+# That would cause ARC to see duplicated and (in the case of uhid tests) altered
+# events.
+RUN+="/bin/rm /dev/input/%k"
+
+# Create in the /dev/arc_input directory the file typically in /dev/input. It
+# will have the ARC "input" group and more importantly, the file will exist with
+# 660 permissions *upon creation*. Otherwise, system_server will try to open the
+# device after creation but before it has access.
+RUN+="/bin/mkdir -p /dev/arc_input"
+# [numeric 'input' gid] + [Android ugid offset] = 1004 + 655360 = 656364
+RUN+="/bin/chown root:656364 /dev/arc_input"
+
+# 02000 bit is for setgid. It makes new files inherit the gid of the directory.
+# setuid has no effect for mknod, but it is OK if it is owned by root rather
+# than android-root.
+# If android-root must be the owner, this can be resolved by creating the file
+# outside of the final directory first, but in the same devtmpfs filesystem,
+# then chown'ing it and finally moving it into place.
+RUN+="/bin/chmod 2755 /dev/arc_input"
+RUN+="/bin/mknod -m 660 /dev/arc_input/%k c %M %m"
+
+LABEL="arcinput_end"

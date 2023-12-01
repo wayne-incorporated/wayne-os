@@ -1,0 +1,260 @@
+From c9f7b4d356a453a01aa77a6bb74ca7ef49732c08 Mon Sep 17 00:00:00 2001
+From: Mike Gilbert <floppymaster@gmail.com>
+Date: Tue, 10 Jan 2017 02:39:05 -0500
+Subject: [PATCH] build-sys: add check for gperf lookup function signature
+ (#5055)
+
+gperf-3.1 generates lookup functions that take a size_t length
+parameter instead of unsigned int. Test for this at configure time.
+
+Fixes: https://github.com/systemd/systemd/issues/5039
+---
+ configure.ac                     | 22 ++++++++++++++++++++++
+ src/basic/af-list.c              |  2 +-
+ src/basic/arphrd-list.c          |  2 +-
+ src/basic/cap-list.c             |  2 +-
+ src/basic/errno-list.c           |  2 +-
+ src/core/load-fragment.h         |  2 +-
+ src/journal/journald-server.h    |  2 +-
+ src/login/logind.h               |  2 +-
+ src/network/netdev/netdev.h      |  2 +-
+ src/network/networkd-conf.h      |  2 +-
+ src/network/networkd-network.h   |  2 +-
+ src/nspawn/nspawn-settings.h     |  2 +-
+ src/resolve/dns-type.c           |  2 +-
+ src/resolve/resolved-conf.h      |  2 +-
+ src/test/test-af-list.c          |  2 +-
+ src/test/test-arphrd-list.c      |  2 +-
+ src/timesync/timesyncd-conf.h    |  2 +-
+ src/udev/net/link-config.h       |  2 +-
+ src/udev/udev-builtin-keyboard.c |  2 +-
+ 19 files changed, 40 insertions(+), 18 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index d9ab362..64c4f6b 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -242,6 +242,28 @@ AC_CHECK_SIZEOF(rlim_t,,[
+        #include <sys/resource.h>
+ ])
+ 
++GPERF_TEST="$(echo foo,bar | ${GPERF} -L ANSI-C)"
++
++AC_COMPILE_IFELSE(
++        [AC_LANG_PROGRAM([
++                #include <string.h>
++                const char * in_word_set(const char *, size_t);
++                $GPERF_TEST]
++        )],
++        [GPERF_LEN_TYPE=size_t],
++        [AC_COMPILE_IFELSE(
++                [AC_LANG_PROGRAM([
++                        #include <string.h>
++                        const char * in_word_set(const char *, unsigned);
++                        $GPERF_TEST]
++                )],
++                [GPERF_LEN_TYPE=unsigned],
++                [AC_MSG_ERROR([** unable to determine gperf len type])]
++        )]
++)
++
++AC_DEFINE_UNQUOTED([GPERF_LEN_TYPE], [$GPERF_LEN_TYPE], [gperf len type])
++
+ # ------------------------------------------------------------------------------
+ # we use python to build the man page index
+ have_python=no
+diff --git a/src/basic/af-list.c b/src/basic/af-list.c
+index f396115..cbdec82 100644
+--- a/src/basic/af-list.c
++++ b/src/basic/af-list.c
+@@ -25,7 +25,7 @@
+ #include "util.h"
+ #include "af-list.h"
+ 
+-static const struct af_name* lookup_af(register const char *str, register unsigned int len);
++static const struct af_name* lookup_af(register const char *str, register GPERF_LEN_TYPE len);
+ 
+ #include "af-to-name.h"
+ #include "af-from-name.h"
+diff --git a/src/basic/arphrd-list.c b/src/basic/arphrd-list.c
+index 284043c..edabe4f 100644
+--- a/src/basic/arphrd-list.c
++++ b/src/basic/arphrd-list.c
+@@ -25,7 +25,7 @@
+ #include "util.h"
+ #include "arphrd-list.h"
+ 
+-static const struct arphrd_name* lookup_arphrd(register const char *str, register unsigned int len);
++static const struct arphrd_name* lookup_arphrd(register const char *str, register GPERF_LEN_TYPE len);
+ 
+ #include "arphrd-to-name.h"
+ #include "arphrd-from-name.h"
+diff --git a/src/basic/cap-list.c b/src/basic/cap-list.c
+index bd5bffb..f27cb73 100644
+--- a/src/basic/cap-list.c
++++ b/src/basic/cap-list.c
+@@ -25,7 +25,7 @@
+ #include "cap-list.h"
+ #include "missing.h"
+ 
+-static const struct capability_name* lookup_capability(register const char *str, register unsigned int len);
++static const struct capability_name* lookup_capability(register const char *str, register GPERF_LEN_TYPE len);
+ 
+ #include "cap-to-name.h"
+ #include "cap-from-name.h"
+diff --git a/src/basic/errno-list.c b/src/basic/errno-list.c
+index 34d1331..8001b1d 100644
+--- a/src/basic/errno-list.c
++++ b/src/basic/errno-list.c
+@@ -25,7 +25,7 @@
+ #include "errno-list.h"
+ 
+ static const struct errno_name* lookup_errno(register const char *str,
+-                                                 register unsigned int len);
++                                                 register GPERF_LEN_TYPE len);
+ 
+ #include "errno-to-name.h"
+ #include "errno-from-name.h"
+diff --git a/src/core/load-fragment.h b/src/core/load-fragment.h
+index fcca2b0..6fe345e 100644
+--- a/src/core/load-fragment.h
++++ b/src/core/load-fragment.h
+@@ -107,7 +107,7 @@ int config_parse_bus_name(const char* unit, const char *filename, unsigned line,
+ int config_parse_exec_utmp_mode(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+ 
+ /* gperf prototypes */
+-const struct ConfigPerfItem* load_fragment_gperf_lookup(const char *key, unsigned length);
++const struct ConfigPerfItem* load_fragment_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+ extern const char load_fragment_gperf_nulstr[];
+ 
+ typedef enum Disabled {
+diff --git a/src/journal/journald-server.h b/src/journal/journald-server.h
+index d954c51..070d4e8 100644
+--- a/src/journal/journald-server.h
++++ b/src/journal/journald-server.h
+@@ -150,7 +150,7 @@ void server_dispatch_message(Server *s, struct iovec *iovec, unsigned n, unsigne
+ void server_driver_message(Server *s, sd_id128_t message_id, const char *format, ...) _printf_(3,4);
+ 
+ /* gperf lookup function */
+-const struct ConfigPerfItem* journald_gperf_lookup(const char *key, unsigned length);
++const struct ConfigPerfItem* journald_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+ 
+ int config_parse_storage(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+ 
+diff --git a/src/login/logind.h b/src/login/logind.h
+index ce99d75..c75c03e 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -177,7 +177,7 @@ int manager_unit_is_active(Manager *manager, const char *unit);
+ int manager_job_is_active(Manager *manager, const char *path);
+ 
+ /* gperf lookup function */
+-const struct ConfigPerfItem* logind_gperf_lookup(const char *key, unsigned length);
++const struct ConfigPerfItem* logind_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+ 
+ int manager_set_lid_switch_ignore(Manager *m, usec_t until);
+ 
+diff --git a/src/network/networkd-netdev.h b/src/network/networkd-netdev.h
+index 19fb5bb..1c4b95b 100644
+--- a/src/network/networkd-netdev.h
++++ b/src/network/networkd-netdev.h
+@@ -200,7 +200,7 @@ NetDevKind netdev_kind_from_string(const char *d) _pure_;
+ int config_parse_netdev_kind(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+ 
+ /* gperf */
+-const struct ConfigPerfItem* network_netdev_gperf_lookup(const char *key, unsigned length);
++const struct ConfigPerfItem* network_netdev_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+ 
+ /* Macros which append INTERFACE= to the message */
+ 
+diff --git a/src/resolve/dns-type.c b/src/resolve/dns-type.c
+index 63b4b36..057d695 100644
+--- a/src/resolve/dns-type.c
++++ b/src/resolve/dns-type.c
+@@ -27,7 +27,7 @@ typedef const struct {
+ } dns_type;
+ 
+ static const struct dns_type_name *
+-lookup_dns_type (register const char *str, register unsigned int len);
++lookup_dns_type (register const char *str, register GPERF_LEN_TYPE len);
+ 
+ #include "dns_type-from-name.h"
+ #include "dns_type-to-name.h"
+diff --git a/src/resolve/resolved-conf.h b/src/resolve/resolved-conf.h
+index b3dbea7..17b0960 100644
+--- a/src/resolve/resolved-conf.h
++++ b/src/resolve/resolved-conf.h
+@@ -26,7 +26,7 @@
+ int manager_parse_dns_server(Manager *m, DnsServerType type, const char *string);
+ int manager_parse_config_file(Manager *m);
+ 
+-const struct ConfigPerfItem* resolved_gperf_lookup(const char *key, unsigned length);
++const struct ConfigPerfItem* resolved_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+ 
+ int config_parse_dnsv(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+ int config_parse_support(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+diff --git a/src/test/test-af-list.c b/src/test/test-af-list.c
+index d69104f..a73b05d 100644
+--- a/src/test/test-af-list.c
++++ b/src/test/test-af-list.c
+@@ -23,7 +23,7 @@
+ #include "macro.h"
+ #include "util.h"
+ 
+-static const struct af_name* lookup_af(register const char *str, register unsigned int len);
++static const struct af_name* lookup_af(register const char *str, register GPERF_LEN_TYPE len);
+ 
+ #include "af-list.h"
+ #include "af-to-name.h"
+diff --git a/src/test/test-arphrd-list.c b/src/test/test-arphrd-list.c
+index d7c8eaa..696fbb9 100644
+--- a/src/test/test-arphrd-list.c
++++ b/src/test/test-arphrd-list.c
+@@ -23,7 +23,7 @@
+ #include "macro.h"
+ #include "util.h"
+ 
+-static const struct arphrd_name* lookup_arphrd(register const char *str, register unsigned int len);
++static const struct arphrd_name* lookup_arphrd(register const char *str, register GPERF_LEN_TYPE len);
+ 
+ #include "arphrd-list.h"
+ #include "arphrd-to-name.h"
+diff --git a/src/timesync/timesyncd-conf.h b/src/timesync/timesyncd-conf.h
+index 56466fe..a776475 100644
+--- a/src/timesync/timesyncd-conf.h
++++ b/src/timesync/timesyncd-conf.h
+@@ -25,7 +25,7 @@
+ 
+ #include "timesyncd-manager.h"
+ 
+-const struct ConfigPerfItem* timesyncd_gperf_lookup(const char *key, unsigned length);
++const struct ConfigPerfItem* timesyncd_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+ 
+ int manager_parse_server_string(Manager *m, ServerType type, const char *string);
+ 
+diff --git a/src/udev/net/link-config.h b/src/udev/net/link-config.h
+index 9875057..9ffc521 100644
+--- a/src/udev/net/link-config.h
++++ b/src/udev/net/link-config.h
+@@ -92,7 +92,7 @@ const char *mac_policy_to_string(MACPolicy p) _const_;
+ MACPolicy mac_policy_from_string(const char *p) _pure_;
+ 
+ /* gperf lookup function */
+-const struct ConfigPerfItem* link_config_gperf_lookup(const char *key, unsigned length);
++const struct ConfigPerfItem* link_config_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+ 
+ int config_parse_mac_policy(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+ int config_parse_name_policy(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+diff --git a/src/udev/udev-builtin-keyboard.c b/src/udev/udev-builtin-keyboard.c
+index 01f3879..e08a8ad 100644
+--- a/src/udev/udev-builtin-keyboard.c
++++ b/src/udev/udev-builtin-keyboard.c
+@@ -25,7 +25,7 @@
+ 
+ #include "udev.h"
+ 
+-static const struct key *keyboard_lookup_key(const char *str, unsigned len);
++static const struct key *keyboard_lookup_key(const char *str, GPERF_LEN_TYPE len);
+ #include "keyboard-keys-from-name.h"
+ 
+ static int install_force_release(struct udev_device *dev, const unsigned *release, unsigned release_count) {

@@ -3,7 +3,7 @@
 <node name="/org/chromium/SessionManager"
       xmlns:doc="http://www.freedesktop.org/dbus/1.0/doc.dtd">
 <!--
-  Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+  Copyright 2012 The ChromiumOS Authors
   Use of this source code is governed by a BSD-style license that can be
   found in the LICENSE file.
 
@@ -164,6 +164,30 @@
     </method>
 
     <!--
+        StartSessionEx:
+        @account_id: Account ID of the user to start a session for.
+        @unique_identifier: Unused.
+        @chrome_owner_key: If true, Chrome will handle owner key generation.
+            Otherwise, session_manager is responsible for that.
+
+        Updates bookkeeping to know about a session for @account_id. Also emits
+        "start-user-session" upstart signal (asynchronously) and
+        "SessionStateChanged:started" D-Bus signal.
+
+        TODO(b/244407123): This is a temporary method to implement the
+        experiment about generating the owner key in Chrome and gradually
+        migrate to it. During the migration calling StartSession is equivalent
+        to calling this method with |chrome_owner_key| == false. After the full
+        rollout this method should be removed and StartSession will expect
+        Chrome to handle the owner key.
+    -->
+    <method name="StartSessionEx">
+      <arg type="s" name="account_id" direction="in" />
+      <arg type="s" name="unique_identifier" direction="in" />
+      <arg type="b" name="chrome_owner_key" direction="in" />
+    </method>
+
+    <!--
         @deprecated Use StopSessionWithReason instead.
 
         StopSession:
@@ -241,25 +265,6 @@
         it is stored by Chrome directly.
     -->
     <method name="StorePolicyEx">
-      <arg type="ay" name="descriptor_blob" direction="in" />
-      <arg type="ay" name="policy_blob" direction="in" />
-      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
-    </method>
-
-    <!--
-        StoreUnsignedPolicyEx:
-        @descriptor_blob: Serialized PolicyDescriptor protobuf containing
-            metadata about the policy (user, device or component policy).
-        @policy_blob: Serialized PolicyFetchResponse protobuf containing user,
-            device or component policy, but no signature. If empty and
-            |descriptor_blob| specifies component policy, the policy is deleted.
-
-        Similar to StorePolicyEx, but stores policy without signature
-        verification for AD managed devices. Locked down through busconfig to be
-        only callable by authpolicyd and exits with an error if install
-        attributes are not locked to enterprise_ad device mode.
-    -->
-    <method name="StoreUnsignedPolicyEx">
       <arg type="ay" name="descriptor_blob" direction="in" />
       <arg type="ay" name="policy_blob" direction="in" />
       <annotation name="org.chromium.DBus.Method.Kind" value="async" />
@@ -470,22 +475,30 @@
 
     <!--
         StartRemoteDeviceWipe:
+        @signed_command: serialized remote command SignedData
 
         Same as StartDeviceWipe (sets the device up to "Powerwash" on reboot,
-        and triggers a reboot), except it also verifies the remote command.
+        and triggers a reboot), except it is called due to
+        the powerwash remote command. Verifies the remote command,
+        assuming it is signed with the SHA256_RSA algorithm.
+
+        TODO(b/226330226): Taking |method_call| to ensure
+        backwards compatibility. Revert the method to <arg /> instead of raw,
+        once the clients are migrated back to a single argument call.
     -->
     <method name="StartRemoteDeviceWipe">
-      <arg type="ay" name="signed_command" direction="in" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="raw" />
     </method>
 
     <!--
         ClearForcedReEnrollmentVpd:
 
-        Sets block_devmode=0 and check_enrollment=0 in RW_VPD.
+        Sets block_devmode=0 in RW_VPD.
 
         Currently, we also set block_devmode=0 in system properties
         here. This should be removed again once the system property
         check for dev mode blocking is removed.
+        TODO(igorcov): Rename into ClearBlockDevmode.
     -->
     <method name="ClearForcedReEnrollmentVpd">
       <annotation name="org.chromium.DBus.Method.Kind" value="async" />
@@ -563,6 +576,21 @@
       <arg type="aay" name="state_keys" direction="out" />
       <annotation name="org.chromium.DBus.Method.Kind" value="async" />
     </method>
+
+    <!--
+        GetPsmDeviceActiveSecret:
+        @derived_secret: The secret is used to generate PSM plaintext_id.
+
+        Requests derived device secret based on chromeos stable device secret
+        to be computed and returned. The derived device secret will be used
+        in generating the plaintext_id for counting CrOS devices actives in
+        a privacy compliant manner.
+    -->
+    <method name="GetPsmDeviceActiveSecret">
+      <arg type="s" name="derived_secret" direction="out" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+    </method>
+
 
     <!--
         InitMachineInfo:
@@ -707,13 +735,71 @@
     <!--
         StartBrowserDataMigration:
         @account_id: Account ID of the user to start data migration for.
+        @mode: What kind of migration to run. This is set as the value of the
+            browser-data-migration-mode flag.
 
         Makes ash-chrome run browser data migration for lacros-chrome on the
         subsequent ash-chrome run.
     -->
     <method name="StartBrowserDataMigration">
-      <arg type="s" name="account_id" direction="in" />
+      <arg name="account_id" type="s" direction="in" />
+      <arg name="mode" type="s" direction="in" />
     </method>
+
+    <!--
+        StartBrowserDataBackwardMigration:
+        @account_id: Account ID of the user to start data backward migration for.
+
+        Makes ash-chrome run browser data backward migration during the subsequent ash-chrome run.
+    -->
+    <method name="StartBrowserDataBackwardMigration">
+      <arg name="account_id" type="s" direction="in" />
+    </method>
+
+    <!--
+        UnblockDevModeForInitialStateDetermination:
+
+        Dev mode unblocking broker API to unblock the developer mode
+        for ZTE. Broker will unblock the developer mode once all
+        related modules unblock the developer mode.
+    -->
+    <method name="UnblockDevModeForInitialStateDetermination">
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+    </method>
+
+    <!--
+        UnblockDevModeForEnrollment:
+
+        Dev mode unblocking broker API to unblock the developer mode
+        for enterprise enrollment. Broker will unblock the developer mode
+        once all related modules unblock the developer mode.
+    -->
+    <method name="UnblockDevModeForEnrollment">
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+    </method>
+
+    <!--
+        UnblockDevModeForCarrierLock:
+
+        Dev mode unblocking broker API to unblock the developer mode
+        for Carrier Lock. Broker will unblock the developer mode once all
+        related modules unblock the developer mode.
+    -->
+    <method name="UnblockDevModeForCarrierLock">
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+    </method>
+
+    <!--
+        IsDevModeBlockedForCarrierLock:
+
+        Broker method to check if developer mode is blocked for
+        Carrier Lock.
+    -->
+    <method name="IsDevModeBlockedForCarrierLock">
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg type="b" name="is_blocked" direction="out" />
+    </method>
+
   </interface>
   <!-- ********************************************************************* -->
 </node>

@@ -1,0 +1,141 @@
+From a6ab9085e25ff031237e065f4559d3b5aaa2302a Mon Sep 17 00:00:00 2001
+From: Nataraj Deshpande <nataraj.deshpande@intel.com>
+Date: Thu, 18 Jul 2019 10:11:25 -0700
+Subject: [PATCH] egl/android: Update color_buffers querying for buffer age
+
+color_buffers[] is currently hard coded to 3 for android which fails
+in droid_window_dequeue_buffer when ANativeWindow creates color_buffers
+>3 while querying buffer age during dEQP partial_update tests on chromeOS.
+
+The patch removes static color_buffers[], queries for MIN_UNDEQUEUED_BUFFERS,
+sets native window buffer count and allocates the correct number of
+color_buffers as per android.
+
+Fixes dEQP-EGL.functional.partial_update* tests on chromebooks with
+enabling EGL_KHR_partial_update.
+
+v2: update comment instead of removing (Eric Engestrom)
+v3: change static array to dynamic allocated color_buffers
+    querying MIN_UNDEQUEUED_BUFFERS (Chia-I Wu olv@chromium.org)
+
+Fixes: 2acc69da8ce "EGL/Android: Add EGL_EXT_buffer_age extension"
+Signed-off-by: Nataraj Deshpande <nataraj.deshpande@intel.com>
+Acked-by: Eric Engestrom <eric@engestrom.ch>
+
+(am from https://patchwork.freedesktop.org/patch/318987/)
+Backport: trivial merge conflicts
+
+Change-Id: I13ba21c51a10c0cc7e387e8a24e66da3238c49dd
+---
+ src/egl/drivers/dri2/egl_dri2.h         |  7 +++---
+ src/egl/drivers/dri2/platform_android.c | 30 ++++++++++++++++++++++---
+ 2 files changed, 31 insertions(+), 6 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/egl_dri2.h b/src/egl/drivers/dri2/egl_dri2.h
+index a9ddadf11b1..3811a92ae3a 100644
+--- a/src/egl/drivers/dri2/egl_dri2.h
++++ b/src/egl/drivers/dri2/egl_dri2.h
+@@ -322,13 +322,14 @@ struct dri2_egl_surface
+    __DRIimage *dri_image_front;
+ 
+    /* Used to record all the buffers created by ANativeWindow and their ages.
+-    * Usually Android uses at most triple buffers in ANativeWindow
+-    * so hardcode the number of color_buffers to 3.
++    * Allocate number of color_buffers based on query to android bufferqueue
++    * and save color_buffers_count.
+     */
++   int color_buffers_count;
+    struct {
+       struct ANativeWindowBuffer *buffer;
+       int age;
+-   } color_buffers[3], *back;
++   } *color_buffers, *back;
+ #endif
+ 
+ #if defined(HAVE_SURFACELESS_PLATFORM)
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 366a9ec14e9..16eb8b4586e 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -223,7 +223,7 @@ droid_window_dequeue_buffer(struct dri2_egl_surface *dri2_surf)
+     * for updating buffer's age in swap_buffers.
+     */
+    EGLBoolean updated = EGL_FALSE;
+-   for (int i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++) {
++   for (int i = 0; i < dri2_surf->color_buffers_count; i++) {
+       if (!dri2_surf->color_buffers[i].buffer) {
+          dri2_surf->color_buffers[i].buffer = dri2_surf->buffer;
+       }
+@@ -238,7 +238,7 @@ droid_window_dequeue_buffer(struct dri2_egl_surface *dri2_surf)
+       /* In case of all the buffers were recreated by ANativeWindow, reset
+        * the color_buffers
+        */
+-      for (int i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++) {
++      for (int i = 0; i < dri2_surf->color_buffers_count; i++) {
+          dri2_surf->color_buffers[i].buffer = NULL;
+          dri2_surf->color_buffers[i].age = 0;
+       }
+@@ -353,6 +353,7 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
+ 
+    if (type == EGL_WINDOW_BIT) {
+       int format;
++      int buffer_count;
+ 
+       if (window->common.magic != ANDROID_NATIVE_WINDOW_MAGIC) {
+          _eglError(EGL_BAD_NATIVE_WINDOW, "droid_create_surface");
+@@ -363,6 +364,26 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
+          goto cleanup_surface;
+       }
+ 
++      /* Query ANativeWindow for MIN_UNDEQUEUED_BUFFER, set buffer count
++       * and allocate color_buffers.
++       */
++      if (window->query(window, NATIVE_WINDOW_MIN_UNDEQUEUED_BUFFERS,
++                        &buffer_count)) {
++         _eglError(EGL_BAD_NATIVE_WINDOW, "droid_create_surface");
++         goto cleanup_surface;
++      }
++      if (native_window_set_buffer_count(window, buffer_count+1)) {
++         _eglError(EGL_BAD_NATIVE_WINDOW, "droid_create_surface");
++         goto cleanup_surface;
++      }
++      dri2_surf->color_buffers = calloc(buffer_count+1,
++                                        sizeof(*dri2_surf->color_buffers));
++      if (!dri2_surf->color_buffers) {
++         _eglError(EGL_BAD_ALLOC, "droid_create_surface");
++         goto cleanup_surface;
++      }
++      dri2_surf->color_buffers_count = buffer_count+1;
++
+       if (format != dri2_conf->base.NativeVisualID) {
+          _eglLog(_EGL_WARNING, "Native format mismatch: 0x%x != 0x%x",
+                format, dri2_conf->base.NativeVisualID);
+@@ -399,6 +420,8 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
+    return &dri2_surf->base;
+ 
+ cleanup_surface:
++   if (dri2_surf->color_buffers_count)
++      free(dri2_surf->color_buffers);
+    free(dri2_surf);
+ 
+    return NULL;
+@@ -451,6 +474,7 @@ droid_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
+    dri2_dpy->core->destroyDrawable(dri2_surf->dri_drawable);
+ 
+    dri2_fini_surface(surf);
++   free(dri2_surf->color_buffers);
+    free(dri2_surf);
+ 
+    return EGL_TRUE;
+@@ -692,7 +716,7 @@ droid_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
+       return EGL_TRUE;
+    }
+ 
+-   for (int i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++) {
++   for (int i = 0; i < dri2_surf->color_buffers_count; i++) {
+       if (dri2_surf->color_buffers[i].age > 0)
+          dri2_surf->color_buffers[i].age++;
+    }
+-- 
+2.20.1
+

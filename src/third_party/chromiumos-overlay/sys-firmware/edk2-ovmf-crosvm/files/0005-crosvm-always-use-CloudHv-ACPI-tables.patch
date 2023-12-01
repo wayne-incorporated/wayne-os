@@ -1,0 +1,36 @@
+From 5a0b8b2d021d5e8eb06df49b8a025e178b6d0f10 Mon Sep 17 00:00:00 2001
+From: Mike Gerow <gerow@google.com>
+Date: Wed, 1 Feb 2023 16:11:17 -0800
+Subject: [PATCH 5/8] [crosvm] always use CloudHv ACPI tables
+
+BUG=b:236184260
+---
+ OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c | 14 +++-----------
+ 1 file changed, 3 insertions(+), 11 deletions(-)
+
+diff --git a/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c b/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c
+index fcfb9703bd..c9e0aa84d5 100644
+--- a/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c
++++ b/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c
+@@ -28,15 +28,7 @@ InstallAcpiTables (
+   IN   EFI_ACPI_TABLE_PROTOCOL  *AcpiTable
+   )
+ {
+-  EFI_STATUS  Status;
+-  UINT16      HostBridgeDevId;
+-
+-  HostBridgeDevId = PcdGet16 (PcdOvmfHostBridgePciDevId);
+-  if (HostBridgeDevId == CLOUDHV_DEVICE_ID) {
+-    Status = InstallCloudHvTables (AcpiTable);
+-  } else {
+-    Status = InstallQemuFwCfgTables (AcpiTable);
+-  }
+-
+-  return Status;
++  // TODO(b/236184260): Add conditional back once we can reliably identify
++  // crosvm.
++  return InstallCloudHvTables(AcpiTable);
+ }
+-- 
+2.39.1.456.gfc5497dd1b-goog
+

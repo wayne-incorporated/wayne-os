@@ -1,0 +1,46 @@
+From c66c2543dc569825712a30223727947f61bb9580 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 15 Mar 2022 18:09:10 -0300
+Subject: [PATCH 104/163] posix: Use unsigned to check for _POSIX_VDISABLE
+
+Clang warns:
+
+  ../sysdeps/posix/fpathconf.c:118:21: error: right side of operator
+  converted from negative value to unsigned: -1 to 18446744073709551615
+  [-Werror]
+  #if _POSIX_VDISABLE == -1
+    ~~~~~~~~~~~~~~~ ^  ~~
+---
+ sysdeps/posix/fpathconf.c | 2 +-
+ sysdeps/posix/pathconf.c  | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/posix/fpathconf.c b/sysdeps/posix/fpathconf.c
+index 4b215e0600..7d5b543e47 100644
+--- a/sysdeps/posix/fpathconf.c
++++ b/sysdeps/posix/fpathconf.c
+@@ -115,7 +115,7 @@ __fpathconf (int fd, int name)
+       return _POSIX_NO_TRUNC;
+ 
+     case _PC_VDISABLE:
+-#if _POSIX_VDISABLE == -1
++#if _POSIX_VDISABLE == -1U
+ # error "Invalid value for _POSIX_VDISABLE"
+ #endif
+       return _POSIX_VDISABLE;
+diff --git a/sysdeps/posix/pathconf.c b/sysdeps/posix/pathconf.c
+index d414f7a313..54c86f0dfd 100644
+--- a/sysdeps/posix/pathconf.c
++++ b/sysdeps/posix/pathconf.c
+@@ -113,7 +113,7 @@ __pathconf (const char *path, int name)
+       return _POSIX_NO_TRUNC;
+ 
+     case _PC_VDISABLE:
+-#if _POSIX_VDISABLE == -1
++#if _POSIX_VDISABLE == -1U
+ # error "Invalid value for _POSIX_VDISABLE"
+ #endif
+       return _POSIX_VDISABLE;
+-- 
+2.37.2
+

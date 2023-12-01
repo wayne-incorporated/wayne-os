@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,9 +18,10 @@
 
 #include "bindings/chrome_device_policy.pb.h"
 
+class Crossystem;
+
 namespace login_manager {
-// Forward declaration.
-typedef struct PK11SlotInfoStr PK11SlotInfo;
+class SystemUtils;
 
 class MockDevicePolicyService : public DevicePolicyService {
  public:
@@ -28,31 +29,24 @@ class MockDevicePolicyService : public DevicePolicyService {
   explicit MockDevicePolicyService(PolicyKey* policy_key);
   ~MockDevicePolicyService() override;
 
-  MOCK_METHOD(bool,
-              Store,
-              (const PolicyNamespace&,
-               const std::vector<uint8_t>&,
-               int,
-               SignatureCheck,
-               const Completion&),
-              (override));
+  MOCK_METHOD(
+      bool,
+      Store,
+      (const PolicyNamespace&, const std::vector<uint8_t>&, int, Completion),
+      (override));
   MOCK_METHOD(bool,
               Retrieve,
               (const PolicyNamespace&, std::vector<uint8_t>*),
-              (override));
-  MOCK_METHOD(bool,
-              Delete,
-              (const PolicyNamespace&, SignatureCheck),
               (override));
   MOCK_METHOD(std::vector<std::string>,
               ListComponentIds,
               (PolicyDomain),
               (override));
-  MOCK_METHOD(
-      bool,
-      CheckAndHandleOwnerLogin,
-      (const std::string&, PK11SlotDescriptor*, bool*, brillo::ErrorPtr*),
-      (override));
+  MOCK_METHOD(bool,
+              HandleOwnerLogin,
+              (const std::string&, PK11SlotDescriptor*, brillo::ErrorPtr*),
+              (override));
+  MOCK_METHOD(bool, UserIsOwner, (const std::string&), (override));
   MOCK_METHOD(bool,
               ValidateAndStoreOwnerKey,
               (const std::string&,
@@ -62,16 +56,15 @@ class MockDevicePolicyService : public DevicePolicyService {
   MOCK_METHOD(bool, KeyMissing, (), (override));
   MOCK_METHOD(bool, Mitigating, (), (override));
   MOCK_METHOD(bool, Initialize, (), (override));
-  MOCK_METHOD(void, ReportPolicyFileMetrics, (bool, bool), (override));
-  MOCK_METHOD(void,
-              ClearForcedReEnrollmentFlags,
-              (const Completion&),
-              (override));
-  MOCK_METHOD(bool,
-              ValidateRemoteDeviceWipeCommand,
-              (const std::vector<uint8_t>&),
-              (override));
+  MOCK_METHOD(void, ClearBlockDevmode, (Completion), (override));
+  MOCK_METHOD(
+      bool,
+      ValidateRemoteDeviceWipeCommand,
+      (const std::vector<uint8_t>&,
+       enterprise_management::PolicyFetchRequest::SignatureType signature_type),
+      (override));
 
+  void set_system_utils(SystemUtils* system) { system_ = system; }
   void set_crossystem(Crossystem* crossystem) { crossystem_ = crossystem; }
   void set_vpd_process(VpdProcess* vpd_process) { vpd_process_ = vpd_process; }
   void set_install_attributes_reader(

@@ -1,0 +1,46 @@
+# Copyright 2022 The ChromiumOS Authors.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+device-config: &device_config
+  audio:
+    main:
+      cras-config-dir: '{{$chassis}}'
+  brand-code: '{{$brand-code}}'
+  firmware:
+    build-targets:
+      bmpblk: lars
+      coreboot: lars
+      depthcharge: lars
+      ec: lars
+      libpayload: lars
+    image-name: '{{$model}}'
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    has-backlight: true
+    psu-type: battery
+  identity: &base_identity
+    frid: Google_Lars
+    platform-name: Lars
+  name: '{{$model}}'
+  power:
+    has-keyboard-backlight: '1'
+    keyboard-backlight-no-als-brightness: '10.0'
+    low-battery-shutdown-percent: '4.0'
+
+chromeos:
+  devices:
+    - $chassis: LILI
+      $model: lili
+      $brand-code: ACBC
+      skus:
+        - config:
+            <<: *device_config
+            identity:
+              <<: *base_identity
+              customization-id: ACER-LILI
+    - $chassis: LARS
+      $model: lars
+      $brand-code: ACAX
+      skus:
+        - config: *device_config

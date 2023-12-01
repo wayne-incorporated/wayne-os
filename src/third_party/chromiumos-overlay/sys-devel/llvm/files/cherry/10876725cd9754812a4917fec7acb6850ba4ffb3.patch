@@ -1,0 +1,444 @@
+From 10876725cd9754812a4917fec7acb6850ba4ffb3 Mon Sep 17 00:00:00 2001
+From: Philip Reames <preames@rivosinc.com>
+Date: Wed, 10 May 2023 15:02:28 -0700
+Subject: [PATCH] Revert "[RISCV] Fix extract_vector_elt on i1 at idx 0 being
+ inverted"
+
+This reverts commit d9683a70fef48cfaee2c83147a3b26f4f90162a2.  A regression was reported in the review, revert until author is back from conference and can investigate.
+---
+ llvm/lib/Target/RISCV/RISCVISelLowering.cpp    |  2 +-
+ llvm/test/CodeGen/RISCV/rvv/extractelt-i1.ll   | 14 +++++++-------
+ .../RISCV/rvv/fixed-vectors-extract-i1.ll      | 18 +++++++++---------
+ .../RISCV/rvv/fixed-vectors-masked-gather.ll   | 18 +++++++++---------
+ .../RISCV/rvv/fixed-vectors-masked-scatter.ll  | 18 +++++++++---------
+ .../CodeGen/RISCV/rvv/fixed-vectors-store.ll   |  2 +-
+ .../rvv/fixed-vectors-vreductions-mask.ll      | 16 ++++++++--------
+ 7 files changed, 44 insertions(+), 44 deletions(-)
+
+diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+index 02c772b604ba..8157df99248f 100644
+--- a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
++++ b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+@@ -6179,7 +6179,7 @@ SDValue RISCVTargetLowering::lowerEXTRACT_VECTOR_ELT(SDValue Op,
+       SDValue Vfirst =
+           DAG.getNode(RISCVISD::VFIRST_VL, DL, XLenVT, Vec, Mask, VL);
+       return DAG.getSetCC(DL, XLenVT, Vfirst, DAG.getConstant(0, DL, XLenVT),
+-                          ISD::SETNE);
++                          ISD::SETEQ);
+     }
+     if (VecVT.isFixedLengthVector()) {
+       unsigned NumElts = VecVT.getVectorNumElements();
+diff --git a/llvm/test/CodeGen/RISCV/rvv/extractelt-i1.ll b/llvm/test/CodeGen/RISCV/rvv/extractelt-i1.ll
+index 2210ed4720c5..ba8486780197 100644
+--- a/llvm/test/CodeGen/RISCV/rvv/extractelt-i1.ll
++++ b/llvm/test/CodeGen/RISCV/rvv/extractelt-i1.ll
+@@ -217,7 +217,7 @@ define i1 @extractelt_nxv1i1_idx0(<vscale x 1 x i8>* %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <vscale x 1 x i8>, <vscale x 1 x i8>* %x
+   %b = icmp eq <vscale x 1 x i8> %a, zeroinitializer
+@@ -232,7 +232,7 @@ define i1 @extractelt_nxv2i1_idx0(<vscale x 2 x i8>* %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <vscale x 2 x i8>, <vscale x 2 x i8>* %x
+   %b = icmp eq <vscale x 2 x i8> %a, zeroinitializer
+@@ -247,7 +247,7 @@ define i1 @extractelt_nxv4i1_idx0(<vscale x 4 x i8>* %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <vscale x 4 x i8>, <vscale x 4 x i8>* %x
+   %b = icmp eq <vscale x 4 x i8> %a, zeroinitializer
+@@ -262,7 +262,7 @@ define i1 @extractelt_nxv8i1_idx0(<vscale x 8 x i8>* %x) nounwind {
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, m1, ta, ma
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <vscale x 8 x i8>, <vscale x 8 x i8>* %x
+   %b = icmp eq <vscale x 8 x i8> %a, zeroinitializer
+@@ -277,7 +277,7 @@ define i1 @extractelt_nxv16i1_idx0(<vscale x 16 x i8>* %x) nounwind {
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, m2, ta, ma
+ ; CHECK-NEXT:    vmseq.vi v10, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v10
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <vscale x 16 x i8>, <vscale x 16 x i8>* %x
+   %b = icmp eq <vscale x 16 x i8> %a, zeroinitializer
+@@ -292,7 +292,7 @@ define i1 @extractelt_nxv32i1_idx0(<vscale x 32 x i8>* %x) nounwind {
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, m4, ta, ma
+ ; CHECK-NEXT:    vmseq.vi v12, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v12
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <vscale x 32 x i8>, <vscale x 32 x i8>* %x
+   %b = icmp eq <vscale x 32 x i8> %a, zeroinitializer
+@@ -307,7 +307,7 @@ define i1 @extractelt_nxv64i1_idx0(<vscale x 64 x i8>* %x) nounwind {
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, m8, ta, ma
+ ; CHECK-NEXT:    vmseq.vi v16, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v16
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <vscale x 64 x i8>, <vscale x 64 x i8>* %x
+   %b = icmp eq <vscale x 64 x i8> %a, zeroinitializer
+diff --git a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-extract-i1.ll b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-extract-i1.ll
+index 2ee0e44253d6..07656c5405f7 100644
+--- a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-extract-i1.ll
++++ b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-extract-i1.ll
+@@ -453,7 +453,7 @@ define i1 @extractelt_v1i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <1 x i8>, ptr %x
+   %b = icmp eq <1 x i8> %a, zeroinitializer
+@@ -468,7 +468,7 @@ define i1 @extractelt_v2i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <2 x i8>, ptr %x
+   %b = icmp eq <2 x i8> %a, zeroinitializer
+@@ -483,7 +483,7 @@ define i1 @extractelt_v4i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <4 x i8>, ptr %x
+   %b = icmp eq <4 x i8> %a, zeroinitializer
+@@ -498,7 +498,7 @@ define i1 @extractelt_v8i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <8 x i8>, ptr %x
+   %b = icmp eq <8 x i8> %a, zeroinitializer
+@@ -513,7 +513,7 @@ define i1 @extractelt_v16i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v8, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v8
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <16 x i8>, ptr %x
+   %b = icmp eq <16 x i8> %a, zeroinitializer
+@@ -529,7 +529,7 @@ define i1 @extractelt_v32i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v10, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v10
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <32 x i8>, ptr %x
+   %b = icmp eq <32 x i8> %a, zeroinitializer
+@@ -545,7 +545,7 @@ define i1 @extractelt_v64i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v12, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v12
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <64 x i8>, ptr %x
+   %b = icmp eq <64 x i8> %a, zeroinitializer
+@@ -561,7 +561,7 @@ define i1 @extractelt_v128i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v16, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v16
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <128 x i8>, ptr %x
+   %b = icmp eq <128 x i8> %a, zeroinitializer
+@@ -577,7 +577,7 @@ define i1 @extractelt_v256i1_idx0(ptr %x) nounwind {
+ ; CHECK-NEXT:    vle8.v v8, (a0)
+ ; CHECK-NEXT:    vmseq.vi v16, v8, 0
+ ; CHECK-NEXT:    vfirst.m a0, v16
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %a = load <256 x i8>, ptr %x
+   %b = icmp eq <256 x i8> %a, zeroinitializer
+diff --git a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-gather.ll b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-gather.ll
+index 3aeb31770c75..3ba23804b431 100644
+--- a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-gather.ll
++++ b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-gather.ll
+@@ -36,7 +36,7 @@ define <1 x i8> @mgather_v1i8(<1 x ptr> %ptrs, <1 x i1> %m, <1 x i8> %passthru)
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB0_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB0_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vle8.v v8, (a0)
+@@ -871,7 +871,7 @@ define <1 x i16> @mgather_v1i16(<1 x ptr> %ptrs, <1 x i1> %m, <1 x i16> %passthr
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB13_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB13_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e16, mf2, ta, ma
+ ; RV64ZVE32F-NEXT:    vle16.v v8, (a0)
+@@ -2072,7 +2072,7 @@ define <1 x i32> @mgather_v1i32(<1 x ptr> %ptrs, <1 x i1> %m, <1 x i32> %passthr
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB27_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB27_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e32, m1, ta, ma
+ ; RV64ZVE32F-NEXT:    vle32.v v8, (a0)
+@@ -3618,7 +3618,7 @@ define <1 x i64> @mgather_v1i64(<1 x ptr> %ptrs, <1 x i1> %m, <1 x i64> %passthr
+ ; RV32ZVE32F:       # %bb.0:
+ ; RV32ZVE32F-NEXT:    vsetvli a2, zero, e8, mf4, ta, ma
+ ; RV32ZVE32F-NEXT:    vfirst.m a2, v0
+-; RV32ZVE32F-NEXT:    beqz a2, .LBB42_2
++; RV32ZVE32F-NEXT:    bnez a2, .LBB42_2
+ ; RV32ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV32ZVE32F-NEXT:    vsetvli zero, zero, e32, m1, ta, ma
+ ; RV32ZVE32F-NEXT:    vmv.x.s a0, v8
+@@ -3631,7 +3631,7 @@ define <1 x i64> @mgather_v1i64(<1 x ptr> %ptrs, <1 x i1> %m, <1 x i64> %passthr
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a2, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a2, v0
+-; RV64ZVE32F-NEXT:    beqz a2, .LBB42_2
++; RV64ZVE32F-NEXT:    bnez a2, .LBB42_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV64ZVE32F-NEXT:    ld a1, 0(a0)
+ ; RV64ZVE32F-NEXT:  .LBB42_2: # %else
+@@ -7089,7 +7089,7 @@ define <1 x half> @mgather_v1f16(<1 x ptr> %ptrs, <1 x i1> %m, <1 x half> %passt
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB58_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB58_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e16, mf2, ta, ma
+ ; RV64ZVE32F-NEXT:    vle16.v v8, (a0)
+@@ -8056,7 +8056,7 @@ define <1 x float> @mgather_v1f32(<1 x ptr> %ptrs, <1 x i1> %m, <1 x float> %pas
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB68_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB68_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e32, m1, ta, ma
+ ; RV64ZVE32F-NEXT:    vle32.v v8, (a0)
+@@ -9476,7 +9476,7 @@ define <1 x double> @mgather_v1f64(<1 x ptr> %ptrs, <1 x i1> %m, <1 x double> %p
+ ; RV32ZVE32F:       # %bb.0:
+ ; RV32ZVE32F-NEXT:    vsetvli a0, zero, e8, mf4, ta, ma
+ ; RV32ZVE32F-NEXT:    vfirst.m a0, v0
+-; RV32ZVE32F-NEXT:    beqz a0, .LBB81_2
++; RV32ZVE32F-NEXT:    bnez a0, .LBB81_2
+ ; RV32ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV32ZVE32F-NEXT:    vsetvli zero, zero, e32, m1, ta, ma
+ ; RV32ZVE32F-NEXT:    vmv.x.s a0, v8
+@@ -9488,7 +9488,7 @@ define <1 x double> @mgather_v1f64(<1 x ptr> %ptrs, <1 x i1> %m, <1 x double> %p
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB81_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB81_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.load
+ ; RV64ZVE32F-NEXT:    fld fa0, 0(a0)
+ ; RV64ZVE32F-NEXT:  .LBB81_2: # %else
+diff --git a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-scatter.ll b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-scatter.ll
+index 8dad90ef0ba9..74eeb01f57ae 100644
+--- a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-scatter.ll
++++ b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-masked-scatter.ll
+@@ -33,7 +33,7 @@ define void @mscatter_v1i8(<1 x i8> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB0_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB0_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vse8.v v8, (a0)
+@@ -638,7 +638,7 @@ define void @mscatter_v1i16(<1 x i16> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB10_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB10_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e16, mf2, ta, ma
+ ; RV64ZVE32F-NEXT:    vse16.v v8, (a0)
+@@ -1598,7 +1598,7 @@ define void @mscatter_v1i32(<1 x i32> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB22_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB22_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e32, m1, ta, ma
+ ; RV64ZVE32F-NEXT:    vse32.v v8, (a0)
+@@ -2898,7 +2898,7 @@ define void @mscatter_v1i64(<1 x i64> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV32ZVE32F:       # %bb.0:
+ ; RV32ZVE32F-NEXT:    vsetvli a2, zero, e8, mf4, ta, ma
+ ; RV32ZVE32F-NEXT:    vfirst.m a2, v0
+-; RV32ZVE32F-NEXT:    beqz a2, .LBB36_2
++; RV32ZVE32F-NEXT:    bnez a2, .LBB36_2
+ ; RV32ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV32ZVE32F-NEXT:    vsetvli zero, zero, e32, m1, ta, ma
+ ; RV32ZVE32F-NEXT:    vmv.x.s a2, v8
+@@ -2911,7 +2911,7 @@ define void @mscatter_v1i64(<1 x i64> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a2, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a2, v0
+-; RV64ZVE32F-NEXT:    beqz a2, .LBB36_2
++; RV64ZVE32F-NEXT:    bnez a2, .LBB36_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV64ZVE32F-NEXT:    sd a0, 0(a1)
+ ; RV64ZVE32F-NEXT:  .LBB36_2: # %else
+@@ -6003,7 +6003,7 @@ define void @mscatter_v1f16(<1 x half> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB52_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB52_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e16, mf2, ta, ma
+ ; RV64ZVE32F-NEXT:    vse16.v v8, (a0)
+@@ -6853,7 +6853,7 @@ define void @mscatter_v1f32(<1 x float> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB62_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB62_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV64ZVE32F-NEXT:    vsetivli zero, 1, e32, m1, ta, ma
+ ; RV64ZVE32F-NEXT:    vse32.v v8, (a0)
+@@ -8099,7 +8099,7 @@ define void @mscatter_v1f64(<1 x double> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV32ZVE32F:       # %bb.0:
+ ; RV32ZVE32F-NEXT:    vsetvli a0, zero, e8, mf4, ta, ma
+ ; RV32ZVE32F-NEXT:    vfirst.m a0, v0
+-; RV32ZVE32F-NEXT:    beqz a0, .LBB75_2
++; RV32ZVE32F-NEXT:    bnez a0, .LBB75_2
+ ; RV32ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV32ZVE32F-NEXT:    vsetvli zero, zero, e32, m1, ta, ma
+ ; RV32ZVE32F-NEXT:    vmv.x.s a0, v8
+@@ -8111,7 +8111,7 @@ define void @mscatter_v1f64(<1 x double> %val, <1 x ptr> %ptrs, <1 x i1> %m) {
+ ; RV64ZVE32F:       # %bb.0:
+ ; RV64ZVE32F-NEXT:    vsetvli a1, zero, e8, mf4, ta, ma
+ ; RV64ZVE32F-NEXT:    vfirst.m a1, v0
+-; RV64ZVE32F-NEXT:    beqz a1, .LBB75_2
++; RV64ZVE32F-NEXT:    bnez a1, .LBB75_2
+ ; RV64ZVE32F-NEXT:  # %bb.1: # %cond.store
+ ; RV64ZVE32F-NEXT:    fsd fa0, 0(a0)
+ ; RV64ZVE32F-NEXT:  .LBB75_2: # %else
+diff --git a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-store.ll b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-store.ll
+index 9095f95b37ec..5c06e45e03cd 100644
+--- a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-store.ll
++++ b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-store.ll
+@@ -209,7 +209,7 @@ define void @store_v6i1(ptr %p, <6 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetivli zero, 8, e8, mf2, ta, ma
+ ; CHECK-NEXT:    vfirst.m a1, v0
+-; CHECK-NEXT:    snez a1, a1
++; CHECK-NEXT:    seqz a1, a1
+ ; CHECK-NEXT:    vmv.x.s a2, v0
+ ; CHECK-NEXT:    andi a3, a2, 2
+ ; CHECK-NEXT:    or a1, a1, a3
+diff --git a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-vreductions-mask.ll b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-vreductions-mask.ll
+index 53d12da198e6..9d7564d4dda5 100644
+--- a/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-vreductions-mask.ll
++++ b/llvm/test/CodeGen/RISCV/rvv/fixed-vectors-vreductions-mask.ll
+@@ -11,7 +11,7 @@ define zeroext i1 @vreduce_or_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.or.v1i1(<1 x i1> %v)
+   ret i1 %red
+@@ -24,7 +24,7 @@ define zeroext i1 @vreduce_xor_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.xor.v1i1(<1 x i1> %v)
+   ret i1 %red
+@@ -37,7 +37,7 @@ define zeroext i1 @vreduce_and_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.and.v1i1(<1 x i1> %v)
+   ret i1 %red
+@@ -50,7 +50,7 @@ define zeroext i1 @vreduce_umax_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.umax.v1i1(<1 x i1> %v)
+   ret i1 %red
+@@ -63,7 +63,7 @@ define zeroext i1 @vreduce_smax_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.smax.v1i1(<1 x i1> %v)
+   ret i1 %red
+@@ -76,7 +76,7 @@ define zeroext i1 @vreduce_umin_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.umin.v1i1(<1 x i1> %v)
+   ret i1 %red
+@@ -89,7 +89,7 @@ define zeroext i1 @vreduce_smin_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.smin.v1i1(<1 x i1> %v)
+   ret i1 %red
+@@ -806,7 +806,7 @@ define zeroext i1 @vreduce_add_v1i1(<1 x i1> %v) {
+ ; CHECK:       # %bb.0:
+ ; CHECK-NEXT:    vsetvli a0, zero, e8, mf8, ta, ma
+ ; CHECK-NEXT:    vfirst.m a0, v0
+-; CHECK-NEXT:    snez a0, a0
++; CHECK-NEXT:    seqz a0, a0
+ ; CHECK-NEXT:    ret
+   %red = call i1 @llvm.vector.reduce.add.v1i1(<1 x i1> %v)
+   ret i1 %red
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

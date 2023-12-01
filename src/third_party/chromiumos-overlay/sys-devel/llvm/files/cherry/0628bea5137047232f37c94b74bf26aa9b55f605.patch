@@ -1,0 +1,1571 @@
+commit 0628bea5137047232f37c94b74bf26aa9b55f605
+Author: Hans Wennborg <hans@chromium.org>
+Date:   Mon Oct 19 12:23:22 2020 +0200
+
+    Revert "[PM/CC1] Add -f[no-]split-cold-code CC1 option to toggle splitting"
+    
+    This broke Chromium's PGO build, it seems because hot-cold-splitting got turned
+    on unintentionally. See comment on the code review for repro etc.
+    
+    > This patch adds -f[no-]split-cold-code CC1 options to clang. This allows
+    > the splitting pass to be toggled on/off. The current method of passing
+    > `-mllvm -hot-cold-split=true` to clang isn't ideal as it may not compose
+    > correctly (say, with `-O0` or `-Oz`).
+    >
+    > To implement the -fsplit-cold-code option, an attribute is applied to
+    > functions to indicate that they may be considered for splitting. This
+    > removes some complexity from the old/new PM pipeline builders, and
+    > behaves as expected when LTO is enabled.
+    >
+    > Co-authored by: Saleem Abdulrasool <compnerd@compnerd.org>
+    > Differential Revision: https://reviews.llvm.org/D57265
+    > Reviewed By: Aditya Kumar, Vedant Kumar
+    > Reviewers: Teresa Johnson, Aditya Kumar, Fedor Sergeev, Philip Pfaffe, Vedant Kumar
+    
+    This reverts commit 273c299d5d649a0222fbde03c9a41e41913751b4.
+
+diff --git a/clang/include/clang/Basic/CodeGenOptions.def b/clang/include/clang/Basic/CodeGenOptions.def
+index e60f606b29c..bce2120a4d6 100644
+--- a/clang/include/clang/Basic/CodeGenOptions.def
++++ b/clang/include/clang/Basic/CodeGenOptions.def
+@@ -152,7 +152,6 @@ CODEGENOPT(IncrementalLinkerCompatible, 1, 0) ///< Emit an object file which can
+                                               ///< linker.
+ CODEGENOPT(MergeAllConstants , 1, 1) ///< Merge identical constants.
+ CODEGENOPT(MergeFunctions    , 1, 0) ///< Set when -fmerge-functions is enabled.
+-CODEGENOPT(SplitColdCode     , 1, 0) ///< Set when -fsplit-cold-code is enabled.
+ CODEGENOPT(MemProf           , 1, 0) ///< Set when -fmemory-profile is enabled.
+ CODEGENOPT(MSVolatile        , 1, 0) ///< Set when /volatile:ms is enabled.
+ CODEGENOPT(NoCommon          , 1, 0) ///< Set when -fno-common or C++ is enabled.
+diff --git a/clang/include/clang/Basic/DiagnosticFrontendKinds.td b/clang/include/clang/Basic/DiagnosticFrontendKinds.td
+index d00315c74f3..6434d92fd8f 100644
+--- a/clang/include/clang/Basic/DiagnosticFrontendKinds.td
++++ b/clang/include/clang/Basic/DiagnosticFrontendKinds.td
+@@ -286,10 +286,6 @@ def warn_alias_with_section : Warning<
+   "as the %select{aliasee|resolver}2">,
+   InGroup<IgnoredAttributes>;
+ 
+-def warn_fe_ignored_opt_split_cold_code : Warning<
+-  "'%0' has no effect when %select{optimizing for minimum size|optimizations are disabled}1">,
+-  InGroup<IgnoredAttributes>;
+-
+ let CategoryName = "Instrumentation Issue" in {
+ def warn_profile_data_out_of_date : Warning<
+   "profile data may be out of date: of %0 function%s0, %1 %plural{1:has|:have}1"
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index ab75ac0a65a..201c5de420b 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -3788,10 +3788,6 @@ def fdump_vtable_layouts : Flag<["-"], "fdump-vtable-layouts">,
+   HelpText<"Dump the layouts of all vtables that will be emitted in a translation unit">;
+ def fmerge_functions : Flag<["-"], "fmerge-functions">,
+   HelpText<"Permit merging of identical functions when optimizing.">;
+-def fsplit_cold_code : Flag<["-"], "fsplit-cold-code">,
+-  HelpText<"Permit splitting of cold code when optimizing (off by default).">;
+-def fno_split_cold_code : Flag<["-"], "fno-split-cold-code">,
+-  HelpText<"Disable splitting of cold code when optimizing.">;
+ def femit_coverage_notes : Flag<["-"], "femit-coverage-notes">,
+   HelpText<"Emit a gcov coverage notes file when compiling.">;
+ def femit_coverage_data: Flag<["-"], "femit-coverage-data">,
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index d577dc7d6f5..93b49ec981e 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -63,7 +63,6 @@
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/MD5.h"
+ #include "llvm/Support/TimeProfiler.h"
+-#include "llvm/Transforms/IPO/HotColdSplitting.h"
+ 
+ using namespace clang;
+ using namespace CodeGen;
+@@ -1696,9 +1695,6 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
+ 
+     if (D->hasAttr<MinSizeAttr>())
+       B.addAttribute(llvm::Attribute::MinSize);
+-
+-    if (CodeGenOpts.SplitColdCode)
+-      B.addAttribute(llvm::getHotColdSplittingAttrKind());
+   }
+ 
+   F->addAttributes(llvm::AttributeList::FunctionIndex, B);
+diff --git a/clang/lib/Frontend/CompilerInvocation.cpp b/clang/lib/Frontend/CompilerInvocation.cpp
+index 87d64f1e7ca..a4c56cc4e51 100644
+--- a/clang/lib/Frontend/CompilerInvocation.cpp
++++ b/clang/lib/Frontend/CompilerInvocation.cpp
+@@ -1469,17 +1469,6 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
+ 
+   Opts.PassByValueIsNoAlias = Args.hasArg(OPT_fpass_by_value_is_noalias);
+ 
+-  // -f[no-]split-cold-code
+-  // This may only be enabled when optimizing, and when small code size
+-  // increases are tolerable.
+-  Opts.SplitColdCode =
+-      (Opts.OptimizationLevel > 0) && (Opts.OptimizeSize != 2) &&
+-      Args.hasFlag(OPT_fsplit_cold_code, OPT_fno_split_cold_code, false);
+-  if (Arg *A = Args.getLastArg(OPT_fsplit_cold_code))
+-    if (!Opts.SplitColdCode)
+-      Diags.Report(diag::warn_fe_ignored_opt_split_cold_code)
+-          << A->getAsString(Args) << (Opts.OptimizeSize != 2);
+-
+   return Success;
+ }
+ 
+diff --git a/clang/test/CodeGen/split-cold-code.c b/clang/test/CodeGen/split-cold-code.c
+deleted file mode 100644
+index 8ec2a7e2660..00000000000
+--- a/clang/test/CodeGen/split-cold-code.c
++++ /dev/null
+@@ -1,73 +0,0 @@
+-// === Old PM ===
+-// No splitting at -O0.
+-// RUN: %clang_cc1 -O0 -fsplit-cold-code -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// No splitting at -Oz.
+-// RUN: %clang_cc1 -Oz -fsplit-cold-code -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// No splitting by default, even at -O3.
+-// RUN: %clang_cc1 -O3 -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// No splitting when it's explicitly disabled.
+-// RUN: %clang_cc1 -O3 -fno-split-cold-code -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// Split at -O1.
+-// RUN: %clang_cc1 -O1 -fsplit-cold-code -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-//
+-// Split at -Os.
+-// RUN: %clang_cc1 -Os -fsplit-cold-code -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-//
+-// Split at -O2.
+-// RUN: %clang_cc1 -O2 -fsplit-cold-code -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-//
+-// Split at -O3.
+-// RUN: %clang_cc1 -O3 -fsplit-cold-code -mllvm -debug-pass=Structure \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-
+-// === New PM (ditto) ===
+-// No splitting at -O0.
+-// RUN: %clang_cc1 -O0 -fsplit-cold-code -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// No splitting at -Oz.
+-// RUN: %clang_cc1 -Oz -fsplit-cold-code -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// No splitting by default, even at -O3.
+-// RUN: %clang_cc1 -O3 -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// No splitting when it's explicitly disabled.
+-// RUN: %clang_cc1 -O3 -fno-split-cold-code -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=NO-SPLIT %s
+-//
+-// Split at -O1.
+-// RUN: %clang_cc1 -O1 -fsplit-cold-code -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-//
+-// Split at -Os.
+-// RUN: %clang_cc1 -Os -fsplit-cold-code -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-//
+-// Split at -O2.
+-// RUN: %clang_cc1 -O2 -fsplit-cold-code -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-//
+-// Split at -O3.
+-// RUN: %clang_cc1 -O3 -fsplit-cold-code -fexperimental-new-pass-manager -fdebug-pass-manager \
+-// RUN:   -emit-llvm -o - %s 2>&1 | FileCheck --check-prefix=SPLIT %s
+-
+-// NO-SPLIT-NOT: "hot-cold-split"
+-
+-// SPLIT: define {{.*}} @foo() [[ATTR:#[0-9]+]]
+-// SPLIT: attributes [[ATTR]] = { {{.*}} "hot-cold-split"
+-
+-__attribute__((used))
+-void foo() {}
+diff --git a/clang/test/Frontend/split-cold-code.c b/clang/test/Frontend/split-cold-code.c
+deleted file mode 100644
+index 932665fc688..00000000000
+--- a/clang/test/Frontend/split-cold-code.c
++++ /dev/null
+@@ -1,5 +0,0 @@
+-// RUN: %clang_cc1 -O0 -fsplit-cold-code %s 2>&1 | FileCheck %s --check-prefix=O0
+-// O0: warning: '-fsplit-cold-code' has no effect when optimizations are disabled
+-
+-// RUN: %clang_cc1 -Oz -fsplit-cold-code %s 2>&1 | FileCheck %s --check-prefix=Oz
+-// Oz: warning: '-fsplit-cold-code' has no effect when optimizing for minimum size
+diff --git a/llvm/include/llvm/Transforms/IPO/HotColdSplitting.h b/llvm/include/llvm/Transforms/IPO/HotColdSplitting.h
+index 01a9af3b5b4..8c3049fbaac 100644
+--- a/llvm/include/llvm/Transforms/IPO/HotColdSplitting.h
++++ b/llvm/include/llvm/Transforms/IPO/HotColdSplitting.h
+@@ -12,7 +12,6 @@
+ #ifndef LLVM_TRANSFORMS_IPO_HOTCOLDSPLITTING_H
+ #define LLVM_TRANSFORMS_IPO_HOTCOLDSPLITTING_H
+ 
+-#include "llvm/ADT/StringRef.h"
+ #include "llvm/IR/PassManager.h"
+ 
+ namespace llvm {
+@@ -26,9 +25,6 @@ class AssumptionCache;
+ class DominatorTree;
+ class CodeExtractorAnalysisCache;
+ 
+-/// Get the attribute kind used to mark functions for hot/cold splitting.
+-StringRef getHotColdSplittingAttrKind();
+-
+ /// A sequence of basic blocks.
+ ///
+ /// A 0-sized SmallVector is slightly cheaper to move than a std::vector.
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index 7fc60cd108e..18de4619ce6 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -298,6 +298,7 @@ PipelineTuningOptions::PipelineTuningOptions() {
+ }
+ 
+ extern cl::opt<bool> EnableConstraintElimination;
++extern cl::opt<bool> EnableHotColdSplit;
+ extern cl::opt<bool> EnableOrderFileInstrumentation;
+ 
+ extern cl::opt<bool> FlattenedProfileUsed;
+@@ -1235,7 +1236,7 @@ ModulePassManager PassBuilder::buildModuleOptimizationPipeline(
+   // Split out cold code. Splitting is done late to avoid hiding context from
+   // other optimizations and inadvertently regressing performance. The tradeoff
+   // is that this has a higher code size cost than splitting early.
+-  if (!LTOPreLink)
++  if (EnableHotColdSplit && !LTOPreLink)
+     MPM.addPass(HotColdSplittingPass());
+ 
+   // LoopSink pass sinks instructions hoisted by LICM, which serves as a
+@@ -1624,7 +1625,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level, bool DebugLogging,
+ 
+   // Enable splitting late in the FullLTO post-link pipeline. This is done in
+   // the same stage in the old pass manager (\ref addLateLTOOptimizationPasses).
+-  MPM.addPass(HotColdSplittingPass());
++  if (EnableHotColdSplit)
++    MPM.addPass(HotColdSplittingPass());
+ 
+   // Add late LTO optimization passes.
+   // Delete basic blocks, which optimization passes may have killed.
+diff --git a/llvm/lib/Transforms/IPO/HotColdSplitting.cpp b/llvm/lib/Transforms/IPO/HotColdSplitting.cpp
+index 2759104800a..2460099fba4 100644
+--- a/llvm/lib/Transforms/IPO/HotColdSplitting.cpp
++++ b/llvm/lib/Transforms/IPO/HotColdSplitting.cpp
+@@ -72,7 +72,6 @@
+ #include <string>
+ 
+ #define DEBUG_TYPE "hotcoldsplit"
+-#define PASS_NAME "Hot Cold Splitting"
+ 
+ STATISTIC(NumColdRegionsFound, "Number of cold regions found.");
+ STATISTIC(NumColdRegionsOutlined, "Number of cold regions outlined.");
+@@ -192,8 +191,6 @@ public:
+   }
+ 
+   bool runOnModule(Module &M) override;
+-
+-  StringRef getPassName() const override { return PASS_NAME; }
+ };
+ 
+ } // end anonymous namespace
+@@ -215,9 +212,6 @@ bool HotColdSplitting::isFunctionCold(const Function &F) const {
+ // Returns false if the function should not be considered for hot-cold split
+ // optimization.
+ bool HotColdSplitting::shouldOutlineFrom(const Function &F) const {
+-  if (!F.hasFnAttribute(getHotColdSplittingAttrKind()))
+-    return false;
+-
+   if (F.hasFnAttribute(Attribute::AlwaysInline))
+     return false;
+ 
+@@ -756,17 +750,13 @@ HotColdSplittingPass::run(Module &M, ModuleAnalysisManager &AM) {
+ }
+ 
+ char HotColdSplittingLegacyPass::ID = 0;
+-INITIALIZE_PASS_BEGIN(HotColdSplittingLegacyPass, "hotcoldsplit", PASS_NAME,
+-                      false, false)
++INITIALIZE_PASS_BEGIN(HotColdSplittingLegacyPass, "hotcoldsplit",
++                      "Hot Cold Splitting", false, false)
+ INITIALIZE_PASS_DEPENDENCY(ProfileSummaryInfoWrapperPass)
+ INITIALIZE_PASS_DEPENDENCY(BlockFrequencyInfoWrapperPass)
+-INITIALIZE_PASS_END(HotColdSplittingLegacyPass, "hotcoldsplit", PASS_NAME,
+-                    false, false)
++INITIALIZE_PASS_END(HotColdSplittingLegacyPass, "hotcoldsplit",
++                    "Hot Cold Splitting", false, false)
+ 
+ ModulePass *llvm::createHotColdSplittingPass() {
+   return new HotColdSplittingLegacyPass();
+ }
+-
+-StringRef llvm::getHotColdSplittingAttrKind() {
+-  return "hot-cold-split";
+-}
+diff --git a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+index 0ddee415ff4..088f1e25f3d 100644
+--- a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
++++ b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+@@ -104,6 +104,9 @@ static cl::opt<bool>
+     EnablePerformThinLTO("perform-thinlto", cl::init(false), cl::Hidden,
+                          cl::desc("Enable performing ThinLTO."));
+ 
++cl::opt<bool> EnableHotColdSplit("hot-cold-split", cl::init(false),
++    cl::ZeroOrMore, cl::desc("Enable hot-cold splitting pass"));
++
+ static cl::opt<bool> UseLoopVersioningLICM(
+     "enable-loop-versioning-licm", cl::init(false), cl::Hidden,
+     cl::desc("Enable the experimental Loop Versioning LICM pass"));
+@@ -862,7 +865,7 @@ void PassManagerBuilder::populateModulePassManager(
+ 
+   // See comment in the new PM for justification of scheduling splitting at
+   // this stage (\ref buildModuleSimplificationPipeline).
+-  if (!(PrepareForLTO || PrepareForThinLTO))
++  if (EnableHotColdSplit && !(PrepareForLTO || PrepareForThinLTO))
+     MPM.add(createHotColdSplittingPass());
+ 
+   if (MergeFunctions)
+@@ -1086,7 +1089,8 @@ void PassManagerBuilder::addLateLTOOptimizationPasses(
+     legacy::PassManagerBase &PM) {
+   // See comment in the new PM for justification of scheduling splitting at
+   // this stage (\ref buildLTODefaultPipeline).
+-  PM.add(createHotColdSplittingPass());
++  if (EnableHotColdSplit)
++    PM.add(createHotColdSplittingPass());
+ 
+   // Delete basic blocks, which optimization passes may have killed.
+   PM.add(createCFGSimplificationPass());
+diff --git a/llvm/test/CodeGen/AMDGPU/opt-pipeline.ll b/llvm/test/CodeGen/AMDGPU/opt-pipeline.ll
+index 09ab9ce98c2..2c157cb8018 100644
+--- a/llvm/test/CodeGen/AMDGPU/opt-pipeline.ll
++++ b/llvm/test/CodeGen/AMDGPU/opt-pipeline.ll
+@@ -280,13 +280,6 @@
+ ; GCN-O1-NEXT:       Warn about non-applied transformations
+ ; GCN-O1-NEXT:       Alignment from assumptions
+ ; GCN-O1-NEXT:     Strip Unused Function Prototypes
+-; GCN-O1-NEXT:     Hot Cold Splitting
+-; GCN-O1-NEXT:       FunctionPass Manager
+-; GCN-O1-NEXT:         Dominator Tree Construction
+-; GCN-O1-NEXT:         Natural Loop Information
+-; GCN-O1-NEXT:         Post-Dominator Tree Construction
+-; GCN-O1-NEXT:         Branch Probability Analysis
+-; GCN-O1-NEXT:         Block Frequency Analysis
+ ; GCN-O1-NEXT:     Call Graph Profile
+ ; GCN-O1-NEXT:       FunctionPass Manager
+ ; GCN-O1-NEXT:         Dominator Tree Construction
+@@ -645,13 +638,6 @@
+ ; GCN-O2-NEXT:     Strip Unused Function Prototypes
+ ; GCN-O2-NEXT:     Dead Global Elimination
+ ; GCN-O2-NEXT:     Merge Duplicate Global Constants
+-; GCN-O2-NEXT:     Hot Cold Splitting
+-; GCN-O2-NEXT:       FunctionPass Manager
+-; GCN-O2-NEXT:         Dominator Tree Construction
+-; GCN-O2-NEXT:         Natural Loop Information
+-; GCN-O2-NEXT:         Post-Dominator Tree Construction
+-; GCN-O2-NEXT:         Branch Probability Analysis
+-; GCN-O2-NEXT:         Block Frequency Analysis
+ ; GCN-O2-NEXT:     Call Graph Profile
+ ; GCN-O2-NEXT:       FunctionPass Manager
+ ; GCN-O2-NEXT:         Dominator Tree Construction
+@@ -1015,13 +1001,6 @@
+ ; GCN-O3-NEXT:     Strip Unused Function Prototypes
+ ; GCN-O3-NEXT:     Dead Global Elimination
+ ; GCN-O3-NEXT:     Merge Duplicate Global Constants
+-; GCN-O3-NEXT:     Hot Cold Splitting
+-; GCN-O3-NEXT:       FunctionPass Manager
+-; GCN-O3-NEXT:         Dominator Tree Construction
+-; GCN-O3-NEXT:         Natural Loop Information
+-; GCN-O3-NEXT:         Post-Dominator Tree Construction
+-; GCN-O3-NEXT:         Branch Probability Analysis
+-; GCN-O3-NEXT:         Block Frequency Analysis
+ ; GCN-O3-NEXT:     Call Graph Profile
+ ; GCN-O3-NEXT:       FunctionPass Manager
+ ; GCN-O3-NEXT:         Dominator Tree Construction
+diff --git a/llvm/test/Other/X86/lto-hot-cold-split.ll b/llvm/test/Other/X86/lto-hot-cold-split.ll
+index 3c2a6bc6625..1c6a33df21c 100644
+--- a/llvm/test/Other/X86/lto-hot-cold-split.ll
++++ b/llvm/test/Other/X86/lto-hot-cold-split.ll
+@@ -1,6 +1,6 @@
+ ; RUN: opt -module-summary %s -o %t.bc
+-; RUN: llvm-lto -thinlto-action=run %t.bc -debug-pass=Structure 2>&1 | FileCheck %s -check-prefix=OLDPM-ANYLTO-POSTLINK-Os
+-; RUN: llvm-lto %t.bc -debug-pass=Structure 2>&1 | FileCheck %s -check-prefix=OLDPM-ANYLTO-POSTLINK-Os
++; RUN: llvm-lto -hot-cold-split=true -thinlto-action=run %t.bc -debug-pass=Structure 2>&1 | FileCheck %s -check-prefix=OLDPM-ANYLTO-POSTLINK-Os
++; RUN: llvm-lto -hot-cold-split=true %t.bc -debug-pass=Structure 2>&1 | FileCheck %s -check-prefix=OLDPM-ANYLTO-POSTLINK-Os
+ 
+ ; REQUIRES: asserts
+ 
+diff --git a/llvm/test/Other/new-pm-defaults.ll b/llvm/test/Other/new-pm-defaults.ll
+index f153ec467b6..2576f939c28 100644
+--- a/llvm/test/Other/new-pm-defaults.ll
++++ b/llvm/test/Other/new-pm-defaults.ll
+@@ -10,27 +10,23 @@
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes='default<O1>' -S %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O1 \
+-; RUN:      --check-prefix=%llvmcheckext --check-prefix=CHECK-O-NOPRELINK
++; RUN:      --check-prefix=%llvmcheckext
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes='default<O2>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O2 \
+-; RUN:      --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext \
+-; RUN:      --check-prefix=CHECK-O-NOPRELINK
++; RUN:      --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+-; RUN:      --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext \
+-; RUN:      --check-prefix=CHECK-O-NOPRELINK
++; RUN:      --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes='default<Os>' -S %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-Os \
+-; RUN:      --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext \
+-; RUN:      --check-prefix=CHECK-O-NOPRELINK
++; RUN:      --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes='default<Oz>' -S %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-Oz \
+-; RUN:     --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-O23SZ --check-prefix=%llvmcheckext
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes='lto-pre-link<O2>' -S %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O2 \
+@@ -42,50 +38,43 @@
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-PEEPHOLE --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-PEEPHOLE --check-prefix=CHECK-O23SZ
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes-ep-late-loop-optimizations='no-op-loop' \
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-LOOP-LATE --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-LOOP-LATE --check-prefix=CHECK-O23SZ
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes-ep-loop-optimizer-end='no-op-loop' \
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-LOOP-END --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-LOOP-END --check-prefix=CHECK-O23SZ
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes-ep-scalar-optimizer-late='no-op-function' \
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-SCALAR-LATE --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-SCALAR-LATE --check-prefix=CHECK-O23SZ
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes-ep-cgscc-optimizer-late='no-op-cgscc' \
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-CGSCC-LATE --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-CGSCC-LATE --check-prefix=CHECK-O23SZ
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes-ep-vectorizer-start='no-op-function' \
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-VECTORIZER-START --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-VECTORIZER-START --check-prefix=CHECK-O23SZ
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes-ep-pipeline-start='no-op-module' \
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-PIPELINE-START --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-PIPELINE-START --check-prefix=CHECK-O23SZ
+ ; RUN: opt -disable-verify -debug-pass-manager \
+ ; RUN:     -passes-ep-pipeline-start='no-op-module' \
+ ; RUN:     -passes='lto-pre-link<O3>' -S  %s 2>&1 \
+@@ -97,8 +86,7 @@
+ ; RUN:     -passes='default<O3>' -S  %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O --check-prefix=CHECK-O3 \
+ ; RUN:     --check-prefix=%llvmcheckext \
+-; RUN:     --check-prefix=CHECK-EP-OPTIMIZER-LAST --check-prefix=CHECK-O23SZ \
+-; RUN:     --check-prefix=CHECK-O-NOPRELINK
++; RUN:     --check-prefix=CHECK-EP-OPTIMIZER-LAST --check-prefix=CHECK-O23SZ
+ 
+ ; CHECK-O: Starting llvm::Module pass manager run.
+ ; CHECK-O-NEXT: Running pass: ForceFunctionAttrsPass
+@@ -236,7 +224,6 @@
+ ; CHECK-O2-LTO-NOT: Running pass: EliminateAvailableExternallyPass
+ ; CHECK-O: Running pass: ReversePostOrderFunctionAttrsPass
+ ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}GlobalsAA
+-; CHECK-O-NOPRELINK-NEXT: Running pass: HotColdSplittingPass
+ ; CHECK-O-NEXT: Starting llvm::Function pass manager run.
+ ; CHECK-O-NEXT: Running pass: Float2IntPass
+ ; CHECK-O-NEXT: Running pass: LowerConstantIntrinsicsPass on foo
+diff --git a/llvm/test/Other/new-pm-lto-defaults.ll b/llvm/test/Other/new-pm-lto-defaults.ll
+index 739591c4e06..65e5dac1b37 100644
+--- a/llvm/test/Other/new-pm-lto-defaults.ll
++++ b/llvm/test/Other/new-pm-lto-defaults.ll
+@@ -100,7 +100,6 @@
+ ; CHECK-O2-NEXT: Running pass: CrossDSOCFIPass
+ ; CHECK-O2-NEXT: Running pass: LowerTypeTestsPass
+ ; CHECK-O-NEXT: Running pass: LowerTypeTestsPass
+-; CHECK-O2-NEXT: Running pass: HotColdSplittingPass
+ ; CHECK-O2-NEXT: Running pass: SimplifyCFGPass
+ ; CHECK-O2-NEXT: Running pass: EliminateAvailableExternallyPass
+ ; CHECK-O2-NEXT: Running pass: GlobalDCEPass
+diff --git a/llvm/test/Other/new-pm-pgo.ll b/llvm/test/Other/new-pm-pgo.ll
+index f04099f0574..09fd103e172 100644
+--- a/llvm/test/Other/new-pm-pgo.ll
++++ b/llvm/test/Other/new-pm-pgo.ll
+@@ -1,8 +1,9 @@
+ ; RUN: opt -debug-pass-manager -passes='default<O2>' -pgo-kind=pgo-instr-gen-pipeline -profile-file='temp' %s 2>&1 |FileCheck %s --check-prefixes=GEN
+ ; RUN: llvm-profdata merge %S/Inputs/new-pm-pgo.proftext -o %t.profdata
+-; RUN: opt -debug-pass-manager -passes='default<O2>' -pgo-kind=pgo-instr-use-pipeline -profile-file='%t.profdata' %s 2>&1 |FileCheck %s --check-prefixes=USE,USE-NOPRELINK
++; RUN: opt -debug-pass-manager -passes='default<O2>' -pgo-kind=pgo-instr-use-pipeline -profile-file='%t.profdata' %s 2>&1 |FileCheck %s --check-prefixes=USE
+ ; RUN: opt -debug-pass-manager -passes='thinlto-pre-link<O2>' -pgo-kind=pgo-instr-use-pipeline -profile-file='%t.profdata' %s 2>&1 |FileCheck %s --check-prefixes=USE
+ ; RUN: opt -debug-pass-manager -passes='thinlto<O2>' -pgo-kind=pgo-instr-use-pipeline -profile-file='%t.profdata' %s 2>&1 |FileCheck %s --check-prefixes=USE_POST_LINK
++; RUN: opt -debug-pass-manager -passes='default<O2>' -hot-cold-split -pgo-kind=pgo-instr-use-pipeline -profile-file='%t.profdata' %s 2>&1 |FileCheck %s --check-prefixes=USE --check-prefixes=SPLIT
+ ; RUN: opt -debug-pass-manager -passes='default<O2>' -pgo-kind=pgo-sample-use-pipeline -profile-file='%S/Inputs/new-pm-pgo.prof' %s 2>&1 \
+ ; RUN:     |FileCheck %s --check-prefixes=SAMPLE_USE,SAMPLE_USE_O
+ ; RUN: opt -debug-pass-manager -passes='thinlto-pre-link<O2>' -pgo-kind=pgo-sample-use-pipeline -profile-file='%S/Inputs/new-pm-pgo.prof' %s 2>&1 \
+@@ -30,7 +31,7 @@
+ ; SAMPLE_USE_POST_LINK: Running pass: PGOIndirectCallPromotion
+ ; SAMPLE_USE_PRE_LINK-NOT: Running pass: PGOIndirectCallPromotion
+ ; SAMPLE_GEN: Running pass: AddDiscriminatorsPass
+-; USE-NOPRELINK: Running pass: HotColdSplittingPass
++; SPLIT: Running pass: HotColdSplittingPass
+ 
+ define void @foo() {
+   ret void
+diff --git a/llvm/test/Other/new-pm-thinlto-defaults.ll b/llvm/test/Other/new-pm-thinlto-defaults.ll
+index 01967da219f..bc1e6577f73 100644
+--- a/llvm/test/Other/new-pm-thinlto-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-defaults.ll
+@@ -195,7 +195,6 @@
+ ; CHECK-POSTLINK-O-NEXT: Running pass: EliminateAvailableExternallyPass
+ ; CHECK-POSTLINK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass
+ ; CHECK-POSTLINK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}GlobalsAA
+-; CHECK-POSTLINK-O-NEXT: Running pass: HotColdSplittingPass
+ ; CHECK-POSTLINK-O-NEXT: Starting llvm::Function pass manager run.
+ ; CHECK-POSTLINK-O-NEXT: Running pass: Float2IntPass
+ ; CHECK-POSTLINK-O-NEXT: Running pass: LowerConstantIntrinsicsPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+index 0c1daba4308..0e287cc156b 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+@@ -165,7 +165,6 @@
+ ; CHECK-O-NEXT: Running pass: EliminateAvailableExternallyPass
+ ; CHECK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass
+ ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}GlobalsAA
+-; CHECK-O-NEXT: Running pass: HotColdSplittingPass
+ ; CHECK-O-NEXT: Starting {{.*}}Function pass manager run.
+ ; CHECK-O-NEXT: Running pass: Float2IntPass
+ ; CHECK-O-NEXT: Running pass: LowerConstantIntrinsicsPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+index 05ca8a9de67..da63b9580d7 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+@@ -176,7 +176,6 @@
+ ; CHECK-O-NEXT: Running pass: EliminateAvailableExternallyPass
+ ; CHECK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass
+ ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}GlobalsAA
+-; CHECK-O-NEXT: Running pass: HotColdSplittingPass
+ ; CHECK-O-NEXT: Starting {{.*}}Function pass manager run.
+ ; CHECK-O-NEXT: Running pass: Float2IntPass
+ ; CHECK-O-NEXT: Running pass: LowerConstantIntrinsicsPass
+diff --git a/llvm/test/Other/opt-O2-pipeline.ll b/llvm/test/Other/opt-O2-pipeline.ll
+index 6f89412d6db..4d944208df7 100644
+--- a/llvm/test/Other/opt-O2-pipeline.ll
++++ b/llvm/test/Other/opt-O2-pipeline.ll
+@@ -285,13 +285,6 @@
+ ; CHECK-NEXT:     Strip Unused Function Prototypes
+ ; CHECK-NEXT:     Dead Global Elimination
+ ; CHECK-NEXT:     Merge Duplicate Global Constants
+-; CHECK-NEXT:     Hot Cold Splitting
+-; CHECK-NEXT:       FunctionPass Manager
+-; CHECK-NEXT:         Dominator Tree Construction
+-; CHECK-NEXT:         Natural Loop Information
+-; CHECK-NEXT:         Post-Dominator Tree Construction
+-; CHECK-NEXT:         Branch Probability Analysis
+-; CHECK-NEXT:         Block Frequency Analysis
+ ; CHECK-NEXT:     Call Graph Profile
+ ; CHECK-NEXT:       FunctionPass Manager
+ ; CHECK-NEXT:         Dominator Tree Construction
+diff --git a/llvm/test/Other/opt-O3-pipeline-enable-matrix.ll b/llvm/test/Other/opt-O3-pipeline-enable-matrix.ll
+index 7f1f73aff0e..5c3f2a57e7e 100644
+--- a/llvm/test/Other/opt-O3-pipeline-enable-matrix.ll
++++ b/llvm/test/Other/opt-O3-pipeline-enable-matrix.ll
+@@ -297,13 +297,6 @@
+ ; CHECK-NEXT:     Strip Unused Function Prototypes
+ ; CHECK-NEXT:     Dead Global Elimination
+ ; CHECK-NEXT:     Merge Duplicate Global Constants
+-; CHECK-NEXT:     Hot Cold Splitting
+-; CHECK-NEXT:       FunctionPass Manager
+-; CHECK-NEXT:         Dominator Tree Construction
+-; CHECK-NEXT:         Natural Loop Information
+-; CHECK-NEXT:         Post-Dominator Tree Construction
+-; CHECK-NEXT:         Branch Probability Analysis
+-; CHECK-NEXT:         Block Frequency Analysis
+ ; CHECK-NEXT:     Call Graph Profile
+ ; CHECK-NEXT:       FunctionPass Manager
+ ; CHECK-NEXT:         Dominator Tree Construction
+diff --git a/llvm/test/Other/opt-O3-pipeline.ll b/llvm/test/Other/opt-O3-pipeline.ll
+index e0c1aea8e1f..d910ad52ade 100644
+--- a/llvm/test/Other/opt-O3-pipeline.ll
++++ b/llvm/test/Other/opt-O3-pipeline.ll
+@@ -290,13 +290,6 @@
+ ; CHECK-NEXT:     Strip Unused Function Prototypes
+ ; CHECK-NEXT:     Dead Global Elimination
+ ; CHECK-NEXT:     Merge Duplicate Global Constants
+-; CHECK-NEXT:     Hot Cold Splitting
+-; CHECK-NEXT:       FunctionPass Manager
+-; CHECK-NEXT:         Dominator Tree Construction
+-; CHECK-NEXT:         Natural Loop Information
+-; CHECK-NEXT:         Post-Dominator Tree Construction
+-; CHECK-NEXT:         Branch Probability Analysis
+-; CHECK-NEXT:         Block Frequency Analysis
+ ; CHECK-NEXT:     Call Graph Profile
+ ; CHECK-NEXT:       FunctionPass Manager
+ ; CHECK-NEXT:         Dominator Tree Construction
+diff --git a/llvm/test/Other/opt-Os-pipeline.ll b/llvm/test/Other/opt-Os-pipeline.ll
+index d02db9c9f4b..d89f9071470 100644
+--- a/llvm/test/Other/opt-Os-pipeline.ll
++++ b/llvm/test/Other/opt-Os-pipeline.ll
+@@ -271,13 +271,6 @@
+ ; CHECK-NEXT:     Strip Unused Function Prototypes
+ ; CHECK-NEXT:     Dead Global Elimination
+ ; CHECK-NEXT:     Merge Duplicate Global Constants
+-; CHECK-NEXT:     Hot Cold Splitting
+-; CHECK-NEXT:       FunctionPass Manager
+-; CHECK-NEXT:         Dominator Tree Construction
+-; CHECK-NEXT:         Natural Loop Information
+-; CHECK-NEXT:         Post-Dominator Tree Construction
+-; CHECK-NEXT:         Branch Probability Analysis
+-; CHECK-NEXT:         Block Frequency Analysis
+ ; CHECK-NEXT:     Call Graph Profile
+ ; CHECK-NEXT:       FunctionPass Manager
+ ; CHECK-NEXT:         Dominator Tree Construction
+diff --git a/llvm/test/Other/opt-hot-cold-split.ll b/llvm/test/Other/opt-hot-cold-split.ll
+index 143dd1c0fca..cd01314f1f7 100644
+--- a/llvm/test/Other/opt-hot-cold-split.ll
++++ b/llvm/test/Other/opt-hot-cold-split.ll
+@@ -1,8 +1,8 @@
+-; RUN: opt -mtriple=x86_64-- -Os -debug-pass=Structure -enable-new-pm=0 < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=DEFAULT-Os
+-; RUN: opt -mtriple=x86_64-- -passes='lto-pre-link<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=LTO-PRELINK-Os
+-; RUN: opt -mtriple=x86_64-- -passes='thinlto-pre-link<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=THINLTO-PRELINK-Os
+-; RUN: opt -mtriple=x86_64-- -passes='lto<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=LTO-POSTLINK-Os
+-; RUN: opt -mtriple=x86_64-- -passes='thinlto<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=THINLTO-POSTLINK-Os
++; RUN: opt -mtriple=x86_64-- -Os -hot-cold-split=true -debug-pass=Structure -enable-new-pm=0 < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=DEFAULT-Os
++; RUN: opt -mtriple=x86_64-- -hot-cold-split=true -passes='lto-pre-link<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=LTO-PRELINK-Os
++; RUN: opt -mtriple=x86_64-- -hot-cold-split=true -passes='thinlto-pre-link<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=THINLTO-PRELINK-Os
++; RUN: opt -mtriple=x86_64-- -hot-cold-split=true -passes='lto<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=LTO-POSTLINK-Os
++; RUN: opt -mtriple=x86_64-- -hot-cold-split=true -passes='thinlto<Os>' -debug-pass-manager < %s -o /dev/null 2>&1 | FileCheck %s -check-prefix=THINLTO-POSTLINK-Os
+ 
+ ; REQUIRES: asserts
+ 
+diff --git a/llvm/test/Other/pass-pipelines.ll b/llvm/test/Other/pass-pipelines.ll
+index 6365f949187..ccd364d5d74 100644
+--- a/llvm/test/Other/pass-pipelines.ll
++++ b/llvm/test/Other/pass-pipelines.ll
+@@ -11,6 +11,11 @@
+ ; RUN:     -pgo-kind=pgo-instr-use-pipeline -profile-file='%t.profdata' \
+ ; RUN:     -O2 %s 2>&1 \
+ ; RUN:     | FileCheck %s --check-prefix=CHECK-O2 --check-prefix=PGOUSE
++; RUN: opt -enable-new-pm=0 -disable-output -disable-verify -debug-pass=Structure \
++; RUN:     -pgo-kind=pgo-instr-use-pipeline -profile-file='%t.profdata' \
++; RUN:     -hot-cold-split \
++; RUN:     -O2 %s 2>&1 \
++; RUN:     | FileCheck %s --check-prefix=CHECK-O2 --check-prefix=PGOUSE --check-prefix=SPLIT
+ ;
+ ; In the first pipeline there should just be a function pass manager, no other
+ ; pass managers.
+@@ -96,7 +101,7 @@
+ ; the runtime unrolling though.
+ ; CHECK-O2: Loop Pass Manager
+ ; CHECK-O2-NEXT: Loop Invariant Code Motion
+-; CHECK-O2: Hot Cold Splitting
++; SPLIT: Hot Cold Splitting
+ ; CHECK-O2: FunctionPass Manager
+ ; CHECK-O2: Loop Pass Manager
+ ; CHECK-O2-NEXT: Loop Sink
+diff --git a/llvm/test/Transforms/CodeExtractor/extract-assume.ll b/llvm/test/Transforms/CodeExtractor/extract-assume.ll
+index 5c7918bbb49..bf0d2ecb2d6 100644
+--- a/llvm/test/Transforms/CodeExtractor/extract-assume.ll
++++ b/llvm/test/Transforms/CodeExtractor/extract-assume.ll
+@@ -9,7 +9,7 @@
+ 
+ declare void @fun2(i32) #0
+ 
+-define void @fun(i32 %x) "hot-cold-split" {
++define void @fun(i32 %x) {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/X86/do-not-split.ll b/llvm/test/Transforms/HotColdSplit/X86/do-not-split.ll
+index 64658cc000d..21cd099ac70 100644
+--- a/llvm/test/Transforms/HotColdSplit/X86/do-not-split.ll
++++ b/llvm/test/Transforms/HotColdSplit/X86/do-not-split.ll
+@@ -9,7 +9,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; The cold region is too small to split.
+ ; CHECK-LABEL: @foo
+ ; CHECK-NOT: foo.cold.1
+-define void @foo() "hot-cold-split" {
++define void @foo() {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -23,7 +23,7 @@ if.end:                                           ; preds = %entry
+ ; The cold region is still too small to split.
+ ; CHECK-LABEL: @bar
+ ; CHECK-NOT: bar.cold.1
+-define void @bar() "hot-cold-split" {
++define void @bar() {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -38,7 +38,7 @@ if.end:                                           ; preds = %entry
+ ; Make sure we don't try to outline the entire function.
+ ; CHECK-LABEL: @fun
+ ; CHECK-NOT: fun.cold.1
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -54,7 +54,7 @@ if.end:                                           ; preds = %entry
+ ; entry block is cold.
+ ; CHECK: define void @cold_entry_block() [[COLD_ATTR:#[0-9]+]]
+ ; CHECK-NOT: cold_entry_block.cold.1
+-define void @cold_entry_block() "hot-cold-split" {
++define void @cold_entry_block() {
+ entry:
+   call void @sink()
+   ret void
+@@ -63,7 +63,7 @@ entry:
+ ; Do not split `noinline` functions.
+ ; CHECK-LABEL: @noinline_func
+ ; CHECK-NOT: noinline_func.cold.1
+-define void @noinline_func() noinline "hot-cold-split" {
++define void @noinline_func() noinline {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -78,7 +78,7 @@ if.end:                                           ; preds = %entry
+ ; Do not split `alwaysinline` functions.
+ ; CHECK-LABEL: @alwaysinline_func
+ ; CHECK-NOT: alwaysinline_func.cold.1
+-define void @alwaysinline_func() alwaysinline "hot-cold-split" {
++define void @alwaysinline_func() alwaysinline {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -93,7 +93,7 @@ if.end:                                           ; preds = %entry
+ ; Don't outline infinite loops.
+ ; CHECK-LABEL: @infinite_loop
+ ; CHECK-NOT: infinite_loop.cold.1
+-define void @infinite_loop() "hot-cold-split" {
++define void @infinite_loop() {
+ entry:
+   br label %loop
+ 
+@@ -105,7 +105,7 @@ loop:
+ ; Don't count debug intrinsics towards the outlining threshold.
+ ; CHECK-LABEL: @dont_count_debug_intrinsics
+ ; CHECK-NOT: dont_count_debug_intrinsics.cold.1
+-define void @dont_count_debug_intrinsics(i32 %arg1) "hot-cold-split" !dbg !6 {
++define void @dont_count_debug_intrinsics(i32 %arg1) !dbg !6 {
+ entry:
+   %var = add i32 0, 0, !dbg !11
+   br i1 undef, label %if.then, label %if.end
+@@ -122,7 +122,7 @@ if.end:                                           ; preds = %entry
+ 
+ ; CHECK-LABEL: @sanitize_address
+ ; CHECK-NOT: sanitize_address.cold.1
+-define void @sanitize_address() sanitize_address "hot-cold-split" {
++define void @sanitize_address() sanitize_address {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -136,7 +136,7 @@ if.end:                                           ; preds = %entry
+ 
+ ; CHECK-LABEL: @sanitize_hwaddress
+ ; CHECK-NOT: sanitize_hwaddress.cold.1
+-define void @sanitize_hwaddress() sanitize_hwaddress "hot-cold-split" {
++define void @sanitize_hwaddress() sanitize_hwaddress {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -150,7 +150,7 @@ if.end:                                           ; preds = %entry
+ 
+ ; CHECK-LABEL: @sanitize_thread
+ ; CHECK-NOT: sanitize_thread.cold.1
+-define void @sanitize_thread() sanitize_thread "hot-cold-split" {
++define void @sanitize_thread() sanitize_thread {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -164,7 +164,7 @@ if.end:                                           ; preds = %entry
+ 
+ ; CHECK-LABEL: @sanitize_memory
+ ; CHECK-NOT: sanitize_memory.cold.1
+-define void @sanitize_memory() sanitize_memory "hot-cold-split" {
++define void @sanitize_memory() sanitize_memory {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+@@ -180,7 +180,7 @@ declare void @llvm.trap() cold noreturn
+ 
+ ; CHECK-LABEL: @nosanitize_call
+ ; CHECK-NOT: nosanitize_call.cold.1
+-define void @nosanitize_call() sanitize_memory "hot-cold-split" {
++define void @nosanitize_call() sanitize_memory {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/addr-taken.ll b/llvm/test/Transforms/HotColdSplit/addr-taken.ll
+index fa5b3e6b174..19f1d4f1974 100644
+--- a/llvm/test/Transforms/HotColdSplit/addr-taken.ll
++++ b/llvm/test/Transforms/HotColdSplit/addr-taken.ll
+@@ -4,12 +4,12 @@ target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
+ target triple = "x86_64-apple-macosx10.14.0"
+ 
+ ; CHECK: define {{.*}} @foo{{.*}}#[[outlined_func_attr:[0-9]+]]
+-define void @foo() noreturn cold "hot-cold-split" {
++define void @foo() noreturn cold {
+   unreachable
+ }
+ 
+ ; CHECK: define {{.*}} @bar.cold.1{{.*}}#[[outlined_func_attr]]
+-define void @bar() "hot-cold-split" {
++define void @bar() {
+   br i1 undef, label %normal, label %exit
+ 
+ normal:
+diff --git a/llvm/test/Transforms/HotColdSplit/apply-noreturn-bonus.ll b/llvm/test/Transforms/HotColdSplit/apply-noreturn-bonus.ll
+index 4b2c71217a5..c1d9af88595 100644
+--- a/llvm/test/Transforms/HotColdSplit/apply-noreturn-bonus.ll
++++ b/llvm/test/Transforms/HotColdSplit/apply-noreturn-bonus.ll
+@@ -3,7 +3,7 @@
+ 
+ declare void @sink() cold
+ 
+-define void @foo(i32 %arg) "hot-cold-split" {
++define void @foo(i32 %arg) {
+ entry:
+   br i1 undef, label %cold1, label %exit
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/apply-penalty-for-inputs.ll b/llvm/test/Transforms/HotColdSplit/apply-penalty-for-inputs.ll
+index 20fe0c8fb50..fffd6f9f5dc 100644
+--- a/llvm/test/Transforms/HotColdSplit/apply-penalty-for-inputs.ll
++++ b/llvm/test/Transforms/HotColdSplit/apply-penalty-for-inputs.ll
+@@ -5,7 +5,7 @@ declare void @sink(i32*, i32, i32) cold
+ 
+ @g = global i32 0
+ 
+-define void @foo(i32 %arg) "hot-cold-split" {
++define void @foo(i32 %arg) {
+   %local = load i32, i32* @g
+   br i1 undef, label %cold, label %exit
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/apply-penalty-for-outputs.ll b/llvm/test/Transforms/HotColdSplit/apply-penalty-for-outputs.ll
+index 124a5823336..a7d9f97ab03 100644
+--- a/llvm/test/Transforms/HotColdSplit/apply-penalty-for-outputs.ll
++++ b/llvm/test/Transforms/HotColdSplit/apply-penalty-for-outputs.ll
+@@ -5,7 +5,7 @@ declare void @sink() cold
+ 
+ @g = global i32 0
+ 
+-define i32 @foo(i32 %arg) "hot-cold-split" {
++define i32 @foo(i32 %arg) {
+ entry:
+   br i1 undef, label %cold, label %exit
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/apply-successor-penalty.ll b/llvm/test/Transforms/HotColdSplit/apply-successor-penalty.ll
+index f88b5d77932..3886d76da01 100644
+--- a/llvm/test/Transforms/HotColdSplit/apply-successor-penalty.ll
++++ b/llvm/test/Transforms/HotColdSplit/apply-successor-penalty.ll
+@@ -4,7 +4,7 @@
+ declare void @sink() cold
+ 
+ ; CHECK-LABEL: Outlining in one_non_region_successor
+-define void @one_non_region_successor(i32 %arg) "hot-cold-split" {
++define void @one_non_region_successor(i32 %arg) {
+ entry:
+   br i1 undef, label %cold1, label %exit
+ 
+@@ -27,7 +27,7 @@ exit:
+ }
+ 
+ ; CHECK-LABEL: Outlining in two_non_region_successor
+-define void @two_non_region_successors(i32 %arg) "hot-cold-split" {
++define void @two_non_region_successors(i32 %arg) {
+ entry:
+   br i1 undef, label %cold1, label %exit1
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/assumption-cache-invalidation.ll b/llvm/test/Transforms/HotColdSplit/assumption-cache-invalidation.ll
+index 5f52ba144ff..bdb46d584dc 100644
+--- a/llvm/test/Transforms/HotColdSplit/assumption-cache-invalidation.ll
++++ b/llvm/test/Transforms/HotColdSplit/assumption-cache-invalidation.ll
+@@ -18,7 +18,7 @@ target triple = "aarch64"
+ ; CHECK: %1 = icmp eq i64 %0, 0
+ ; CHECK-NOT: call void @llvm.assume
+ 
+-define void @f() "hot-cold-split" {
++define void @f() {
+ entry:
+   %0 = getelementptr inbounds %a, %a* null, i64 0, i32 1
+   br label %label
+diff --git a/llvm/test/Transforms/HotColdSplit/coldentrycount.ll b/llvm/test/Transforms/HotColdSplit/coldentrycount.ll
+index 7ab6b514c49..89642763eed 100644
+--- a/llvm/test/Transforms/HotColdSplit/coldentrycount.ll
++++ b/llvm/test/Transforms/HotColdSplit/coldentrycount.ll
+@@ -10,7 +10,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: define {{.*}} @fun{{.*}} ![[HOTPROF:[0-9]+]] {{.*}}section_prefix ![[LIKELY:[0-9]+]]
+ ; CHECK: call void @fun.cold.1
+ 
+-define void @fun() "hot-cold-split" !prof !14 {
++define void @fun() !prof !14 {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/delete-use-without-def-dbg-val.ll b/llvm/test/Transforms/HotColdSplit/delete-use-without-def-dbg-val.ll
+index bc40daa9035..97f5cb8ba6c 100644
+--- a/llvm/test/Transforms/HotColdSplit/delete-use-without-def-dbg-val.ll
++++ b/llvm/test/Transforms/HotColdSplit/delete-use-without-def-dbg-val.ll
+@@ -9,7 +9,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-LABEL: define {{.*}}@foo.cold
+ ; CHECK-NOT: call {{.*}}llvm.dbg.value
+ 
+-define void @foo() "hot-cold-split" !dbg !6 {
++define void @foo() !dbg !6 {
+ entry:
+   br i1 undef, label %if.then, label %if.end
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/duplicate-phi-preds-crash.ll b/llvm/test/Transforms/HotColdSplit/duplicate-phi-preds-crash.ll
+index 20d531acbeb..fa68300b0d8 100644
+--- a/llvm/test/Transforms/HotColdSplit/duplicate-phi-preds-crash.ll
++++ b/llvm/test/Transforms/HotColdSplit/duplicate-phi-preds-crash.ll
+@@ -18,7 +18,7 @@ declare void @sink() cold
+ ; CHECK: call {{.*}}@realloc2.cold.1(i64 %size, i8* %ptr, i8** %retval.0.ce.loc)
+ ; CHECK-LABEL: cleanup:
+ ; CHECK-NEXT: phi i8* [ null, %if.then ], [ %call, %if.end ], [ %retval.0.ce.reload, %codeRepl ]
+-define i8* @realloc2(i8* %ptr, i64 %size) "hot-cold-split" {
++define i8* @realloc2(i8* %ptr, i64 %size) {
+ entry:
+   %0 = add i64 %size, -1
+   %1 = icmp ugt i64 %0, 184549375
+diff --git a/llvm/test/Transforms/HotColdSplit/eh-pads.ll b/llvm/test/Transforms/HotColdSplit/eh-pads.ll
+index 73b2be416eb..80a566c6cf1 100644
+--- a/llvm/test/Transforms/HotColdSplit/eh-pads.ll
++++ b/llvm/test/Transforms/HotColdSplit/eh-pads.ll
+@@ -6,7 +6,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-LABEL: define {{.*}}@foo(
+ ; CHECK: landingpad
+ ; CHECK: sideeffect(i32 2)
+-define void @foo(i32 %cond) "hot-cold-split" personality i8 0 {
++define void @foo(i32 %cond) personality i8 0 {
+ entry:
+   invoke void @llvm.donothing() to label %normal unwind label %exception
+ 
+@@ -30,7 +30,7 @@ normal:
+ ;
+ ; CHECK-LABEL: define {{.*}}@bar(
+ ; CHECK: landingpad
+-define void @bar(i32 %cond) "hot-cold-split" personality i8 0 {
++define void @bar(i32 %cond) personality i8 0 {
+ entry:
+   br i1 undef, label %exit, label %continue
+ 
+@@ -54,7 +54,7 @@ normal:
+   ret void
+ }
+ 
+-define void @baz() "hot-cold-split" personality i8 0 {
++define void @baz() personality i8 0 {
+ entry:
+   br i1 undef, label %exit, label %cold1
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/eh-typeid-for.ll b/llvm/test/Transforms/HotColdSplit/eh-typeid-for.ll
+index c59da4dd51b..87a5bcc9131 100644
+--- a/llvm/test/Transforms/HotColdSplit/eh-typeid-for.ll
++++ b/llvm/test/Transforms/HotColdSplit/eh-typeid-for.ll
+@@ -6,7 +6,7 @@
+ 
+ ; CHECK-LABEL: @fun
+ ; CHECK-NOT: call {{.*}}@fun.cold.1
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/forward-dfs-reaches-marked-block.ll b/llvm/test/Transforms/HotColdSplit/forward-dfs-reaches-marked-block.ll
+index aa45d789390..3c0f93b0985 100644
+--- a/llvm/test/Transforms/HotColdSplit/forward-dfs-reaches-marked-block.ll
++++ b/llvm/test/Transforms/HotColdSplit/forward-dfs-reaches-marked-block.ll
+@@ -5,7 +5,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ 
+ ; CHECK-LABEL: define {{.*}}@fun
+ ; CHECK: call {{.*}}@fun.cold.1(
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll
+index 5149878aa87..d8afa44d514 100644
+--- a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll
++++ b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll
+@@ -9,7 +9,7 @@ declare void @use(i8*)
+ declare void @cold_use2(i8*, i8*) cold
+ 
+ ; CHECK-LABEL: define {{.*}}@foo(
+-define void @foo() "hot-cold-split" {
++define void @foo() {
+ entry:
+   %local1 = alloca i256
+   %local2 = alloca i256
+diff --git a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll
+index dc8faabf8e7..3d5a3bb8636 100644
+--- a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll
++++ b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll
+@@ -34,7 +34,7 @@ declare void @use(i8*)
+ ;          \      /
+ ;            exit
+ ;          (lt.end)
+-define void @only_lifetime_start_is_cold() "hot-cold-split" {
++define void @only_lifetime_start_is_cold() {
+ ; CHECK-LABEL: @only_lifetime_start_is_cold(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256, align 8
+@@ -42,7 +42,7 @@ define void @only_lifetime_start_is_cold() "hot-cold-split" {
+ ; CHECK-NEXT:    br i1 undef, label [[CODEREPL:%.*]], label [[NO_EXTRACT1:%.*]]
+ ; CHECK:       codeRepl:
+ ; CHECK-NEXT:    call void @llvm.lifetime.start.p0i256(i64 -1, i256* [[LOCAL1]])
+-; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @only_lifetime_start_is_cold.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR4:#.*]]
++; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @only_lifetime_start_is_cold.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR3:#.*]]
+ ; CHECK-NEXT:    br i1 [[TARGETBLOCK]], label [[NO_EXTRACT1]], label [[EXIT:%.*]]
+ ; CHECK:       no-extract1:
+ ; CHECK-NEXT:    br label [[EXIT]]
+@@ -94,7 +94,7 @@ exit:
+ ;    (lt.end)
+ ;        \         /
+ ;            exit
+-define void @only_lifetime_end_is_cold() "hot-cold-split" {
++define void @only_lifetime_end_is_cold() {
+ ; CHECK-LABEL: @only_lifetime_end_is_cold(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256, align 8
+@@ -105,7 +105,7 @@ define void @only_lifetime_end_is_cold() "hot-cold-split" {
+ ; CHECK-NEXT:    call void @llvm.lifetime.end.p0i8(i64 1, i8* [[LOCAL1_CAST]])
+ ; CHECK-NEXT:    br label [[EXIT:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    call void @only_lifetime_end_is_cold.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR4]]
++; CHECK-NEXT:    call void @only_lifetime_end_is_cold.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR3]]
+ ; CHECK-NEXT:    br label [[EXIT]]
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+@@ -134,7 +134,7 @@ exit:
+ 
+ ; In this CFG, splitting will extract the blocks extract{1,2,3}. Lifting the
+ ; lifetime.end marker would be a miscompile.
+-define void @do_not_lift_lifetime_end() "hot-cold-split" {
++define void @do_not_lift_lifetime_end() {
+ ; CHECK-LABEL: @do_not_lift_lifetime_end(
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256, align 8
+@@ -145,7 +145,7 @@ define void @do_not_lift_lifetime_end() "hot-cold-split" {
+ ; CHECK-NEXT:    call void @use(i8* [[LOCAL1_CAST]])
+ ; CHECK-NEXT:    br i1 undef, label [[EXIT:%.*]], label [[CODEREPL:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @do_not_lift_lifetime_end.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR4]]
++; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @do_not_lift_lifetime_end.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR3]]
+ ; CHECK-NEXT:    br i1 [[TARGETBLOCK]], label [[HEADER]], label [[EXIT]]
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+diff --git a/llvm/test/Transforms/HotColdSplit/mark-the-whole-func-cold.ll b/llvm/test/Transforms/HotColdSplit/mark-the-whole-func-cold.ll
+index 9017e204f36..cc87f617b4f 100644
+--- a/llvm/test/Transforms/HotColdSplit/mark-the-whole-func-cold.ll
++++ b/llvm/test/Transforms/HotColdSplit/mark-the-whole-func-cold.ll
+@@ -24,7 +24,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: define {{.*}}@_Z3fooii{{.*}}#[[outlined_func_attr:[0-9]+]]
+ ; CHECK-NOT: _Z3fooii.cold
+ ; CHECK: attributes #[[outlined_func_attr]] = { {{.*}}minsize
+-define void @_Z3fooii(i32, i32) "hot-cold-split" {
++define void @_Z3fooii(i32, i32) {
+   %3 = alloca i32, align 4
+   %4 = alloca i32, align 4
+   store i32 %0, i32* %3, align 4
+diff --git a/llvm/test/Transforms/HotColdSplit/minsize.ll b/llvm/test/Transforms/HotColdSplit/minsize.ll
+index 11b480a8de7..36bd0340718 100644
+--- a/llvm/test/Transforms/HotColdSplit/minsize.ll
++++ b/llvm/test/Transforms/HotColdSplit/minsize.ll
+@@ -5,7 +5,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ 
+ ; CHECK-LABEL: @fun
+ ; CHECK: call void @fun.cold.1
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+@@ -18,7 +18,7 @@ if.else:
+ }
+ 
+ ; CHECK: define {{.*}} @foo{{.*}}#[[outlined_func_attr:[0-9]+]]
+-define void @foo() cold "hot-cold-split" {
++define void @foo() cold {
+   ret void
+ }
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/multiple-exits.ll b/llvm/test/Transforms/HotColdSplit/multiple-exits.ll
+index e2b3a29e1a7..c41e4f04bf3 100644
+--- a/llvm/test/Transforms/HotColdSplit/multiple-exits.ll
++++ b/llvm/test/Transforms/HotColdSplit/multiple-exits.ll
+@@ -32,7 +32,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: call {{.*}}@sideeffect(i32 1)
+ ; CHECK: [[return]]:
+ ; CHECK-NEXT: ret void
+-define void @foo(i32 %cond) "hot-cold-split" {
++define void @foo(i32 %cond) {
+ entry:
+   %tobool = icmp eq i32 %cond, 0
+   br i1 %tobool, label %exit1, label %if.then
+diff --git a/llvm/test/Transforms/HotColdSplit/noreturn.ll b/llvm/test/Transforms/HotColdSplit/noreturn.ll
+index e5a7ef1b7ec..74f4cb18c7f 100644
+--- a/llvm/test/Transforms/HotColdSplit/noreturn.ll
++++ b/llvm/test/Transforms/HotColdSplit/noreturn.ll
+@@ -10,7 +10,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ 
+ ; CHECK-LABEL: define {{.*}}@foo(
+ ; CHECK-NOT: foo.cold.1
+-define void @foo(i32, %struct.__jmp_buf_tag*) "hot-cold-split" {
++define void @foo(i32, %struct.__jmp_buf_tag*) {
+   %3 = icmp eq i32 %0, 0
+   tail call void @_Z10sideeffectv()
+   br i1 %3, label %5, label %4
+@@ -45,7 +45,7 @@ define void @xpc_objc_main(i32) noreturn {
+ 
+ ; CHECK-LABEL: define {{.*}}@bar(
+ ; CHECK: call {{.*}}@bar.cold.1(
+-define void @bar(i32) "hot-cold-split" {
++define void @bar(i32) {
+   %2 = icmp eq i32 %0, 0
+   tail call void @_Z10sideeffectv()
+   br i1 %2, label %sink, label %exit
+@@ -63,7 +63,7 @@ exit:
+ 
+ ; CHECK-LABEL: define {{.*}}@baz(
+ ; CHECK: call {{.*}}@baz.cold.1(
+-define void @baz(i32, %struct.__jmp_buf_tag*) "hot-cold-split" {
++define void @baz(i32, %struct.__jmp_buf_tag*) {
+   %3 = icmp eq i32 %0, 0
+   tail call void @_Z10sideeffectv()
+   br i1 %3, label %5, label %4
+diff --git a/llvm/test/Transforms/HotColdSplit/outline-cold-asm.ll b/llvm/test/Transforms/HotColdSplit/outline-cold-asm.ll
+index 1cc1508f497..8c1a1a88ecf 100644
+--- a/llvm/test/Transforms/HotColdSplit/outline-cold-asm.ll
++++ b/llvm/test/Transforms/HotColdSplit/outline-cold-asm.ll
+@@ -9,7 +9,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-LABEL: define {{.*}}@fun.cold.1(
+ ; CHECK: asm ""
+ 
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/outline-disjoint-diamonds.ll b/llvm/test/Transforms/HotColdSplit/outline-disjoint-diamonds.ll
+index b0f7db966be..b33454b5c4e 100644
+--- a/llvm/test/Transforms/HotColdSplit/outline-disjoint-diamonds.ll
++++ b/llvm/test/Transforms/HotColdSplit/outline-disjoint-diamonds.ll
+@@ -5,7 +5,7 @@
+ ; CHECK-NEXT: ret void
+ ; CHECK: call {{.*}}@fun.cold.1(
+ ; CHECK-NEXT: ret void
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %A.then, label %A.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/outline-if-then-else.ll b/llvm/test/Transforms/HotColdSplit/outline-if-then-else.ll
+index 6e289a17834..faf663c71c5 100644
+--- a/llvm/test/Transforms/HotColdSplit/outline-if-then-else.ll
++++ b/llvm/test/Transforms/HotColdSplit/outline-if-then-else.ll
+@@ -24,7 +24,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-NEXT: call void @foo.cold.1
+ ; CHECK-LABEL: if.end2:
+ ; CHECK: call void @sideeffect(i32 2)
+-define void @foo(i32 %cond) "hot-cold-split" {
++define void @foo(i32 %cond) {
+ entry:
+   %cond.addr = alloca i32
+   store i32 %cond, i32* %cond.addr
+diff --git a/llvm/test/Transforms/HotColdSplit/outline-multiple-entry-region.ll b/llvm/test/Transforms/HotColdSplit/outline-multiple-entry-region.ll
+index e83b1e36fe5..0275715fc0a 100644
+--- a/llvm/test/Transforms/HotColdSplit/outline-multiple-entry-region.ll
++++ b/llvm/test/Transforms/HotColdSplit/outline-multiple-entry-region.ll
+@@ -34,7 +34,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: call void @_Z4sinkv
+ ; CHECK: call void @_Z10sideeffecti(i32 3)
+ 
+-define void @_Z3fooii(i32, i32) "hot-cold-split" {
++define void @_Z3fooii(i32, i32) {
+   %3 = alloca i32, align 4
+   %4 = alloca i32, align 4
+   store i32 %0, i32* %3, align 4
+diff --git a/llvm/test/Transforms/HotColdSplit/outline-while-loop.ll b/llvm/test/Transforms/HotColdSplit/outline-while-loop.ll
+index b1a1f09bb8d..6337726ca13 100644
+--- a/llvm/test/Transforms/HotColdSplit/outline-while-loop.ll
++++ b/llvm/test/Transforms/HotColdSplit/outline-while-loop.ll
+@@ -24,7 +24,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-NEXT: call void @foo.cold.1
+ ; CHECK-LABEL: if.end:
+ ; CHECK: call void @sideeffect(i32 1)
+-define void @foo(i32 %cond) "hot-cold-split" {
++define void @foo(i32 %cond) {
+ entry:
+   %tobool = icmp eq i32 %cond, 0
+   br i1 %tobool, label %if.end, label %while.cond.preheader
+@@ -62,7 +62,7 @@ if.end:                                           ; preds = %entry
+ ; CHECK-NEXT: call void @while_loop_after_sink.cold.1
+ ; CHECK-LABEL: if.end:
+ ; CHECK: call void @sideeffect(i32 1)
+-define void @while_loop_after_sink(i32 %cond) "hot-cold-split" {
++define void @while_loop_after_sink(i32 %cond) {
+ entry:
+   %tobool = icmp eq i32 %cond, 0
+   br i1 %tobool, label %if.end, label %sink
+diff --git a/llvm/test/Transforms/HotColdSplit/phi-with-distinct-outlined-values.ll b/llvm/test/Transforms/HotColdSplit/phi-with-distinct-outlined-values.ll
+index 38ee77fbcaf..cb12befcf46 100644
+--- a/llvm/test/Transforms/HotColdSplit/phi-with-distinct-outlined-values.ll
++++ b/llvm/test/Transforms/HotColdSplit/phi-with-distinct-outlined-values.ll
+@@ -11,7 +11,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: %p.ce = phi i32 [ 1, %coldbb ], [ 3, %coldbb2 ]
+ ; CHECK-NEXT: store i32 %p.ce, i32* %p.ce.out 
+ 
+-define void @foo(i32 %cond) "hot-cold-split" {
++define void @foo(i32 %cond) {
+ entry:
+   %tobool = icmp eq i32 %cond, 0
+   br i1 %tobool, label %if.end, label %coldbb
+diff --git a/llvm/test/Transforms/HotColdSplit/region-overlap.ll b/llvm/test/Transforms/HotColdSplit/region-overlap.ll
+index 651a669e80c..6ab65c069ec 100644
+--- a/llvm/test/Transforms/HotColdSplit/region-overlap.ll
++++ b/llvm/test/Transforms/HotColdSplit/region-overlap.ll
+@@ -24,7 +24,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-LABEL: define {{.*}}@_Z3fooii
+ ; CHECK: call {{.*}}@_Z3fooii.cold.1
+ ; CHECK-NOT: _Z3fooii.cold
+-define void @_Z3fooii(i32, i32) "hot-cold-split" {
++define void @_Z3fooii(i32, i32) {
+   %3 = alloca i32, align 4
+   %4 = alloca i32, align 4
+   store i32 %0, i32* %3, align 4
+diff --git a/llvm/test/Transforms/HotColdSplit/resume.ll b/llvm/test/Transforms/HotColdSplit/resume.ll
+index 6d675a4d596..67d2d241916 100644
+--- a/llvm/test/Transforms/HotColdSplit/resume.ll
++++ b/llvm/test/Transforms/HotColdSplit/resume.ll
+@@ -10,7 +10,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ 
+ declare void @sink() cold
+ 
+-define i32 @foo() "hot-cold-split" personality i8 0 {
++define i32 @foo() personality i8 0 {
+ entry:
+   br i1 undef, label %pre-resume-eh, label %normal
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/retain-section.ll b/llvm/test/Transforms/HotColdSplit/retain-section.ll
+index c04ea3120f8..af611a75858 100644
+--- a/llvm/test/Transforms/HotColdSplit/retain-section.ll
++++ b/llvm/test/Transforms/HotColdSplit/retain-section.ll
+@@ -7,7 +7,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ 
+ ; CHECK-LABEL: @fun
+ ; CHECK: call void @fun.cold.1{{.*}}
+-define void @fun() "hot-cold-split" section ".text.cold" {
++define void @fun() section ".text.cold" {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/section-splitting-custom.ll b/llvm/test/Transforms/HotColdSplit/section-splitting-custom.ll
+index 1205002de6e..b4404888ec0 100644
+--- a/llvm/test/Transforms/HotColdSplit/section-splitting-custom.ll
++++ b/llvm/test/Transforms/HotColdSplit/section-splitting-custom.ll
+@@ -15,7 +15,7 @@
+ ; CHECK: define {{.*}}@fun.cold.1{{.*}} [[cold_attr:#[0-9]+]] section "__cold_custom"
+ ; CHECK: attributes [[cold_attr]] = { {{.*}}noreturn
+ 
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/section-splitting-default.ll b/llvm/test/Transforms/HotColdSplit/section-splitting-default.ll
+index 7724ad4dbc5..ed9c319adc6 100644
+--- a/llvm/test/Transforms/HotColdSplit/section-splitting-default.ll
++++ b/llvm/test/Transforms/HotColdSplit/section-splitting-default.ll
+@@ -14,7 +14,7 @@
+ ; CHECK: define {{.*}}@fun.cold.1{{.*}} [[cold_attr:#[0-9]+]] section "__llvm_cold"
+ ; CHECK: attributes [[cold_attr]] = { {{.*}}noreturn
+ 
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/split-cold-2.ll b/llvm/test/Transforms/HotColdSplit/split-cold-2.ll
+index 75f1c37a2c8..0b228a58897 100644
+--- a/llvm/test/Transforms/HotColdSplit/split-cold-2.ll
++++ b/llvm/test/Transforms/HotColdSplit/split-cold-2.ll
+@@ -12,7 +12,7 @@
+ ; CHECK: define {{.*}}@fun.cold.1{{.*}} [[cold_attr:#[0-9]+]]
+ ; CHECK: attributes [[cold_attr]] = { {{.*}}noreturn
+ 
+-define void @fun() "hot-cold-split" {
++define void @fun() {
+ entry:
+   br i1 undef, label %if.then, label %if.else
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/split-out-dbg-label.ll b/llvm/test/Transforms/HotColdSplit/split-out-dbg-label.ll
+index 90f3b383eb9..3e2ed276271 100644
+--- a/llvm/test/Transforms/HotColdSplit/split-out-dbg-label.ll
++++ b/llvm/test/Transforms/HotColdSplit/split-out-dbg-label.ll
+@@ -18,7 +18,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: [[LINE]] = !DILocation(line: 1, column: 1, scope: [[SCOPE]]
+ ; CHECK: [[LABEL]] = !DILabel(scope: [[SCOPE]], name: "bye", file: [[FILE]], line: 28
+ 
+-define void @foo(i32 %arg1) "hot-cold-split" !dbg !6 {
++define void @foo(i32 %arg1) !dbg !6 {
+ entry:
+   %var = add i32 0, 0, !dbg !11
+   br i1 undef, label %if.then, label %if.end
+diff --git a/llvm/test/Transforms/HotColdSplit/split-out-dbg-val-of-arg.ll b/llvm/test/Transforms/HotColdSplit/split-out-dbg-val-of-arg.ll
+index 4856bb47404..54ca19511c0 100644
+--- a/llvm/test/Transforms/HotColdSplit/split-out-dbg-val-of-arg.ll
++++ b/llvm/test/Transforms/HotColdSplit/split-out-dbg-val-of-arg.ll
+@@ -6,7 +6,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-LABEL: define {{.*}}@foo.cold
+ ; CHECK-NOT: llvm.dbg.value
+ 
+-define void @foo(i32 %arg1) "hot-cold-split" !dbg !6 {
++define void @foo(i32 %arg1) !dbg !6 {
+ entry:
+   %var = add i32 0, 0, !dbg !11
+   br i1 undef, label %if.then, label %if.end
+diff --git a/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll b/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll
+index 11aa4951238..0222c57fc66 100644
+--- a/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll
++++ b/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll
+@@ -28,7 +28,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: call {{.*}}@sideeffect(i32 3)
+ ; CHECK: call {{.*}}@sideeffect(i32 4)
+ ; CHECK: call {{.*}}@sideeffect(i32 5)
+-define void @pluto() "hot-cold-split" {
++define void @pluto() {
+ bb:
+   switch i8 undef, label %bb1 [
+     i8 0, label %bb7
+diff --git a/llvm/test/Transforms/HotColdSplit/stale-assume-in-original-func.ll b/llvm/test/Transforms/HotColdSplit/stale-assume-in-original-func.ll
+index 6c15b9af513..6d40be6d975 100644
+--- a/llvm/test/Transforms/HotColdSplit/stale-assume-in-original-func.ll
++++ b/llvm/test/Transforms/HotColdSplit/stale-assume-in-original-func.ll
+@@ -12,7 +12,7 @@
+ ; CHECK-NOT: llvm.assume
+ ; CHECK: }
+ 
+-define void @foo(i1 %cond) "hot-cold-split" {
++define void @foo(i1 %cond) {
+ entry:
+   br i1 %cond, label %cold, label %cont
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/succ-block-with-self-edge.ll b/llvm/test/Transforms/HotColdSplit/succ-block-with-self-edge.ll
+index 6270c4e5c52..5197f4061e6 100644
+--- a/llvm/test/Transforms/HotColdSplit/succ-block-with-self-edge.ll
++++ b/llvm/test/Transforms/HotColdSplit/succ-block-with-self-edge.ll
+@@ -7,7 +7,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: call {{.*}}@exit_block_with_same_incoming_vals.cold.1(
+ ; CHECK-NOT: br i1 undef
+ ; CHECK: phi i32 [ 0, %entry ], [ %p.ce.reload, %codeRepl ]
+-define void @exit_block_with_same_incoming_vals(i32 %cond) "hot-cold-split" {
++define void @exit_block_with_same_incoming_vals(i32 %cond) {
+ entry:
+   %tobool = icmp eq i32 %cond, 0
+   br i1 %tobool, label %if.end, label %coldbb
+@@ -30,7 +30,7 @@ if.end:
+ ; CHECK: call {{.*}}@exit_block_with_distinct_incoming_vals.cold.1(
+ ; CHECK-NOT: br i1 undef
+ ; CHECK: phi i32 [ 0, %entry ], [ %p.ce.reload, %codeRepl ]
+-define void @exit_block_with_distinct_incoming_vals(i32 %cond) "hot-cold-split" {
++define void @exit_block_with_distinct_incoming_vals(i32 %cond) {
+ entry:
+   %tobool = icmp eq i32 %cond, 0
+   br i1 %tobool, label %if.end, label %coldbb
+diff --git a/llvm/test/Transforms/HotColdSplit/swifterror.ll b/llvm/test/Transforms/HotColdSplit/swifterror.ll
+index 2aaa655580c..b97b0fa005e 100644
+--- a/llvm/test/Transforms/HotColdSplit/swifterror.ll
++++ b/llvm/test/Transforms/HotColdSplit/swifterror.ll
+@@ -9,7 +9,7 @@ declare void @sink() cold
+ 
+ ; CHECK-LABEL: define {{.*}}@in_arg(
+ ; CHECK: call void @in_arg.cold.1(%swift_error** swifterror
+-define void @in_arg(%swift_error** swifterror %error_ptr_ref) "hot-cold-split" {
++define void @in_arg(%swift_error** swifterror %error_ptr_ref) {
+   br i1 undef, label %cold, label %exit
+ 
+ cold:
+@@ -23,7 +23,7 @@ exit:
+ 
+ ; CHECK-LABEL: define {{.*}}@in_alloca(
+ ; CHECK: call void @in_alloca.cold.1(%swift_error** swifterror
+-define void @in_alloca() "hot-cold-split" {
++define void @in_alloca() {
+   %err = alloca swifterror %swift_error*
+   br i1 undef, label %cold, label %exit
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/transfer-debug-info.ll b/llvm/test/Transforms/HotColdSplit/transfer-debug-info.ll
+index fa1c8551b8f..d28f46a3c9f 100644
+--- a/llvm/test/Transforms/HotColdSplit/transfer-debug-info.ll
++++ b/llvm/test/Transforms/HotColdSplit/transfer-debug-info.ll
+@@ -37,7 +37,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; - Line locations in @foo.cold.1 point to the new scope for @foo.cold.1
+ ; CHECK: [[LINE1]] = !DILocation(line: 1, column: 1, scope: [[NEWSCOPE]])
+ 
+-define void @foo(i32 %arg1) "hot-cold-split" !dbg !6 {
++define void @foo(i32 %arg1) !dbg !6 {
+ entry:
+   %var = add i32 0, 0, !dbg !11
+   br i1 undef, label %if.then, label %if.end
+diff --git a/llvm/test/Transforms/HotColdSplit/unwind.ll b/llvm/test/Transforms/HotColdSplit/unwind.ll
+index 83c437d978f..66e2f76e327 100644
+--- a/llvm/test/Transforms/HotColdSplit/unwind.ll
++++ b/llvm/test/Transforms/HotColdSplit/unwind.ll
+@@ -11,7 +11,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ 
+ ; CHECK-NOT: noreturn
+ 
+-define i32 @foo() "hot-cold-split" personality i8 0 {
++define i32 @foo() personality i8 0 {
+ entry:
+   invoke void @llvm.donothing() to label %normal unwind label %exception
+ 
+diff --git a/llvm/test/Transforms/HotColdSplit/update-split-loop-metadata.ll b/llvm/test/Transforms/HotColdSplit/update-split-loop-metadata.ll
+index 87b0cbc8ef0..ccfe84fe797 100644
+--- a/llvm/test/Transforms/HotColdSplit/update-split-loop-metadata.ll
++++ b/llvm/test/Transforms/HotColdSplit/update-split-loop-metadata.ll
+@@ -14,7 +14,7 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK: [[LOOP_MD]] = distinct !{[[LOOP_MD]], [[LINE:![0-9]+]], [[LINE]]}
+ ; CHECK: [[LINE]] = !DILocation(line: 1, column: 1, scope: [[SCOPE]])
+ 
+-define void @basic(i32* %p, i32 %k) "hot-cold-split" !dbg !6 {
++define void @basic(i32* %p, i32 %k) !dbg !6 {
+ entry:
+   %cmp3 = icmp slt i32 0, %k
+   br i1 %cmp3, label %for.body.lr.ph, label %for.end
+diff --git a/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll b/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll
+index c8d85f5564b..f19d6dd1f04 100644
+--- a/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll
++++ b/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll
+@@ -2,7 +2,7 @@
+ target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
+ target triple = "x86_64-apple-macosx10.14.0"
+ 
+-define void @foo(i32) "hot-cold-split" {
++define void @foo(i32) {
+   %2 = icmp eq i32 %0, 0
+   tail call void @_Z10sideeffectv()
+   br i1 %2, label %sink, label %exit
+@@ -16,7 +16,7 @@ exit:
+   ret void
+ }
+ 
+-define void @bar(i32) "hot-cold-split" {
++define void @bar(i32) {
+   %2 = icmp eq i32 %0, 0
+   tail call void @_Z10sideeffectv()
+   br i1 %2, label %sink, label %exit
+diff --git a/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.generated.expected b/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.generated.expected
+index 8425e5aad59..e34e2c2d1a6 100644
+--- a/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.generated.expected
++++ b/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.generated.expected
+@@ -3,7 +3,7 @@
+ target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
+ target triple = "x86_64-apple-macosx10.14.0"
+ 
+-define void @foo(i32) "hot-cold-split" {
++define void @foo(i32) {
+   %2 = icmp eq i32 %0, 0
+   tail call void @_Z10sideeffectv()
+   br i1 %2, label %sink, label %exit
+@@ -17,7 +17,7 @@ exit:
+   ret void
+ }
+ 
+-define void @bar(i32) "hot-cold-split" {
++define void @bar(i32) {
+   %2 = icmp eq i32 %0, 0
+   tail call void @_Z10sideeffectv()
+   br i1 %2, label %sink, label %exit
+@@ -38,7 +38,7 @@ declare void @_Z10sideeffectv()
+ ; CHECK-NEXT:    tail call void @_Z10sideeffectv()
+ ; CHECK-NEXT:    br i1 [[TMP2]], label [[CODEREPL:%.*]], label [[EXIT:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    call void @foo.cold.1() [[ATTR3:#.*]]
++; CHECK-NEXT:    call void @foo.cold.1() [[ATTR2:#.*]]
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+@@ -49,7 +49,7 @@ declare void @_Z10sideeffectv()
+ ; CHECK-NEXT:    tail call void @_Z10sideeffectv()
+ ; CHECK-NEXT:    br i1 [[TMP2]], label [[CODEREPL:%.*]], label [[EXIT:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    call void @bar.cold.1() [[ATTR3]]
++; CHECK-NEXT:    call void @bar.cold.1() [[ATTR2]]
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+diff --git a/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.nogenerated.expected b/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.nogenerated.expected
+index 35e5abe5ee6..fcd39c14700 100644
+--- a/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.nogenerated.expected
++++ b/llvm/test/tools/UpdateTestChecks/update_test_checks/Inputs/generated_funcs.ll.nogenerated.expected
+@@ -3,13 +3,13 @@
+ target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
+ target triple = "x86_64-apple-macosx10.14.0"
+ 
+-define void @foo(i32) "hot-cold-split" {
++define void @foo(i32) {
+ ; CHECK-LABEL: @foo(
+ ; CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i32 [[TMP0:%.*]], 0
+ ; CHECK-NEXT:    tail call void @_Z10sideeffectv()
+ ; CHECK-NEXT:    br i1 [[TMP2]], label [[CODEREPL:%.*]], label [[EXIT:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    call void @foo.cold.1() [[ATTR3:#.*]]
++; CHECK-NEXT:    call void @foo.cold.1() [[ATTR2:#.*]]
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+@@ -27,13 +27,13 @@ exit:
+   ret void
+ }
+ 
+-define void @bar(i32) "hot-cold-split" {
++define void @bar(i32) {
+ ; CHECK-LABEL: @bar(
+ ; CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i32 [[TMP0:%.*]], 0
+ ; CHECK-NEXT:    tail call void @_Z10sideeffectv()
+ ; CHECK-NEXT:    br i1 [[TMP2]], label [[CODEREPL:%.*]], label [[EXIT:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    call void @bar.cold.1() [[ATTR3]]
++; CHECK-NEXT:    call void @bar.cold.1() [[ATTR2]]
+ ; CHECK-NEXT:    ret void
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void

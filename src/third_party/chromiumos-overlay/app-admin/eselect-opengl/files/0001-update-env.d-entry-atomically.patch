@@ -1,0 +1,41 @@
+https://bugs.gentoo.org/508708
+
+From e9171f28f4437a8aa3e8e085f85c0c2bd7c5c05e Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@gentoo.org>
+Date: Fri, 25 Apr 2014 13:37:03 -0400
+Subject: [PATCH 1/4] update env.d entry atomically
+
+---
+ opengl.eselect | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/opengl.eselect b/opengl.eselect
+index 3f59a19..90ac51e 100644
+--- a/opengl.eselect
++++ b/opengl.eselect
+@@ -196,9 +196,6 @@ set_new_implementation() {
+ 	fi
+ 
+ 	echo -n "Switching to ${gl_implem} OpenGL interface..."
+-	if [[ -f ${ENV_FILE} ]] ; then
+-		rm -f "${ENV_FILE}" || die -q "Failed to remove ${ENV_FILE}"
+-	fi
+ 
+ 	for libdir in $(list_libdirs); do
+ 		# Set libdir correctly to EROOT
+@@ -269,8 +266,10 @@ set_new_implementation() {
+ 		fi
+ 	done
+ 
+-	store_config ${ENV_FILE} LDPATH "${ldpath}"
+-	store_config ${ENV_FILE} OPENGL_PROFILE "${gl_implem}"
++	# Update the file atomically. #508708
++	store_config "${ENV_FILE}~" LDPATH "${ldpath}"
++	store_config "${ENV_FILE}~" OPENGL_PROFILE "${gl_implem}"
++	mv -f "${ENV_FILE}~" "${ENV_FILE}" || die -q "could not update ${ENV_FILE}"
+ 
+ 	do_action env update &> /dev/null
+ 
+-- 
+1.9.2
+

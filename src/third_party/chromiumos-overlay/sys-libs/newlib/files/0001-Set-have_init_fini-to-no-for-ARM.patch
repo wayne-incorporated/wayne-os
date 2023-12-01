@@ -1,0 +1,26 @@
+From 87edc193b7748b9c616cd59391f82b11e773525f Mon Sep 17 00:00:00 2001
+From: Tom Hughes <tomhughes@chromium.org>
+Date: Tue, 6 Dec 2022 19:04:22 +0000
+Subject: [PATCH] Set have_init_fini to no for ARM
+
+If {init,fini}_array exist, arm/crt0.S calls them instead of
+_init/_fini.
+---
+ newlib/configure.host | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/newlib/configure.host b/newlib/configure.host
+index 3cfed4ccf..6df8b880f 100644
+--- a/newlib/configure.host
++++ b/newlib/configure.host
+@@ -127,6 +127,7 @@ case "${host_cpu}" in
+   arm*)
+ 	machine_dir=arm
+ 	libm_machine_dir=arm
++	have_init_fini=no
+ 	;;
+   avr*)
+ 	newlib_cflags="${newlib_cflags} -DPREFER_SIZE_OVER_SPEED -mcall-prologues"
+-- 
+2.39.0.rc0.267.gcb52ba06e7-goog
+

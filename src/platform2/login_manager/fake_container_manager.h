@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include <base/callback.h>
+#include <base/functional/callback.h>
 
 #include "login_manager/container_manager_interface.h"
 
@@ -30,7 +30,7 @@ class FakeContainerManager : public ContainerManagerInterface {
   void EnsureJobExit(base::TimeDelta timeout) override;
 
   bool StartContainer(const std::vector<std::string>& env,
-                      const ExitCallback& exit_callback) override;
+                      ExitCallback exit_callback) override;
   StatefulMode GetStatefulMode() const override;
   void SetStatefulMode(StatefulMode mode) override;
   bool GetContainerPID(pid_t* pid_out) const override;

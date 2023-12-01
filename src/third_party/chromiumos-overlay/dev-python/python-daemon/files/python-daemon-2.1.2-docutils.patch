@@ -1,0 +1,48 @@
+The docutils module is used only to extract some metadata from the ChangeLog.
+This means it needs docutils from the SDK, and in a compatible version.  We've
+disabled python2 docutils in the SDK, but not for some boards, so hack this up
+until we can drop python2 docutils everywhere.
+
+https://crbug.com/1169482
+
+--- a/setup.py
++++ b/setup.py
+@@ -20,8 +20,6 @@ import pydoc
+ 
+ from setuptools import (setup, find_packages)
+ 
+-import version
+-
+ 
+ fromlist_expects_type = str
+ if sys.version_info < (3, 0):
+@@ -40,18 +38,15 @@ metadata = main_module._metadata
+ 
+ 
+ setup(
+-        distclass=version.ChangelogAwareDistribution,
++        version='2.1.2',
++        maintainer='Ben Finney',
++        maintainer_email='ben+python@benfinney.id.au',
+         name=metadata.distribution_name,
+         packages=find_packages(exclude=["test"]),
+-        cmdclass={
+-            "write_version_info": version.WriteVersionInfoCommand,
+-            "egg_info": version.EggInfoCommand,
+-            },
+ 
+         # Setuptools metadata.
+         zip_safe=False,
+         setup_requires=[
+-            "docutils",
+             ],
+         test_suite="unittest2.collector",
+         tests_require=[
+@@ -63,7 +58,6 @@ setup(
+             ],
+         install_requires=[
+             "setuptools",
+-            "docutils",
+             "lockfile >=0.10",
+             ],
+ 

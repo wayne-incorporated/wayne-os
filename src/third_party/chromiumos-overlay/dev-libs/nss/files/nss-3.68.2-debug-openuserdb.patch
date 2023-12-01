@@ -1,0 +1,639 @@
+This patch adds debug logs to investigate cases when NSS fails to open the database.
+Associated bug: crbug.com/1163303 .
+This is a temporary patch until the bug is fixed and it is not expected to change
+any behavior.
+
+diff --git a/lib/pk11wrap/pk11err.c b/lib/pk11wrap/pk11err.c
+index 7b665df..1adb68a 100644
+--- a/lib/pk11wrap/pk11err.c
++++ b/lib/pk11wrap/pk11err.c
+@@ -125,6 +125,7 @@ PK11_MapError(CK_RV rv)
+             return pk11_error_map[i].sec_error;
+         }
+     }
++    fprintf(stderr, "[%s:%d(%s)] NSS: Mapping to the unknown error, original error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, rv);
+     return SEC_ERROR_UNKNOWN_PKCS11_ERROR;
+ }
+ 
+@@ -135,6 +136,7 @@ PK11_MapError(CK_RV rv)
+         break;
+ /* clang-format on */
+ }
++fprintf(stderr, "[%s:%d(%s)] NSS: Mapping to the unknown error, original error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, rv);
+ return SEC_ERROR_UNKNOWN_PKCS11_ERROR;
+ }
+ 
+diff --git a/lib/pk11wrap/pk11obj.c b/lib/pk11wrap/pk11obj.c
+index 8ece7a6..162db29 100644
+--- a/lib/pk11wrap/pk11obj.c
++++ b/lib/pk11wrap/pk11obj.c
+@@ -401,6 +401,7 @@ PK11_CreateNewObject(PK11SlotInfo *slot, CK_SESSION_HANDLE session,
+             PK11_EnterSlotMonitor(slot);
+     }
+     if (rwsession == CK_INVALID_HANDLE) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: rwsession is bad.\n", __FILE__, __LINE__, __FUNCTION__);
+         PORT_SetError(SEC_ERROR_BAD_DATA);
+         return SECFailure;
+     }
+@@ -408,6 +409,7 @@ PK11_CreateNewObject(PK11SlotInfo *slot, CK_SESSION_HANDLE session,
+                                             /* cast away const :-( */ (CK_ATTRIBUTE_PTR)theTemplate,
+                                             count, objectID);
+     if (crv != CKR_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create an object, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
+         PORT_SetError(PK11_MapError(crv));
+         rv = SECFailure;
+     }
+diff --git a/lib/pk11wrap/pk11util.c b/lib/pk11wrap/pk11util.c
+index 08c793b..d1baff9 100644
+--- a/lib/pk11wrap/pk11util.c
++++ b/lib/pk11wrap/pk11util.c
+@@ -329,6 +329,7 @@ SECMOD_FindSlotByID(SECMODModule *module, CK_SLOT_ID slotID)
+     PK11SlotInfo *slot = NULL;
+ 
+     if (!moduleLock) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: moduleLock is bad.\n", __FILE__, __LINE__, __FUNCTION__);
+         PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+         return slot;
+     }
+@@ -344,6 +345,7 @@ SECMOD_FindSlotByID(SECMODModule *module, CK_SLOT_ID slotID)
+     SECMOD_ReleaseReadLock(moduleLock);
+ 
+     if (slot == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: slot is null.\n", __FILE__, __LINE__, __FUNCTION__);
+         PORT_SetError(SEC_ERROR_NO_SLOT_SELECTED);
+     }
+     return slot;
+@@ -1015,6 +1017,7 @@ SECMOD_UpdateSlotList(SECMODModule *mod)
+     PK11SlotInfo **oldSlots = NULL;
+ 
+     if (!moduleLock) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: moduleLock is bad.\n", __FILE__, __LINE__, __FUNCTION__);
+         PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+         return SECFailure;
+     }
+@@ -1026,6 +1029,7 @@ SECMOD_UpdateSlotList(SECMODModule *mod)
+     /* see if the number of slots have changed */
+     crv = PK11_GETTAB(mod)->C_GetSlotList(PR_FALSE, NULL, &count);
+     if (crv != CKR_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: C_GetSlotList failed, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
+         PORT_SetError(PK11_MapError(crv));
+         goto loser;
+     }
+@@ -1036,6 +1040,7 @@ SECMOD_UpdateSlotList(SECMODModule *mod)
+         return SECSuccess;
+     }
+     if (count < (CK_ULONG)mod->slotCount) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Slot count is wrong.\n", __FILE__, __LINE__, __FUNCTION__);
+         /* shouldn't happen with a properly functioning PKCS #11 module */
+         PORT_SetError(SEC_ERROR_INCOMPATIBLE_PKCS11);
+         goto loser;
+@@ -1044,11 +1049,13 @@ SECMOD_UpdateSlotList(SECMODModule *mod)
+     /* get the new slot list */
+     slotIDs = PORT_NewArray(CK_SLOT_ID, count);
+     if (slotIDs == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to make a new array.\n", __FILE__, __LINE__, __FUNCTION__);
+         goto loser;
+     }
+ 
+     crv = PK11_GETTAB(mod)->C_GetSlotList(PR_FALSE, slotIDs, &count);
+     if (crv != CKR_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to get the new slot list, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
+         PORT_SetError(PK11_MapError(crv));
+         goto loser;
+     }
+@@ -1056,6 +1063,7 @@ SECMOD_UpdateSlotList(SECMODModule *mod)
+     PZ_Unlock(mod->refLock);
+     mark = PORT_ArenaMark(mod->arena);
+     if (mark == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to mark arena.\n", __FILE__, __LINE__, __FUNCTION__);
+         goto loser;
+     }
+     newSlots = PORT_ArenaZNewArray(mod->arena, PK11SlotInfo *, count);
+@@ -1070,6 +1078,7 @@ SECMOD_UpdateSlotList(SECMODModule *mod)
+             /* we have a new slot create a new slot data structure */
+             slot = PK11_NewSlotInfo(mod);
+             if (!slot) {
++                fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create a new slot data structure.\n", __FILE__, __LINE__, __FUNCTION__);
+                 goto loser;
+             }
+             PK11_InitSlot(mod, slotIDs[i], slot);
+@@ -1102,6 +1111,7 @@ SECMOD_UpdateSlotList(SECMODModule *mod)
+     return SECSuccess;
+ 
+ loser:
++    fprintf(stderr, "[%s:%d(%s)] NSS: SECMOD_UpdateSlotList failed.\n", __FILE__, __LINE__, __FUNCTION__);
+     if (freeRef) {
+         PZ_Unlock(mod->refLock);
+     }
+@@ -1387,10 +1397,15 @@ secmod_UserDBOp(PK11SlotInfo *slot, CK_OBJECT_CLASS objClass,
+     PK11_ExitSlotMonitor(slot);
+ 
+     if (crv != CKR_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create a new object, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
+         PORT_SetError(PK11_MapError(crv));
+         return SECFailure;
+     }
+-    return SECMOD_UpdateSlotList(slot->module);
++    SECStatus status = SECMOD_UpdateSlotList(slot->module);
++    if (status != SECSuccess) {
++      fprintf(stderr, "[%s:%d(%s)] NSS: Failed to update slot list, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, status);
++    }
++    return status;
+ }
+ 
+ /*
+@@ -1461,22 +1476,26 @@ SECMOD_OpenNewSlot(SECMODModule *mod, const char *moduleSpec)
+ 
+     slotID = secmod_FindFreeSlot(mod);
+     if (slotID == (CK_SLOT_ID)-1) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to find a free slot.\n", __FILE__, __LINE__, __FUNCTION__);
+         return NULL;
+     }
+ 
+     if (mod->slotCount == 0) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: slotCount is 0.\n", __FILE__, __LINE__, __FUNCTION__);
+         return NULL;
+     }
+ 
+     /* just grab the first slot in the module, any present slot should work */
+     slot = PK11_ReferenceSlot(mod->slots[0]);
+     if (slot == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to reference the slot.\n", __FILE__, __LINE__, __FUNCTION__);
+         return NULL;
+     }
+ 
+     /* we've found the slot, now build the moduleSpec */
+     escSpec = NSSUTIL_DoubleEscape(moduleSpec, '>', ']');
+     if (escSpec == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to build the moduleSpec.\n", __FILE__, __LINE__, __FUNCTION__);
+         PK11_FreeSlot(slot);
+         return NULL;
+     }
+@@ -1484,6 +1503,7 @@ SECMOD_OpenNewSlot(SECMODModule *mod, const char *moduleSpec)
+     PORT_Free(escSpec);
+ 
+     if (sendSpec == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to build the spec.\n", __FILE__, __LINE__, __FUNCTION__);
+         /* PR_smprintf does not set SEC_ERROR_NO_MEMORY on failure. */
+         PK11_FreeSlot(slot);
+         PORT_SetError(SEC_ERROR_NO_MEMORY);
+@@ -1493,6 +1513,7 @@ SECMOD_OpenNewSlot(SECMODModule *mod, const char *moduleSpec)
+     PR_smprintf_free(sendSpec);
+     PK11_FreeSlot(slot);
+     if (rv != SECSuccess) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: secmod_UserDBOp failed.\n", __FILE__, __LINE__, __FUNCTION__);
+         return NULL;
+     }
+ 
+@@ -1505,6 +1526,8 @@ SECMOD_OpenNewSlot(SECMODModule *mod, const char *moduleSpec)
+         }
+         /* force the slot info structures to properly reset */
+         (void)PK11_IsPresent(slot);
++    } else {
++      fprintf(stderr, "[%s:%d(%s)] NSS: SECMOD_FindSlotByID failed.\n", __FILE__, __LINE__, __FUNCTION__);
+     }
+     return slot;
+ }
+@@ -1575,11 +1598,13 @@ secmod_FindSlotFromModuleSpec(const char *moduleSpec, SECMODModule *module)
+ PK11SlotInfo *
+ SECMOD_OpenUserDB(const char *moduleSpec)
+ {
++    fprintf(stderr, "[%s:%d(%s)] NSS: === SECMOD_OpenUserDB is called. ===\n", __FILE__, __LINE__, __FUNCTION__);
+     SECMODModule *mod;
+     SECMODConfigList *conflist = NULL;
+     int count = 0;
+ 
+     if (moduleSpec == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: moduleSpec is null.\n", __FILE__, __LINE__, __FUNCTION__);
+         return NULL;
+     }
+ 
+@@ -1589,10 +1614,11 @@ SECMOD_OpenUserDB(const char *moduleSpec)
+     if (!mod) {
+         /* shouldn't happen */
+         PORT_SetError(SEC_ERROR_LIBRARY_FAILURE);
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to get internal module.\n", __FILE__, __LINE__, __FUNCTION__);
+         return NULL;
+     }
+ 
+-    /* make sure we don't open the same database twice. We only understand 
++    /* make sure we don't open the same database twice. We only understand
+      * the moduleSpec for internal databases well enough to do this, so only
+      * do this in OpenUserDB */
+     conflist = secmod_GetConfigList(mod->isFIPS, mod->libraryParams, &count);
+diff --git a/lib/softoken/lgglue.c b/lib/softoken/lgglue.c
+index 461e9a3..04abb38 100644
+--- a/lib/softoken/lgglue.c
++++ b/lib/softoken/lgglue.c
+@@ -273,6 +273,7 @@ sftkdbLoad_Legacy()
+ 
+     lib = sftkdb_LoadLibrary(LEGACY_LIB_NAME);
+     if (lib == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: sftkdb_LoadLibrary failed.\n", __FILE__, __LINE__, __FUNCTION__);
+         return SECFailure;
+     }
+ 
+@@ -294,6 +295,8 @@ sftkdbLoad_Legacy()
+         !legacy_glue_releaseSecmod || !legacy_glue_deleteSecmod ||
+         !legacy_glue_addSecmod || !setCryptFunction) {
+         PR_UnloadLibrary(lib);
++        fprintf(stderr, "[%s:%d(%s)] NSS: sftkdbLoad_Legacy failed: %d, %d, %d, %d, %d, %d.\n", __FILE__, __LINE__, __FUNCTION__,
++          !legacy_glue_open, !legacy_glue_readSecmod, !legacy_glue_releaseSecmod, !legacy_glue_deleteSecmod, !legacy_glue_addSecmod, !setCryptFunction);
+         return SECFailure;
+     }
+ 
+@@ -311,6 +314,7 @@ sftkdbCall_open(const char *dir, const char *certPrefix, const char *keyPrefix,
+ 
+     rv = sftkdbLoad_Legacy();
+     if (rv != SECSuccess) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: sftkdbLoad_Legacy failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, rv);
+         return CKR_GENERAL_ERROR;
+     }
+     if (!legacy_glue_open) {
+diff --git a/lib/softoken/pkcs11.c b/lib/softoken/pkcs11.c
+index 3f49333..046cdc8 100644
+--- a/lib/softoken/pkcs11.c
++++ b/lib/softoken/pkcs11.c
+@@ -2776,6 +2776,7 @@ SFTK_SlotReInit(SFTKSlot *slot, char *configdir, char *updatedir,
+                           moduleIndex == NSC_FIPS_MODULE,
+                           &certHandle, &keyHandle);
+         if (crv != CKR_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sftk_DBInit failed, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
+             goto loser;
+         }
+ 
+@@ -4471,6 +4472,7 @@ static CK_RV
+ sftk_CreateNewSlot(SFTKSlot *slot, CK_OBJECT_CLASS class,
+                    SFTKObject *object)
+ {
++    fprintf(stderr, "[%s:%d(%s)] NSS: sftk_CreateNewSlot is called.\n", __FILE__, __LINE__, __FUNCTION__);
+     PRBool isValidUserSlot = PR_FALSE;
+     PRBool isValidFIPSUserSlot = PR_FALSE;
+     PRBool isValidSlot = PR_FALSE;
+@@ -4484,6 +4486,7 @@ sftk_CreateNewSlot(SFTKSlot *slot, CK_OBJECT_CLASS class,
+     CK_RV crv = CKR_OK;
+ 
+     if (class != CKO_NSS_DELSLOT && class != CKO_NSS_NEWSLOT) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: class is bad.\n", __FILE__, __LINE__, __FUNCTION__);
+         return CKR_ATTRIBUTE_VALUE_INVALID;
+     }
+     if (class == CKO_NSS_NEWSLOT && slot->slotID == FIPS_SLOT_ID) {
+@@ -4491,16 +4494,19 @@ sftk_CreateNewSlot(SFTKSlot *slot, CK_OBJECT_CLASS class,
+     }
+     attribute = sftk_FindAttribute(object, CKA_NSS_MODULE_SPEC);
+     if (attribute == NULL) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: attribute is null.\n", __FILE__, __LINE__, __FUNCTION__);
+         return CKR_TEMPLATE_INCOMPLETE;
+     }
+     paramString = (char *)attribute->attrib.pValue;
+     crv = sftk_parseParameters(paramString, &paramStrings, isFIPS);
+     if (crv != CKR_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to parse parameters.\n", __FILE__, __LINE__, __FUNCTION__);
+         goto loser;
+     }
+ 
+     /* enforce only one at a time */
+     if (paramStrings.token_count != 1) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Error: more than 1 token requested.\n", __FILE__, __LINE__, __FUNCTION__);
+         crv = CKR_ATTRIBUTE_VALUE_INVALID;
+         goto loser;
+     }
+@@ -4529,6 +4535,7 @@ sftk_CreateNewSlot(SFTKSlot *slot, CK_OBJECT_CLASS class,
+     }
+ 
+     if (!isValidSlot) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: The slot is invalid.\n", __FILE__, __LINE__, __FUNCTION__);
+         crv = CKR_ATTRIBUTE_VALUE_INVALID;
+         goto loser;
+     }
+@@ -4538,6 +4545,7 @@ sftk_CreateNewSlot(SFTKSlot *slot, CK_OBJECT_CLASS class,
+     if (newSlot && newSlot->present) {
+         crv = SFTK_ShutdownSlot(newSlot);
+         if (crv != CKR_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to unload the existing slot, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
+             goto loser;
+         }
+     }
+@@ -4547,6 +4555,7 @@ sftk_CreateNewSlot(SFTKSlot *slot, CK_OBJECT_CLASS class,
+         /* sort of a unconventional use of this error code, be we are
+          * overusing CKR_ATTRIBUTE_VALUE_INVALID, and it does apply */
+         crv = newSlot ? CKR_OK : CKR_SLOT_ID_INVALID;
++        fprintf(stderr, "[%s:%d(%s)] NSS: Delete slot request.\n", __FILE__, __LINE__, __FUNCTION__);
+         goto loser; /* really exit */
+     }
+ 
+diff --git a/lib/softoken/sdb.c b/lib/softoken/sdb.c
+index 50625ab..8242b08 100644
+--- a/lib/softoken/sdb.c
++++ b/lib/softoken/sdb.c
+@@ -695,11 +695,13 @@ sdb_openDB(const char *name, sqlite3 **sqlDB, int flags)
+     /* Requires SQLite 3.5.0 or newer. */
+     sqlerr = sqlite3_open_v2(name, sqlDB, openFlags, NULL);
+     if (sqlerr != SQLITE_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_open_v2 failed, %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+         return sqlerr;
+     }
+ 
+     sqlerr = sqlite3_busy_timeout(*sqlDB, SDB_SQLITE_BUSY_TIMEOUT);
+     if (sqlerr != SQLITE_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_busy_timeout failed, %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+         sqlite3_close(*sqlDB);
+         *sqlDB = NULL;
+         return sqlerr;
+@@ -1972,11 +1974,15 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+     LOCK_SQLITE();
+     create = (_NSSUTIL_Access(dbname, PR_ACCESS_EXISTS) != PR_SUCCESS);
+     if ((flags == SDB_RDONLY) && create) {
++        // CHROME_LOG("_NSSUTIL_Access failed.");
++        fprintf(stderr, "[%s:%d(%s)] NSS: _NSSUTIL_Access failed.\n", __FILE__, __LINE__, __FUNCTION__);
+         error = sdb_mapSQLError(type, SQLITE_CANTOPEN);
+         goto loser;
+     }
+     sqlerr = sdb_openDB(dbname, &sqlDB, flags);
+     if (sqlerr != SQLITE_OK) {
++        // CHROME_LOG("sdb_openDB failed, error: %d.", sqlerr);
++        fprintf(stderr, "[%s:%d(%s)] NSS: sdb_openDB failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+         error = sdb_mapSQLError(type, sqlerr);
+         goto loser;
+     }
+@@ -1988,6 +1994,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+      * NO NSPR call for chmod? :(
+      */
+     if (create && sdb_chmod(dbname, 0600) != 0) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: sdb_chmod failed.\n", __FILE__, __LINE__, __FUNCTION__);
+         error = sdb_mapSQLError(type, SQLITE_CANTOPEN);
+         goto loser;
+     }
+@@ -1995,6 +2002,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+     if (flags != SDB_RDONLY) {
+         sqlerr = sqlite3_exec(sqlDB, BEGIN_CMD, NULL, 0, NULL);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_exec(BEGIN_CMD) failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             error = sdb_mapSQLError(type, sqlerr);
+             goto loser;
+         }
+@@ -2003,6 +2011,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+     if (!tableExists(sqlDB, table)) {
+         *newInit = 1;
+         if (flags != SDB_CREATE) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Table doesn't exist.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = sdb_mapSQLError(type, SQLITE_CANTOPEN);
+             goto loser;
+         }
+@@ -2013,6 +2022,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+             initStr = newStr;
+         }
+         if (initStr == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: initStr is null.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+@@ -2020,60 +2030,70 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+         newStr = sqlite3_mprintf(INIT_CMD, table, initStr);
+         sqlite3_free(initStr);
+         if (newStr == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create INIT_CMD command.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+         sqlerr = sqlite3_exec(sqlDB, newStr, NULL, 0, NULL);
+         sqlite3_free(newStr);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_exec(INIT_CMD) failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             error = sdb_mapSQLError(type, sqlerr);
+             goto loser;
+         }
+ 
+         newStr = sqlite3_mprintf(CREATE_ISSUER_INDEX_CMD, table);
+         if (newStr == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create CREATE_ISSUER_INDEX_CMD command.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+         sqlerr = sqlite3_exec(sqlDB, newStr, NULL, 0, NULL);
+         sqlite3_free(newStr);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_exec(CREATE_ISSUER_INDEX_CMD) failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             error = sdb_mapSQLError(type, sqlerr);
+             goto loser;
+         }
+ 
+         newStr = sqlite3_mprintf(CREATE_SUBJECT_INDEX_CMD, table);
+         if (newStr == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create CREATE_SUBJECT_INDEX_CMD command.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+         sqlerr = sqlite3_exec(sqlDB, newStr, NULL, 0, NULL);
+         sqlite3_free(newStr);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_exec(CREATE_SUBJECT_INDEX_CMD) failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             error = sdb_mapSQLError(type, sqlerr);
+             goto loser;
+         }
+ 
+         newStr = sqlite3_mprintf(CREATE_LABEL_INDEX_CMD, table);
+         if (newStr == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create CREATE_LABEL_INDEX_CMD command.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+         sqlerr = sqlite3_exec(sqlDB, newStr, NULL, 0, NULL);
+         sqlite3_free(newStr);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_exec(CREATE_LABEL_INDEX_CMD) failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             error = sdb_mapSQLError(type, sqlerr);
+             goto loser;
+         }
+ 
+         newStr = sqlite3_mprintf(CREATE_ID_INDEX_CMD, table);
+         if (newStr == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create CREATE_ID_INDEX_CMD command.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+         sqlerr = sqlite3_exec(sqlDB, newStr, NULL, 0, NULL);
+         sqlite3_free(newStr);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_exec(CREATE_ID_INDEX_CMD) failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             error = sdb_mapSQLError(type, sqlerr);
+             goto loser;
+         }
+@@ -2187,12 +2207,14 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+ 
+         cacheTable = sqlite3_mprintf("%sCache", table);
+         if (cacheTable == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create cacheTable description.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+         /* build the cache table */
+         error = sdb_buildCache(sqlDB, type, cacheTable, table);
+         if (error != CKR_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to build cache.\n", __FILE__, __LINE__, __FUNCTION__);
+             goto loser;
+         }
+         /* initialize the last cache build time */
+@@ -2201,11 +2223,13 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+ 
+     sdb = (SDB *)malloc(sizeof(SDB));
+     if (!sdb) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to allocate memory for SDB.\n", __FILE__, __LINE__, __FUNCTION__);
+         error = CKR_HOST_MEMORY;
+         goto loser;
+     }
+     sdb_p = (SDBPrivate *)malloc(sizeof(SDBPrivate));
+     if (!sdb_p) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: Failed to allocate memory for SDBPrivate.\n", __FILE__, __LINE__, __FUNCTION__);
+         error = CKR_HOST_MEMORY;
+         goto loser;
+     }
+@@ -2223,6 +2247,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+         /* Can't bind parameters to a PRAGMA. */
+         queryStr = sqlite3_mprintf("PRAGMA table_info(%s);", table);
+         if (queryStr == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to create table_info command.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+@@ -2230,6 +2255,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+         sqlite3_free(queryStr);
+         queryStr = NULL;
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_prepare_v2 failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             goto loser;
+         }
+         unsigned int schemaAttrsCapacity = known_attributes_size;
+@@ -2249,6 +2275,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+                     sdb_p->schemaAttrs = realloc(sdb_p->schemaAttrs,
+                                                  schemaAttrsCapacity * sizeof(CK_ATTRIBUTE_TYPE));
+                     if (!sdb_p->schemaAttrs) {
++                        fprintf(stderr, "[%s:%d(%s)] NSS: !sdb_p->schemaAttrs is bad.\n", __FILE__, __LINE__, __FUNCTION__);
+                         error = CKR_HOST_MEMORY;
+                         goto loser;
+                     }
+@@ -2262,14 +2289,17 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+             }
+         } while (!sdb_done(sqlerr, &retry));
+         if (sqlerr != SQLITE_DONE) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlerr: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             goto loser;
+         }
+         sqlerr = sqlite3_reset(stmt);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_reset failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             goto loser;
+         }
+         sqlerr = sqlite3_finalize(stmt);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_finalize failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             goto loser;
+         }
+ 
+@@ -2318,6 +2348,7 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+     if (inTransaction) {
+         sqlerr = sqlite3_exec(sqlDB, COMMIT_CMD, NULL, 0, NULL);
+         if (sqlerr != SQLITE_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sqlite3_exec(COMMIT_CMD) failed, error: %d.\n", __FILE__, __LINE__, __FUNCTION__, sqlerr);
+             error = sdb_mapSQLError(sdb_p->type, sqlerr);
+             goto loser;
+         }
+@@ -2331,6 +2362,8 @@ sdb_init(char *dbname, char *table, sdbDataType type, int *inUpdate,
+     return CKR_OK;
+ 
+ loser:
++
++    fprintf(stderr, "[%s:%d(%s)] NSS: sdb_init failed, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, error);
+     /* lots of stuff to do */
+     if (inTransaction) {
+         sqlite3_exec(sqlDB, ROLLBACK_CMD, NULL, 0, NULL);
+@@ -2375,6 +2408,7 @@ s_open(const char *directory, const char *certPrefix, const char *keyPrefix,
+     if (sqlite_lock == NULL) {
+         sqlite_lock = PR_NewLock();
+         if (sqlite_lock == NULL) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: Failed to take the lock.\n", __FILE__, __LINE__, __FUNCTION__);
+             error = CKR_HOST_MEMORY;
+             goto loser;
+         }
+@@ -2404,6 +2438,7 @@ s_open(const char *directory, const char *certPrefix, const char *keyPrefix,
+         error = sdb_init(cert, "nssPublic", SDB_CERT, &inUpdate,
+                          newInit, flags, accessOps, certdb);
+         if (error != CKR_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sdb_init failed for nssPublic, error: %lu\n", __FILE__, __LINE__, __FUNCTION__, error);
+             goto loser;
+         }
+     }
+@@ -2421,6 +2456,7 @@ s_open(const char *directory, const char *certPrefix, const char *keyPrefix,
+         error = sdb_init(key, "nssPrivate", SDB_KEY, &inUpdate,
+                          newInit, flags, accessOps, keydb);
+         if (error != CKR_OK) {
++            fprintf(stderr, "[%s:%d(%s)] NSS: sdb_init failed for nssPrivate, error: %lu\n", __FILE__, __LINE__, __FUNCTION__, error);
+             goto loser;
+         }
+     }
+diff --git a/lib/softoken/sftkdb.c b/lib/softoken/sftkdb.c
+index cfa0563..5ee5e91 100644
+--- a/lib/softoken/sftkdb.c
++++ b/lib/softoken/sftkdb.c
+@@ -2322,7 +2322,7 @@ sftkdb_updateIntegrity(PLArenaPool *arena, SFTKDBHandle *handle,
+             crv = sftkdb_getRawAttributeSignature(handle, source, sourceID, type,
+                                                   &signature);
+             if (crv != CKR_OK) {
+-                /* old databases don't have signature IDs because they are 
++                /* old databases don't have signature IDs because they are
+                  * 3DES encrypted. Since we know not to look for integrity
+                  * for 3DES records it's OK not to find one here. A new record
+                  * will be created when we reencrypt using AES CBC */
+@@ -2859,16 +2859,25 @@ sftk_DBInit(const char *configdir, const char *certPrefix,
+         case NSS_DB_TYPE_LEGACY:
+             crv = sftkdbCall_open(confdir, certPrefix, keyPrefix, 8, 3, flags,
+                                   noCertDB ? NULL : &certSDB, noKeyDB ? NULL : &keySDB);
++            if (crv != CKR_OK) {
++              fprintf(stderr, "[%s:%d(%s)] NSS: sftkdbCall_open failed for NSS_DB_TYPE_LEGACY, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
++            }
+             break;
+         case NSS_DB_TYPE_MULTIACCESS:
+             crv = sftkdbCall_open(configdir, certPrefix, keyPrefix, 8, 3, flags,
+                                   noCertDB ? NULL : &certSDB, noKeyDB ? NULL : &keySDB);
++            if (crv != CKR_OK) {
++              fprintf(stderr, "[%s:%d(%s)] NSS: sftkdbCall_open failed for NSS_DB_TYPE_MULTIACCESS, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
++            }
+             break;
+ #endif /* NSS_DISABLE_DBM */
+         case NSS_DB_TYPE_SQL:
+         case NSS_DB_TYPE_EXTERN: /* SHOULD open a loadable db */
+             crv = s_open(confdir, certPrefix, keyPrefix, 9, 4, flags,
+                          noCertDB ? NULL : &certSDB, noKeyDB ? NULL : &keySDB, &newInit);
++            if (crv != CKR_OK) {
++              fprintf(stderr, "[%s:%d(%s)] NSS: s_open failed, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
++            }
+             legacy = PR_FALSE;
+ 
+ #ifndef NSS_DISABLE_DBM
+@@ -2888,6 +2897,9 @@ sftk_DBInit(const char *configdir, const char *certPrefix,
+                     crv = sftkdbCall_open(nconfdir, certPrefix,
+                                           keyPrefix, 8, 3, flags,
+                                           noCertDB ? NULL : &certSDB, noKeyDB ? NULL : &keySDB);
++                    if (crv != CKR_OK) {
++                      fprintf(stderr, "[%s:%d(%s)] NSS: sftkdbCall_open failed with legacy confdir, error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv);
++                    }
+                 }
+                 /* Handle the database merge case.
+                  *
+@@ -2929,6 +2941,7 @@ sftk_DBInit(const char *configdir, const char *certPrefix,
+                                       * specified. */
+     }
+     if (crv != CKR_OK) {
++        fprintf(stderr, "[%s:%d(%s)] NSS: sftk_DBInit failed.\n", __FILE__, __LINE__, __FUNCTION__);
+         goto done;
+     }
+     if (!noCertDB) {
+@@ -2986,6 +2999,8 @@ sftk_DBInit(const char *configdir, const char *certPrefix,
+                 /* we don't have a key DB, update the certificate DB now */
+                 sftkdb_Update(*certDB, NULL);
+             }
++        } else {
++          fprintf(stderr, "[%s:%d(%s)] NSS: sftkdbCall_open failed (2), error: %lu.\n", __FILE__, __LINE__, __FUNCTION__, crv2);
+         }
+     }
+ #endif /* NSS_DISABLE_DBM */

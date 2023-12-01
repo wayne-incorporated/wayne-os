@@ -1,0 +1,29 @@
+commit af0332498405b3a4074cef09845bbacfd4fd594f
+Author: David Green <david.green@arm.com>
+Date:   Fri Jan 22 14:07:48 2021 +0000
+
+    [ARM] Disable sign extended SSAT pattern recognition.
+    
+    I may have given bad advice, and skipping sext_inreg when matching SSAT
+    patterns is not valid on it's own. It at least needs to sext_inreg the
+    input again, but as far as I can tell is still only valid based on
+    demanded bits. For the moment disable that part of the combine,
+    hopefully reimplementing it in the future more correctly.
+
+diff --git a/llvm/lib/Target/ARM/ARMISelLowering.cpp b/llvm/lib/Target/ARM/ARMISelLowering.cpp
+index 949d2ffc1714..f6f8597f3a69 100644
+--- a/llvm/lib/Target/ARM/ARMISelLowering.cpp
++++ b/llvm/lib/Target/ARM/ARMISelLowering.cpp
+@@ -5062,12 +5062,6 @@ static SDValue LowerSaturatingConditional(SDValue Op, SelectionDAG &DAG) {
+   SDValue V1Tmp = V1;
+   SDValue V2Tmp = V2;
+ 
+-  if (V1.getOpcode() == ISD::SIGN_EXTEND_INREG &&
+-      V2.getOpcode() == ISD::SIGN_EXTEND_INREG) {
+-    V1Tmp = V1.getOperand(0);
+-    V2Tmp = V2.getOperand(0);
+-  }
+-
+   // Check that the registers and the constants match a max(min()) or min(max())
+   // pattern
+   if (V1Tmp != TrueVal1 || V2Tmp != TrueVal2 || K1 != FalseVal1 ||

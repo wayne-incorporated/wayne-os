@@ -1,0 +1,47 @@
+commit 5d90f886bc022e7c9144a0ef08ea7ccde7e66030
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Tue Mar 17 10:51:21 2020 -0700
+
+    [clang][AArch64] readd support for 'p' inline asm constraint
+    
+    Summary:
+    Was accidentally removed by commit af64948e2a05 when it overrode
+    TargetInfo::convertConstraint.
+    
+    Fixes: pr/45225
+    
+    Reviewers: eli.friedman, sdesmalen
+    
+    Reviewed By: sdesmalen
+    
+    Subscribers: echristo, sdesmalen, kristof.beyls, cfe-commits, kmclaughlin, srhines
+    
+    Tags: #clang
+    
+    Differential Revision: https://reviews.llvm.org/D76297
+
+diff --git a/clang/lib/Basic/Targets/AArch64.h b/clang/lib/Basic/Targets/AArch64.h
+index befbf693ad8..41970e5d716 100644
+--- a/clang/lib/Basic/Targets/AArch64.h
++++ b/clang/lib/Basic/Targets/AArch64.h
+@@ -96,7 +96,7 @@ public:
+       Constraint += 2;
+       break;
+     default:
+-      R = std::string(1, *Constraint);
++      R = TargetInfo::convertConstraint(Constraint);
+       break;
+     }
+     return R;
+diff --git a/clang/test/CodeGen/inline-asm-p-constraint.c b/clang/test/CodeGen/inline-asm-p-constraint.c
+new file mode 100644
+index 00000000000..70db78bc649
+--- /dev/null
++++ b/clang/test/CodeGen/inline-asm-p-constraint.c
+@@ -0,0 +1,6 @@
++// RUN: %clang_cc1 -emit-llvm %s -o - -triple aarch64-linux-gnu | FileCheck %s
++void foo(void* ptr) {
++  asm volatile("prfm pldl1keep, %a0\n" : : "p" (ptr));
++  // CHECK:     call void asm sideeffect "prfm pldl1keep, ${0:a}\0A", "r"(i8* %0)
++  // CHECK-NOT: call void asm sideeffect "prfm pldl1keep, ${0:a}\0A", "p"(i8* %0)
++}

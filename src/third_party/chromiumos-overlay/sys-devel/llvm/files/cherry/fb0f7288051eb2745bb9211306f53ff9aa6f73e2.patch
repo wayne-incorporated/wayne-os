@@ -1,0 +1,318 @@
+commit fb0f7288051eb2745bb9211306f53ff9aa6f73e2
+Author: Zequan Wu <zequanwu@google.com>
+Date:   Mon Dec 7 16:37:14 2020 -0800
+
+    [Clang] Make nomerge attribute a function attribute as well as a statement attribute.
+    
+    Differential Revision: https://reviews.llvm.org/D92800
+
+diff --git a/clang/include/clang/AST/Attr.h b/clang/include/clang/AST/Attr.h
+index 8d9fb8f2bf27..e453733ab92c 100644
+--- a/clang/include/clang/AST/Attr.h
++++ b/clang/include/clang/AST/Attr.h
+@@ -162,6 +162,21 @@ public:
+   }
+ };
+ 
++class DeclOrStmtAttr : public InheritableAttr {
++protected:
++  DeclOrStmtAttr(ASTContext &Context, const AttributeCommonInfo &CommonInfo,
++                 attr::Kind AK, bool IsLateParsed,
++                 bool InheritEvenIfAlreadyPresent)
++      : InheritableAttr(Context, CommonInfo, AK, IsLateParsed,
++                        InheritEvenIfAlreadyPresent) {}
++
++public:
++  static bool classof(const Attr *A) {
++    return A->getKind() >= attr::FirstDeclOrStmtAttr &&
++           A->getKind() <= attr::LastDeclOrStmtAttr;
++  }
++};
++
+ class InheritableParamAttr : public InheritableAttr {
+ protected:
+   InheritableParamAttr(ASTContext &Context,
+diff --git a/clang/include/clang/Basic/Attr.td b/clang/include/clang/Basic/Attr.td
+index 7d566e64c99b..ce2ee40dc036 100644
+--- a/clang/include/clang/Basic/Attr.td
++++ b/clang/include/clang/Basic/Attr.td
+@@ -570,6 +570,9 @@ class InheritableAttr : Attr {
+ /// attributes, but have historically been written on declarations.
+ class DeclOrTypeAttr : InheritableAttr;
+ 
++/// A attribute is either a declaration attribute or a statement attribute.
++class DeclOrStmtAttr : InheritableAttr;
++
+ /// A target-specific attribute.  This class is meant to be used as a mixin
+ /// with InheritableAttr or Attr depending on the attribute's needs.
+ class TargetSpecificAttr<TargetSpec target> {
+@@ -1317,9 +1320,12 @@ def Unlikely : StmtAttr {
+   let Documentation = [LikelihoodDocs];
+ }
+ 
+-def NoMerge : StmtAttr {
++def NoMerge : DeclOrStmtAttr {
+   let Spellings = [Clang<"nomerge">];
+   let Documentation = [NoMergeDocs];
++  let InheritEvenIfAlreadyPresent = 1;
++  let Subjects = SubjectList<[Function], ErrorDiag, "functions and statements">;
++  let SimpleHandler = 1;
+ }
+ 
+ def FastCall : DeclOrTypeAttr {
+diff --git a/clang/include/clang/Basic/AttrDocs.td b/clang/include/clang/Basic/AttrDocs.td
+index 4f8cd8ecd86f..c3a412158aba 100644
+--- a/clang/include/clang/Basic/AttrDocs.td
++++ b/clang/include/clang/Basic/AttrDocs.td
+@@ -386,7 +386,11 @@ location of certain calls. For example, it will prevent tail merging otherwise
+ identical code sequences that raise an exception or terminate the program. Tail
+ merging normally reduces the precision of source location information, making
+ stack traces less useful for debugging. This attribute gives the user control
+-over the tradeoff between code size and debug information precision.
++over the tradeoff between code size and debug information precision. 
++
++``nomerge`` attribute can also be used as function attribute to prevent all 
++calls to the specified function from merging. It has no effect on indirect 
++calls.
+   }];
+ }
+ 
+diff --git a/clang/lib/CodeGen/CGCall.cpp b/clang/lib/CodeGen/CGCall.cpp
+index 28a7d128505a..bfc7b8e74d8f 100644
+--- a/clang/lib/CodeGen/CGCall.cpp
++++ b/clang/lib/CodeGen/CGCall.cpp
+@@ -1968,6 +1968,8 @@ void CodeGenModule::ConstructAttributeList(
+           FuncAttrs.addAttribute(llvm::Attribute::NoReturn);
+         NBA = Fn->getAttr<NoBuiltinAttr>();
+       }
++      if (!AttrOnCallSite && TargetDecl->hasAttr<NoMergeAttr>())
++        FuncAttrs.addAttribute(llvm::Attribute::NoMerge);
+     }
+ 
+     // 'const', 'pure' and 'noalias' attributed functions are also nounwind.
+@@ -4978,11 +4980,13 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
+         Attrs.addAttribute(getLLVMContext(), llvm::AttributeList::FunctionIndex,
+                            llvm::Attribute::StrictFP);
+ 
+-  // Add call-site nomerge attribute if exists.
+-  if (InNoMergeAttributedStmt)
+-    Attrs =
+-      Attrs.addAttribute(getLLVMContext(), llvm::AttributeList::FunctionIndex,
+-                         llvm::Attribute::NoMerge);
++  // Add nomerge attribute to the call-site if the callee function doesn't have
++  // the attribute.
++  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl))
++    if (!FD->hasAttr<NoMergeAttr>() && InNoMergeAttributedStmt)
++      Attrs = Attrs.addAttribute(getLLVMContext(),
++                                 llvm::AttributeList::FunctionIndex,
++                                 llvm::Attribute::NoMerge);
+ 
+   // Apply some call-site-specific attributes.
+   // TODO: work this into building the attribute set.
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 0bb9c91f2434..7dd343dbcc16 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -1749,6 +1749,9 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
+       B.addAttribute(llvm::Attribute::MinSize);
+   }
+ 
++  if (D->hasAttr<NoMergeAttr>())
++    B.addAttribute(llvm::Attribute::NoMerge);
++
+   F->addAttributes(llvm::AttributeList::FunctionIndex, B);
+ 
+   unsigned alignment = D->getMaxAlignment() / Context.getCharWidth();
+diff --git a/clang/lib/Sema/SemaDeclAttr.cpp b/clang/lib/Sema/SemaDeclAttr.cpp
+index 6b2145029e92..954388dda82e 100644
+--- a/clang/lib/Sema/SemaDeclAttr.cpp
++++ b/clang/lib/Sema/SemaDeclAttr.cpp
+@@ -7910,6 +7910,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
+     handleSimpleAttributeWithExclusions<DisableTailCallsAttr, NakedAttr>(S, D,
+                                                                          AL);
+     break;
++  case ParsedAttr::AT_NoMerge:
++    handleSimpleAttribute<NoMergeAttr>(S, D, AL);
++    break;
+   case ParsedAttr::AT_Visibility:
+     handleVisibilityAttr(S, D, AL, false);
+     break;
+diff --git a/clang/test/CodeGen/attr-nomerge.cpp b/clang/test/CodeGen/attr-nomerge.cpp
+index cc594db14968..bbf0547a050a 100644
+--- a/clang/test/CodeGen/attr-nomerge.cpp
++++ b/clang/test/CodeGen/attr-nomerge.cpp
+@@ -1,9 +1,23 @@
+ // RUN: %clang_cc1 -S -emit-llvm %s -triple x86_64-unknown-linux-gnu -o - | FileCheck %s
+ 
+-bool bar();
+-void f(bool, bool);
++class A {
++public:
++  [[clang::nomerge]] A();
++  [[clang::nomerge]] ~A();
++  [[clang::nomerge]] void f();
++  [[clang::nomerge]] virtual void g();
++  [[clang::nomerge]] static void f1();
++};
+ 
+-void foo(int i) {
++class B : public A {
++public:
++  void g() override;
++};
++
++[[clang::nomerge]] bool bar();
++[[clang::nomerge]] void f(bool, bool);
++
++void foo(int i, A *ap, B *bp) {
+   [[clang::nomerge]] bar();
+   [[clang::nomerge]] (i = 4, bar());
+   [[clang::nomerge]] (void)(bar());
+@@ -12,18 +26,68 @@ void foo(int i) {
+   [[clang::nomerge]] for (bar(); bar(); bar()) {}
+   [[clang::nomerge]] { asm("nop"); }
+   bar();
++
++  ap->g();
++  bp->g();
++
++  A a;
++  a.f();
++  a.g();
++  A::f1();
++
++  B b;
++  b.g();
++}
++
++int g(int i);
++
++void something() {
++  g(1);
++}
++
++[[clang::nomerge]] int g(int i);
++
++void something_else() {
++  g(1);
++}
++
++int g(int i) { return i; }
++
++void something_else_again() {
++  g(1);
+ }
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR:[0-9]+]]
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR]]
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR]]
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR]]
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR]]
+-// CHECK: call void @_Z1fbb({{.*}}) #[[NOMERGEATTR]]
+-// CHECK: call void @"_ZZ3fooiENK3$_0clEv"(%class.anon* {{[^,]*}} %ref.tmp) #[[NOMERGEATTR]]
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR]]
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR]]
+-// CHECK: call zeroext i1 @_Z3barv() #[[NOMERGEATTR]]
+-// CHECK: call void asm {{.*}} #[[NOMERGEATTR2:[0-9]+]]
+-// CHECK: call zeroext i1 @_Z3barv()
+-// CHECK: attributes #[[NOMERGEATTR]] = { nomerge }
+-// CHECK: attributes #[[NOMERGEATTR2]] = { nomerge nounwind }
++
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call void @_Z1fbb({{.*}}){{$}}
++// CHECK: call void @"_ZZ3fooiP1AP1BENK3$_0clEv"{{.*}} #[[ATTR0:[0-9]+]]
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call void asm sideeffect "nop"{{.*}} #[[ATTR1:[0-9]+]]
++// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: %[[AG:.*]] = load void (%class.A*)*, void (%class.A*)**
++// CHECK-NEXT: call void %[[AG]](%class.A* nonnull dereferenceable
++// CHECK: %[[BG:.*]] = load void (%class.B*)*, void (%class.B*)**
++// CHECK-NEXT: call void %[[BG]](%class.B* nonnull dereferenceable
++
++
++// CHECK-DAG: declare zeroext i1 @_Z3barv() #[[ATTR2:[0-9]+]]
++// CHECK-DAG: declare void @_Z1fbb(i1 zeroext, i1 zeroext) #[[ATTR2]]
++// CHECK-DAG: declare void @_ZN1AC1Ev{{.*}} #[[ATTR2]]
++// CHECK-DAG: declare void @_ZN1A1fEv{{.*}} #[[ATTR2]]
++// CHECK-DAG: declare void @_ZN1A1gEv{{.*}} #[[ATTR2]]
++// CHECK-DAG: declare void @_ZN1A2f1Ev{{.*}} #[[ATTR2]]
++// CHECK-DAG: declare void @_ZN1AC2Ev{{.*}} #[[ATTR2]]
++// CHECK-DAG: declare void @_ZN1AD1Ev{{.*}} #[[ATTR3:[0-9]+]]
++// CHECK-DAG: declare void @_ZN1AD2Ev{{.*}} #[[ATTR3]]
++// CHECK-DAG: define i32 @_Z1gi(i32 %i) #[[ATTR4:[0-9]+]] {
++
++// CHECK-DAG: attributes #[[ATTR0]] = {{{.*}}nomerge{{.*}}}
++// CHECK-DAG: attributes #[[ATTR1]] = {{{.*}}nomerge{{.*}}}
++// CHECK-DAG: attributes #[[ATTR2]] = {{{.*}}nomerge{{.*}}}
++// CHECK-DAG: attributes #[[ATTR3]] = {{{.*}}nomerge{{.*}}}
++// CHECK-DAG: attributes #[[ATTR4]] = {{{.*}}nomerge{{.*}}}
+diff --git a/clang/test/Misc/pragma-attribute-supported-attributes-list.test b/clang/test/Misc/pragma-attribute-supported-attributes-list.test
+index e2802197a548..729546891e8a 100644
+--- a/clang/test/Misc/pragma-attribute-supported-attributes-list.test
++++ b/clang/test/Misc/pragma-attribute-supported-attributes-list.test
+@@ -92,6 +92,7 @@
+ // CHECK-NEXT: NoEscape (SubjectMatchRule_variable_is_parameter)
+ // CHECK-NEXT: NoInline (SubjectMatchRule_function)
+ // CHECK-NEXT: NoInstrumentFunction (SubjectMatchRule_function)
++// CHECK-NEXT: NoMerge (SubjectMatchRule_function)
+ // CHECK-NEXT: NoMicroMips (SubjectMatchRule_function)
+ // CHECK-NEXT: NoMips16 (SubjectMatchRule_function)
+ // CHECK-NEXT: NoSanitize (SubjectMatchRule_function, SubjectMatchRule_objc_method, SubjectMatchRule_variable_is_global)
+diff --git a/clang/test/Sema/attr-nomerge.cpp b/clang/test/Sema/attr-nomerge.cpp
+index 175153c7753e..eafea2dfe810 100644
+--- a/clang/test/Sema/attr-nomerge.cpp
++++ b/clang/test/Sema/attr-nomerge.cpp
+@@ -8,10 +8,10 @@ void foo() {
+   int x;
+   [[clang::nomerge]] x = 10; // expected-warning {{nomerge attribute is ignored because there exists no call expression inside the statement}}
+ 
+-  [[clang::nomerge]] label: bar(); // expected-error {{'nomerge' attribute cannot be applied to a declaration}}
++  [[clang::nomerge]] label: bar(); // expected-error {{'nomerge' attribute only applies to functions and statements}}
+ 
+ }
+ 
+-int f();
++[[clang::nomerge]] int f();
+ 
+-[[clang::nomerge]] static int i = f(); // expected-error {{'nomerge' attribute cannot be applied to a declaration}}
++[[clang::nomerge]] static int i = f(); // expected-error {{'nomerge' attribute only applies to functions and statements}}
+diff --git a/clang/utils/TableGen/ClangAttrEmitter.cpp b/clang/utils/TableGen/ClangAttrEmitter.cpp
+index ec436df15e65..d435c5780531 100644
+--- a/clang/utils/TableGen/ClangAttrEmitter.cpp
++++ b/clang/utils/TableGen/ClangAttrEmitter.cpp
+@@ -2693,6 +2693,7 @@ static const AttrClassDescriptor AttrClassDescriptors[] = {
+   { "ATTR", "Attr" },
+   { "TYPE_ATTR", "TypeAttr" },
+   { "STMT_ATTR", "StmtAttr" },
++  { "DECL_OR_STMT_ATTR", "DeclOrStmtAttr" },
+   { "INHERITABLE_ATTR", "InheritableAttr" },
+   { "DECL_OR_TYPE_ATTR", "DeclOrTypeAttr" },
+   { "INHERITABLE_PARAM_ATTR", "InheritableParamAttr" },
+@@ -3779,7 +3780,8 @@ void EmitClangAttrParsedAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
+     OS << (Attr.isSubClassOf("TypeAttr") ||
+            Attr.isSubClassOf("DeclOrTypeAttr")) << ";\n";
+     OS << "    IsStmt = ";
+-    OS << Attr.isSubClassOf("StmtAttr") << ";\n";
++    OS << (Attr.isSubClassOf("StmtAttr") || Attr.isSubClassOf("DeclOrStmtAttr"))
++       << ";\n";
+     OS << "    IsKnownToGCC = ";
+     OS << IsKnownToGCC(Attr) << ";\n";
+     OS << "    IsSupportedByPragmaAttribute = ";
+diff --git a/llvm/include/llvm/IR/Attributes.td b/llvm/include/llvm/IR/Attributes.td
+index 30d297563cb1..798e4544aef4 100644
+--- a/llvm/include/llvm/IR/Attributes.td
++++ b/llvm/include/llvm/IR/Attributes.td
+@@ -124,7 +124,7 @@ def NoInline : EnumAttr<"noinline">;
+ /// Function is called early and/or often, so lazy binding isn't worthwhile.
+ def NonLazyBind : EnumAttr<"nonlazybind">;
+ 
+-/// Disable merging for call sites
++/// Disable merging for specified functions or call sites.
+ def NoMerge : EnumAttr<"nomerge">;
+ 
+ /// Pointer is known to be not null.

@@ -1,0 +1,23 @@
+commit bab74864168bb5e28ecbc0294fe1095d8da7f569
+Author: Reid Kleckner <rnk@google.com>
+Date:   Mon Feb 1 15:18:42 2021 -0800
+
+    Disable CFI in __get_elem to allow casting a pointer to uninitialized memory
+    
+    Fixes usage of shared_ptr with CFI enabled, which is llvm.org/pr48993.
+    
+    Differential Revision: https://reviews.llvm.org/D95827
+
+diff --git a/libcxx/include/memory b/libcxx/include/memory
+index a00916c8c03f..39d0f5bee6a5 100644
+--- a/libcxx/include/memory
++++ b/libcxx/include/memory
+@@ -2647,7 +2647,7 @@ private:
+             _Alloc *__alloc = reinterpret_cast<_Alloc*>(__first);
+             return __alloc;
+         }
+-        _Tp* __get_elem() _NOEXCEPT {
++        _LIBCPP_NO_CFI _Tp* __get_elem() _NOEXCEPT {
+             _CompressedPair *__as_pair = reinterpret_cast<_CompressedPair*>(__blob_);
+             typename _CompressedPair::_Base2* __second = _CompressedPair::__get_second_base(__as_pair);
+             _Tp *__elem = reinterpret_cast<_Tp*>(__second);

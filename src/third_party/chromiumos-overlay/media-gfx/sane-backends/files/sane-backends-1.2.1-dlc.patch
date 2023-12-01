@@ -1,0 +1,74 @@
+From 7ff066cfecc959ed043f603c36a0647e5c1417e7 Mon Sep 17 00:00:00 2001
+From: Rishabh Agrawal <rishabhagr@google.com>
+Date: Fri, 3 Mar 2023 22:20:41 +0000
+Subject: [PATCH] Paper IO scanning DLC patch
+
+Add the DLC directory path in the load function to include the dlc
+drivers. Add the DLC directory path for the config files to include dlc
+driver configs.
+---
+ backend/dll.c        | 19 ++++++++++++++++++-
+ sanei/sanei_config.c |  3 ++-
+ 2 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/backend/dll.c b/backend/dll.c
+index bf34c4f6d..9cd70cdcb 100644
+--- a/backend/dll.c
++++ b/backend/dll.c
+@@ -149,6 +149,8 @@ posix_dlsym (void *handle, const char *func)
+ #else
+ # define DIR_SEP        ":"
+ #endif
++// ChromeOS DLC directory
++# define DLC_DIR "/run/imageloader/sane-airscan/package/root/usr/lib64/sane"
+ 
+ 
+ #include "../include/sane/sanei_config.h"
+@@ -416,7 +418,7 @@ load (struct backend *be)
+ {
+ #ifdef HAVE_DLL
+   int mode = 0;
+-  char *funcname, *src, *orig_src = 0, *dir, *path = 0;
++  char *funcname, *src, *orig_src = 0, *dir, *path, *temp_path = 0;
+   char libname[PATH_MAX];
+   int i;
+   int src_len;
+@@ -465,6 +467,21 @@ load (struct backend *be)
+     path = getenv ("SHLIB_PATH");	/* for HP-UX */
+   if (!path)
+     path = getenv ("LIBPATH");	/* for AIX */
++  if (!path)
++    path = DLC_DIR;
++  else
++    {
++      temp_path = path;
++      src_len = strlen (path) + strlen (DIR_SEP) + strlen(DLC_DIR) + 1;
++      path = malloc (src_len);
++      if (!path)
++	{
++	  DBG (1, "load: malloc failed: %s\n", strerror (errno));
++	  return SANE_STATUS_NO_MEM;
++	}
++      snprintf (path, src_len, "%s%s%s", temp_path, DIR_SEP, DLC_DIR);
++    }
++
+ 
+   if (path)
+     {
+diff --git a/sanei/sanei_config.c b/sanei/sanei_config.c
+index 07c85c964..7343094bb 100644
+--- a/sanei/sanei_config.c
++++ b/sanei/sanei_config.c
+@@ -65,7 +65,8 @@
+ # define PATH_SEP	'/'
+ #endif
+ 
+-#define DEFAULT_DIRS	"." DIR_SEP STRINGIFY(PATH_SANE_CONFIG_DIR)
++#define DEFAULT_DIRS  "/run/imageloader/sane-airscan/package/root/etc/sane.d" \
++    DIR_SEP STRINGIFY(PATH_SANE_CONFIG_DIR)
+ 
+ #ifdef __BEOS__
+ #include <FindDirectory.h>
+-- 
+2.40.0.rc2.332.ga46443480c-goog
+

@@ -1,0 +1,17 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+
+on post-stune
+    write /dev/stune/foreground/cpu.uclamp.min 20
+    write /dev/stune/foreground/cpu.uclamp.latency_sensitive 1
+
+on property:sys.boot_completed=1
+    # Adjust cpusets in container to better split work between
+    # little and big cores.
+    write /dev/cpuset/foreground/cpus 0-3
+    write /dev/cpuset/background/cpus 0
+    write /dev/cpuset/system-background/cpus 0-1
+    write /dev/cpuset/restricted/cpus 0
+    write /dev/cpuset/top-app/cpus 0-3

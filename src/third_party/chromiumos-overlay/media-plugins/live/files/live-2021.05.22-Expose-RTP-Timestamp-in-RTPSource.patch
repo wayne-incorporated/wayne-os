@@ -1,0 +1,42 @@
+From: Lionel Koenig <lionelk@google.com>
+
+Exposes the RTP Timestamp in the liveMedia RTPSource object.
+
+This is a workaround and won't be upstreamed:
+http://lists.live555.com/pipermail/live-devel/2020-May/021598.html
+
+Detailed explanation:
+The presentation time is adjusted via RTCP Sender Report every now and
+then using the sender media clock through RTP Timestamps and the sender
+system clock. This sender system clock might be adjusted via NTP causing
+some occasional jumps (I've seen system clock being adjusted with NTP
+every few seconds on some devices) leading to "time jumps" in the RTCP
+Sender Report (Will most likely not change the strictly increasing
+nature of the whole clock system).
+
+The presentation time clock the receiver sees then is a combination of
+the media clock and the sender system clock. The adjustment of the
+system clock via NTP (or maybe something else) introduces "noise" if the
+media clock is then re-derived from this presentation time.
+
+Using the RTP Timestamp directly allows a way to circumvent the noise
+introduced by the different system clocks, sender report adjustment and
+so on, and only focus on solving the media clock synchronization issue.
+
+More details in:
+  - https://tools.ietf.org/html/rfc3550#section-5.1
+  - https://tools.ietf.org/html/rfc3551#section-4.3
+
+--- a/liveMedia/include/RTPSource.hh
++++ b/liveMedia/include/RTPSource.hh
+@@ -86,7 +86,6 @@ public:
+   // RTP sequence numbers and timestamps are usually not useful to receivers.
+   // (Our implementation of RTP reception already does all needed handling of RTP sequence numbers and timestamps.)
+   u_int16_t curPacketRTPSeqNum() const { return fCurPacketRTPSeqNum; }
+-private: friend class MediaSubsession; // "MediaSubsession" is the only outside class that ever needs to see RTP timestamps!
+   u_int32_t curPacketRTPTimestamp() const { return fCurPacketRTPTimestamp; }
+
+ protected:
+--
+2.21.0
+

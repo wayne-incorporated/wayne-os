@@ -1,0 +1,44 @@
+From 25314feb127a35774f0aa9dde61a91baa8c92f13 Mon Sep 17 00:00:00 2001
+From: Christopher Di Bella <cjdb@google.com>
+Date: Fri, 30 Jul 2021 23:33:06 +0000
+Subject: [PATCH 12/17] gold: remove iovec and add missing headers
+
+The struct iovec is already defined somewhere in libstdc++, so this is
+causing binutils to fail during emerge.
+
+The headers for mkdir weren't being included so they were causing
+`mkdir(...)` to fail.
+---
+ gold/fileread.cc | 1 -
+ gold/plugin.cc   | 3 +++
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/gold/fileread.cc b/gold/fileread.cc
+index 12ae1b4a6e8..265fadef31f 100644
+--- a/gold/fileread.cc
++++ b/gold/fileread.cc
+@@ -84,7 +84,6 @@ gold_munmap(void *, size_t)
+ #endif
+ 
+ #ifndef HAVE_READV
+-struct iovec { void* iov_base; size_t iov_len; };
+ ssize_t
+ readv(int, const iovec*, int)
+ {
+diff --git a/gold/plugin.cc b/gold/plugin.cc
+index 838d5c80413..7a279d61712 100644
+--- a/gold/plugin.cc
++++ b/gold/plugin.cc
+@@ -32,6 +32,9 @@
+ #include <unistd.h>
+ #include "libiberty.h"
+ 
++#include <sys/stat.h>
++#include <sys/types.h>
++
+ #ifdef ENABLE_PLUGINS
+ #ifdef HAVE_DLFCN_H
+ #include <dlfcn.h>
+-- 
+2.34.1
+

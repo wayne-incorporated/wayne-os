@@ -1,0 +1,124 @@
+ThirdPartyVpn hierarchy
+=======================
+
+Service		org.chromium.flimflam
+Interface	org.chromium.flimflam.ThirdPartyVpn
+Object path	/thirdpartyvpn/{objectpath0,objectpath1,...}
+
+Methods		string SetParameters(dict parameters)
+
+			Configures the VPN's IP parameters.  This should
+			be called after receiving a Connected, LinkChanged,
+			or LinkUp platform message.  See below for the list
+			of parameters.
+
+			Returns an error message on failure, or "" on
+			success.
+
+		void UpdateConnectionState(uint32 connection_state)
+
+			Informs shill of the VPN app's connection state,
+			so that it can set the correct service state.
+
+			Possible values:
+
+				1 (kStateConnected) - The VPN app is now
+				  online, so shill should use it to pass
+				  system traffic.
+				2 (kStateFailure) - The VPN app has failed
+				  to connect (or reconnect) so the service
+				  should be disabled.
+
+			Possible Errors: [service].Error.InvalidArguments
+					 [service].Error.InternalError
+
+		void SendPacket(array{uint8} ip_packet)
+
+			Transmits an IP packet to the tunnel interface.
+			This packet should not have an Ethernet header.
+
+Signals		OnPlatformMessage(uint32 platform_message)
+
+			Informs a VPN app of changes to the network
+			configuration.
+
+			Possible values:
+
+				1 (kConnected) - The app can now call
+				  SetParameters to configure the tunnel.
+				2 (kDisconnected) - A "clean" disconnection
+				  has taken place, and the service will no
+				  longer pass traffic.
+				3 (kError) - An "unclean" disconnection has
+				  taken place, and the service will no
+				  longer pass traffic.
+				4 (kLinkDown) - The system's physical
+				  network connection has gone down, so
+				  the VPN app will not have connectivity.
+				5 (kLinkUp) - The system's physical network
+				  connection has been restored.
+				6 (kLinkChanged) - The system's physical
+				  network connection has changed, and the
+				  VPN may need to reconnect to the gateway.
+				7 (kSuspend) - The system is going to sleep.
+				8 (kResume) - The system has woken up from
+				  sleep.
+
+		OnPacketReceived(array{uint8} ip_packet)
+
+			A packet has been received from the tunnel
+			interface.  This packet will not have an Ethernet
+			header.
+
+Parameters	string address [mandatory]
+
+			An IPv4 address, e.g. "192.168.1.1"
+
+		string subnet_prefix [mandatory]
+
+			The IPv4 subnet prefix length, typically "32"
+
+		string broadcast_address [optional]
+
+			An IPv4 address, e.g. "192.168.1.255"
+
+		string exclusion_list [mandatory, but may be empty]
+
+			A comma-separated list of IPv4 ranges in CIDR
+			notation that should be excluded from the VPN
+			tunnel.  e.g. "8.8.8.8/32,192.168.2.0/24"
+
+		string inclusion_list [mandatory, but may be empty]
+
+			A comma-separated list of IPv4 ranges in CIDR
+			notation that should be routed through the VPN
+			tunnel.  e.g. "192.168.1.0/24,10.0.0.0/8"
+
+		string dns_servers [optional]
+
+			A comma-separated list of IPv4 addresses used for
+			DNS servers.
+
+		string domain_search [optional]
+
+			A comma-separated list of DNS search domains.
+
+		string mtu [optional]
+
+			The MTU for the tunnel interface.  e.g. "1280"
+
+			The default is 1500 bytes.
+
+		string reconnect [optional]
+
+			Indicates whether the VPN app can handle LinkDown,
+			LinkUp, LinkChanged, Suspend, and Resume events.
+			If not, the service will disconnect if the system's
+			physical network changes.
+
+			Possible values:
+
+				"true" - Reconnections are supported.
+				"false" - Reconnections are not supported.
+
+			The default is "false".

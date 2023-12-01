@@ -1,0 +1,40 @@
+commit db27867dfc95257faf5baa40436370df67647847
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Sat Nov 6 19:14:42 2021 -0700
+
+    [compiler-rt] Produce the right arch suffix for arm baremetal
+    
+    D98452 introduced a mismatch between clang expectations for
+    builtin name for baremetal targets on arm. Fix it by
+    adding a case for baremetal. This now matches the output of
+    "clang -target armv7m-none-eabi -print-libgcc-file-name \
+    -rtlib=compiler-rt"
+    
+    Reviewed By: mstorsjo
+    
+    Differential Revision: https://reviews.llvm.org/D113357
+
+diff --git a/compiler-rt/cmake/Modules/AddCompilerRT.cmake b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+index 76e015368f5d..6a594f92c246 100644
+--- a/compiler-rt/cmake/Modules/AddCompilerRT.cmake
++++ b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+@@ -130,11 +130,14 @@ macro(set_output_name output name arch)
+       else()
+         set(triple "${TARGET_TRIPLE}")
+       endif()
+-      # When using arch-suffixed runtime library names, clang only looks for
+-      # libraries named "arm" or "armhf", see getArchNameForCompilerRTLib in
+-      # clang. Therefore, try to inspect both the arch name and the triple
+-      # if it seems like we're building an armhf target.
+-      if ("${arch}" MATCHES "hf$" OR "${triple}" MATCHES "hf$")
++      # Except for baremetal, when using arch-suffixed runtime library names,
++      # clang only looks for libraries named "arm" or "armhf", see
++      # getArchNameForCompilerRTLib in clang. Therefore, try to inspect both
++      # the arch name and the triple if it seems like we're building an armhf
++      # target.
++      if (COMPILER_RT_BAREMETAL_BUILD)
++        set(${output} "${name}-${arch}${COMPILER_RT_OS_SUFFIX}")
++      elseif ("${arch}" MATCHES "hf$" OR "${triple}" MATCHES "hf$")
+         set(${output} "${name}-armhf${COMPILER_RT_OS_SUFFIX}")
+       else()
+         set(${output} "${name}-arm${COMPILER_RT_OS_SUFFIX}")

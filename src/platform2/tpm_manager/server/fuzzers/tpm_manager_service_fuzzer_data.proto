@@ -1,0 +1,38 @@
+// Copyright 2021 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+
+import "tpm_manager.proto";
+
+package tpm_manager;
+
+message TpmManagerServiceFuzzerData {
+  message Request {
+    oneof requests {
+      GetTpmStatusRequest get_tpm_status_request = 1;
+      GetTpmNonsensitiveStatusRequest get_tpm_nonsensitive_status_request = 2;
+      GetVersionInfoRequest get_version_info_request = 3;
+      GetSupportedFeaturesRequest get_supported_features_request = 4;
+      GetDictionaryAttackInfoRequest get_dictionary_attack_info_request = 5;
+      ResetDictionaryAttackLockRequest reset_dictionary_attack_lock_request = 6;
+      TakeOwnershipRequest take_ownership_request = 7;
+      RemoveOwnerDependencyRequest remove_owner_dependency_request = 8;
+      ClearStoredOwnerPasswordRequest clear_stored_owner_password_request = 9;
+      DefineSpaceRequest define_space_request = 10;
+      DestroySpaceRequest destroy_space_request = 11;
+      WriteSpaceRequest write_space_request = 12;
+      ReadSpaceRequest read_space_request = 13;
+      LockSpaceRequest lock_space_request = 14;
+      ListSpacesRequest list_spaces_request = 15;
+      GetSpaceInfoRequest get_space_info_request = 16;
+    }
+  }
+
+  bytes fuzzed_data = 1;
+  repeated Request requests = 2;
+  bool wait_for_ownership = 3;
+  bool perform_preinit = 4;
+}

@@ -1,0 +1,69 @@
+commit 012ea747ed0275c499f69c82ac0f635f4c76f746
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Thu Apr 27 13:39:54 2023 -0700
+
+    [CodeGen][MachineLastInstrsCleanup] fix INLINEASM_BR hazard
+    
+    If the removable definition resides in an INLINEASM_BR target, the
+    reuseable candidate might not dominate the INLINEASM_BR.
+    
+       bb0:
+          INLINEASM_BR &"" %bb.1
+          renamable $x8 = MOVi64imm 29273397577910035
+          B %bb.2
+          ...
+        bb1:
+          renamable $x8 = MOVi64imm 29273397577910035
+          renamable $x8 = ADDXri killed renamable $x8, 2048, 0
+        bb2:
+    
+    Removing the second mov is a hazard when the inline asm branches to bb1.
+    
+    Skip such replacements when the to be removed instruction is in the
+    target of such an INLINEASM_BR instruction.
+    
+    We could get more aggressive about this in the future, but for now
+    simply abort.
+    
+    This is causing a boot failure on linux-4.19.y branches of the LTS Linux
+    kernel for ARCH=arm64 with CONFIG_RANDOMIZE_BASE=y (KASLR) and
+    CONFIG_UNMAP_KERNEL_AT_EL0=y (KPTI).
+    
+    Link: https://reviews.llvm.org/D123394
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1837
+    
+    Thanks to @nathanchance for the report, and @ardb for debugging.
+    
+    Reviewed By: efriedma
+    
+    Differential Revision: https://reviews.llvm.org/D149191
+
+diff --git a/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp b/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp
+index f69febadcd77..2dc289014200 100644
+--- a/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp
++++ b/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp
+@@ -175,7 +175,8 @@ bool MachineLateInstrsCleanup::processBlock(MachineBasicBlock *MBB) {
+   Reg2DefMap &MBBDefs = RegDefs[MBB->getNumber()];
+ 
+   // Find reusable definitions in the predecessor(s).
+-  if (!MBB->pred_empty() && !MBB->isEHPad()) {
++  if (!MBB->pred_empty() && !MBB->isEHPad() &&
++      !MBB->isInlineAsmBrIndirectTarget()) {
+     MachineBasicBlock *FirstPred = *MBB->pred_begin();
+     for (auto [Reg, DefMI] : RegDefs[FirstPred->getNumber()])
+       if (llvm::all_of(
+diff --git a/llvm/test/CodeGen/AArch64/machine-latecleanup-inlineasm.mir b/llvm/test/CodeGen/AArch64/machine-latecleanup-inlineasm.mir
+index be6d021a628d..9a8e5c6341bc 100644
+--- a/llvm/test/CodeGen/AArch64/machine-latecleanup-inlineasm.mir
++++ b/llvm/test/CodeGen/AArch64/machine-latecleanup-inlineasm.mir
+@@ -160,8 +160,9 @@ body:             |
+   ; CHECK-NEXT: {{  $}}
+   ; CHECK-NEXT: bb.1.bb8 (machine-block-address-taken, inlineasm-br-indirect-target):
+   ; CHECK-NEXT:   successors: %bb.2(0x80000000)
+-  ; CHECK-NEXT:   liveins: $w20, $x19, $x21, $x22, $x23, $x24, $x8
++  ; CHECK-NEXT:   liveins: $w20, $x19, $x21, $x22, $x23, $x24
+   ; CHECK-NEXT: {{  $}}
++  ; CHECK-NEXT:   renamable $x8 = MOVi64imm 29273397577910035
+   ; CHECK-NEXT:   renamable $x8 = ADDXri killed renamable $x8, 2048, 0
+   ; CHECK-NEXT: {{  $}}
+   ; CHECK-NEXT: bb.2.bb9:

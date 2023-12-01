@@ -1,0 +1,103 @@
+From d46636fac8778c39ebbe71ed344f0e7968a80412 Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Wed, 13 Mar 2019 10:43:35 -0700
+Subject: [PATCH 3/6] egl/android: plumb swrast option
+
+Change-Id: I462b323e58a40726f2f2261c718cdea7b1575f81
+---
+ src/egl/drivers/dri2/platform_android.c | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 366a9ec14e98..67eea19dac52 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -1200,11 +1200,11 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
+ }
+ 
+ static EGLBoolean
+-droid_probe_device(_EGLDisplay *disp);
++droid_probe_device(_EGLDisplay *disp, bool swrast);
+ 
+ #ifdef HAVE_DRM_GRALLOC
+ static EGLBoolean
+-droid_open_device_drm_gralloc(_EGLDisplay *disp)
++droid_open_device_drm_gralloc(_EGLDisplay *disp, bool swrast)
+ {
+    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+    int fd = -1, err = -EINVAL;
+@@ -1222,7 +1222,7 @@ droid_open_device_drm_gralloc(_EGLDisplay *disp)
+    if (dri2_dpy->fd < 0)
+      return EGL_FALSE;
+ 
+-   return droid_probe_device(disp);
++   return droid_probe_device(disp, swrast);
+ }
+ #endif /* HAVE_DRM_GRALLOC */
+ 
+@@ -1368,7 +1368,7 @@ static const __DRIextension *droid_image_loader_extensions[] = {
+ };
+ 
+ static EGLBoolean
+-droid_load_driver(_EGLDisplay *disp)
++droid_load_driver(_EGLDisplay *disp, bool swrast)
+ {
+    struct dri2_egl_display *dri2_dpy = disp->DriverData;
+    const char *err;
+@@ -1437,13 +1437,13 @@ droid_filter_device(_EGLDisplay *disp, int fd, const char *vendor)
+ }
+ 
+ static EGLBoolean
+-droid_probe_device(_EGLDisplay *disp)
++droid_probe_device(_EGLDisplay *disp, bool swrast)
+ {
+   /* Check that the device is supported, by attempting to:
+    * - load the dri module
+    * - and, create a screen
+    */
+-   if (!droid_load_driver(disp))
++   if (!droid_load_driver(disp, swrast))
+       return EGL_FALSE;
+ 
+    if (!dri2_create_screen(disp)) {
+@@ -1455,7 +1455,7 @@ droid_probe_device(_EGLDisplay *disp)
+ }
+ 
+ static EGLBoolean
+-droid_open_device(_EGLDisplay *disp)
++droid_open_device(_EGLDisplay *disp, bool swrast)
+ {
+ #define MAX_DRM_DEVICES 32
+    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+@@ -1498,14 +1498,14 @@ droid_open_device(_EGLDisplay *disp)
+          /* If the requested device matches - use it. Regardless if
+           * init fails, do not fall-back to any other device.
+           */
+-         if (!droid_probe_device(disp)) {
++         if (!droid_probe_device(disp, swrast)) {
+             close(dri2_dpy->fd);
+             dri2_dpy->fd = -1;
+          }
+ 
+          break;
+       }
+-      if (droid_probe_device(disp))
++      if (droid_probe_device(disp, swrast))
+          break;
+ 
+       /* No explicit request - attempt the next device */
+@@ -1551,9 +1551,9 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *disp)
+    disp->DriverData = (void *) dri2_dpy;
+ 
+ #ifdef HAVE_DRM_GRALLOC
+-   if (!droid_open_device_drm_gralloc(disp)) {
++   if (!droid_open_device_drm_gralloc(disp, false)) {
+ #else
+-   if (!droid_open_device(disp)) {
++   if (!droid_open_device(disp, false)) {
+ #endif
+       err = "DRI2: failed to open device";
+       goto cleanup;
+-- 
+2.20.1
+

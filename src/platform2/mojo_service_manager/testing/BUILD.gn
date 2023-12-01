@@ -1,0 +1,55 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/mojom_bindings_generator.gni")
+import("//common-mk/pkg_config.gni")
+
+# This is for the package mojo_service_manager-test, which is installed to test
+# image.
+group("all") {
+  deps = [
+    ":install_policy",
+    ":mojo_service_manager_test_tool",
+  ]
+}
+
+generate_mojom_bindings("test_mojom") {
+  sources = [ "test.mojom" ]
+  mojo_root = "${platform2_root}"
+}
+
+pkg_config("target_default") {
+  pkg_deps = [ "libmojo" ]
+}
+
+source_set("mojo_test_runner") {
+  sources = [ "mojo_test_runner.cc" ]
+  configs += [
+    "//common-mk:test",
+    ":target_default",
+  ]
+}
+
+# This is used by the package mojo_service_manager-test, which depends on the
+# package mojo_service_manager.
+pkg_config("target_service_manager_test") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmojo",
+    "mojo_service_manager",
+  ]
+}
+
+executable("mojo_service_manager_test_tool") {
+  sources = [ "test_tool.cc" ]
+  configs += [ ":target_service_manager_test" ]
+  deps = [ ":test_mojom" ]
+  install_path = "/usr/local/bin"
+}
+
+install_config("install_policy") {
+  sources = [ "service_manager_test.jsonc" ]
+  install_path = "/usr/local/etc/mojo/service_manager/policy"
+}

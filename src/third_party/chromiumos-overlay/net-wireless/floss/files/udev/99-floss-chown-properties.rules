@@ -1,0 +1,9 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Userspace needs to be able to write to the `reset` sysfs entry to recover
+# controllers that are not working properly. Make sure it's owned by the
+# bluetooth user.
+ACTION!="remove", SUBSYSTEM=="bluetooth", ENV{DEVTYPE}=="host", TEST=="reset", \
+	RUN+="/bin/chown bluetooth:bluetooth \"$sys/$devpath/reset\""

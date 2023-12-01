@@ -1,0 +1,94 @@
+// Copyright 2018 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package cryptohome;
+
+// Container for the signature-sealed data, including the additional non-secret
+// information required for unsealing.
+message SignatureSealedData {
+  // Index and value of a TPM Platform Configuration Register (PCR).
+  message PcrValue {
+    optional uint32 pcr_index = 1;
+    optional bytes pcr_value = 2;
+  }
+
+  // Information about a single set of PCR restrictions for TPM 2.0.
+  message Tpm2PcrRestriction {
+    // List of PCR values that must be all satisfied for this restriction.
+    repeated PcrValue pcr_values = 1;
+
+    // TPM policy digest for the TPM2_PolicyPCR command executed with the PCR
+    // values specified by |pcr_values|.
+    optional bytes policy_digest = 2;
+  }
+
+  // Data for the TPM 2.0 method based on the "TPM2_PolicySigned" feature.
+  message Tpm2PolicySignedData {
+    // DER-encoded blob of the X.509 Subject Public Key Info of the key that
+    // should be used for unsealing.
+    optional bytes public_key_spki_der = 1;
+
+    // The secret blob, wrapped by the TPM's Storage Root Key.
+    optional bytes srk_wrapped_secret = 2;
+
+    // The signature scheme (TPM_ALG_ID) that should be used for unsealing.
+    optional int32 scheme = 3;
+
+    // The signature hash algorithm (TPM_ALG_ID) that should be used for
+    // unsealing.
+    optional int32 hash_alg = 4;
+
+    // Multiple alternative sets of PCR restrictions that are applied to the
+    // wrapped secret. For unsealing, it's enough to satisfy only one of those
+    // restrictions.
+    // Note that the order of items here is important: it defines the order of
+    // arguments when building the TPM policy digest.
+    repeated Tpm2PcrRestriction pcr_restrictions = 5;
+  }
+
+  // TPM 1.2 data that is bound to the specific set of PCRs.
+  message Tpm12PcrBoundItem {
+    // Set of PCRs to which the secret blob is bound.
+    repeated PcrValue pcr_values = 1;
+
+    // The secret blob, which is bound to the PCR values specified by
+    // |pcr_values| and with the AuthData value that is stored encrypted in
+    // |cmk_wrapped_auth_data|.
+    optional bytes bound_secret = 2;
+  }
+
+  // Data for the TPM 1.2 method based on the "Certified Migratable Key"
+  // functionality.
+  message Tpm12CertifiedMigratableKeyData {
+    // DER-encoded blob of the X.509 Subject Public Key Info of the key that
+    // should be used for unsealing.
+    optional bytes public_key_spki_der = 1;
+
+    // The blob of the Certified Migratable Key wrapped by the TPM's Storage
+    // Root Key.
+    optional bytes srk_wrapped_cmk = 2;
+
+    // The TPM_PUBKEY blob of the Certified Migratable Key.
+    optional bytes cmk_pubkey = 3;
+
+    // The AuthData blob encrypted by the CMK using the RSAES-OAEP MGF1
+    // algorithm.
+    optional bytes cmk_wrapped_auth_data = 4;
+
+    // Multiple alternative representations of the secret data, where each
+    // representation is bound to its specific set of PCRs and to the AuthData
+    // value that is stored encrypted in |cmk_wrapped_auth_data|.
+    repeated Tpm12PcrBoundItem pcr_bound_items = 5;
+  }
+
+  // The union containing the data depending on the sealing method.
+  oneof data {
+    Tpm2PolicySignedData tpm2_policy_signed_data = 1;
+    Tpm12CertifiedMigratableKeyData tpm12_certified_migratable_key_data = 2;
+  }
+}

@@ -1,0 +1,39 @@
+From eb233656256f4cbe050b27de63fa5632fa0f2863 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 14:48:44 -0300
+Subject: [PATCH 042/163] math: x86: Use prefix for FP_INIT_ROUNDMODE
+
+Not all compilers support the inline asm prefix '%v' to emit the avx
+instruction if AVX is enable.  Use a prefix instead.
+
+Checked on x86_64-linux-gnu and i686-linux-gnu.
+
+(cherry picked from commit 2fc7320668ee843f9d1e5a2ec6c6fdbf00c735a3)
+---
+ sysdeps/x86/fpu/sfp-machine.h | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/sysdeps/x86/fpu/sfp-machine.h b/sysdeps/x86/fpu/sfp-machine.h
+index 5892f4f5fe..bc3fe332df 100644
+--- a/sysdeps/x86/fpu/sfp-machine.h
++++ b/sysdeps/x86/fpu/sfp-machine.h
+@@ -39,9 +39,15 @@ typedef unsigned int UTItype __attribute__ ((mode (TI)));
+ 
+ # define FP_RND_MASK		0x6000
+ 
++# ifdef __AVX__
++#  define AVX_INSN_PREFIX	"v"
++# else
++#  define AVX_INSN_PREFIX	""
++# endif
++
+ # define FP_INIT_ROUNDMODE					\
+   do {								\
+-    __asm__ __volatile__ ("%vstmxcsr\t%0" : "=m" (_fcw));	\
++    __asm__ __volatile__ (AVX_INSN_PREFIX "stmxcsr\t%0" : "=m" (_fcw)); \
+   } while (0)
+ #else
+ # define _FP_W_TYPE_SIZE	32
+-- 
+2.37.2
+

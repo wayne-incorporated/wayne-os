@@ -1,0 +1,65 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+group("all") {
+  deps = [ ":generate_squashfs" ]
+}
+
+action("mkdir_squashfs_source_dir") {
+  inputs = []
+  outputs = [ "${root_gen_dir}/squashfs_source_dir" ]
+  script = "//common-mk/file_generator_wrapper.py"
+  args = [
+    "mkdir",
+    "-p",
+    "${root_gen_dir}/squashfs_source_dir",
+  ]
+}
+
+action("generate_squashfs") {
+  inputs = [ "${root_gen_dir}/squashfs_source_dir" ]
+  outputs = [ "${root_out_dir}/rootfs.squashfs" ]
+  install_configs = [
+    {
+      # The path must be kept consistent with additional installation steps
+      # in the ebuild file.
+      path = "/opt/google/containers/arc-sdcard"
+    },
+  ]
+  script = "//common-mk/file_generator_wrapper.py"
+  args = [
+    "mksquashfs",
+    "${root_gen_dir}/squashfs_source_dir",
+    "${root_out_dir}/rootfs.squashfs",
+    "-no-progress",
+    "-info",
+    "-all-root",
+    "-noappend",
+    "-comp",
+    "lzo",
+    "-b",
+    "4K",
+    "-p",
+    "/data d 700 0 0",
+    "-p",
+    "/dev d 700 0 0",
+    "-p",
+    "/dev/fuse c 666 root root 10 229",
+    "-p",
+    "/mnt d 700 0 0",
+    "-p",
+    "/mnt/runtime d 700 0 0",
+    "-p",
+    "/proc d 700 0 0",
+    "-p",
+    "/system d 700 0 0",
+    "-p",
+    "/system/bin d 700 0 0",
+    "-p",
+    "/system/bin/sdcard f 640 0 0 echo -n",
+    "-p",
+    "/Downloads d 700 0 0",
+  ]
+  deps = [ ":mkdir_squashfs_source_dir" ]
+}

@@ -1,0 +1,43 @@
+commit 187a35527d8364994e5acf0a528a758adbd617ac
+Author: Fangrui Song <i@maskray.me>
+Date:   Thu Apr 20 09:49:22 2023 -0700
+
+    Revert D147493 "[ELF] Cap parallel::strategy to 16 threads when --threads= is unspecified"
+    
+    This reverts commit da68d2164efcc1f5e57f090e2ae2219056b120a0.
+    
+    This change is correct, but left a `config->threadCount` use that is error-prone
+    and may harm performance when parallel::strategy.compute_thread_count() > 16.
+
+diff --git a/lld/ELF/Driver.cpp b/lld/ELF/Driver.cpp
+index 5ba5eab23355..c540f573aaef 100644
+--- a/lld/ELF/Driver.cpp
++++ b/lld/ELF/Driver.cpp
+@@ -1420,12 +1420,8 @@ static void readConfigs(opt::InputArgList &args) {
+     config->mllvmOpts.emplace_back(arg->getValue());
+   }
+ 
+-  config->threadCount = parallel::strategy.compute_thread_count();
+-
+   // --threads= takes a positive integer and provides the default value for
+-  // --thinlto-jobs=. If unspecified, cap the number of threads since
+-  // overhead outweighs optimization for used parallel algorithms for the
+-  // non-LTO parts.
++  // --thinlto-jobs=.
+   if (auto *arg = args.getLastArg(OPT_threads)) {
+     StringRef v(arg->getValue());
+     unsigned threads = 0;
+@@ -1434,12 +1430,10 @@ static void readConfigs(opt::InputArgList &args) {
+             arg->getValue() + "'");
+     parallel::strategy = hardware_concurrency(threads);
+     config->thinLTOJobs = v;
+-  } else if (config->threadCount > 16) {
+-    log("set maximum concurrency to 16, specify --threads= to change");
+-    parallel::strategy = hardware_concurrency(16);
+   }
+   if (auto *arg = args.getLastArg(OPT_thinlto_jobs_eq))
+     config->thinLTOJobs = arg->getValue();
++  config->threadCount = parallel::strategy.compute_thread_count();
+ 
+   if (config->ltoPartitions == 0)
+     error("--lto-partitions: number of threads must be > 0");

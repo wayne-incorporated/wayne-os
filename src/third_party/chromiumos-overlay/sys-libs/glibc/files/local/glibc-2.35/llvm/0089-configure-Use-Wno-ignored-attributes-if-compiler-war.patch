@@ -1,0 +1,125 @@
+From 9eb26ae5c462bcd6482567ed401f8f3b19d4fc94 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 11 Mar 2022 10:40:44 -0300
+Subject: [PATCH 089/163] configure: Use -Wno-ignored-attributes if compiler
+ warns about multiple aliases
+
+clang emits an warning when a double alias redirection is used, to warn
+the the original symbol will be used even when weak definition is
+overridden.  Howerver, this is a common pattern for weak_alias, where
+multiple alias are set to same symbol.
+---
+ configure                             | 29 +++++++++++++++++++++++++++
+ configure.ac                          | 22 ++++++++++++++++++++
+ math/Makefile                         |  8 ++++++++
+ sysdeps/x86_64/fpu/multiarch/Makefile |  2 ++
+ 4 files changed, 61 insertions(+)
+
+diff --git a/configure b/configure
+index 5be71d9a3c..72d163969b 100755
+--- a/configure
++++ b/configure
+@@ -6353,6 +6353,35 @@ $as_echo "$libc_cv_wno_ignored_attributes" >&6; }
+ config_vars="$config_vars
+ config-cflags-wno-ignored-attributes = $libc_cv_wno_ignored_attributes"
+ 
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking if -Wno-ignored-attributes is required for aliases" >&5
++$as_echo_n "checking if -Wno-ignored-attributes is required for aliases... " >&6; }
++if ${libc_cv_wno_ignored_attributes+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  cat > conftest.c <<EOF
++void __foo (void)
++{
++}
++extern __typeof (__foo) foo __attribute__ ((weak, alias ("__foo")));
++extern __typeof (__foo) bar __attribute__ ((weak, alias ("foo")));
++EOF
++libc_cv_wno_ignored_attributes=""
++if ! { ac_try='${CC-cc} $CFLAGS $CPPFLAGS -Werror -c conftest.c'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }
++then
++  libc_cv_wno_ignored_attributes="-Wno-ignored-attributes"
++fi
++rm -f conftest*
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_wno_ignored_attributes" >&5
++$as_echo "$libc_cv_wno_ignored_attributes" >&6; }
++config_vars="$config_vars
++config-cflags-wno-ignored-attributes = $libc_cv_wno_ignored_attributes"
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether cc puts quotes around section names" >&5
+ $as_echo_n "checking whether cc puts quotes around section names... " >&6; }
+ if ${libc_cv_have_section_quotes+:} false; then :
+diff --git a/configure.ac b/configure.ac
+index 11d2728763..e30c2eb685 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1449,6 +1449,28 @@ rm -f conftest*])
+ AC_SUBST(libc_cv_mtls_dialect_gnu2)
+ LIBC_CONFIG_VAR([have-mtls-dialect-gnu2], [$libc_cv_mtls_dialect_gnu2])
+ 
++dnl clang emits an warning when a double alias redirection is used, to warn
++dnl the the original symbol will be used even when weak definition is overridden.
++dnl This is a common pattern for weak_alias, where multiple alias are set to
++dnl same symbol.
++AC_CACHE_CHECK([if -Wno-ignored-attributes is required for aliases],
++	       libc_cv_wno_ignored_attributes, [dnl
++cat > conftest.c <<EOF
++void __foo (void)
++{
++}
++extern __typeof (__foo) foo __attribute__ ((weak, alias ("__foo")));
++extern __typeof (__foo) bar __attribute__ ((weak, alias ("foo")));
++EOF
++libc_cv_wno_ignored_attributes=""
++if ! AC_TRY_COMMAND([${CC-cc} $CFLAGS $CPPFLAGS -Werror -c conftest.c])
++then
++  libc_cv_wno_ignored_attributes="-Wno-ignored-attributes"
++fi
++rm -f conftest*])
++LIBC_CONFIG_VAR([config-cflags-wno-ignored-attributes],
++		[$libc_cv_wno_ignored_attributes])
++
+ dnl clang emits an warning when a double alias redirection is used, to warn
+ dnl the the original symbol will be used even when weak definition is overridden.
+ dnl This is a common pattern for weak_alias, where multiple alias are set to
+diff --git a/math/Makefile b/math/Makefile
+index 71708f5542..dce94d0249 100644
+--- a/math/Makefile
++++ b/math/Makefile
+@@ -769,6 +769,14 @@ CFLAGS-s_y1.c += -fno-builtin-y1l
+ CFLAGS-s_yn.c += -fno-builtin-ynl
+ endif
+ 
++CFLAGS-s_fabsf128.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-fraiseexcpt.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-fegetround.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-fesetround.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-fegetenv.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-fesetenv.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-feholdexcpt.c += $(config-cflags-wno-ignored-attributes)
++
+ # These files quiet sNaNs in a way that is optimized away without
+ # -fsignaling-nans.
+ CFLAGS-s_modf.c += $(config-cflags-signaling-nans)
+diff --git a/sysdeps/x86_64/fpu/multiarch/Makefile b/sysdeps/x86_64/fpu/multiarch/Makefile
+index ec796277a5..e41551ec05 100644
+--- a/sysdeps/x86_64/fpu/multiarch/Makefile
++++ b/sysdeps/x86_64/fpu/multiarch/Makefile
+@@ -12,6 +12,8 @@ libm-sysdep_routines += s_ceil-sse4_1 s_ceilf-sse4_1 s_floor-sse4_1 \
+ libm-sysdep_routines += e_exp-fma e_log-fma e_pow-fma s_atan-fma \
+ 			e_asin-fma e_atan2-fma s_sin-fma s_tan-fma
+ 
++CFLAGS-s_sincos.c += $(config-cflags-wno-ignored-attributes)
++
+ CFLAGS-e_asin-fma.c = -mfma -mavx2
+ CFLAGS-e_atan2-fma.c = -mfma -mavx2
+ CFLAGS-e_exp-fma.c = -mfma -mavx2
+-- 
+2.37.2
+

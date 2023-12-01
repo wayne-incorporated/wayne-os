@@ -1,0 +1,53 @@
+speex: Fix resampler output length for interleaved input.
+
+The original code has an assumption that if the resampler consumes
+N input samples to produce M output samples, it assumes N samples is
+enough to produce the M output samples. It is incorrect because the
+resampler may actually used N+1 samples to produce the output, but it
+only consumes N samples because the last input sample is still needed
+(again) in the future.
+
+The issue happens when the left channel resampler consumes N input
+samples but actually used N+1, then the right channel resampler is only
+given N input samples and cannot produce M samples.
+The issue and fix is the same as mentioned in
+http://lists.xiph.org/pipermail/speex-dev/2009-August/007406.html
+
+--- speex-1.2rc1.orig/libspeex/resample.c	2008-05-30 15:34:16.000000000 +0800
++++ speex-1.2rc1/libspeex/resample.c	2013-09-13 20:24:07.981599107 +0800
+@@ -954,13 +954,15 @@
+ {
+    spx_uint32_t i;
+    int istride_save, ostride_save;
+-   spx_uint32_t bak_len = *out_len;
++   spx_uint32_t bak_out_len = *out_len;
++   spx_uint32_t bak_in_len = *in_len;
+    istride_save = st->in_stride;
+    ostride_save = st->out_stride;
+    st->in_stride = st->out_stride = st->nb_channels;
+    for (i=0;i<st->nb_channels;i++)
+    {
+-      *out_len = bak_len;
++      *out_len = bak_out_len;
++      *in_len = bak_in_len;
+       if (in != NULL)
+          speex_resampler_process_float(st, i, in+i, in_len, out+i, out_len);
+       else
+@@ -975,13 +977,15 @@
+ {
+    spx_uint32_t i;
+    int istride_save, ostride_save;
+-   spx_uint32_t bak_len = *out_len;
++   spx_uint32_t bak_out_len = *out_len;
++   spx_uint32_t bak_in_len = *in_len;
+    istride_save = st->in_stride;
+    ostride_save = st->out_stride;
+    st->in_stride = st->out_stride = st->nb_channels;
+    for (i=0;i<st->nb_channels;i++)
+    {
+-      *out_len = bak_len;
++      *out_len = bak_out_len;
++      *in_len = bak_in_len;
+       if (in != NULL)
+          speex_resampler_process_int(st, i, in+i, in_len, out+i, out_len);
+       else

@@ -1,0 +1,51 @@
+From c247a88879a1677a309c83e3f7ef5b66646c8d9e Mon Sep 17 00:00:00 2001
+From: Elly Jones <ellyjones@chromium.org>
+Date: Tue, 29 Nov 2011 19:28:53 -0500
+Subject: [PATCH] sys-apps/dbus: add unix fd support to dbus-send(1).
+
+Support 'fd:<int>' to pass file descriptors using dbus-send(1).
+
+BUG=chromium-os:22533
+TESTED_ON=x86-generic
+TEST=Adhoc,trybot
+Build, send an fd to debugd.
+
+Try: http://naya.i.corp.google.com/tries/7ba87f0b-5e05-4127-b827-1979b0846e50.txt
+Change-Id: I25eac2201246b18ce6f7e78ea92ea71d91fe3d41
+Signed-off-by: Elly Jones <ellyjones@chromium.org>
+Reviewed-on: https://gerrit.chromium.org/gerrit/12237
+Reviewed-by: Eric Shienbrood <ers@chromium.org>
+Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.com>
+[Adrian Ratiu: rebased to dbus 1.12.20]
+---
+ tools/dbus-send.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/tools/dbus-send.c b/tools/dbus-send.c
+index 14cde130..0cda2c66 100644
+--- a/tools/dbus-send.c
++++ b/tools/dbus-send.c
+@@ -151,6 +151,11 @@ append_arg (DBusMessageIter *iter, int type, const char *value)
+ 	}
+       break;
+ 
++    case DBUS_TYPE_UNIX_FD:
++      uint32 = strtoul (value, NULL, 0);
++      ret = dbus_message_iter_append_basic (iter, DBUS_TYPE_UNIX_FD, &uint32);
++      break;
++
+     default:
+       fprintf (stderr, "%s: Unsupported data type %c\n", appname, (char) type);
+       exit (1);
+@@ -297,6 +302,8 @@ type_from_name (const char *arg)
+     type = DBUS_TYPE_BOOLEAN;
+   else if (!strcmp (arg, "objpath"))
+     type = DBUS_TYPE_OBJECT_PATH;
++  else if (!strcmp (arg, "fd"))
++    type = DBUS_TYPE_UNIX_FD;
+   else
+     {
+       fprintf (stderr, "%s: Unknown type \"%s\"\n", appname, arg);
+-- 
+2.31.1
+

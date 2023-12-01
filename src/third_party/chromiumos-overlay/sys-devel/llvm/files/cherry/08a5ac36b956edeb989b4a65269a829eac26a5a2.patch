@@ -1,0 +1,30 @@
+commit 08a5ac36b956edeb989b4a65269a829eac26a5a2
+Author: Saleem Abdulrasool <compnerd@compnerd.org>
+Date:   Tue Aug 10 17:45:31 2021 +0000
+
+    libunwind: add missing break statements in EHABI
+    
+    Add missing break statements identified by static analysis tools.
+    
+    Patch by Andrii Kurdiumov!
+    
+    Reviewed By: compnerd, danielkiss
+    
+    Differential Revision: https://reviews.llvm.org/D107537
+
+diff --git a/libunwind/src/Unwind-EHABI.cpp b/libunwind/src/Unwind-EHABI.cpp
+index 32b5cbc3be92..8843db7f54c3 100644
+--- a/libunwind/src/Unwind-EHABI.cpp
++++ b/libunwind/src/Unwind-EHABI.cpp
+@@ -97,9 +97,11 @@ _Unwind_Reason_Code ProcessDescriptors(
+       case Descriptor::LU32:
+         descriptor = getNextWord(descriptor, &length);
+         descriptor = getNextWord(descriptor, &offset);
++        break;
+       case Descriptor::LU16:
+         descriptor = getNextNibble(descriptor, &length);
+         descriptor = getNextNibble(descriptor, &offset);
++        break;
+       default:
+         assert(false);
+         return _URC_FAILURE;

@@ -1,0 +1,627 @@
+From 4d15e8e71d8749e1066a27e3bb8064d0637546bd Mon Sep 17 00:00:00 2001
+From: Bogdan Graur <bgraur@google.com>
+Date: Fri, 10 Dec 2021 16:44:36 +0100
+Subject: [PATCH] Revert "X86InstrInfo: Support immediates that are +1/-1
+ different in optimizeCompareInstr"
+
+This reverts commit 847a6807332b13f43704327c2d30103ec0347c77.
+
+The reverted revision was causing miscompiles that manifest on AMD
+machines.
+
+Differential Revision: https://reviews.llvm.org/D115528
+---
+ llvm/lib/Target/X86/X86InstrInfo.cpp          |  93 +-----
+ llvm/lib/Target/X86/X86InstrInfo.h            |   3 +-
+ llvm/test/CodeGen/X86/optimize-compare.mir    | 304 ------------------
+ llvm/test/CodeGen/X86/peep-test-5.ll          |  56 ----
+ .../X86/use-cr-result-of-dom-icmp-st.ll       |  12 +-
+ 5 files changed, 25 insertions(+), 443 deletions(-)
+ delete mode 100644 llvm/test/CodeGen/X86/peep-test-5.ll
+
+diff --git a/llvm/lib/Target/X86/X86InstrInfo.cpp b/llvm/lib/Target/X86/X86InstrInfo.cpp
+index bb5637a31947..ec5d2ac3a5d6 100644
+--- a/llvm/lib/Target/X86/X86InstrInfo.cpp
++++ b/llvm/lib/Target/X86/X86InstrInfo.cpp
+@@ -4088,8 +4088,8 @@ bool X86InstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
+ bool X86InstrInfo::isRedundantFlagInstr(const MachineInstr &FlagI,
+                                         Register SrcReg, Register SrcReg2,
+                                         int64_t ImmMask, int64_t ImmValue,
+-                                        const MachineInstr &OI, bool *IsSwapped,
+-                                        int64_t *ImmDelta) const {
++                                        const MachineInstr &OI,
++                                        bool *IsSwapped) const {
+   switch (OI.getOpcode()) {
+   case X86::CMP64rr:
+   case X86::CMP32rr:
+@@ -4140,21 +4140,10 @@ bool X86InstrInfo::isRedundantFlagInstr(const MachineInstr &FlagI,
+       int64_t OIMask;
+       int64_t OIValue;
+       if (analyzeCompare(OI, OISrcReg, OISrcReg2, OIMask, OIValue) &&
+-          SrcReg == OISrcReg && ImmMask == OIMask) {
+-        if (OIValue == ImmValue) {
+-          *ImmDelta = 0;
+-          return true;
+-        } else if (static_cast<uint64_t>(ImmValue) ==
+-                   static_cast<uint64_t>(OIValue) - 1) {
+-          *ImmDelta = -1;
+-          return true;
+-        } else if (static_cast<uint64_t>(ImmValue) ==
+-                   static_cast<uint64_t>(OIValue) + 1) {
+-          *ImmDelta = 1;
+-          return true;
+-        } else {
+-          return false;
+-        }
++          SrcReg == OISrcReg && ImmMask == OIMask && OIValue == ImmValue) {
++        assert(SrcReg2 == X86::NoRegister && OISrcReg2 == X86::NoRegister &&
++               "should not have 2nd register");
++        return true;
+       }
+     }
+     return FlagI.isIdenticalTo(OI);
+@@ -4404,7 +4393,6 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+   bool ShouldUpdateCC = false;
+   bool IsSwapped = false;
+   X86::CondCode NewCC = X86::COND_INVALID;
+-  int64_t ImmDelta = 0;
+ 
+   // Search backward from CmpInstr for the next instruction defining EFLAGS.
+   const TargetRegisterInfo *TRI = &getRegisterInfo();
+@@ -4451,7 +4439,7 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+         //     ...           // EFLAGS not changed
+         //     cmp x, y      // <-- can be removed
+         if (isRedundantFlagInstr(CmpInstr, SrcReg, SrcReg2, CmpMask, CmpValue,
+-                                 Inst, &IsSwapped, &ImmDelta)) {
++                                 Inst, &IsSwapped)) {
+           Sub = &Inst;
+           break;
+         }
+@@ -4485,7 +4473,7 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+   // It is safe to remove CmpInstr if EFLAGS is redefined or killed.
+   // If we are done with the basic block, we need to check whether EFLAGS is
+   // live-out.
+-  bool FlagsMayLiveOut = true;
++  bool IsSafe = false;
+   SmallVector<std::pair<MachineInstr*, X86::CondCode>, 4> OpsToUpdate;
+   MachineBasicBlock::iterator AfterCmpInstr =
+       std::next(MachineBasicBlock::iterator(CmpInstr));
+@@ -4495,7 +4483,7 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+     // We should check the usage if this instruction uses and updates EFLAGS.
+     if (!UseEFLAGS && ModifyEFLAGS) {
+       // It is safe to remove CmpInstr if EFLAGS is updated again.
+-      FlagsMayLiveOut = false;
++      IsSafe = true;
+       break;
+     }
+     if (!UseEFLAGS && !ModifyEFLAGS)
+@@ -4503,7 +4491,7 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+ 
+     // EFLAGS is used by this instruction.
+     X86::CondCode OldCC = X86::COND_INVALID;
+-    if (MI || IsSwapped || ImmDelta != 0) {
++    if (MI || IsSwapped) {
+       // We decode the condition code from opcode.
+       if (Instr.isBranch())
+         OldCC = X86::getCondFromBranch(Instr);
+@@ -4555,60 +4543,11 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+       // to be changed from r2 > r1 to r1 < r2, from r2 < r1 to r1 > r2, etc.
+       // We swap the condition code and synthesize the new opcode.
+       ReplacementCC = getSwappedCondition(OldCC);
+-      if (ReplacementCC == X86::COND_INVALID) return false;
+-      ShouldUpdateCC = true;
+-    } else if (ImmDelta != 0) {
+-      unsigned BitWidth = TRI->getRegSizeInBits(*MRI->getRegClass(SrcReg));
+-      // Shift amount for min/max constants to adjust for 8/16/32 instruction
+-      // sizes.
+-      switch (OldCC) {
+-      case X86::COND_L: // x <s (C + 1)  -->  x <=s C
+-        if (ImmDelta != 1 || APInt::getSignedMinValue(BitWidth) == CmpValue)
+-          return false;
+-        ReplacementCC = X86::COND_LE;
+-        break;
+-      case X86::COND_B: // x <u (C + 1)  -->  x <=u C
+-        if (ImmDelta != 1 || CmpValue == 0)
+-          return false;
+-        ReplacementCC = X86::COND_BE;
+-        break;
+-      case X86::COND_GE: // x >=s (C + 1)  -->  x >s C
+-        if (ImmDelta != 1 || APInt::getSignedMinValue(BitWidth) == CmpValue)
+-          return false;
+-        ReplacementCC = X86::COND_G;
+-        break;
+-      case X86::COND_AE: // x >=u (C + 1)  -->  x >u C
+-        if (ImmDelta != 1 || CmpValue == 0)
+-          return false;
+-        ReplacementCC = X86::COND_A;
+-        break;
+-      case X86::COND_G: // x >s (C - 1)  -->  x >=s C
+-        if (ImmDelta != -1 || APInt::getSignedMaxValue(BitWidth) == CmpValue)
+-          return false;
+-        ReplacementCC = X86::COND_GE;
+-        break;
+-      case X86::COND_A: // x >u (C - 1)  -->  x >=u C
+-        if (ImmDelta != -1 || APInt::getMaxValue(BitWidth) == CmpValue)
+-          return false;
+-        ReplacementCC = X86::COND_AE;
+-        break;
+-      case X86::COND_LE: // x <=s (C - 1)  -->  x <s C
+-        if (ImmDelta != -1 || APInt::getSignedMaxValue(BitWidth) == CmpValue)
+-          return false;
+-        ReplacementCC = X86::COND_L;
+-        break;
+-      case X86::COND_BE: // x <=u (C - 1)  -->  x <u C
+-        if (ImmDelta != -1 || APInt::getMaxValue(BitWidth) == CmpValue)
+-          return false;
+-        ReplacementCC = X86::COND_B;
+-        break;
+-      default:
++      if (ReplacementCC == X86::COND_INVALID)
+         return false;
+-      }
+-      ShouldUpdateCC = true;
+     }
+ 
+-    if (ShouldUpdateCC && ReplacementCC != OldCC) {
++    if ((ShouldUpdateCC || IsSwapped) && ReplacementCC != OldCC) {
+       // Push the MachineInstr to OpsToUpdate.
+       // If it is safe to remove CmpInstr, the condition code of these
+       // instructions will be modified.
+@@ -4616,14 +4555,14 @@ bool X86InstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+     }
+     if (ModifyEFLAGS || Instr.killsRegister(X86::EFLAGS, TRI)) {
+       // It is safe to remove CmpInstr if EFLAGS is updated again or killed.
+-      FlagsMayLiveOut = false;
++      IsSafe = true;
+       break;
+     }
+   }
+ 
+-  // If we have to update users but EFLAGS is live-out abort, since we cannot
+-  // easily find all of the users.
+-  if (ShouldUpdateCC && FlagsMayLiveOut) {
++  // If EFLAGS is not killed nor re-defined, we should check whether it is
++  // live-out. If it is live-out, do not optimize.
++  if ((MI || IsSwapped) && !IsSafe) {
+     for (MachineBasicBlock *Successor : CmpMBB.successors())
+       if (Successor->isLiveIn(X86::EFLAGS))
+         return false;
+diff --git a/llvm/lib/Target/X86/X86InstrInfo.h b/llvm/lib/Target/X86/X86InstrInfo.h
+index 33ce55bbdb2b..537ada6222bf 100644
+--- a/llvm/lib/Target/X86/X86InstrInfo.h
++++ b/llvm/lib/Target/X86/X86InstrInfo.h
+@@ -643,8 +643,7 @@ private:
+   ///   CMP %1, %2   and  %3 = SUB %2, %1  ; IsSwapped=true
+   bool isRedundantFlagInstr(const MachineInstr &FlagI, Register SrcReg,
+                             Register SrcReg2, int64_t ImmMask, int64_t ImmValue,
+-                            const MachineInstr &OI, bool *IsSwapped,
+-                            int64_t *ImmDelta) const;
++                            const MachineInstr &OI, bool *IsSwapped) const;
+ };
+ 
+ } // namespace llvm
+diff --git a/llvm/test/CodeGen/X86/optimize-compare.mir b/llvm/test/CodeGen/X86/optimize-compare.mir
+index 968ee7804b83..dc15cbbab8b1 100644
+--- a/llvm/test/CodeGen/X86/optimize-compare.mir
++++ b/llvm/test/CodeGen/X86/optimize-compare.mir
+@@ -379,307 +379,3 @@ body: |
+     CMP64ri32 %0, 24, implicit-def $eflags
+     $cl = SETCCr 3, implicit $eflags
+ ...
+----
+-name: opt_redundant_flags_adjusted_imm_0
+-body: |
+-  bb.0:
+-    ; CHECK-LABEL: name: opt_redundant_flags_adjusted_imm_0
+-    ; CHECK: [[COPY:%[0-9]+]]:gr64 = COPY $rsi
+-    ; CHECK-NEXT: CMP64ri8 [[COPY]], 1, implicit-def $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 4, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 15, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 7, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 14, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 6, implicit $eflags
+-    %0:gr64 = COPY $rsi
+-    ; CMP+SETCC   %0 == 1
+-    CMP64ri8 %0, 1, implicit-def $eflags
+-    $cl = SETCCr 4, implicit $eflags
+-    ; CMP+SETCC   %0 >= 2; CMP can be removed.
+-    CMP64ri8 %0, 2, implicit-def $eflags
+-    ; %0 >=s 2  -->  %0 >s 1
+-    $bl = SETCCr 13, implicit $eflags
+-    ; %0 >=u 2  -->  %0 >u 1
+-    $bl = SETCCr 3, implicit $eflags
+-    ; %0 <s 2  -->  %0 <=s 1
+-    $bl = SETCCr 12, implicit $eflags
+-    ; %0 <u 2  -->  %0 <=u 1
+-    $bl = SETCCr 2, implicit $eflags
+-...
+----
+-name: opt_redundant_flags_adjusted_imm_1
+-body: |
+-  bb.0:
+-    ; CHECK-LABEL: name: opt_redundant_flags_adjusted_imm_1
+-    ; CHECK: [[COPY:%[0-9]+]]:gr64 = COPY $rsi
+-    ; CHECK-NEXT: CMP64ri8 [[COPY]], 42, implicit-def $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 5, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 13, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 3, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 12, implicit $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 2, implicit $eflags
+-    %0:gr64 = COPY $rsi
+-    ; CMP+SETCC   %0 != 42
+-    CMP64ri8 %0, 42, implicit-def $eflags
+-    $cl = SETCCr 5, implicit $eflags
+-    ; CMP+SETCC   %0 >= 2; CMP can be removed.
+-    CMP64ri8 %0, 41, implicit-def $eflags
+-    ; %0 >s 41  -->  %0 >=s 42
+-    $bl = SETCCr 15, implicit $eflags
+-    ; %0 >u 41  -->  %0 >=u 42
+-    $bl = SETCCr 7, implicit $eflags
+-    ; %0 <=s 41  -->  %0 <s 42
+-    $bl = SETCCr 14, implicit $eflags
+-    ; %0 <=u 41  -->  %0 <u 42
+-    $bl = SETCCr 6, implicit $eflags
+-...
+----
+-name: opt_redundant_flags_adjusted_imm_test_cmp
+-body: |
+-  bb.0:
+-    ; CHECK-LABEL: name: opt_redundant_flags_adjusted_imm_test_cmp
+-    ; CHECK: [[COPY:%[0-9]+]]:gr8 = COPY $bl
+-    ; CHECK-NEXT: TEST8rr [[COPY]], [[COPY]], implicit-def $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 14, implicit $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 7, implicit $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 12, implicit $eflags
+-    %0:gr8 = COPY $bl
+-    TEST8rr %0, %0, implicit-def $eflags
+-    ; SET %0 <=s 0
+-    $cl = SETCCr 14, implicit $eflags
+-    ; CMP should be removed (%0 >=u 1)
+-    CMP8ri %0, 1, implicit-def $eflags
+-    $cl = SETCCr 3, implicit $eflags
+-
+-    ; CMP should be removed (%0 <=s -1)
+-    CMP8ri %0, -1, implicit-def $eflags
+-    $cl = SETCCr 14, implicit $eflags
+-...
+----
+-name: opt_redundant_flags_adjusted_imm_cmp_test
+-body: |
+-  bb.0:
+-    ; CHECK-LABEL: name: opt_redundant_flags_adjusted_imm_cmp_test
+-    ; CHECK: [[COPY:%[0-9]+]]:gr64 = COPY $rsi
+-    ; CHECK-NEXT: CMP64ri32 [[COPY]], 1, implicit-def $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 13, implicit $eflags
+-    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gr64 = COPY $edi
+-    ; CHECK-NEXT: CMP64ri32 [[COPY1]], -1, implicit-def $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 14, implicit $eflags
+-    %0:gr64 = COPY $rsi
+-    CMP64ri32 %0, 1, implicit-def $eflags
+-    ; TEST should be removed
+-    TEST64rr %0, %0, implicit-def $eflags
+-    $cl = SETCCr 15, implicit $eflags
+-
+-    %1:gr64 = COPY $edi
+-    CMP64ri32 %1, -1, implicit-def $eflags
+-    ; TEST should be removed
+-    TEST64rr %1, %1, implicit-def $eflags
+-    $cl = SETCCr 12, implicit $eflags
+-...
+----
+-name: opt_redundant_flags_adjusted_imm_noopt_0
+-body: |
+-  bb.0:
+-    ; CHECK-LABEL: name: opt_redundant_flags_adjusted_imm_noopt_0
+-    ; CHECK: [[COPY:%[0-9]+]]:gr64 = COPY $rsi
+-    ; CHECK-NEXT: CMP64ri8 [[COPY]], 42, implicit-def $eflags
+-    ; CHECK-NEXT: $cl = SETCCr 4, implicit $eflags
+-    ; CHECK-NEXT: CMP64ri8 [[COPY]], 41, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 4, implicit $eflags
+-    %0:gr64 = COPY $rsi
+-    ; CMP+SETCC   %0 <s 1
+-    CMP64ri8 %0, 42, implicit-def $eflags
+-    $cl = SETCCr 4, implicit $eflags
+-    ; CMP should not be removed.
+-    CMP64ri8 %0, 41, implicit-def $eflags
+-    ; %0 == 41
+-    $bl = SETCCr 4, implicit $eflags
+-...
+----
+-name: opt_redundant_flags_adjusted_imm_noopt_1
+-body: |
+-  bb.0:
+-    ; CHECK-LABEL: name: opt_redundant_flags_adjusted_imm_noopt_1
+-    ; CHECK: [[COPY:%[0-9]+]]:gr32 = COPY $esi
+-    ; CHECK-NEXT: CMP32ri [[COPY]], 2147483647, implicit-def $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], -2147483648, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 12, implicit $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], 4294967295, implicit-def $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], -2147483648, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 12, implicit $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], 2147483647, implicit-def $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], -2147483648, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 13, implicit $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], 4294967295, implicit-def $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], 0, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 2, implicit $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], 4294967295, implicit-def $eflags
+-    ; CHECK-NEXT: CMP32ri [[COPY]], 0, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 3, implicit $eflags
+-    %0:gr32 = COPY $esi
+-    ; CMP+SETCC   %0 == INT32_MAX
+-    CMP32ri %0, 2147483647, implicit-def $eflags
+-    ; CMP should not be removed.
+-    CMP32ri %0, -2147483648, implicit-def $eflags
+-    ; %0 <s INT32_MIN
+-    $bl = SETCCr 12, implicit $eflags
+-
+-    CMP32ri %0, 4294967295, implicit-def $eflags
+-    ; CMP should not be removed.
+-    CMP32ri %0, -2147483648, implicit-def $eflags
+-    $bl = SETCCr 12, implicit $eflags
+-
+-    CMP32ri %0, 2147483647, implicit-def $eflags
+-    ; CMP should not be removed.
+-    CMP32ri %0, -2147483648, implicit-def $eflags
+-    $bl = SETCCr 13, implicit $eflags
+-
+-    CMP32ri %0, 4294967295, implicit-def $eflags
+-    ; should not be removed
+-    CMP32ri %0, 0, implicit-def $eflags
+-    $bl = SETCCr 2, implicit $eflags
+-
+-    CMP32ri %0, 4294967295, implicit-def $eflags
+-    ; should not be removed
+-    CMP32ri %0, 0, implicit-def $eflags
+-    $bl = SETCCr 3, implicit $eflags
+-...
+----
+-name: opt_redundant_flags_adjusted_imm_noopt_2
+-body: |
+-  bb.0:
+-    ; CHECK-LABEL: name: opt_redundant_flags_adjusted_imm_noopt_2
+-    ; CHECK: [[COPY:%[0-9]+]]:gr16 = COPY $cx
+-    ; CHECK-NEXT: CMP16ri [[COPY]], -32768, implicit-def $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 32767, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 15, implicit $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 65535, implicit-def $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 32767, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 15, implicit $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], -32768, implicit-def $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 32767, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 14, implicit $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 0, implicit-def $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 65535, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 4, implicit $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 0, implicit-def $eflags
+-    ; CHECK-NEXT: CMP16ri [[COPY]], 65535, implicit-def $eflags
+-    ; CHECK-NEXT: $bl = SETCCr 6, implicit $eflags
+-    %0:gr16 = COPY $cx
+-    ; CMP+SETCC   %0 == INT16_MIN
+-    CMP16ri %0, -32768, implicit-def $eflags
+-    ; CMP should not be removed.
+-    CMP16ri %0, 32767, implicit-def $eflags
+-    ; %0 >s INT16_MAX
+-    $bl = SETCCr 15, implicit $eflags
+-
+-    CMP16ri %0, 65535, implicit-def $eflags
+-    ; CMP should not be removed.
+-    CMP16ri %0, 32767, implicit-def $eflags
+-    $bl = SETCCr 15, implicit $eflags
+-
+-    CMP16ri %0, -32768, implicit-def $eflags
+-    ; CMP should not be removed.
+-    CMP16ri %0, 32767, implicit-def $eflags
+-    $bl = SETCCr 14, implicit $eflags
+-
+-    CMP16ri %0, 0, implicit-def $eflags
+-    ; should not be removed
+-    CMP16ri %0, 65535, implicit-def $eflags
+-    $bl = SETCCr 4, implicit $eflags
+-
+-    CMP16ri %0, 0, implicit-def $eflags
+-    ; should not be removed
+-    CMP16ri %0, 65535, implicit-def $eflags
+-    $bl = SETCCr 6, implicit $eflags
+-...
+----
+-name: opt_adjusted_imm_multiple_blocks
+-body: |
+-  ; CHECK-LABEL: name: opt_adjusted_imm_multiple_blocks
+-  ; CHECK: bb.0:
+-  ; CHECK-NEXT:   successors: %bb.1(0x40000000), %bb.3(0x40000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   [[COPY:%[0-9]+]]:gr32 = COPY $eax
+-  ; CHECK-NEXT:   CMP32ri [[COPY]], 20, implicit-def $eflags
+-  ; CHECK-NEXT:   JCC_1 %bb.1, 4, implicit $eflags
+-  ; CHECK-NEXT:   JMP_1 %bb.3
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.1:
+-  ; CHECK-NEXT:   successors: %bb.2(0x40000000), %bb.3(0x40000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   JCC_1 %bb.2, 15, implicit $eflags
+-  ; CHECK-NEXT:   JMP_1 %bb.3
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.2:
+-  ; CHECK-NEXT:   successors: %bb.3(0x80000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   JMP_1 %bb.3
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.3:
+-  ; CHECK-NEXT:   RET64
+-  bb.0:
+-    %0:gr32 = COPY $eax
+-    CMP32ri %0, 20, implicit-def $eflags
+-    JCC_1 %bb.1, 4, implicit $eflags
+-    JMP_1 %bb.3
+-
+-  bb.1:
+-    ; CMP can be removed when adjusting the JCC.
+-    CMP32ri %0, 21, implicit-def $eflags
+-    JCC_1 %bb.2, 13, implicit $eflags
+-    JMP_1 %bb.3
+-
+-  bb.2:
+-    JMP_1 %bb.3
+-
+-  bb.3:
+-    RET64
+-...
+----
+-name: opt_adjusted_imm_multiple_blocks_noopt
+-body: |
+-  ; CHECK-LABEL: name: opt_adjusted_imm_multiple_blocks_noopt
+-  ; CHECK: bb.0:
+-  ; CHECK-NEXT:   successors: %bb.1(0x40000000), %bb.3(0x40000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   [[COPY:%[0-9]+]]:gr32 = COPY $eax
+-  ; CHECK-NEXT:   CMP32ri [[COPY]], 20, implicit-def $eflags
+-  ; CHECK-NEXT:   JCC_1 %bb.1, 4, implicit $eflags
+-  ; CHECK-NEXT:   JMP_1 %bb.3
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.1:
+-  ; CHECK-NEXT:   successors: %bb.2(0x40000000), %bb.3(0x40000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   CMP32ri [[COPY]], 21, implicit-def $eflags
+-  ; CHECK-NEXT:   JCC_1 %bb.2, 13, implicit $eflags
+-  ; CHECK-NEXT:   JMP_1 %bb.3
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.2:
+-  ; CHECK-NEXT:   successors: %bb.3(0x80000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   $al = SETCCr 4, implicit $eflags
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.3:
+-  ; CHECK-NEXT:   RET64
+-  bb.0:
+-    %0:gr32 = COPY $eax
+-    CMP32ri %0, 20, implicit-def $eflags
+-    JCC_1 %bb.1, 4, implicit $eflags
+-    JMP_1 %bb.3
+-
+-  bb.1:
+-    ; The following CMP should not be optimized because $eflags is live-out
+-    CMP32ri %0, 21, implicit-def $eflags
+-    JCC_1 %bb.2, 13, implicit $eflags
+-    JMP_1 %bb.3
+-
+-  bb.2:
+-    liveins: $eflags
+-    $al = SETCCr 4, implicit $eflags
+-
+-  bb.3:
+-    RET64
+-...
+diff --git a/llvm/test/CodeGen/X86/peep-test-5.ll b/llvm/test/CodeGen/X86/peep-test-5.ll
+deleted file mode 100644
+index 2530cf6576b8..000000000000
+--- a/llvm/test/CodeGen/X86/peep-test-5.ll
++++ /dev/null
+@@ -1,56 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py
+-; RUN: llc -o - %s -mtriple=x86_64-- | FileCheck %s
+-; Example of a decref operation with "immortal" objects.
+-; void decref(long* refcount) {
+-;  long count = *refcount;
+-;  if (count == 1) { free_object() }
+-;  else if (count > 1) { *refcount = count - 1; }
+-;  else { /* immortal */ }
+-; }
+-; Resulting assembly should share flags from single CMP instruction for both
+-; conditions!
+-define void @decref(i32* %p) {
+-; CHECK-LABEL: decref:
+-; CHECK:       # %bb.0:
+-; CHECK-NEXT:    pushq %rax
+-; CHECK-NEXT:    .cfi_def_cfa_offset 16
+-; CHECK-NEXT:    movl (%rdi), %eax
+-; CHECK-NEXT:    cmpl $1, %eax
+-; CHECK-NEXT:    jne .LBB0_2
+-; CHECK-NEXT:  # %bb.1: # %bb_free
+-; CHECK-NEXT:    callq free_object@PLT
+-; CHECK-NEXT:  .LBB0_4: # %end
+-; CHECK-NEXT:    popq %rax
+-; CHECK-NEXT:    .cfi_def_cfa_offset 8
+-; CHECK-NEXT:    retq
+-; CHECK-NEXT:  .LBB0_2: # %bb2
+-; CHECK-NEXT:    .cfi_def_cfa_offset 16
+-; CHECK-NEXT:    jle .LBB0_4
+-; CHECK-NEXT:  # %bb.3: # %bb_dec
+-; CHECK-NEXT:    decl %eax
+-; CHECK-NEXT:    movl %eax, (%rdi)
+-; CHECK-NEXT:    popq %rax
+-; CHECK-NEXT:    .cfi_def_cfa_offset 8
+-; CHECK-NEXT:    retq
+-  %count = load i32, i32* %p, align 4
+-  %cmp0 = icmp eq i32 %count, 1
+-  br i1 %cmp0, label %bb_free, label %bb2
+-
+-bb2:
+-  %cmp1 = icmp sgt i32 %count, 1
+-  br i1 %cmp1, label %bb_dec, label %end
+-
+-bb_dec:
+-  %dec = add nsw i32 %count, -1
+-  store i32 %dec, i32* %p, align 4
+-  br label %end
+-
+-bb_free:
+-  call void @free_object()
+-  br label %end
+-
+-end:
+-  ret void
+-}
+-
+-declare void @free_object()
+diff --git a/llvm/test/CodeGen/X86/use-cr-result-of-dom-icmp-st.ll b/llvm/test/CodeGen/X86/use-cr-result-of-dom-icmp-st.ll
+index ae25f0522575..baae1ab539e0 100644
+--- a/llvm/test/CodeGen/X86/use-cr-result-of-dom-icmp-st.ll
++++ b/llvm/test/CodeGen/X86/use-cr-result-of-dom-icmp-st.ll
+@@ -117,8 +117,9 @@ define i64 @ll_a_op_b_1(i64 %a, i64 %b) {
+ ; CHECK-NEXT:    cmpq $1, %rdx
+ ; CHECK-NEXT:    jg .LBB3_2
+ ; CHECK-NEXT:  # %bb.1: # %if.end
++; CHECK-NEXT:    testq %rdx, %rdx
+ ; CHECK-NEXT:    movl $1, %ecx
+-; CHECK-NEXT:    cmovlq %rcx, %rax
++; CHECK-NEXT:    cmovleq %rcx, %rax
+ ; CHECK-NEXT:    imulq %rdi, %rax
+ ; CHECK-NEXT:  .LBB3_2: # %return
+ ; CHECK-NEXT:    retq
+@@ -255,8 +256,9 @@ define i64 @ll_a_1(i64 %a, i64 %b) {
+ ; CHECK-NEXT:    cmpq $1, %rdi
+ ; CHECK-NEXT:    jg .LBB8_2
+ ; CHECK-NEXT:  # %bb.1: # %if.end
++; CHECK-NEXT:    testq %rdi, %rdi
+ ; CHECK-NEXT:    movl $1, %ecx
+-; CHECK-NEXT:    cmovlq %rcx, %rax
++; CHECK-NEXT:    cmovleq %rcx, %rax
+ ; CHECK-NEXT:    imulq %rdi, %rax
+ ; CHECK-NEXT:  .LBB8_2: # %return
+ ; CHECK-NEXT:    retq
+@@ -410,8 +412,9 @@ define i64 @i_a_op_b_1(i32 signext %a, i32 signext %b) {
+ ; CHECK-NEXT:    cmpl $1, %eax
+ ; CHECK-NEXT:    jg .LBB13_2
+ ; CHECK-NEXT:  # %bb.1: # %if.end
++; CHECK-NEXT:    testl %eax, %eax
+ ; CHECK-NEXT:    movl $1, %eax
+-; CHECK-NEXT:    cmovll %eax, %ecx
++; CHECK-NEXT:    cmovlel %eax, %ecx
+ ; CHECK-NEXT:    imull %edi, %ecx
+ ; CHECK-NEXT:  .LBB13_2: # %return
+ ; CHECK-NEXT:    movslq %ecx, %rax
+@@ -560,8 +563,9 @@ define i64 @i_a_1(i32 signext %a, i32 signext %b) {
+ ; CHECK-NEXT:    cmpl $1, %edi
+ ; CHECK-NEXT:    jg .LBB18_2
+ ; CHECK-NEXT:  # %bb.1: # %if.end
++; CHECK-NEXT:    testl %edi, %edi
+ ; CHECK-NEXT:    movl $1, %eax
+-; CHECK-NEXT:    cmovll %eax, %esi
++; CHECK-NEXT:    cmovlel %eax, %esi
+ ; CHECK-NEXT:    imull %edi, %esi
+ ; CHECK-NEXT:  .LBB18_2: # %return
+ ; CHECK-NEXT:    movslq %esi, %rax
+-- 
+2.35.0.rc0.227.g00780c9af4-goog
+

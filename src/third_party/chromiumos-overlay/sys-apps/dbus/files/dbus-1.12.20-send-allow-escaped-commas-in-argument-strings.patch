@@ -1,0 +1,118 @@
+From 3a9bf982abae5aa8729b092e845f4283ec498dca Mon Sep 17 00:00:00 2001
+From: Tim Song <tengs@chromium.org>
+Date: Tue, 14 May 2013 14:32:38 -0700
+Subject: [PATCH] Patch dbus-send to support escaping commas in string elements
+ of arrays.
+
+BUG=chromium:240540
+TEST=Telemetry tests on cros pass with escaped commas in arguments.
+
+Change-Id: I1a284dfa443f2048dddaa85912b518224aaea5d5
+Reviewed-on: https://gerrit.chromium.org/gerrit/51185
+Reviewed-by: Elly Jones <ellyjones@chromium.org>
+Reviewed-by: Achuith Bhandarkar <achuith@chromium.org>
+Tested-by: Tim Song <tengs@chromium.org>
+Commit-Queue: Tim Song <tengs@chromium.org>
+---
+ tools/dbus-send.c | 78 ++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 70 insertions(+), 8 deletions(-)
+
+diff --git a/tools/dbus-send.c b/tools/dbus-send.c
+index a1884837..52623a52 100644
+--- a/tools/dbus-send.c
++++ b/tools/dbus-send.c
+@@ -159,21 +159,83 @@ append_arg (DBusMessageIter *iter, int type, const char *value)
+   handle_oom (ret);
+ }
+ 
++// Note: buffer must be pre-allocated and at least as big as str.
++static int
++get_next_token (const char *str, int loc, char *buffer)
++{
++  int str_index, buffer_index = 0;
++
++  enum State {START, ESCAPE};
++  enum State state = START;
++
++  for (str_index = loc; str[str_index] != '\0'; str_index++)
++    {
++      if (state == START)
++        {
++          switch (str[str_index])
++            {
++              case '\\':
++                state = ESCAPE;
++                continue;
++
++              // If we hit a , in the start state, we should treat it as
++              // an argument separator since it's not escaped.
++              case ',':
++                buffer[buffer_index] = '\0';
++                return str_index + 1;
++            }
++        }
++      else if (state == ESCAPE)
++        {
++          // If the \ doesn't immediately precede a , or another \, then
++          // it's not being used as an escape character.
++          // Similarly, if we have a string of multiple \s as the last
++          // characters, then they're also not being used as escape characters.
++          if ((str[str_index] != ',' && str[str_index] != '\\') ||
++              (str[str_index] == '\\' && str[str_index + 1] == '\0'))
++            {
++              buffer[buffer_index] = '\\';
++              buffer_index++;
++            }
++
++          state = START;
++        }
++
++      buffer[buffer_index] = str[str_index];
++      buffer_index++;
++    }
++
++  // If we end on a single \, then it's not being used as an escape character.
++  // Note the earlier check will only catch if we end on a string of multiple
++  // \s.
++  if (state == ESCAPE)
++    {
++      buffer[buffer_index] = '\\';
++      buffer_index++;
++    }
++  buffer[buffer_index] = '\0';
++
++  return -1;
++}
++
+ static void
+ append_array (DBusMessageIter *iter, int type, const char *value)
+ {
+-  const char *val;
+-  char *dupval = strdup (value);
++  char *buffer = strdup (value);
+ 
+-  handle_oom (dupval != NULL);
++  handle_oom (buffer != NULL);
+ 
+-  val = strtok (dupval, ",");
+-  while (val != NULL)
++  int loc = 0;
++  while (loc >= 0)
+     {
+-      append_arg (iter, type, val);
+-      val = strtok (NULL, ",");
++      loc = get_next_token (value, loc, buffer);
++
++      // We don't want to include empty strings, even if there are
++      // several commas directly beside each other.
++      if (buffer[0] != '\0')
++        append_arg (iter, type, buffer);
+     }
+-  free (dupval);
++  free (buffer);
+ }
+ 
+ static void
+-- 
+2.30.1
+

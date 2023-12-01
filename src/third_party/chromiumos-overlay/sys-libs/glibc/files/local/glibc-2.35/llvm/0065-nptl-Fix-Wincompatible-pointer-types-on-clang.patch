@@ -1,0 +1,29 @@
+From ac6704113fef37abaae08c2dea91a5dae2628a13 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 9 Mar 2022 16:17:43 -0300
+Subject: [PATCH 065/163] nptl: Fix Wincompatible-pointer-types on clang
+
+Clang issues:
+
+error: incompatible pointer types passing 'struct pthread **' to
+parameter of type 'void **' [-Werror,-Wincompatible-pointer-types]
+---
+ nptl/pthread_join_common.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/nptl/pthread_join_common.c b/nptl/pthread_join_common.c
+index ca3245b0af..a4a528c40b 100644
+--- a/nptl/pthread_join_common.c
++++ b/nptl/pthread_join_common.c
+@@ -29,7 +29,7 @@ cleanup (void *arg)
+      fail for any reason but the thread not having done that yet so
+      there is no reason for a loop.  */
+   struct pthread *self = THREAD_SELF;
+-  atomic_compare_exchange_weak_acquire (&arg, &self, NULL);
++  atomic_compare_exchange_weak_acquire (&arg, (void **) &self, NULL);
+ }
+ 
+ int
+-- 
+2.37.2
+

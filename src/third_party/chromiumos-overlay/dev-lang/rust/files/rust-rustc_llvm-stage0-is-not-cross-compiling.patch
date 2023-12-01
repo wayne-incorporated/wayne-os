@@ -1,0 +1,20 @@
+This patch is needed to work around linker errors in our stage0 build when we're
+building for x86_64-pc-linux-gnu with an x86_64-unknown-linux-gnu rustc.
+
+b/278119972 tracks whether this can be cleaned up and upstreamed
+
+diff --git a/compiler/rustc_llvm/build.rs b/compiler/rustc_llvm/build.rs
+index 6accfea03..438ddb150 100644
+--- a/compiler/rustc_llvm/build.rs
++++ b/compiler/rustc_llvm/build.rs
+@@ -156,7 +159,9 @@ fn main() {
+     // are gated on `if !is_crossed`
+     let target = env::var("TARGET").expect("TARGET was not set");
+     let host = env::var("HOST").expect("HOST was not set");
+-    let is_crossed = target != host;
++    let is_crossed = target != host && !(
++        target == "x86_64-pc-linux-gnu" && host == "x86_64-unknown-linux-gnu"
++    );
+ 
+     let components = output(Command::new(&llvm_config).arg("--components"));
+     let mut components = components.split_whitespace().collect::<Vec<_>>();

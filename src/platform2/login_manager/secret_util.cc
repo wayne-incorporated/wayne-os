@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include <base/file_descriptor_posix.h>
 #include <base/files/file_util.h>
 #include <base/files/scoped_file.h>
+#include <base/logging.h>
 #include <base/memory/read_only_shared_memory_region.h>
 #include <base/process/process_handle.h>
 #include <base/strings/string_number_conversions.h>
@@ -107,7 +108,7 @@ base::ScopedFD WriteSizeAndDataToPipe(const std::vector<uint8_t>& data) {
   base::ScopedFD write_scoped_fd(fds[1]);
 
   base::WriteFileDescriptor(write_scoped_fd.get(),
-                            base::as_bytes(base::make_span(&data_size, 1)));
+                            base::as_bytes(base::make_span(&data_size, 1u)));
   base::WriteFileDescriptor(write_scoped_fd.get(), data);
   return read_dbus_fd;
 }

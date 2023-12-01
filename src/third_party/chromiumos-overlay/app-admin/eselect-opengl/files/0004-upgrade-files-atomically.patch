@@ -1,0 +1,38 @@
+https://bugs.gentoo.org/508708
+
+From 1d2540d8f66d344d3adcfa0db626690d43187dbb Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@gentoo.org>
+Date: Fri, 25 Apr 2014 13:39:21 -0400
+Subject: [PATCH 4/4] upgrade files atomically
+
+---
+ opengl.eselect | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/opengl.eselect b/opengl.eselect
+index 1b72c18..0e1e52a 100644
+--- a/opengl.eselect
++++ b/opengl.eselect
+@@ -71,13 +71,13 @@ upgrade_file() {
+ 	[[ -f ${file} ]] || return
+ 	filename=$(basename "${file}")
+ 
+-	if [[ -f ${filename} || ( -L ${filename} && ! -e ${filename} ) ]] ; then
+-		rm -f "${filename}" || die -q "Failed to delete ${workdir}/${filename}"
+-	fi
+-
+-	#echo "DEBUG: ln -s \"${linkfile}\" \"${filename}\""
++	#echo "DEBUG: ln -sf \"${linkfile}\" \"${filename}\""
+ 	if [[ "x${REMOVE_ONLY}" == "xfalse" ]]; then
+-		ln -s "${linkfile}" "${filename}" || die -q "Failed to create symlink ${workdir}/${filename}"
++		# Upgrade the file atomically. #508708
++		ln -sf "${linkfile}" "${filename}~" || die -q "Failed to create symlink ${workdir}/${filename}~"
++		mv -f "${filename}~" "${filename}" || die -q "Failed to update ${workdir}/${filename}"
++	elif [[ -f ${filename} || ( -L ${filename} && ! -e ${filename} ) ]] ; then
++		rm -f "${filename}" || die -q "Failed to delete ${workdir}/${filename}"
+ 	fi
+ }
+ 
+-- 
+1.9.2
+

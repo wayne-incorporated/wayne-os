@@ -1,0 +1,38 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/mojom_bindings_generator.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":iioservice_ipc",
+    ":libiioservice_ipc_mojom",
+  ]
+}
+
+generate_mojom_bindings("libiioservice_ipc_mojom") {
+  sources = [
+    "//iioservice/mojo/cros_sensor_service.mojom",
+    "//iioservice/mojo/sensor.mojom",
+  ]
+  mojo_root = "${platform2_root}"
+  use_pic = true
+  install_package = "iioservice_ipc"
+}
+
+generate_pkg_config("iioservice_ipc") {
+  description = "Iioservice library"
+  version = "1.0"
+  requires_private = [
+    "libchrome",
+    "libmojo",
+  ]
+  libs = [ "-liioservice_ipc_mojom" ]
+
+  # This flag will faltten the include space. If need to install files directly,
+  # install path should be `/usr/include/iioservice_ipc/iioservice`.
+  cflags = [ "-I/usr/include/iioservice_ipc" ]
+  install = true
+}

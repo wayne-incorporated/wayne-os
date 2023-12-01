@@ -1,0 +1,65 @@
+From 25fcabee01b1f20d43ceae1194466f5035f78400 Mon Sep 17 00:00:00 2001
+From: Yiwei Zhang <zzyiwei@chromium.org>
+Date: Sat, 22 May 2021 03:21:05 +0000
+Subject: [PATCH] UPSTREAM: anv: fix AHB leak upon exportable allocation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A successful AHardwareBuffer_allocate itself will increase a refcount on
+the newly allocated AHB. For the import case, the implementation must
+acquire a reference on the AHB. So if we layer the exportable allocation
+on top of AHB allocation and AHB import, we must release an AHB
+reference to avoid leak.
+
+Signed-off-by: Yiwei Zhang <zzyiwei@chromium.org>
+Reviewed-by: Tapani Pälli <tapani.palli@intel.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/10940>
+---
+ src/intel/vulkan/anv_android.c | 10 ++++++++--
+ src/intel/vulkan/anv_device.c  |  7 -------
+ 2 files changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/src/intel/vulkan/anv_android.c b/src/intel/vulkan/anv_android.c
+index 3272ddd85b1..42cb3cfd575 100644
+--- a/src/intel/vulkan/anv_android.c
++++ b/src/intel/vulkan/anv_android.c
+@@ -368,9 +368,15 @@ anv_create_ahw_memory(VkDevice device_h,
+    if (AHardwareBuffer_allocate(&desc, &ahw) != 0)
+       return VK_ERROR_OUT_OF_HOST_MEMORY;
+ 
+-   mem->ahw = ahw;
++   const struct VkImportAndroidHardwareBufferInfoANDROID import_info = {
++      .buffer = ahw,
++   };
++   VkResult result = anv_import_ahw_memory(device_h, mem, &import_info);
+ 
+-   return VK_SUCCESS;
++   /* Release a reference to avoid leak for AHB allocation. */
++   AHardwareBuffer_release(ahw);
++
++   return result;
+ }
+ 
+ VkResult
+diff --git a/src/intel/vulkan/anv_device.c b/src/intel/vulkan/anv_device.c
+index f44b046cf5d..87b225a0e77 100644
+--- a/src/intel/vulkan/anv_device.c
++++ b/src/intel/vulkan/anv_device.c
+@@ -2379,13 +2379,6 @@ VkResult anv_AllocateMemory(
+       if (result != VK_SUCCESS)
+          goto fail;
+ 
+-      const struct VkImportAndroidHardwareBufferInfoANDROID import_info = {
+-         .buffer = mem->ahw,
+-      };
+-      result = anv_import_ahw_memory(_device, mem, &import_info);
+-      if (result != VK_SUCCESS)
+-         goto fail;
+-
+       goto success;
+    }
+ 
+-- 
+2.31.0
+

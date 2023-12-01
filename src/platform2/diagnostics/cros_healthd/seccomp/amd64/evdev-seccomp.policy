@@ -1,0 +1,99 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+
+mmap: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+openat: 1
+read: 1
+close: 1
+gettid: 1
+# ioctl values:
+#   0x5401 == TCGETS
+#   0x8913 == SIOCGIFFLAGS
+#   0x8914 == SIOCSIFFLAGS
+#   0x80084524 == EVIOCGBIT(EV_MSC, 8)
+#   0x80084509 == EVIOCGPROP(8)
+#   0x80084525 == EVIOCGBIT(EV_SW, 8)
+#   0x80084532 == EVIOCGBIT(EV_SND, 8)
+#   0x80ff4506 == EVIOCGNAME(255)
+#   0x80084531 == EVIOCGBIT(EV_LED, 8)
+#   0x80ff4507 == EVIOCGPHYS(255)
+#   0x80ff4508 == EVIOCGUNIQ(255)
+#   0x80044501 == EVIOCGVERSION
+#   0x80084502 == EVIOCGID
+#   0x80104535 == EVIOCGBIT(EV_FF, 16)
+#   0x8008451b == EVIOCGSW(8)
+#   0x80604521 == EVIOCGBIT(EV_KEY, 96)
+#   0x80084523 == EVIOCGBIT(EV_ABS, 8)
+#   0x80604518 == EVIOCGKEY(96)
+#   0x80084522 == EVIOCGBIT(EV_REL, 8)
+#   0x80084519 == EVIOCGLED(8)
+#   0x80084520 == EVIOCGBIT(0, 8)
+#   0x80084503 == EVIOCGREP
+#   0x80184540 == EVIOCGABS(ABS_X)
+#   0x80184541 == EVIOCGABS(ABS_Y)
+#   0x80184542 == EVIOCGABS(ABS_Z)
+#   0x80184558 == EVIOCGABS(ABS_PRESSURE)
+#   0x80184559 == EVIOCGABS(ABS_DISTANCE)
+#   0x8018455a == EVIOCGABS(ABS_TILT_X)
+#   0x8018455b == EVIOCGABS(ABS_TILT_Y)
+#   0x8018455c == EVIOCGABS(ABS_TOOL_WIDTH)
+#   0x80184568 == EVIOCGABS(ABS_MISC)
+#   0x8018456f == EVIOCGABS(ABS_MT_SLOT)
+#   0x80184570 == EVIOCGABS(ABS_MT_TOUCH_MAJOR)
+#   0x80184571 == EVIOCGABS(ABS_MT_TOUCH_MINOR)
+#   0x80184574 == EVIOCGABS(ABS_MT_ORIENTATION)
+#   0x80184575 == EVIOCGABS(ABS_MT_POSITION_X)
+#   0x80184576 == EVIOCGABS(ABS_MT_POSITION_Y)
+#   0x80184577 == EVIOCGABS(ABS_MT_TOOL_TYPE)
+#   0x80184579 == EVIOCGABS(ABS_MT_TRACKING_ID)
+#   0x8018457a == EVIOCGABS(ABS_MT_PRESSURE)
+#   0x8018457b == EVIOCGABS(ABS_MT_DISTANCE)
+#   0x8018457c == EVIOCGABS(ABS_MT_TOOL_X)
+#   0x8018457d == EVIOCGABS(ABS_MT_TOOL_Y)
+#   0x8404450a == EVIOCGMTSLOTS(1028)
+ioctl: arg1 == 0x5401 || arg1 == 0x8913 || arg1 == 0x8914 || \
+       arg1 == 0x80084524 || arg1 == 0x80084509 || arg1 == 0x80084525 || \
+       arg1 == 0x80084532 || arg1 == 0x80ff4506 || arg1 == 0x80084531 || \
+       arg1 == 0x80ff4507 || arg1 == 0x80ff4508 || arg1 == 0x80044501 || \
+       arg1 == 0x80084502 || arg1 == 0x80104535 || arg1 == 0x8008451b || \
+       arg1 == 0x80604521 || arg1 == 0x80084523 || arg1 == 0x80604518 || \
+       arg1 == 0x80084522 || arg1 == 0x80084519 || arg1 == 0x80084520 || \
+       arg1 == 0x80084503 || arg1 == 0x80184540 || arg1 == 0x80184541 || \
+       arg1 == 0x80184558 || arg1 == 0x80184559 || arg1 == 0x8018455a || \
+       arg1 == 0x8018455b || arg1 == 0x8018455c || arg1 == 0x80184568 || \
+       arg1 == 0x8018456f || arg1 == 0x80184570 || arg1 == 0x80184571 || \
+       arg1 == 0x80184574 || arg1 == 0x80184575 || arg1 == 0x80184576 || \
+       arg1 == 0x80184577 || arg1 == 0x80184579 || arg1 == 0x8018457a || \
+       arg1 == 0x8404450a || arg1 == 0x8018457b || arg1 == 0x8018457c || \
+       arg1 == 0x8018457d || arg1 == 0x80184542
+write: 1
+geteuid: 1
+getuid: 1
+getegid: 1
+getgid: 1
+pipe2: 1
+getpid: 1
+rt_sigprocmask: 1
+epoll_ctl: 1
+sendto: 1
+fcntl: 1
+epoll_create1: 1
+uname: 1
+recvmsg: 1
+signalfd4: 1
+madvise: 1
+memfd_create: 1
+eventfd2: 1
+epoll_wait: 1
+newfstatat: 1
+getrandom: arg2 in 0xfffffffd
+brk: 1
+getdents64: 1
+socket: arg0 == AF_UNIX
+connect: 1
+exit_group: 1
+clock_getres: 1
+clock_gettime: 1
+gettimeofday: 1

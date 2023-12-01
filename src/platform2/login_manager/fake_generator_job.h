@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include <sys/types.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <base/time/time.h>
@@ -31,7 +32,7 @@ class FakeGeneratorJob : public GeneratorJobInterface {
     std::unique_ptr<GeneratorJobInterface> Create(
         const std::string& filename,
         const base::FilePath& user_path,
-        const base::Optional<base::FilePath> ns_path,
+        const std::optional<base::FilePath> ns_path,
         uid_t desired_uid,
         SystemUtils* utils) override;
 

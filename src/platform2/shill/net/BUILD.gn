@@ -1,0 +1,225 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/deps.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_headers",
+    ":libshill-net",
+  ]
+  if (use.fuzzer) {
+    deps += [
+      ":ip_address_fuzzer",
+      ":netlink_attribute_list_fuzzer",
+      ":nl80211_message_fuzzer",
+      ":rtnl_handler_fuzzer",
+    ]
+  }
+  if (use.test) {
+    deps += [ ":shill_net_test" ]
+  }
+}
+
+install_config("install_headers") {
+  sources = [
+    "attribute_list.h",
+    "byte_string.h",
+    "control_netlink_attribute.h",
+    "event_history.h",
+    "generic_netlink_message.h",
+    "ieee80211.h",
+    "io_handler.h",
+    "io_handler_factory.h",
+    "io_handler_factory_container.h",
+    "io_input_handler.h",
+    "io_ready_handler.h",
+    "ip_address.h",
+    "mock_io_handler_factory.h",
+    "mock_netlink_manager.h",
+    "mock_netlink_socket.h",
+    "mock_process_manager.h",
+    "mock_rtnl_handler.h",
+    "mock_sockets.h",
+    "mock_time.h",
+    "ndisc.h",
+    "netlink_attribute.h",
+    "netlink_fd.h",
+    "netlink_manager.h",
+    "netlink_message.h",
+    "netlink_message_matchers.h",
+    "netlink_packet.h",
+    "netlink_sock_diag.h",
+    "netlink_socket.h",
+    "nl80211_attribute.h",
+    "nl80211_message.h",
+    "process_manager.h",
+    "rtnl_handler.h",
+    "rtnl_link_stats.h",
+    "rtnl_listener.h",
+    "rtnl_message.h",
+    "shill_export.h",
+    "shill_time.h",
+    "sockets.h",
+  ]
+  install_path = "/usr/include/shill/net"
+}
+
+pkg_config("target_defaults") {
+  cflags_cc = [
+    "-fno-strict-aliasing",
+    "-Woverloaded-virtual",
+    "-Wno-missing-field-initializers",  # for LAZY_INSTANCE_INITIALIZER
+  ]
+  cflags = [
+    "-Wextra",
+    "-Werror",
+    "-Wno-unused-parameter",
+  ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libminijail",
+    "libnet-base",
+  ]
+}
+
+write_deps("libshill-net_deps") {
+  pkg_deps = []
+  target = "libshill-net"
+}
+
+net_sources = [
+  "attribute_list.cc",
+  "byte_string.cc",
+  "control_netlink_attribute.cc",
+  "event_history.cc",
+  "generic_netlink_message.cc",
+  "ieee80211.cc",
+  "io_handler_factory.cc",
+  "io_handler_factory_container.cc",
+  "io_input_handler.cc",
+  "io_ready_handler.cc",
+  "ip_address.cc",
+  "netlink_attribute.cc",
+  "netlink_fd.cc",
+  "netlink_manager.cc",
+  "netlink_message.cc",
+  "netlink_packet.cc",
+  "netlink_sock_diag.cc",
+  "netlink_socket.cc",
+  "nl80211_attribute.cc",
+  "nl80211_message.cc",
+  "process_manager.cc",
+  "rtnl_handler.cc",
+  "rtnl_listener.cc",
+  "rtnl_message.cc",
+  "shill_time.cc",
+  "sockets.cc",
+]
+
+shared_library("libshill-net") {
+  sources = net_sources
+  configs += [ ":target_defaults" ]
+  deps = [ ":${target_name}_deps" ]
+  install_path = "lib"
+}
+
+if (use.fuzzer) {
+  pkg_config("fuzzed_data_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+  executable("ip_address_fuzzer") {
+    sources = [ "ip_address_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libshill-net" ]
+  }
+  executable("netlink_attribute_list_fuzzer") {
+    sources = [ "attribute_list_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libshill-net" ]
+  }
+  executable("nl80211_message_fuzzer") {
+    sources = [ "nl80211_message_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libshill-net" ]
+  }
+  executable("rtnl_handler_fuzzer") {
+    sources = [ "rtnl_handler_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libshill-net" ]
+  }
+}
+
+if (use.test) {
+  source_set("net_test_support") {
+    sources = [
+      "mock_io_handler_factory.cc",
+      "mock_netlink_manager.cc",
+      "mock_netlink_socket.cc",
+      "mock_process_manager.cc",
+      "mock_rtnl_handler.cc",
+      "mock_sockets.cc",
+      "mock_time.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    pkg_deps = [ "libshill-net" ]
+  }
+
+  pkg_config("shill_net_test_config") {
+    pkg_deps = [
+      "libchrome-test",
+      "re2",
+    ]
+  }
+
+  executable("shill_net_test") {
+    run_test = true
+    sources = [
+      "../mock_log.cc",
+      "attribute_list_test.cc",
+      "byte_string_test.cc",
+      "event_history_test.cc",
+      "ip_address_test.cc",
+      "netlink_attribute_test.cc",
+      "netlink_manager_test.cc",
+      "netlink_message_test.cc",
+      "netlink_packet_test.cc",
+      "netlink_socket_test.cc",
+      "nl80211_attribute_test.cc",
+      "nl80211_message_test.cc",
+      "process_manager_test.cc",
+      "rtnl_handler_test.cc",
+      "rtnl_listener_test.cc",
+      "rtnl_message_test.cc",
+      "shill_time_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":shill_net_test_config",
+    ]
+    deps = [
+      ":libshill-net",
+      ":net_test_support",
+      "//common-mk/testrunner",
+    ]
+  }
+}

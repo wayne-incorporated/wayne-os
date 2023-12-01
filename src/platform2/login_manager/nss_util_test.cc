@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,15 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
-#include <base/optional.h>
 #include <crypto/nss_util.h>
 #include <crypto/rsa_private_key.h>
 #include <crypto/scoped_nss_types.h>
 #include <gtest/gtest.h>
 
-using crypto::RSAPrivateKey;
 using crypto::ScopedPK11Slot;
 
 namespace login_manager {
@@ -32,7 +31,7 @@ class NssUtilTest : public ::testing::Test {
     ASSERT_TRUE(tmpdir_.CreateUniqueTempDir());
     ASSERT_TRUE(base::CreateDirectory(
         tmpdir_.GetPath().Append(util_->GetNssdbSubpath())));
-    desc_ = util_->OpenUserDB(tmpdir_.GetPath(), base::nullopt);
+    desc_ = util_->OpenUserDB(tmpdir_.GetPath(), std::nullopt);
   }
 
  protected:
@@ -46,7 +45,7 @@ const char NssUtilTest::kUsername[] = "someone@nowhere.com";
 
 TEST_F(NssUtilTest, FindFromPublicKey) {
   // Create a keypair, which will put the keys in the user's NSSDB.
-  std::unique_ptr<RSAPrivateKey> pair(
+  std::unique_ptr<crypto::RSAPrivateKey> pair(
       util_->GenerateKeyPairForUser(desc_.get()));
   ASSERT_NE(pair, nullptr);
 
@@ -55,7 +54,7 @@ TEST_F(NssUtilTest, FindFromPublicKey) {
 
   EXPECT_TRUE(util_->CheckPublicKeyBlob(public_key));
 
-  std::unique_ptr<RSAPrivateKey> private_key(
+  std::unique_ptr<crypto::RSAPrivateKey> private_key(
       util_->GetPrivateKeyForUser(public_key, desc_.get()));
   EXPECT_NE(private_key, nullptr);
 }

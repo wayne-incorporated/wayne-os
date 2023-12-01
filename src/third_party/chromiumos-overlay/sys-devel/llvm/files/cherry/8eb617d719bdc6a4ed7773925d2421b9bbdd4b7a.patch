@@ -1,0 +1,79 @@
+commit 8eb617d719bdc6a4ed7773925d2421b9bbdd4b7a
+Author: Wei Mi <wmi@google.com>
+Date:   Tue Sep 7 19:33:36 2021 -0700
+
+    [SampleFDO] Allow forward compatibility when adding a new section for extbinary
+    format.
+    
+    Currently when we add a new section in the profile format and generate a profile
+    containing the new section, older compiler which reads the new profile will
+    issue an error. The forward incompatibility can cause unnecessary churn when
+    extending the profile. This patch removes the incompatibility when adding a new
+    section for extbinary format.
+    
+    Differential Revision: https://reviews.llvm.org/D109398
+
+diff --git a/llvm/include/llvm/ProfileData/SampleProf.h b/llvm/include/llvm/ProfileData/SampleProf.h
+index 043e40260307..124e07a93071 100644
+--- a/llvm/include/llvm/ProfileData/SampleProf.h
++++ b/llvm/include/llvm/ProfileData/SampleProf.h
+@@ -149,8 +149,9 @@ static inline std::string getSecName(SecType Type) {
+     return "CSNameTableSection";
+   case SecLBRProfile:
+     return "LBRProfileSection";
++  default:
++    return "UnknownSection";
+   }
+-  llvm_unreachable("A SecType has no name for output");
+ }
+ 
+ // Entry type of section header table used by SampleProfileExtBinaryBaseReader
+diff --git a/llvm/include/llvm/ProfileData/SampleProfReader.h b/llvm/include/llvm/ProfileData/SampleProfReader.h
+index f9a7830335bb..169ba28965fb 100644
+--- a/llvm/include/llvm/ProfileData/SampleProfReader.h
++++ b/llvm/include/llvm/ProfileData/SampleProfReader.h
+@@ -786,6 +786,8 @@ private:
+   virtual std::error_code verifySPMagic(uint64_t Magic) override;
+   virtual std::error_code
+   readCustomSection(const SecHdrTableEntry &Entry) override {
++    // Update the data reader pointer to the end of the section.
++    Data += Entry.Size;
+     return sampleprof_error::success;
+   };
+ 
+diff --git a/llvm/test/tools/llvm-profdata/Inputs/unknown.section.extbin.profdata b/llvm/test/tools/llvm-profdata/Inputs/unknown.section.extbin.profdata
+new file mode 100644
+index 000000000000..b7d0ddbf3657
+Binary files /dev/null and b/llvm/test/tools/llvm-profdata/Inputs/unknown.section.extbin.profdata differ
+diff --git a/llvm/test/tools/llvm-profdata/forward-compatible.test b/llvm/test/tools/llvm-profdata/forward-compatible.test
+new file mode 100644
+index 000000000000..50c79a0d3e51
+--- /dev/null
++++ b/llvm/test/tools/llvm-profdata/forward-compatible.test
+@@ -0,0 +1,26 @@
++RUN: llvm-profdata show -sample %S/Inputs/unknown.section.extbin.profdata | FileCheck %s
++RUN: llvm-profdata show -sample -show-sec-info-only %S/Inputs/unknown.section.extbin.profdata | FileCheck %s -check-prefix=HDR
++
++# The input unknown.section.extbin.profdata contains an unknown section type
++# which uses an enum value which won't be used in the near future. Check
++# llvm-profdata can read it without problem. This is to ensure adding new
++# section in extbinary format for SampleFDO won't cause forward compatibility
++# issue.
++
++CHECK: Function: main: 366846, 0, 3 sampled lines
++CHECK-NEXT: Samples collected in the function's body {
++CHECK-NEXT:   2.1: 60401
++CHECK-NEXT:   3: 0
++CHECK-NEXT:   4: 0
++CHECK-NEXT: }
++
++HDR: ProfileSummarySection - Offset: 242, Size: 121, Flags: {}
++HDR-NEXT: NameTableSection - Offset: 363, Size: 6, Flags: {}
++HDR-NEXT: UnknownSection - Offset: 369, Size: 1, Flags: {}
++HDR-NEXT: FuncOffsetTableSection - Offset: 391, Size: 3, Flags: {}
++HDR-NEXT: LBRProfileSection - Offset: 370, Size: 21, Flags: {}
++HDR-NEXT: ProfileSymbolListSection - Offset: 391, Size: 0, Flags: {}
++HDR-NEXT: FunctionMetadata - Offset: 394, Size: 0, Flags: {}
++HDR-NEXT: Header Size: 242
++HDR-NEXT: Total Sections Size: 152
++HDR-NEXT: File Size: 394

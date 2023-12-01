@@ -1,0 +1,250 @@
+commit 0a9d0799316c7a601a0b20a123bd99922ac6455b
+Author: maekawatoshiki <konndennsa@gmail.com>
+Date:   Mon Jun 7 01:26:47 2021 +0900
+
+    Revert "[LoopUnrollAndJam] Change LoopUnrollAndJamPass to LoopNest pass"
+    
+    This reverts commit 21653600034084e8335374ddc1eb8d362158d9a8.
+    
+    To fix the crash problem in legacy pass manager
+
+diff --git a/llvm/include/llvm/Transforms/Scalar/LoopPassManager.h b/llvm/include/llvm/Transforms/Scalar/LoopPassManager.h
+index 480f5e5dfebd..c3833f363533 100644
+--- a/llvm/include/llvm/Transforms/Scalar/LoopPassManager.h
++++ b/llvm/include/llvm/Transforms/Scalar/LoopPassManager.h
+@@ -258,7 +258,7 @@ public:
+   /// state, this routine will mark that the current loop should be skipped by
+   /// the rest of the pass management infrastructure.
+   void markLoopAsDeleted(Loop &L, llvm::StringRef Name) {
+-    assert((!LoopNestMode || CurrentL == &L) &&
++    assert((!LoopNestMode || L.isOutermost()) &&
+            "L should be a top-level loop in loop-nest mode.");
+     LAM.clear(L, Name);
+     assert((&L == CurrentL || CurrentL->contains(&L)) &&
+diff --git a/llvm/include/llvm/Transforms/Scalar/LoopUnrollAndJamPass.h b/llvm/include/llvm/Transforms/Scalar/LoopUnrollAndJamPass.h
+index 6125fc7636a0..bd83a6a0cca4 100644
+--- a/llvm/include/llvm/Transforms/Scalar/LoopUnrollAndJamPass.h
++++ b/llvm/include/llvm/Transforms/Scalar/LoopUnrollAndJamPass.h
+@@ -10,7 +10,6 @@
+ #define LLVM_TRANSFORMS_SCALAR_LOOPUNROLLANDJAMPASS_H
+ 
+ #include "llvm/IR/PassManager.h"
+-#include "llvm/Transforms/Scalar/LoopPassManager.h"
+ 
+ namespace llvm {
+ class Function;
+@@ -21,8 +20,7 @@ class LoopUnrollAndJamPass : public PassInfoMixin<LoopUnrollAndJamPass> {
+ 
+ public:
+   explicit LoopUnrollAndJamPass(int OptLevel = 2) : OptLevel(OptLevel) {}
+-  PreservedAnalyses run(LoopNest &L, LoopAnalysisManager &AM,
+-                        LoopStandardAnalysisResults &AR, LPMUpdater &U);
++  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+ };
+ 
+ } // end namespace llvm
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index 2e782feebd44..072fd4672885 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -1207,8 +1207,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
+     // across the loop nests.
+     // We do UnrollAndJam in a separate LPM to ensure it happens before unroll
+     if (EnableUnrollAndJam && PTO.LoopUnrolling)
+-      FPM.addPass(createFunctionToLoopPassAdaptor(
+-          LoopUnrollAndJamPass(Level.getSpeedupLevel())));
++      FPM.addPass(LoopUnrollAndJamPass(Level.getSpeedupLevel()));
+     FPM.addPass(LoopUnrollPass(LoopUnrollOptions(
+         Level.getSpeedupLevel(), /*OnlyWhenForced=*/!PTO.LoopUnrolling,
+         PTO.ForgetAllSCEVInLoopUnroll)));
+@@ -1288,8 +1287,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
+     // across the loop nests.
+     // We do UnrollAndJam in a separate LPM to ensure it happens before unroll
+     if (EnableUnrollAndJam && PTO.LoopUnrolling) {
+-      FPM.addPass(createFunctionToLoopPassAdaptor(
+-          LoopUnrollAndJamPass(Level.getSpeedupLevel())));
++      FPM.addPass(LoopUnrollAndJamPass(Level.getSpeedupLevel()));
+     }
+     FPM.addPass(LoopUnrollPass(LoopUnrollOptions(
+         Level.getSpeedupLevel(), /*OnlyWhenForced=*/!PTO.LoopUnrolling,
+diff --git a/llvm/lib/Passes/PassRegistry.def b/llvm/lib/Passes/PassRegistry.def
+index f2f01bbf76d5..0c95e01ffefe 100644
+--- a/llvm/lib/Passes/PassRegistry.def
++++ b/llvm/lib/Passes/PassRegistry.def
+@@ -247,6 +247,7 @@ FUNCTION_PASS("guard-widening", GuardWideningPass())
+ FUNCTION_PASS("load-store-vectorizer", LoadStoreVectorizerPass())
+ FUNCTION_PASS("loop-simplify", LoopSimplifyPass())
+ FUNCTION_PASS("loop-sink", LoopSinkPass())
++FUNCTION_PASS("loop-unroll-and-jam", LoopUnrollAndJamPass())
+ FUNCTION_PASS("lowerinvoke", LowerInvokePass())
+ FUNCTION_PASS("lowerswitch", LowerSwitchPass())
+ FUNCTION_PASS("mem2reg", PromotePass())
+@@ -398,7 +399,6 @@ LOOP_PASS("loop-deletion", LoopDeletionPass())
+ LOOP_PASS("loop-simplifycfg", LoopSimplifyCFGPass())
+ LOOP_PASS("loop-reduce", LoopStrengthReducePass())
+ LOOP_PASS("indvars", IndVarSimplifyPass())
+-LOOP_PASS("loop-unroll-and-jam", LoopUnrollAndJamPass())
+ LOOP_PASS("loop-unroll-full", LoopFullUnrollPass())
+ LOOP_PASS("print-access-info", LoopAccessInfoPrinterPass(dbgs()))
+ LOOP_PASS("print<ddg>", DDGAnalysisPrinterPass(dbgs()))
+diff --git a/llvm/lib/Transforms/Scalar/LoopUnrollAndJamPass.cpp b/llvm/lib/Transforms/Scalar/LoopUnrollAndJamPass.cpp
+index 9b586e83027f..495906e1a763 100644
+--- a/llvm/lib/Transforms/Scalar/LoopUnrollAndJamPass.cpp
++++ b/llvm/lib/Transforms/Scalar/LoopUnrollAndJamPass.cpp
+@@ -22,7 +22,6 @@
+ #include "llvm/Analysis/DependenceAnalysis.h"
+ #include "llvm/Analysis/LoopAnalysisManager.h"
+ #include "llvm/Analysis/LoopInfo.h"
+-#include "llvm/Analysis/LoopPass.h"
+ #include "llvm/Analysis/OptimizationRemarkEmitter.h"
+ #include "llvm/Analysis/ScalarEvolution.h"
+ #include "llvm/Analysis/TargetTransformInfo.h"
+@@ -425,29 +424,35 @@ tryToUnrollAndJamLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
+   return UnrollResult;
+ }
+ 
+-static bool tryToUnrollAndJamLoop(LoopNest &LN, DominatorTree &DT, LoopInfo &LI,
++static bool tryToUnrollAndJamLoop(Function &F, DominatorTree &DT, LoopInfo &LI,
+                                   ScalarEvolution &SE,
+                                   const TargetTransformInfo &TTI,
+                                   AssumptionCache &AC, DependenceInfo &DI,
+-                                  OptimizationRemarkEmitter &ORE, int OptLevel,
+-                                  LPMUpdater &U) {
++                                  OptimizationRemarkEmitter &ORE,
++                                  int OptLevel) {
+   bool DidSomething = false;
+-  ArrayRef<Loop *> Loops = LN.getLoops();
+-  Loop *OutmostLoop = &LN.getOutermostLoop();
+ 
+-  // Add the loop nests in the reverse order of LN. See method
++  // The loop unroll and jam pass requires loops to be in simplified form, and
++  // also needs LCSSA. Since simplification may add new inner loops, it has to
++  // run before the legality and profitability checks. This means running the
++  // loop unroll and jam pass will simplify all loops, regardless of whether
++  // anything end up being unroll and jammed.
++  for (auto &L : LI) {
++    DidSomething |=
++        simplifyLoop(L, &DT, &LI, &SE, &AC, nullptr, false /* PreserveLCSSA */);
++    DidSomething |= formLCSSARecursively(*L, DT, &LI, &SE);
++  }
++
++  // Add the loop nests in the reverse order of LoopInfo. See method
+   // declaration.
+   SmallPriorityWorklist<Loop *, 4> Worklist;
+-  appendLoopsToWorklist(Loops, Worklist);
++  appendLoopsToWorklist(LI, Worklist);
+   while (!Worklist.empty()) {
+     Loop *L = Worklist.pop_back_val();
+-    std::string LoopName = std::string(L->getName());
+     LoopUnrollResult Result =
+         tryToUnrollAndJamLoop(L, DT, &LI, SE, TTI, AC, DI, ORE, OptLevel);
+     if (Result != LoopUnrollResult::Unmodified)
+       DidSomething = true;
+-    if (L == OutmostLoop && Result == LoopUnrollResult::FullyUnrolled)
+-      U.markLoopAsDeleted(*L, LoopName);
+   }
+ 
+   return DidSomething;
+@@ -455,35 +460,29 @@ static bool tryToUnrollAndJamLoop(LoopNest &LN, DominatorTree &DT, LoopInfo &LI,
+ 
+ namespace {
+ 
+-class LoopUnrollAndJam : public LoopPass {
++class LoopUnrollAndJam : public FunctionPass {
+ public:
+   static char ID; // Pass ID, replacement for typeid
+   unsigned OptLevel;
+ 
+-  LoopUnrollAndJam(int OptLevel = 2) : LoopPass(ID), OptLevel(OptLevel) {
++  LoopUnrollAndJam(int OptLevel = 2) : FunctionPass(ID), OptLevel(OptLevel) {
+     initializeLoopUnrollAndJamPass(*PassRegistry::getPassRegistry());
+   }
+ 
+-  bool runOnLoop(Loop *L, LPPassManager &LPM) override {
+-    if (skipLoop(L))
++  bool runOnFunction(Function &F) override {
++    if (skipFunction(F))
+       return false;
+ 
+-    auto *F = L->getHeader()->getParent();
+-    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+-    auto *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+-    auto &DI = getAnalysis<DependenceAnalysisWrapperPass>().getDI();
+     auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+-    auto &TTI = getAnalysis<TargetTransformInfoWrapperPass>().getTTI(*F);
++    LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
++    ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
++    const TargetTransformInfo &TTI =
++        getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
++    auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
++    auto &DI = getAnalysis<DependenceAnalysisWrapperPass>().getDI();
+     auto &ORE = getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
+-    auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(*F);
+ 
+-    LoopUnrollResult Result =
+-        tryToUnrollAndJamLoop(L, DT, LI, SE, TTI, AC, DI, ORE, OptLevel);
+-
+-    if (Result == LoopUnrollResult::FullyUnrolled)
+-      LPM.markLoopAsDeleted(*L);
+-
+-    return Result != LoopUnrollResult::Unmodified;
++    return tryToUnrollAndJamLoop(F, DT, LI, SE, TTI, AC, DI, ORE, OptLevel);
+   }
+ 
+   /// This transformation requires natural loop information & requires that
+@@ -506,10 +505,7 @@ char LoopUnrollAndJam::ID = 0;
+ INITIALIZE_PASS_BEGIN(LoopUnrollAndJam, "loop-unroll-and-jam",
+                       "Unroll and Jam loops", false, false)
+ INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+-INITIALIZE_PASS_DEPENDENCY(LoopPass)
+ INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+-INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+-INITIALIZE_PASS_DEPENDENCY(LCSSAWrapperPass)
+ INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+ INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
+ INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+@@ -522,20 +518,19 @@ Pass *llvm::createLoopUnrollAndJamPass(int OptLevel) {
+   return new LoopUnrollAndJam(OptLevel);
+ }
+ 
+-PreservedAnalyses LoopUnrollAndJamPass::run(LoopNest &LN,
+-                                            LoopAnalysisManager &AM,
+-                                            LoopStandardAnalysisResults &AR,
+-                                            LPMUpdater &U) {
+-  Function &F = *LN.getParent();
+-
+-  DependenceInfo DI(&F, &AR.AA, &AR.SE, &AR.LI);
+-  OptimizationRemarkEmitter ORE(&F);
+-
+-  if (!tryToUnrollAndJamLoop(LN, AR.DT, AR.LI, AR.SE, AR.TTI, AR.AC, DI, ORE,
+-                             OptLevel, U))
++PreservedAnalyses LoopUnrollAndJamPass::run(Function &F,
++                                            FunctionAnalysisManager &AM) {
++  ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
++  LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
++  TargetTransformInfo &TTI = AM.getResult<TargetIRAnalysis>(F);
++  AssumptionCache &AC = AM.getResult<AssumptionAnalysis>(F);
++  DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
++  DependenceInfo &DI = AM.getResult<DependenceAnalysis>(F);
++  OptimizationRemarkEmitter &ORE =
++      AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
++
++  if (!tryToUnrollAndJamLoop(F, DT, LI, SE, TTI, AC, DI, ORE, OptLevel))
+     return PreservedAnalyses::all();
+ 
+-  auto PA = getLoopPassPreservedAnalyses();
+-  PA.preserve<LoopNestAnalysis>();
+-  return PA;
++  return getLoopPassPreservedAnalyses();
+ }
+diff --git a/llvm/test/Transforms/LoopUnrollAndJam/innerloop.ll b/llvm/test/Transforms/LoopUnrollAndJam/innerloop.ll
+index c3a4ebd6dede..79c32c90174e 100644
+--- a/llvm/test/Transforms/LoopUnrollAndJam/innerloop.ll
++++ b/llvm/test/Transforms/LoopUnrollAndJam/innerloop.ll
+@@ -1,5 +1,5 @@
+ ; RUN: opt -loop-unroll-and-jam -allow-unroll-and-jam -verify-loop-info < %s -S | FileCheck %s
+-; RUN: opt -passes='loop(loop-unroll-and-jam),verify<loops>' -allow-unroll-and-jam < %s -S | FileCheck %s
++; RUN: opt -passes='loop-unroll-and-jam,verify<loops>' -allow-unroll-and-jam < %s -S | FileCheck %s
+ 
+ ; Check that the newly created loops to not fail to be added to LI
+ ; This test deliberately disables UnJ on the middle loop, performing it instead on the

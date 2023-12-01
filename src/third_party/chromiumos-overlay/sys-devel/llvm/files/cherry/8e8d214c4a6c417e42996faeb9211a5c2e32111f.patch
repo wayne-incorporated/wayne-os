@@ -1,0 +1,213 @@
+commit 8e8d214c4a6c417e42996faeb9211a5c2e32111f
+Author: Roman Lebedev <lebedev.ri@gmail.com>
+Date:   Sun Jan 10 16:25:15 2021 +0300
+
+    [NFCI][SimplifyCFG] Prefer to add Insert edges before Delete edges into DomTreeUpdater, if reasonable
+    
+    This has a measurable impact on the number of DomTree recalculations.
+    While this doesn't handle all the cases,
+    it deals with the most obvious ones.
+
+diff --git a/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp b/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp
+index c0edde8648f5..44b9ddd3e1ee 100644
+--- a/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp
++++ b/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp
+@@ -141,11 +141,11 @@ static bool mergeEmptyReturnBlocks(Function &F, DomTreeUpdater *DTU) {
+       // All predecessors of BB should now branch to RetBlock instead.
+       if (DTU) {
+         for (auto *Predecessor : predecessors(&BB)) {
+-          Updates.push_back({DominatorTree::Delete, Predecessor, &BB});
+           // But, iff Predecessor already branches to RetBlock,
+           // don't (re-)add DomTree edge, because it already exists.
+           if (!is_contained(successors(Predecessor), RetBlock))
+             Updates.push_back({DominatorTree::Insert, Predecessor, RetBlock});
++          Updates.push_back({DominatorTree::Delete, Predecessor, &BB});
+         }
+       }
+       BB.replaceAllUsesWith(RetBlock);
+diff --git a/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp b/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp
+index 0b3a25902c69..bfad88f64c7d 100644
+--- a/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp
++++ b/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp
+@@ -1395,11 +1395,11 @@ BasicBlock *llvm::CreateControlFlowHub(
+   SmallVector<DominatorTree::UpdateType, 16> Updates;
+   if (DTU) {
+     for (auto In : Incoming) {
++      Updates.push_back({DominatorTree::Insert, In, FirstGuardBlock});
+       for (auto Succ : successors(In)) {
+         if (Outgoing.count(Succ))
+           Updates.push_back({DominatorTree::Delete, In, Succ});
+       }
+-      Updates.push_back({DominatorTree::Insert, In, FirstGuardBlock});
+     }
+   }
+ 
+diff --git a/llvm/lib/Transforms/Utils/Local.cpp b/llvm/lib/Transforms/Utils/Local.cpp
+index 76bc8369fe5b..52e71ad164a5 100644
+--- a/llvm/lib/Transforms/Utils/Local.cpp
++++ b/llvm/lib/Transforms/Utils/Local.cpp
+@@ -735,13 +735,13 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB,
+   SmallVector<DominatorTree::UpdateType, 32> Updates;
+ 
+   if (DTU) {
+-    Updates.push_back({DominatorTree::Delete, PredBB, DestBB});
+     for (auto I = pred_begin(PredBB), E = pred_end(PredBB); I != E; ++I) {
+-      Updates.push_back({DominatorTree::Delete, *I, PredBB});
+       // This predecessor of PredBB may already have DestBB as a successor.
+       if (!llvm::is_contained(successors(*I), DestBB))
+         Updates.push_back({DominatorTree::Insert, *I, DestBB});
++      Updates.push_back({DominatorTree::Delete, *I, PredBB});
+     }
++    Updates.push_back({DominatorTree::Delete, PredBB, DestBB});
+   }
+ 
+   // Zap anything that took the address of DestBB.  Not doing this will give the
+@@ -1046,16 +1046,16 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
+ 
+   SmallVector<DominatorTree::UpdateType, 32> Updates;
+   if (DTU) {
+-    Updates.push_back({DominatorTree::Delete, BB, Succ});
+     // All predecessors of BB will be moved to Succ.
+     SmallSetVector<BasicBlock *, 8> Predecessors(pred_begin(BB), pred_end(BB));
+     Updates.reserve(Updates.size() + 2 * Predecessors.size());
+     for (auto *Predecessor : Predecessors) {
+-      Updates.push_back({DominatorTree::Delete, Predecessor, BB});
+       // This predecessor of BB may already have Succ as a successor.
+       if (!llvm::is_contained(successors(Predecessor), Succ))
+         Updates.push_back({DominatorTree::Insert, Predecessor, Succ});
++      Updates.push_back({DominatorTree::Delete, Predecessor, BB});
+     }
++    Updates.push_back({DominatorTree::Delete, BB, Succ});
+   }
+ 
+   if (isa<PHINode>(Succ->begin())) {
+diff --git a/llvm/lib/Transforms/Utils/SimplifyCFG.cpp b/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
+index 4bcbffda6a61..62cab573a819 100644
+--- a/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
++++ b/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
+@@ -2495,8 +2495,8 @@ static bool FoldCondBranchOnPHI(BranchInst *BI, DomTreeUpdater *DTU,
+         PredBBTI->setSuccessor(i, EdgeBB);
+       }
+ 
+-    Updates.push_back({DominatorTree::Delete, PredBB, BB});
+     Updates.push_back({DominatorTree::Insert, PredBB, EdgeBB});
++    Updates.push_back({DominatorTree::Delete, PredBB, BB});
+ 
+     if (DTU)
+       DTU->applyUpdates(Updates);
+@@ -2664,9 +2664,9 @@ static bool FoldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
+ 
+   SmallVector<DominatorTree::UpdateType, 3> Updates;
+   if (DTU) {
++    Updates.push_back({DominatorTree::Insert, DomBlock, BB});
+     for (auto *Successor : successors(DomBlock))
+       Updates.push_back({DominatorTree::Delete, DomBlock, Successor});
+-    Updates.push_back({DominatorTree::Insert, DomBlock, BB});
+   }
+ 
+   OldTI->eraseFromParent();
+@@ -3149,8 +3149,8 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, DomTreeUpdater *DTU,
+       } else
+         PBI->setMetadata(LLVMContext::MD_prof, nullptr);
+ 
+-      Updates.push_back({DominatorTree::Delete, PredBlock, BB});
+       Updates.push_back({DominatorTree::Insert, PredBlock, UniqueSucc});
++      Updates.push_back({DominatorTree::Delete, PredBlock, BB});
+     } else {
+       // Update PHI nodes in the common successors.
+       for (unsigned i = 0, e = PHIs.size(); i != e; ++i) {
+@@ -3581,8 +3581,9 @@ static bool tryWidenCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
+     OldSuccessor->removePredecessor(BI->getParent());
+     BI->setSuccessor(1, IfFalseBB);
+     if (DTU)
+-      DTU->applyUpdates({{DominatorTree::Delete, BI->getParent(), OldSuccessor},
+-                         {DominatorTree::Insert, BI->getParent(), IfFalseBB}});
++      DTU->applyUpdates(
++          {{DominatorTree::Insert, BI->getParent(), IfFalseBB},
++           {DominatorTree::Delete, BI->getParent(), OldSuccessor}});
+     return true;
+   }
+   if (BI->getSuccessor(0) != IfFalseBB && // no inf looping
+@@ -3592,8 +3593,9 @@ static bool tryWidenCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
+     OldSuccessor->removePredecessor(BI->getParent());
+     BI->setSuccessor(0, IfFalseBB);
+     if (DTU)
+-      DTU->applyUpdates({{DominatorTree::Delete, BI->getParent(), OldSuccessor},
+-                         {DominatorTree::Insert, BI->getParent(), IfFalseBB}});
++      DTU->applyUpdates(
++          {{DominatorTree::Insert, BI->getParent(), IfFalseBB},
++           {DominatorTree::Delete, BI->getParent(), OldSuccessor}});
+     return true;
+   }
+   return false;
+@@ -3711,6 +3713,7 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
+   // case, it would be unsafe to hoist the operation into a select instruction.
+ 
+   BasicBlock *CommonDest = PBI->getSuccessor(PBIOp);
++  BasicBlock *RemovedDest = PBI->getSuccessor(PBIOp ^ 1);
+   unsigned NumPhis = 0;
+   for (BasicBlock::iterator II = CommonDest->begin(); isa<PHINode>(II);
+        ++II, ++NumPhis) {
+@@ -3773,16 +3776,13 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
+   // Merge the conditions.
+   Value *Cond = Builder.CreateOr(PBICond, BICond, "brmerge");
+ 
+-  for (auto *Successor : successors(PBI->getParent()))
+-    Updates.push_back({DominatorTree::Delete, PBI->getParent(), Successor});
+-
+   // Modify PBI to branch on the new condition to the new dests.
+   PBI->setCondition(Cond);
+   PBI->setSuccessor(0, CommonDest);
+   PBI->setSuccessor(1, OtherDest);
+ 
+-  for (auto *Successor : successors(PBI->getParent()))
+-    Updates.push_back({DominatorTree::Insert, PBI->getParent(), Successor});
++  Updates.push_back({DominatorTree::Insert, PBI->getParent(), OtherDest});
++  Updates.push_back({DominatorTree::Delete, PBI->getParent(), RemovedDest});
+ 
+   if (DTU)
+     DTU->applyUpdates(Updates);
+@@ -4503,8 +4503,8 @@ static bool removeEmptyCleanup(CleanupReturnInst *RI, DomTreeUpdater *DTU) {
+     } else {
+       Instruction *TI = PredBB->getTerminator();
+       TI->replaceUsesOfWith(BB, UnwindDest);
+-      Updates.push_back({DominatorTree::Delete, PredBB, BB});
+       Updates.push_back({DominatorTree::Insert, PredBB, UnwindDest});
++      Updates.push_back({DominatorTree::Delete, PredBB, BB});
+     }
+   }
+ 
+@@ -4764,10 +4764,10 @@ bool SimplifyCFGOpt::simplifyUnreachable(UnreachableInst *UI) {
+           // Redirect all predecessors of the block containing CatchSwitchInst
+           // to instead branch to the CatchSwitchInst's unwind destination.
+           for (auto *PredecessorOfPredecessor : predecessors(Predecessor)) {
+-            Updates.push_back(
+-                {DominatorTree::Delete, PredecessorOfPredecessor, Predecessor});
+             Updates.push_back({DominatorTree::Insert, PredecessorOfPredecessor,
+                                CSI->getUnwindDest()});
++            Updates.push_back(
++                {DominatorTree::Delete, PredecessorOfPredecessor, Predecessor});
+           }
+           Predecessor->replaceAllUsesWith(CSI->getUnwindDest());
+         } else {
+@@ -4834,8 +4834,8 @@ static void createUnreachableSwitchDefault(SwitchInst *Switch,
+   auto *OrigDefaultBlock = Switch->getDefaultDest();
+   Switch->setDefaultDest(&*NewDefaultBlock);
+   if (DTU)
+-    DTU->applyUpdates({{DominatorTree::Delete, BB, OrigDefaultBlock},
+-                       {DominatorTree::Insert, BB, &*NewDefaultBlock}});
++    DTU->applyUpdates({{DominatorTree::Insert, BB, &*NewDefaultBlock},
++                       {DominatorTree::Delete, BB, OrigDefaultBlock}});
+   SplitBlock(&*NewDefaultBlock, &NewDefaultBlock->front(),
+              DTU ? &DTU->getDomTree() : nullptr);
+   SmallVector<DominatorTree::UpdateType, 2> Updates;
+@@ -6344,8 +6344,8 @@ static bool TryToMergeLandingPad(LandingPadInst *LPad, BranchInst *BI,
+       assert(II->getNormalDest() != BB && II->getUnwindDest() == BB &&
+              "unexpected successor");
+       II->setUnwindDest(OtherPred);
+-      Updates.push_back({DominatorTree::Delete, Pred, BB});
+       Updates.push_back({DominatorTree::Insert, Pred, OtherPred});
++      Updates.push_back({DominatorTree::Delete, Pred, BB});
+     }
+ 
+     // The debug info in OtherPred doesn't cover the merged control flow that

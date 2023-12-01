@@ -1,0 +1,448 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":chaps-protos",
+    ":chaps_client",
+    ":chapsd",
+    ":dbus_conf",
+    ":install_client_headers",
+    ":install_pkcs11_header",
+    ":install_tmpfiles_config",
+    ":libchaps",
+    ":p11_replay",
+  ]
+  if (use.test) {
+    deps += [
+      ":chaps_service_test",
+      ":chaps_test",
+      ":chapsd_test",
+      ":object_policy_test",
+      ":object_pool_test",
+      ":object_store_test",
+      ":object_test",
+      ":session_test",
+      ":slot_manager_test",
+      ":slot_policy_test",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":chaps_attributes_fuzzer",
+      ":chaps_chaps_service_fuzzer",
+      ":chaps_object_store_fuzzer",
+      ":chaps_slot_manager_fuzzer",
+      ":chaps_utility_fuzzer",
+    ]
+  }
+  if (!use.systemd) {
+    deps += [ ":install_chapsd_conf" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  defines = [
+    "USE_TPM_INSECURE_FALLBACK=${use.tpm_insecure_fallback}",
+    "USE_FUZZER=${use.fuzzer}",
+  ]
+
+  if (use.fuzzer) {
+    defines += [ "NO_METRICS" ]
+  }
+
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "nss",
+    "openssl",
+    "system_api",
+  ]
+
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+
+  libs = [
+    "hwsec",
+    "hwsec-foundation",
+  ]
+
+  cflags = [ "-Wconsumed" ]
+}
+
+proto_library("chaps-protos") {
+  proto_in_dir = "."
+  proto_out_dir = "include/chaps/proto_bindings"
+  sources = [ "${proto_in_dir}/attributes.proto" ]
+  if (use.fuzzer) {
+    # Override optimize_for option in proto file.
+    gen_cpp_mode = "speed"
+  }
+
+  # libchaps-protos.a is used by a shared_libary
+  # object, so we need to build it with '-fPIC' instead of '-fPIE'.
+  use_pic = true
+  standalone = true
+}
+
+# This should only be used directly for internal binaries like unittests.
+# All client programs should use the shared libchaps library.
+source_set("libchaps_source_set") {
+  sources = [
+    "attributes.cc",
+    "chaps.cc",
+    "chaps_proxy.cc",
+    "chaps_utility.cc",
+    "isolate_chromeos.cc",
+    "proto_conversion.cc",
+    "token_manager_client.cc",
+  ]
+
+  # Use -fPIC so this code can be linked into a shared library.
+  configs += [ "//common-mk:pic" ]
+
+  configs += [ ":target_defaults" ]
+
+  deps = [ ":chaps-protos" ]
+}
+
+shared_library("libchaps") {
+  configs += [ ":target_defaults" ]
+  install_path = "lib"
+  deps = [ ":libchaps_source_set" ]
+}
+
+source_set("chaps_common") {
+  sources = [
+    "chaps_adaptor.cc",
+    "chaps_factory_impl.cc",
+    "chaps_metrics.cc",
+    "chaps_service.cc",
+    "object_impl.cc",
+    "object_policy_cert.cc",
+    "object_policy_common.cc",
+    "object_policy_data.cc",
+    "object_policy_key.cc",
+    "object_policy_private_key.cc",
+    "object_policy_public_key.cc",
+    "object_policy_secret_key.cc",
+    "object_pool_impl.cc",
+    "object_store_impl.cc",
+    "platform_globals_chromeos.cc",
+    "session_impl.cc",
+    "slot_manager_impl.cc",
+    "slot_policy_default.cc",
+    "slot_policy_shared_slot.cc",
+    "system_shutdown_blocker.cc",
+  ]
+
+  libs = [
+    "dl",
+    "leveldb",
+  ]
+
+  configs += [ ":target_defaults" ]
+}
+
+pkg_config("chapsd_config") {
+  pkg_deps = [ "libminijail" ]
+}
+
+executable("chapsd") {
+  sources = [ "chapsd.cc" ]
+  install_path = "sbin"
+  configs += [
+    ":chapsd_config",
+    ":target_defaults",
+  ]
+  libs = [ "hwsec-profiling" ]
+  deps = [
+    ":chaps_common",
+    ":libchaps",
+  ]
+}
+
+install_config("dbus_conf") {
+  sources = [ "org.chromium.Chaps.conf" ]
+  install_path = "/etc/dbus-1/system.d/"
+}
+
+install_config("install_client_headers") {
+  sources = [
+    "attributes.h",
+    "chaps.h",
+    "chaps_interface.h",
+    "chaps_proxy_mock.h",
+    "isolate.h",
+    "threading_mode.h",
+    "token_manager_client.h",
+    "token_manager_client_mock.h",
+    "token_manager_interface.h",
+  ]
+  install_path = "/usr/include/chaps"
+}
+
+install_config("install_pkcs11_header") {
+  sources = [ "pkcs11/cryptoki.h" ]
+  install_path = "/usr/include/chaps/pkcs11"
+}
+
+executable("chaps_client") {
+  sources = [ "chaps_client.cc" ]
+  install_path = "bin"
+  configs += [ ":target_defaults" ]
+  deps = [ ":libchaps" ]
+}
+
+executable("p11_replay") {
+  sources = [ "p11_replay.cc" ]
+  install_path = "bin"
+  configs += [ ":target_defaults" ]
+  deps = [ ":libchaps" ]
+}
+
+install_config("install_tmpfiles_config") {
+  sources = [ "tmpfiles.d/chaps.conf" ]
+  install_path = "/usr/lib/tmpfiles.d"
+}
+
+if (use.test) {
+  pkg_config("libchaps_test_dependent_config") {
+    pkg_deps = [ "libchrome-test" ]
+
+    libs = [ "hwsec_test" ]
+  }
+
+  source_set("libchaps_test") {
+    sources = [
+      "chaps_factory_mock.cc",
+      "object_mock.cc",
+      "object_policy_mock.cc",
+      "object_pool_mock.cc",
+      "object_store_mock.cc",
+      "session_mock.cc",
+      "slot_manager_mock.cc",
+      "slot_policy_mock.cc",
+    ]
+    configs += [ ":target_defaults" ]
+    all_dependent_configs = [
+      ":libchaps_test_dependent_config",
+      "//common-mk:test",
+    ]
+    deps = [
+      ":chaps_common",
+      ":libchaps_source_set",
+    ]
+  }
+}
+
+if (use.test) {
+  executable("chaps_test") {
+    run_test = true
+    sources = [
+      "chaps_metrics_test.cc",
+      "chaps_test.cc",
+    ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("chaps_service_test") {
+    run_test = true
+    sources = [ "chaps_service_test.cc" ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("slot_manager_test") {
+    run_test = true
+    sources = [ "slot_manager_test.cc" ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("session_test") {
+    run_test = true
+    sources = [ "session_test.cc" ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("object_test") {
+    run_test = true
+    sources = [ "object_test.cc" ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("object_policy_test") {
+    run_test = true
+    sources = [ "object_policy_test.cc" ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("object_pool_test") {
+    run_test = true
+    sources = [ "object_pool_test.cc" ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("slot_policy_test") {
+    run_test = true
+    sources = [
+      "slot_policy_default_test.cc",
+      "slot_policy_shared_slot_test.cc",
+    ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  executable("object_store_test") {
+    run_test = true
+    sources = [ "object_store_test.cc" ]
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+
+  # Live Tests
+  # Note: These tests require a live system with gtest and gmock
+  # installed. These cannot be run without a real TPM and cannot be
+  # run with autotest. These tests do not need to be run regularly
+  # but may be useful in the future and so have been kept around.
+  executable("chapsd_test") {
+    sources = [ "chapsd_test.cc" ]
+    install_path = "sbin"
+    configs += [ ":target_defaults" ]
+    deps = [
+      ":libchaps_test",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("fuzzer_common_config") {
+    pkg_deps = [
+      "absl",
+      "libchrome-test",
+      "libprotobuf-mutator",
+    ]
+  }
+
+  executable("chaps_attributes_fuzzer") {
+    sources = [ "attributes_fuzzer.cc" ]
+    configs += [
+      ":target_defaults",
+      ":fuzzer_common_config",
+      "//common-mk/common_fuzzer:common_fuzzer",
+    ]
+    deps = [
+      ":chaps_common",
+      ":libchaps",
+    ]
+  }
+
+  executable("chaps_object_store_fuzzer") {
+    sources = [ "object_store_fuzzer.cc" ]
+    configs += [
+      ":target_defaults",
+      ":fuzzer_common_config",
+      "//common-mk/common_fuzzer:common_fuzzer",
+    ]
+    deps = [
+      ":chaps_common",
+      ":libchaps",
+    ]
+  }
+
+  executable("chaps_utility_fuzzer") {
+    sources = [ "chaps_utility_fuzzer.cc" ]
+    configs += [
+      ":fuzzer_common_config",
+      ":target_defaults",
+      "//common-mk/common_fuzzer:common_fuzzer",
+    ]
+    deps = [
+      ":chaps_common",
+      ":libchaps",
+    ]
+  }
+
+  executable("chaps_slot_manager_fuzzer") {
+    sources = [
+      "fuzzers/fuzzed_chaps_factory.cc",
+      "fuzzers/fuzzed_object_pool.cc",
+      "fuzzers/slot_manager_fuzzer.cc",
+      "session_mock.cc",
+    ]
+    configs += [
+      ":fuzzer_common_config",
+      ":target_defaults",
+      "//common-mk:test",
+      "//common-mk/common_fuzzer:common_fuzzer",
+    ]
+    deps = [
+      ":chaps_common",
+      ":libchaps",
+    ]
+  }
+
+  executable("chaps_chaps_service_fuzzer") {
+    sources = [ "fuzzers/chaps_service_fuzzer.cc" ]
+    configs += [
+      ":fuzzer_common_config",
+      ":target_defaults",
+      "//common-mk:test",
+      "//common-mk/common_fuzzer:common_fuzzer",
+    ]
+    deps = [
+      ":chaps_common",
+      ":libchaps",
+    ]
+  }
+}
+
+# systemd config is installed by the ebuild.
+if (!use.systemd) {
+  install_config("install_chapsd_conf") {
+    sources = [ "init/chapsd.conf" ]
+    install_path = "/etc/init"
+  }
+}

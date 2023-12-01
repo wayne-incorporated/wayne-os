@@ -1,0 +1,17 @@
+Around the line of code this patches there is a long explanation of the rpath
+but the gist of it was that better handling of the rpath would be done in the
+future. For now, we just add the proper rpath.
+
+diff --git a/src/bootstrap/builder.rs b/src/bootstrap/builder.rs
+index d0eed3f12d1..63c8c6ea0b0 100644
+--- a/src/bootstrap/builder.rs
++++ b/src/bootstrap/builder.rs
+@@ -1186,7 +1186,7 @@ impl<'a> Builder<'a> {
+                 Some("-Wl,-rpath,@loader_path/../lib")
+             } else if !target.contains("windows") {
+                 rustflags.arg("-Clink-args=-Wl,-z,origin");
+-                Some("-Wl,-rpath,$ORIGIN/../lib")
++                Some("-Wl,-rpath,$ORIGIN/../lib:/usr/lib64:/usr/lib64/rust/rustlib/x86_64-unknown-linux-gnu/lib")
+             } else {
+                 None
+             };

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 
 #include <base/files/file_util.h>
+#include <base/logging.h>
 #include <base/system/sys_info.h>
 #include <base/time/default_clock.h>
 #include <base/time/default_tick_clock.h>
@@ -28,22 +29,19 @@ const char kChromeUptimeFile[] = "/tmp/uptime-chrome-exec";
 // process and when the browser process group exits (or killed via SIGABRT).
 const char kLoginBrowserShutdownTimeMetric[] = "Login.BrowserShutdownTime";
 
-// A metric to track the time taken to backup ARC bug report.
-const char kArcBugReportBackupTimeMetric[] = "Login.ArcBugReportBackupTime";
-
 // A metric to track the time taken to execute arc-boot-continue impulse.
-const char kArcContinueBootImpulseTimeMetric[] =
-    "Login.ArcContinueBootImpulseTime";
+const char kArcContinueBootImpulseTime3Metric[] =
+    "Login.ArcContinueBootImpulseTime3";
+const char kArcContinueBootImpulseStatus[] =
+    "Login.ArcContinueBootImpulseStatus";
 
-const char kLoginConsumerAllowsNewUsersMetric[] =
-    "Login.ConsumerNewUsersAllowed";
-const char kLoginPolicyFilesMetric[] = "Login.PolicyFilesStatePerBoot";
-const char kLoginUserTypeMetric[] = "Login.UserType";
 const char kLoginStateKeyGenerationStatus[] = "Login.StateKeyGenerationStatus";
 const char kSessionExitTypeMetric[] = "Login.SessionExitType";
+const char kLoginDevicePolicyStateMetric[] = "Login.DevicePolicyState";
+// |OwnershipState| * |PolicyFileState| ^ 2
+const int kMaxDevicePolicyStateValue = 45;
 const char kInvalidDevicePolicyFilesStatus[] =
     "Enterprise.InvalidDevicePolicyFilesStatus";
-const int kMaxPolicyFilesValue = 64;
 const char kLoginMetricsFlagFile[] = "per_boot_flag";
 const char kMetricsDir[] = "/var/lib/metrics";
 
@@ -53,14 +51,12 @@ const char kLoginMountNamespaceMetric[] = "Login.MountNamespaceCreationSuccess";
 const char kSwitchToFeatureFlagMappingStatus[] =
     "Login.SwitchToFeatureFlagMappingStatus";
 
-}  // namespace
+const char kLivenessPingResponseTimeMetric[] =
+    "ChromeOS.Liveness.PingResponseTime";
 
-// static
-int LoginMetrics::PolicyFilesStatusCode(const PolicyFilesStatus& status) {
-  return (status.owner_key_file_state * 16 /*    4^2 */ +
-          status.policy_file_state * 4 /*        4^1 */ +
-          status.defunct_prefs_file_state * 1 /* 4^0 */);
-}
+const char kLivenessPingResultMetric[] = "ChromeOS.Liveness.PingResult";
+
+}  // namespace
 
 LoginMetrics::LoginMetrics(const base::FilePath& per_boot_flag_dir)
     : per_boot_flag_file_(per_boot_flag_dir.Append(kLoginMetricsFlagFile)) {
@@ -79,30 +75,6 @@ LoginMetrics::~LoginMetrics() {}
 
 void LoginMetrics::SendNamespaceCreationResult(bool status) {
   metrics_lib_.SendBoolToUMA(kLoginMountNamespaceMetric, status);
-}
-
-void LoginMetrics::SendConsumerAllowsNewUsers(bool allowed) {
-  int uma_code = allowed ? ANY_USER_ALLOWED : ONLY_ALLOWLISTED;
-  metrics_lib_.SendEnumToUMA(kLoginConsumerAllowsNewUsersMetric, uma_code, 2);
-}
-
-void LoginMetrics::SendLoginUserType(bool dev_mode,
-                                     bool incognito,
-                                     bool owner) {
-  int uma_code = LoginUserTypeCode(dev_mode, incognito, owner);
-  metrics_lib_.SendEnumToUMA(kLoginUserTypeMetric, uma_code, NUM_TYPES);
-}
-
-bool LoginMetrics::SendPolicyFilesStatus(const PolicyFilesStatus& status) {
-  if (!base::PathExists(per_boot_flag_file_)) {
-    metrics_lib_.SendEnumToUMA(kLoginPolicyFilesMetric,
-                               LoginMetrics::PolicyFilesStatusCode(status),
-                               kMaxPolicyFilesValue);
-    bool created = base::WriteFile(per_boot_flag_file_, "", 0) == 0;
-    PLOG_IF(WARNING, !created) << "Can't touch " << per_boot_flag_file_.value();
-    return true;
-  }
-  return false;
 }
 
 void LoginMetrics::SendStateKeyGenerationStatus(
@@ -148,30 +120,26 @@ void LoginMetrics::SendBrowserShutdownTime(
   metrics_lib_.SendToUMA(
       kLoginBrowserShutdownTimeMetric,
       static_cast<int>(browser_shutdown_time.InMilliseconds()),
-      static_cast<int>(base::TimeDelta::FromMilliseconds(1).InMilliseconds()),
-      static_cast<int>(base::TimeDelta::FromSeconds(12).InMilliseconds()), 50);
+      static_cast<int>(base::Milliseconds(1).InMilliseconds()),
+      static_cast<int>(base::Seconds(12).InMilliseconds()), 50);
 }
 
-void LoginMetrics::SendArcBugReportBackupTime(
-    base::TimeDelta arc_bug_report_backup_time) {
-  // ARC bug report back-up time is between 0 - 60s and split it up into 50
-  // buckets.
-  metrics_lib_.SendToUMA(
-      kArcBugReportBackupTimeMetric,
-      static_cast<int>(arc_bug_report_backup_time.InMilliseconds()),
-      static_cast<int>(base::TimeDelta::FromMilliseconds(1).InMilliseconds()),
-      static_cast<int>(base::TimeDelta::FromSeconds(60).InMilliseconds()), 50);
+void LoginMetrics::SendArcContinueBootImpulseStatus(
+    ArcContinueBootImpulseStatus status) {
+  metrics_lib_.SendEnumToUMA(
+      kArcContinueBootImpulseStatus, static_cast<int>(status),
+      static_cast<int>(ArcContinueBootImpulseStatus::kMaxValue));
 }
 
 void LoginMetrics::SendArcContinueBootImpulseTime(
     base::TimeDelta arc_continue_boot_impulse_time) {
-  // ARC continue-arc-boot impulse time is between 0 - 30s and split it up into
-  // 30 buckets.
+  // ARC continue-arc-boot impulse time is between 0 - 60s and split it up into
+  // 50 buckets.
   metrics_lib_.SendToUMA(
-      kArcContinueBootImpulseTimeMetric,
+      kArcContinueBootImpulseTime3Metric,
       static_cast<int>(arc_continue_boot_impulse_time.InMilliseconds()),
-      static_cast<int>(base::TimeDelta::FromMilliseconds(1).InMilliseconds()),
-      static_cast<int>(base::TimeDelta::FromSeconds(30).InMilliseconds()), 30);
+      static_cast<int>(base::Milliseconds(1).InMilliseconds()),
+      static_cast<int>(base::Seconds(40).InMilliseconds()), 50);
 }
 
 void LoginMetrics::SendSwitchToFeatureFlagMappingStatus(
@@ -182,8 +150,27 @@ void LoginMetrics::SendSwitchToFeatureFlagMappingStatus(
           SwitchToFeatureFlagMappingStatus::NUM_SWITCHES_STATUSES));
 }
 
+void LoginMetrics::SendLivenessPingResponseTime(base::TimeDelta response_time) {
+  metrics_lib_.SendToUMA(
+      kLivenessPingResponseTimeMetric,
+      static_cast<int>(response_time.InMilliseconds()),
+      static_cast<int>(base::Milliseconds(1).InMilliseconds()),
+      static_cast<int>(base::Seconds(60).InMilliseconds()), 50);
+}
+
+void LoginMetrics::SendLivenessPingResult(bool success) {
+  metrics_lib_.SendBoolToUMA(kLivenessPingResultMetric, success);
+}
+
 void LoginMetrics::ReportCrosEvent(const std::string& event) {
   metrics_lib_.SendCrosEventToUMA(event);
+}
+
+void LoginMetrics::SendDevicePolicyFilesMetrics(
+    DevicePolicyFilesStatus status) {
+  metrics_lib_.SendEnumToUMA(kLoginDevicePolicyStateMetric,
+                             DevicePolicyStatusCode(status),
+                             kMaxDevicePolicyStateValue);
 }
 
 // static
@@ -203,6 +190,13 @@ int LoginMetrics::LoginUserTypeCode(bool dev_mode, bool guest, bool owner) {
   if (owner)
     return DEV_OWNER;
   return DEV_OTHER;
+}
+
+// static
+int LoginMetrics::DevicePolicyStatusCode(
+    const DevicePolicyFilesStatus& status) {
+  return status.owner_key_file_state * 1 + status.policy_file_state * 3 +
+         status.ownership_state * 9;
 }
 
 }  // namespace login_manager

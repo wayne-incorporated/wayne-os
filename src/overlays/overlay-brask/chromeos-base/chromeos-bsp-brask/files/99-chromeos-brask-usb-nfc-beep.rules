@@ -1,0 +1,13 @@
+# Copyright 2022 The ChromiumOS Authors
+# Distributed under the terms of the GNU General Public License v2
+# Detect the usb nfc device add/remove event and use the ectool
+# to set the EN_NFC_BUZZER to 0/1 in order to disable/enable the
+# beep sound output to the buzzer.
+
+ACTION=="add", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:14.0/usb3/3-5", \
+  RUN+="/lib/udev/control_usb_nfc_beep.sh 1"
+
+ACTION=="remove", DRIVERS=="usb", SUBSYSTEM=="usb", \
+  DEVPATH=="/devices/pci0000:00/0000:00:14.0/usb3/3-5", \
+  RUN+="/lib/udev/control_usb_nfc_beep.sh 0"

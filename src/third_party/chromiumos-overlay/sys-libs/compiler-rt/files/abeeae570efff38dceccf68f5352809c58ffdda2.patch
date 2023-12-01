@@ -1,0 +1,37 @@
+commit abeeae570efff38dceccf68f5352809c58ffdda2
+Author: Phoebe Wang <phoebe.wang@intel.com>
+Date:   Thu Jun 30 16:40:29 2022 +0800
+
+    [X86] Support `_Float16` on SSE2 and up
+    
+    This is split from D113107 to address #56204 and https://discourse.llvm.org/t/how-to-build-compiler-rt-for-new-x86-half-float-abi/63366
+    
+    Reviewed By: zahiraam, rjmccall, bkramer, MaskRay
+    
+    Differential Revision: https://reviews.llvm.org/D128571
+
+diff --git a/compiler-rt/test/builtins/CMakeLists.txt b/compiler-rt/test/builtins/CMakeLists.txt
+index d56ffc69763b..1579e223e875 100644
+--- a/compiler-rt/test/builtins/CMakeLists.txt
++++ b/compiler-rt/test/builtins/CMakeLists.txt
+@@ -44,9 +44,17 @@ foreach(arch ${BUILTIN_TEST_ARCH})
+     string(REPLACE ";" " " BUILTINS_TEST_TARGET_CFLAGS "${BUILTINS_TEST_TARGET_CFLAGS}")
+   endif()
+ 
+-  if (${arch} MATCHES "arm|aarch64|arm64" AND COMPILER_RT_HAS_FLOAT16)
+-    list(APPEND BUILTINS_TEST_TARGET_CFLAGS -DCOMPILER_RT_HAS_FLOAT16)
+-    string(REPLACE ";" " " BUILTINS_TEST_TARGET_CFLAGS "${BUILTINS_TEST_TARGET_CFLAGS}")
++  if(APPLE)
++    # TODO: Support the new ABI on Apple platforms.
++    if (${arch} MATCHES "arm|aarch64|arm64" AND COMPILER_RT_HAS_FLOAT16)
++      list(APPEND BUILTINS_TEST_TARGET_CFLAGS -DCOMPILER_RT_HAS_FLOAT16)
++      string(REPLACE ";" " " BUILTINS_TEST_TARGET_CFLAGS "${BUILTINS_TEST_TARGET_CFLAGS}")
++    endif()
++  else()
++    if (${arch} MATCHES "arm|aarch64|arm64|i?86|x86_64|AMD64" AND COMPILER_RT_HAS_FLOAT16)
++      list(APPEND BUILTINS_TEST_TARGET_CFLAGS -DCOMPILER_RT_HAS_FLOAT16)
++      string(REPLACE ";" " " BUILTINS_TEST_TARGET_CFLAGS "${BUILTINS_TEST_TARGET_CFLAGS}")
++    endif()
+   endif()
+ 
+   if(COMPILER_RT_ENABLE_CET)

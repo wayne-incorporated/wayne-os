@@ -1,0 +1,137 @@
+From 9f95bc7dc18390199553cf2ea3bfcdc6a95717ef Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Fri, 3 Dec 2021 13:59:46 -0800
+Subject: [PATCH] [clang][ARM] relax -mtp=cp15 for non-thumb cases
+
+Building -march=armv6k Linux kernels with -mtp=cp15 fails to
+compile:
+
+error: hardware TLS register is not supported for the arm
+sub-architecture
+
+@ardb found docs for ARM1176JZF-S (ARMv6K) that reference hard thread
+pointer.
+
+Relax our ARMv6 check for cases where we're targeting ARM via -marm (vs
+Thumb1 via -mthumb).  This more closely matches the KConfig requirements
+for where we plan to use these (ie. ARMv6K, ARMv7 (arm or thumb2)).
+
+As @peter.smith mentions:
+  on armv5 we can write the instruction to read/write to CP15 C13 with
+  the ThreadID opcode. However on no armv5 implementation will the CP15
+  C13 have a Thread ID register. The GCC intent seems to be whether the
+  instruction is encodable rather than check what the CPU supports.
+
+Link: https://github.com/ClangBuiltLinux/linux/issues/1502
+Link: https://developer.arm.com/documentation/ddi0301/h/system-control-coprocessor/system-control-processor-registers/c13--thread-and-process-id-registers
+
+Reviewed By: ardb, peter.smith
+
+Differential Revision: https://reviews.llvm.org/D114116
+---
+ clang/lib/Driver/ToolChains/Arch/ARM.cpp | 18 ++++++++++++------
+ clang/lib/Driver/ToolChains/Arch/ARM.h   |  1 +
+ clang/test/Driver/clang-translation.c    | 24 +++++++++++++++---------
+ 3 files changed, 28 insertions(+), 15 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.cpp b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+index 21c091e1a0ba..8d5c64d97550 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.cpp
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+@@ -147,6 +147,16 @@ bool arm::useAAPCSForMachO(const llvm::Triple &T) {
+          T.getOS() == llvm::Triple::UnknownOS || isARMMProfile(T);
+ }
+ 
++// We follow GCC and support when the backend has support for the MRC/MCR
++// instructions that are used to set the hard thread pointer ("CP15 C13
++// Thread id").
++bool arm::isHardTPSupported(const llvm::Triple &Triple) {
++  int Ver = getARMSubArchVersionNumber(Triple);
++  llvm::ARM::ArchKind AK = llvm::ARM::parseArch(Triple.getArchName());
++  return Triple.isARM() || AK == llvm::ARM::ArchKind::ARMV6T2 ||
++         (Ver >= 7 && AK != llvm::ARM::ArchKind::ARMV8MBaseline);
++}
++
+ // Select mode for reading thread pointer (-mtp=soft/cp15).
+ arm::ReadTPMode arm::getReadTPMode(const Driver &D, const ArgList &Args,
+                                    const llvm::Triple &Triple) {
+@@ -156,10 +166,7 @@ arm::ReadTPMode arm::getReadTPMode(const Driver &D, const ArgList &Args,
+             .Case("cp15", ReadTPMode::Cp15)
+             .Case("soft", ReadTPMode::Soft)
+             .Default(ReadTPMode::Invalid);
+-    if (ThreadPointer == ReadTPMode::Cp15 &&
+-        getARMSubArchVersionNumber(Triple) < 7 &&
+-        llvm::ARM::parseArch(Triple.getArchName()) !=
+-            llvm::ARM::ArchKind::ARMV6T2) {
++    if (ThreadPointer == ReadTPMode::Cp15 && !isHardTPSupported(Triple)) {
+       D.Diag(diag::err_target_unsupported_tp_hard) << Triple.getArchName();
+       return ReadTPMode::Invalid;
+     }
+@@ -430,7 +437,6 @@ void arm::getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
+   bool KernelOrKext =
+       Args.hasArg(options::OPT_mkernel, options::OPT_fapple_kext);
+   arm::FloatABI ABI = arm::getARMFloatABI(D, Triple, Args);
+-  arm::ReadTPMode ThreadPointer = arm::getReadTPMode(D, Args, Triple);
+   llvm::Optional<std::pair<const Arg *, StringRef>> WaCPU, WaFPU, WaHDiv,
+       WaArch;
+ 
+@@ -482,7 +488,7 @@ void arm::getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
+     }
+   }
+ 
+-  if (ThreadPointer == arm::ReadTPMode::Cp15)
++  if (getReadTPMode(D, Args, Triple) == ReadTPMode::Cp15)
+     Features.push_back("+read-tp-hard");
+ 
+   const Arg *ArchArg = Args.getLastArg(options::OPT_march_EQ);
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.h b/clang/lib/Driver/ToolChains/Arch/ARM.h
+index b6fd68fbb9c6..fc5b8c87bef9 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.h
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.h
+@@ -53,6 +53,7 @@ FloatABI getARMFloatABI(const Driver &D, const llvm::Triple &Triple,
+                         const llvm::opt::ArgList &Args);
+ void setFloatABIInTriple(const Driver &D, const llvm::opt::ArgList &Args,
+                          llvm::Triple &triple);
++bool isHardTPSupported(const llvm::Triple &Triple);
+ ReadTPMode getReadTPMode(const Driver &D, const llvm::opt::ArgList &Args,
+                          const llvm::Triple &Triple);
+ void setArchNameInTriple(const Driver &D, const llvm::opt::ArgList &Args,
+diff --git a/clang/test/Driver/clang-translation.c b/clang/test/Driver/clang-translation.c
+index 230ea8e30202..32dd43b8352f 100644
+--- a/clang/test/Driver/clang-translation.c
++++ b/clang/test/Driver/clang-translation.c
+@@ -115,16 +115,22 @@
+ // ARMv7_THREAD_POINTER-HARD: "-target-feature" "+read-tp-hard"
+ 
+ // RUN: %clang -target armv6t2-linux -mtp=cp15 -### -S %s 2>&1 | \
+-// RUN: FileCheck -check-prefix=ARMv6T2_THREAD_POINTER-HARD %s
+-// ARMv6T2_THREAD_POINTER-HARD: "-target-feature" "+read-tp-hard"
+-
++// RUN: FileCheck -check-prefix=ARM_THREAD_POINTER-HARD %s
++// RUN: %clang -target thumbv6t2-linux -mtp=cp15 -### -S %s 2>&1 | \
++// RUN: FileCheck -check-prefix=ARM_THREAD_POINTER-HARD %s
++// RUN: %clang -target armv6k-linux -mtp=cp15 -### -S %s 2>&1 | \
++// RUN: FileCheck -check-prefix=ARM_THREAD_POINTER-HARD %s
++// RUN: %clang -target armv6-linux -mtp=cp15 -### -S %s 2>&1 | \
++// RUN: FileCheck -check-prefix=ARM_THREAD_POINTER-HARD %s
+ // RUN: %clang -target armv5t-linux -mtp=cp15 -### -S %s 2>&1 | \
+-// RUN: FileCheck -check-prefix=ARMv5_THREAD_POINTER_UNSUPP %s
+-// ARMv5_THREAD_POINTER_UNSUPP: hardware TLS register is not supported for the armv5 sub-architecture
+-
+-// RUN: %clang -target thumbv6-linux -mtp=cp15 -### -S %s 2>&1 | \
+-// RUN: FileCheck -check-prefix=ARMv6_THREAD_POINTER_UNSUPP %s
+-// ARMv6_THREAD_POINTER_UNSUPP: hardware TLS register is not supported for the armv6 sub-architecture
++// RUN: FileCheck -check-prefix=ARM_THREAD_POINTER-HARD %s
++// ARM_THREAD_POINTER-HARD: "-target-feature" "+read-tp-hard"
++
++// RUN: %clang -target armv6-linux -mthumb -mtp=cp15 -### -S %s 2>&1 | \
++// RUN: FileCheck -check-prefix=THUMBv6_THREAD_POINTER_UNSUPP %s
++// RUN: %clang -target thumbv6-linux -mthumb -mtp=cp15 -### -S %s 2>&1 | \
++// RUN: FileCheck -check-prefix=THUMBv6_THREAD_POINTER_UNSUPP %s
++// THUMBv6_THREAD_POINTER_UNSUPP: hardware TLS register is not supported for the thumbv6 sub-architecture
+ 
+ // RUN: %clang -target armv7-linux -mtp=soft -### -S %s 2>&1 | \
+ // RUN: FileCheck -check-prefix=ARMv7_THREAD_POINTER_SOFT %s
+-- 
+2.35.1.265.g69c8d7142f-goog
+

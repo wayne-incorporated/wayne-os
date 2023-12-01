@@ -1,0 +1,106 @@
+From ee3caaa89faf56d1918714bad2f8237e0aead09e Mon Sep 17 00:00:00 2001
+From: Denis Nikitin <denik@chromium.org>
+Date: Thu, 4 May 2023 12:33:39 -0700
+Subject: [PATCH 2/2] Fix compile error
+
+Replace llvm::Optinal (which was deprecated) with std::optional.
+---
+ llvm_propeller_profile_writer.cc | 8 ++++----
+ perfdata_reader.cc               | 3 ++-
+ perfdata_reader_test.cc          | 5 +++--
+ 3 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/llvm_propeller_profile_writer.cc b/llvm_propeller_profile_writer.cc
+index 88dec6d..ede42b3 100644
+--- a/llvm_propeller_profile_writer.cc
++++ b/llvm_propeller_profile_writer.cc
+@@ -6,6 +6,7 @@
+ #include <filesystem>
+ #include <fstream>
+ #include <memory>
++#include <optional>
+ #include <ostream>
+ #include <string>
+ #include <utility>
+@@ -82,7 +83,6 @@ void DumpCfgs(
+ namespace devtools_crosstool_autofdo {
+ 
+ using ::devtools_crosstool_autofdo::PropellerOptions;
+-using ::llvm::Optional;
+ using ::llvm::StringRef;
+ 
+ absl::Status GeneratePropellerProfiles(const PropellerOptions &opts) {
+@@ -252,7 +252,7 @@ bool PropellerProfWriter::Write(
+     total_clusters += func_cluster_info.clusters.size();
+ 
+   // Allocate the symbol order vector
+-  std::vector<std::pair<llvm::SmallVector<StringRef, 3>, Optional<unsigned>>>
++  std::vector<std::pair<llvm::SmallVector<StringRef, 3>, std::optional<unsigned>>>
+       symbol_order(total_clusters);
+   // Allocate the cold symbol order vector equally sized as
+   // all_functions_cluster_info, as there is (at most) one cold cluster per
+@@ -295,9 +295,9 @@ bool PropellerProfWriter::Write(
+       // the function name is sufficient for section ordering. Otherwise,
+       // the cluster number is required.
+       symbol_order[cluster.layout_index] =
+-          std::pair<llvm::SmallVector<StringRef, 3>, Optional<unsigned>>(
++          std::pair<llvm::SmallVector<StringRef, 3>, std::optional<unsigned>>(
+               func_layout_info.cfg->names_, cluster.bb_indexes.front() == 0
+-                                                ? Optional<unsigned>()
++                                                ? std::optional<unsigned>()
+                                                 : cluster_id);
+       for (int bbi = 0; bbi < cluster.bb_indexes.size(); ++bbi)
+         out_stream << (bbi ? " " : "!!") << cluster.bb_indexes[bbi];
+diff --git a/perfdata_reader.cc b/perfdata_reader.cc
+index 97460c3..7d95b2d 100644
+--- a/perfdata_reader.cc
++++ b/perfdata_reader.cc
+@@ -2,6 +2,7 @@
+ 
+ #include <functional>
+ #include <list>
++#include <optional>
+ #include <string>
+ #include <utility>
+ 
+@@ -260,7 +261,7 @@ bool PerfDataReader::SelectPerfInfo(PerfDataProvider::BufferHandle perf_data,
+ 
+ // Find the set of file names in perf.data file which has the same build id as
+ // found in "binary_file_name".
+-llvm::Optional<std::set<std::string>> FindFileNameInPerfDataWithFileBuildId(
++std::optional<std::set<std::string>> FindFileNameInPerfDataWithFileBuildId(
+     const std::string &binary_file_name, const quipper::PerfReader &perf_reader,
+     BinaryPerfInfo *info) {
+   if (info->binary_info.build_id.empty()) {
+diff --git a/perfdata_reader_test.cc b/perfdata_reader_test.cc
+index e8faeca..4535e87 100644
+--- a/perfdata_reader_test.cc
++++ b/perfdata_reader_test.cc
+@@ -1,5 +1,6 @@
+ #include "perfdata_reader.h"
+ 
++#include <optional>
+ #include <string>
+ 
+ #include "gmock/gmock.h"
+@@ -118,7 +119,7 @@ TEST(PerfdataReaderTest, FirstLoadableSegmentNoneExecutable) {
+       absl::StrCat(absl::GetFlag(FLAGS_test_srcdir),
+                    "/google3/devtools/crosstool/autofdo/testdata/"
+                    "binary_with_none_executable_first_loadable_segment.bin");
+-  llvm::Optional<bool> v =
++  std::optional<bool> v =
+       devtools_crosstool_autofdo::CheckFirstLoadableSegmentIsExecutable(binary);
+   EXPECT_TRUE(v.hasValue() && !v.getValue());
+ }
+@@ -128,7 +129,7 @@ TEST(PerfdataReaderTest, FirstLoadableSegmentExecutable) {
+       absl::StrCat(absl::GetFlag(FLAGS_test_srcdir),
+                    "/google3/devtools/crosstool/autofdo/testdata/"
+                    "binary_with_executable_first_loadable_segment.bin");
+-  llvm::Optional<bool> v =
++  std::optional<bool> v =
+       devtools_crosstool_autofdo::CheckFirstLoadableSegmentIsExecutable(binary);
+   EXPECT_TRUE(v.hasValue() && v.getValue());
+ }
+-- 
+2.40.1.521.gf1e218fcd8-goog
+

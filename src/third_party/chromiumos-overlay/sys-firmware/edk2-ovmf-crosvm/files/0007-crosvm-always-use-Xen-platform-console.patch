@@ -1,0 +1,30 @@
+From d01ad372b1a429e46d26c32d1e9e321f51a77dcc Mon Sep 17 00:00:00 2001
+From: Mike Gerow <gerow@google.com>
+Date: Wed, 1 Feb 2023 16:15:39 -0800
+Subject: [PATCH 7/8] [crosvm] always use Xen platform console
+
+BUG=b:236184260
+---
+ OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+index 98f6f07341..ad91d0443a 100644
+--- a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
++++ b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+@@ -426,9 +426,9 @@ PlatformBootManagerBeforeConsole (
+   // rely on the serial I/O port to be connected as a console. It reuses the
+   // definition from Xen as it is very generic.
+   //
+-  PlatformInitializeConsole (
+-    (XenDetected () || PcdGet16 (PcdOvmfHostBridgePciDevId) == CLOUDHV_DEVICE_ID) ? gXenPlatformConsole : gPlatformConsole
+-    );
++  // TODO(b/236184260): Add conditional back once we can reliably identify
++  // crosvm.
++  PlatformInitializeConsole(gXenPlatformConsole);
+ 
+   //
+   // Process TPM PPI request; this may require keyboard input
+-- 
+2.39.1.456.gfc5497dd1b-goog
+

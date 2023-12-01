@@ -1,0 +1,121 @@
+From c553e85dc2c5de1e12b16e28006a6a98a5f5ec86 Mon Sep 17 00:00:00 2001
+From: Andres Calderon Jaramillo <andrescj@chromium.org>
+Date: Thu, 23 Mar 2023 18:34:18 +0000
+Subject: [PATCH] Use drmModeAddFB2WithModifiers incase of modifiers.
+
+This patch is based on Sushma Venkatesh Reddy's patch [1]. The original
+description is:
+
+> If we need to pass modifiers to DRM/KMS when adding the framebuffer
+> for a BO, drmModeAddFB2WithModifiers needs to be utilized.
+
+This fixes that patch to address failures on AMD Stoney Ridge. The fixes
+are:
+
+1) Use drmModeAddFB2WithModifiers() only if the modifier is not
+   DRM_FORMAT_MOD_INVALID. This is enough to fix the AMD Stoney Ridge
+   failures.
+
+2) Fall back to drmModeAddFB() if drmModeAddFB2WithModifiers() failed.
+   This is based on a suggestion by marcheu@ (b/270727667#comment13).
+
+[1] https://crrev.com/c/4104308
+---
+ src/waffle/gbm/wgbm_platform.h |  1 +
+ src/waffle/null/wnull_buffer.c | 58 ++++++++++++++++++++++++++++++----
+ 2 files changed, 52 insertions(+), 7 deletions(-)
+
+diff --git a/src/waffle/gbm/wgbm_platform.h b/src/waffle/gbm/wgbm_platform.h
+index 20d3b79..6294a1c 100644
+--- a/src/waffle/gbm/wgbm_platform.h
++++ b/src/waffle/gbm/wgbm_platform.h
+@@ -48,6 +48,7 @@
+     f(uint32_t            , gbm_bo_get_width             , (struct gbm_bo *bo)) \
+     f(uint32_t            , gbm_bo_get_height            , (struct gbm_bo *bo)) \
+     f(uint32_t            , gbm_bo_get_stride            , (struct gbm_bo *bo)) \
++    f(uint32_t            , gbm_bo_get_offset            , (struct gbm_bo *bo, size_t plane)); \
+     f(uint32_t            , gbm_bo_get_format            , (struct gbm_bo *bo)) \
+     f(uint64_t            , gbm_bo_get_modifier   , (struct gbm_bo *bo)) \
+     f(union gbm_bo_handle , gbm_bo_get_handle            , (struct gbm_bo *bo)) \
+diff --git a/src/waffle/null/wnull_buffer.c b/src/waffle/null/wnull_buffer.c
+index 4af51dc..d344d9e 100644
+--- a/src/waffle/null/wnull_buffer.c
++++ b/src/waffle/null/wnull_buffer.c
+@@ -99,6 +99,22 @@ slbuf_stride(struct slbuf *self)
+     return self->f->gbm_bo_get_stride(bo);
+ }
+ 
++static uint32_t
++slbuf_offset(struct slbuf *self)
++{
++    struct gbm_bo *bo = slbuf_get_bo(self);
++    assert(bo);
++    return self->f->gbm_bo_get_offset(bo, 0u);
++}
++
++static uint64_t
++slbuf_modifier(struct slbuf *self)
++{
++    struct gbm_bo *bo = slbuf_get_bo(self);
++    assert(bo);
++    return self->f->gbm_bo_get_modifier(bo);
++}
++
+ static uint32_t
+ slbuf_handle(struct slbuf *self)
+ {
+@@ -111,16 +127,44 @@ bool
+ slbuf_get_drmfb(struct slbuf *self, uint32_t *fb)
+ {
+     if (!self->has_drmfb) {
+-        if (drmModeAddFB(slbuf_drmfd(self),
+-                          self->p->width,
+-                          self->p->height,
+-                          24, 32,
+-                          slbuf_stride(self),
+-                          slbuf_handle(self),
+-                          &self->drmfb)) {
++        prt("adding a DRM/KMS framebuffer\n");
++
++        const uint64_t modifier = slbuf_modifier(self);
++        if (modifier != DRM_FORMAT_MOD_INVALID) {
++            const uint32_t bo_handles[4] = {slbuf_handle(self), 0u, 0u, 0u};
++            const uint32_t pitches[4] = {slbuf_stride(self), 0u, 0u, 0u};
++            const uint32_t offsets[4] = {slbuf_offset(self), 0u, 0u, 0u};
++            const uint64_t modifiers[4] = {modifier, 0u, 0u, 0u};
++            self->has_drmfb =
++                drmModeAddFB2WithModifiers(slbuf_drmfd(self),
++                                           self->p->width,
++                                           self->p->height,
++                                           self->p->gbm_format,
++                                           bo_handles,
++                                           pitches,
++                                           offsets,
++                                           modifiers,
++                                           &self->drmfb,
++                                           DRM_MODE_FB_MODIFIERS) == 0;
++            if (!self->has_drmfb) {
++                prt("drmModeAddFB2WithModifiers failed, falling back to "
++                    "drmModeAddFB\n");
++            }
++        }
++
++        // Fall back to drmModeAddFB if either the modifier is
++        // DRM_FORMAT_MOD_INVALID or drmModeAddFB2WithModifiers failed.
++        if (!self->has_drmfb && drmModeAddFB(slbuf_drmfd(self),
++                                             self->p->width,
++                                             self->p->height,
++                                             24, 32,
++                                             slbuf_stride(self),
++                                             slbuf_handle(self),
++                                             &self->drmfb)) {
+             prt("drmModeAddFB failed\n");
+             return false;
+         }
++
+         self->has_drmfb = true;
+     }
+     *fb = self->drmfb;
+-- 
+2.40.0.348.gf938b09366-goog
+

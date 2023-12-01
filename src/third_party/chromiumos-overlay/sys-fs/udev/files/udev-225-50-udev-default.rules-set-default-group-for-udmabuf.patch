@@ -1,0 +1,30 @@
+From df3a813f3e736263bd0c455383eef4e428a44fe2 Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Fri, 8 Nov 2019 08:51:10 -0800
+Subject: [PATCH] 50-udev-default.rules: set default group for udmabuf to video
+
+Corresponding upstream commit:
+
+https://github.com/systemd/systemd/pull/12348/commits/219f6b995c2951481ec86a0495ae62f675edea28
+
+The "kvm" group doesn't seem to exist in this older version of
+systemd -- use the the video group which also has 660 permissions.
+---
+ rules/50-udev-default.rules | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/rules/50-udev-default.rules b/rules/50-udev-default.rules
+index 6023574..1bf1596 100644
+--- a/rules/50-udev-default.rules
++++ b/rules/50-udev-default.rules
+@@ -35,6 +35,7 @@ SUBSYSTEM=="graphics", GROUP="video"
+ SUBSYSTEM=="drm", GROUP="video"
+ SUBSYSTEM=="dvb", GROUP="video"
+ SUBSYSTEM=="media", GROUP="video"
++KERNEL=="udmabuf", GROUP="video"
+ 
+ SUBSYSTEM=="sound", GROUP="audio", \
+   OPTIONS+="static_node=snd/seq", OPTIONS+="static_node=snd/timer"
+-- 
+2.21.0
+

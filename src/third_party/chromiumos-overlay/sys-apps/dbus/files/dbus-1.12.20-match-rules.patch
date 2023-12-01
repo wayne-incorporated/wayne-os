@@ -1,0 +1,26 @@
+From 8ee3921668b6996fb5408c06a99df5defeafa5a6 Mon Sep 17 00:00:00 2001
+From: Scott James Remnant <keybuk@chromium.org>
+Date: Mon, 19 Nov 2012 15:40:24 -0800
+Subject: [PATCH] dbus: increase match rules limit
+
+BUG=chromium-os:36381
+TEST=grep 'Failed to add match' .../log/chrome
+
+Change-Id: Iaaa35bb934ea0bc773fc7e117ad7112c20eca995
+Reviewed-on: https://gerrit.chromium.org/gerrit/38337
+Reviewed-by: Gaurav Shah <gauravsh@chromium.org>
+Commit-Ready: Scott James Remnant <keybuk@chromium.org>
+Tested-by: Scott James Remnant <keybuk@chromium.org>
+---
+diff --git a/bus/system.conf.in b/bus/system.conf.in
+index f139b557..2066be58 100644
+--- a/bus/system.conf.in
++++ b/bus/system.conf.in
+@@ -137,4 +137,7 @@
+ 
+   <include if_selinux_enabled="yes" selinux_root_relative="yes">contexts/dbus_contexts</include>
+ 
++  <!-- Chromium talks to most services on the bus so needs a relatively
++       large number of match rules. -->
++  <limit name="max_match_rules_per_connection">4096</limit>
+ </busconfig>

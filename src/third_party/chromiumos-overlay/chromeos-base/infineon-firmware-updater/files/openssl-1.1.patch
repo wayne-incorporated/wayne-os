@@ -1,0 +1,148 @@
+From d9026d9153cf668d616ddaf9d11ed0c3f7e9689a Mon Sep 17 00:00:00 2001
+From: Mattias Nissler <mnissler@chromium.org>
+Date: Mon, 19 Aug 2019 21:55:21 +0200
+Subject: [PATCH] Add support for OpenSSL 1.1
+
+Structs are now opaque and must be allocated on the heap. Change the
+code to do so, and add the usual openssl_compat.h header to keep
+things working when building against OpenSSL 1.0.2.
+---
+ Common/Crypt/Linux/Crypt.c | 82 ++++++++++++++++++++++++++++++++------
+ 1 file changed, 70 insertions(+), 12 deletions(-)
+
+--- a/Common/Crypt/Linux/Crypt.c
++++ b/Common/Crypt/Linux/Crypt.c
+@@ -24,6 +24,60 @@
+ #include <openssl/rsa.h>
+ #include <openssl/sha.h>
+ 
++#if OPENSSL_VERSION_NUMBER < 0x10100000L
++
++static void *OPENSSL_zalloc(size_t num)
++{
++    void *ret = OPENSSL_malloc(num);
++
++    if (ret != NULL)
++        memset(ret, 0, num);
++    return ret;
++}
++
++static int RSA_set0_key(RSA *r, BIGNUM *n, BIGNUM *e, BIGNUM *d)
++{
++    /* If the fields n and e in r are NULL, the corresponding input
++     * parameters MUST be non-NULL for n and e.  d may be
++     * left NULL (in case only the public key is used).
++     */
++    if ((r->n == NULL && n == NULL)
++        || (r->e == NULL && e == NULL))
++        return 0;
++
++    if (n != NULL) {
++        BN_free(r->n);
++        r->n = n;
++    }
++    if (e != NULL) {
++        BN_free(r->e);
++        r->e = e;
++    }
++    if (d != NULL) {
++        BN_free(r->d);
++        r->d = d;
++    }
++
++    return 1;
++}
++
++static HMAC_CTX *HMAC_CTX_new(void)
++{
++    HMAC_CTX *ctx = OPENSSL_zalloc(sizeof(HMAC_CTX));
++    if (ctx) {
++        HMAC_CTX_init(ctx);
++    }
++    return ctx;
++}
++
++static void HMAC_CTX_free(HMAC_CTX *ctx)
++{
++    HMAC_CTX_cleanup(ctx);
++    OPENSSL_free(ctx);
++}
++
++#endif /* OPENSSL_VERSION_NUMBER */
++
+ /// OAEP Pad
+ static const BYTE g_rgbOAEPPad[] = { 'T', 'C', 'P', 'A' };
+ 
+@@ -53,7 +107,6 @@ Crypt_HMAC(
+ 	do
+ 	{
+ 		unsigned int unHmacLength = SHA1_DIGEST_SIZE;
+-		HMAC_CTX sContext = {0};
+ 		memset(PrgbHMAC, 0, SHA1_DIGEST_SIZE);
+ 
+ 		// Check parameters
+@@ -64,11 +117,17 @@ Crypt_HMAC(
+ 		}
+ 
+ 		// Calculate HMAC
+-		HMAC_CTX_init(&sContext);
+-		HMAC_Init_ex(&sContext, PrgbKey, SHA1_DIGEST_SIZE, EVP_sha1(), NULL);
+-		HMAC_Update(&sContext, PrgbInputMessage, PusInputMessageSize);
+-		HMAC_Final(&sContext, PrgbHMAC, &unHmacLength);
+-		HMAC_CTX_cleanup(&sContext);
++		HMAC_CTX* sContext = HMAC_CTX_new();
++		if (NULL == sContext)
++		{
++			unReturnValue = RC_E_FAIL;
++			break;
++		}
++
++		HMAC_Init_ex(sContext, PrgbKey, SHA1_DIGEST_SIZE, EVP_sha1(), NULL);
++		HMAC_Update(sContext, PrgbInputMessage, PusInputMessageSize);
++		HMAC_Final(sContext, PrgbHMAC, &unHmacLength);
++		HMAC_CTX_free(sContext);
+ 		unReturnValue = RC_SUCCESS;
+ 	}
+ 	WHILE_FALSE_END;
+@@ -351,16 +410,16 @@ Crypt_EncryptRSA(
+ 			unReturnValue = RC_E_FAIL;
+ 			break;
+ 		}
+-		pRSAPubKey->n = pbnPublicModulus;
+ 
+ 		pbnExponent = BN_bin2bn((const BYTE*)PrgbPublicExponent, PunPublicExponentSize, pbnExponent);
+ 		if (NULL == pbnExponent)
+ 		{
++			BN_free(pbnPublicModulus);
+ 			unReturnValue = RC_E_FAIL;
+ 			break;
+ 		}
+-		pRSAPubKey->e = pbnExponent;
+-		pRSAPubKey->d = NULL;
++
++		RSA_set0_key(pRSAPubKey, pbnPublicModulus, pbnExponent, NULL);
+ 
+ 		// Add padding to the decrypted data
+ 		if (CRYPT_ES_RSAESOAEP_SHA1_MGF1 == PusEncryptionScheme)
+@@ -469,16 +528,15 @@ Crypt_VerifySignature(
+ 			unReturnValue = RC_E_FAIL;
+ 			break;
+ 		}
+-		pRSAPubKey->n = pbnModulus;
+ 
+ 		pbnExponent = BN_bin2bn(RSA_PUB_EXPONENT_KEY_ID_0, sizeof(RSA_PUB_EXPONENT_KEY_ID_0), pbnExponent);
+ 		if (NULL == pbnExponent)
+ 		{
++			BN_free(pbnModulus);
+ 			unReturnValue = RC_E_FAIL;
+ 			break;
+ 		}
+-		pRSAPubKey->e = pbnExponent;
+-		pRSAPubKey->d = NULL;
++		RSA_set0_key(pRSAPubKey, pbnModulus, pbnExponent, NULL);
+ 
+ 		{
+ 			BYTE prgbDecryptedDigest[sizeof(RSA_PUB_MODULUS_KEY_ID_0)] = {0};
+-- 
+2.20.1
+

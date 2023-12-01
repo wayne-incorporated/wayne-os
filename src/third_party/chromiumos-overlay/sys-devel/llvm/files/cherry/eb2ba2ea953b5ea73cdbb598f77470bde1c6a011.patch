@@ -1,0 +1,120 @@
+commit eb2ba2ea953b5ea73cdbb598f77470bde1c6a011
+Author: Artem Belevich <tra@google.com>
+Date:   Wed Mar 11 14:53:03 2020 -0700
+
+    [CUDA] Warn about unsupported CUDA SDK version only if it's used.
+    
+    This fixes an issue with clang issuing a warning about unknown CUDA SDK if it's
+    detected during non-CUDA compilation.
+    
+    Differential Revision: https://reviews.llvm.org/D76030
+
+diff --git a/clang/lib/Driver/ToolChains/Cuda.cpp b/clang/lib/Driver/ToolChains/Cuda.cpp
+index 01c5a9175da..78139add8a8 100644
+--- a/clang/lib/Driver/ToolChains/Cuda.cpp
++++ b/clang/lib/Driver/ToolChains/Cuda.cpp
+@@ -34,24 +34,28 @@ using namespace llvm::opt;
+ 
+ // Parses the contents of version.txt in an CUDA installation.  It should
+ // contain one line of the from e.g. "CUDA Version 7.5.2".
+-static CudaVersion ParseCudaVersionFile(const Driver &D, llvm::StringRef V) {
++void CudaInstallationDetector::ParseCudaVersionFile(llvm::StringRef V) {
++  Version = CudaVersion::UNKNOWN;
+   if (!V.startswith("CUDA Version "))
+-    return CudaVersion::UNKNOWN;
++    return;
+   V = V.substr(strlen("CUDA Version "));
+   SmallVector<StringRef,4> VersionParts;
+   V.split(VersionParts, '.');
+   if (VersionParts.size() < 2)
+-    return CudaVersion::UNKNOWN;
+-  std::string MajorMinor = join_items(".", VersionParts[0], VersionParts[1]);
+-  CudaVersion Version = CudaStringToVersion(MajorMinor);
++    return;
++  DetectedVersion = join_items(".", VersionParts[0], VersionParts[1]);
++  Version = CudaStringToVersion(DetectedVersion);
+   if (Version != CudaVersion::UNKNOWN)
+-    return Version;
++    return;
+ 
+-  // Issue a warning and assume that the version we've found is compatible with
+-  // the latest version we support.
+-  D.Diag(diag::warn_drv_unknown_cuda_version)
+-      << MajorMinor << CudaVersionToString(CudaVersion::LATEST);
+-  return CudaVersion::LATEST;
++  Version = CudaVersion::LATEST;
++  DetectedVersionIsNotSupported = true;
++}
++
++void CudaInstallationDetector::WarnIfUnsupportedVersion() {
++  if (DetectedVersionIsNotSupported)
++    D.Diag(diag::warn_drv_unknown_cuda_version)
++        << DetectedVersion << CudaVersionToString(Version);
+ }
+ 
+ CudaInstallationDetector::CudaInstallationDetector(
+@@ -150,7 +154,7 @@ CudaInstallationDetector::CudaInstallationDetector(
+       // version.txt isn't present.
+       Version = CudaVersion::CUDA_70;
+     } else {
+-      Version = ParseCudaVersionFile(D, (*VersionFile)->getBuffer());
++      ParseCudaVersionFile((*VersionFile)->getBuffer());
+     }
+ 
+     if (Version >= CudaVersion::CUDA_90) {
+@@ -568,8 +572,10 @@ CudaToolChain::CudaToolChain(const Driver &D, const llvm::Triple &Triple,
+                              const Action::OffloadKind OK)
+     : ToolChain(D, Triple, Args), HostTC(HostTC),
+       CudaInstallation(D, HostTC.getTriple(), Args), OK(OK) {
+-  if (CudaInstallation.isValid())
++  if (CudaInstallation.isValid()) {
++    CudaInstallation.WarnIfUnsupportedVersion();
+     getProgramPaths().push_back(std::string(CudaInstallation.getBinPath()));
++  }
+   // Lookup binaries into the driver directory, this is used to
+   // discover the clang-offload-bundler executable.
+   getProgramPaths().push_back(getDriver().Dir);
+diff --git a/clang/lib/Driver/ToolChains/Cuda.h b/clang/lib/Driver/ToolChains/Cuda.h
+index 72ffda83e55..3de98c11a21 100644
+--- a/clang/lib/Driver/ToolChains/Cuda.h
++++ b/clang/lib/Driver/ToolChains/Cuda.h
+@@ -30,6 +30,8 @@ private:
+   const Driver &D;
+   bool IsValid = false;
+   CudaVersion Version = CudaVersion::UNKNOWN;
++  std::string DetectedVersion;
++  bool DetectedVersionIsNotSupported = false;
+   std::string InstallPath;
+   std::string BinPath;
+   std::string LibPath;
+@@ -75,6 +77,10 @@ public:
+   std::string getLibDeviceFile(StringRef Gpu) const {
+     return LibDeviceMap.lookup(Gpu);
+   }
++  void WarnIfUnsupportedVersion();
++
++private:
++  void ParseCudaVersionFile(llvm::StringRef V);
+ };
+ 
+ namespace tools {
+diff --git a/clang/test/Driver/cuda-version-check.cu b/clang/test/Driver/cuda-version-check.cu
+index 5654d4cb7f7..a09b248304f 100644
+--- a/clang/test/Driver/cuda-version-check.cu
++++ b/clang/test/Driver/cuda-version-check.cu
+@@ -10,6 +10,10 @@
+ // RUN:    FileCheck %s --check-prefix=OK
+ // RUN: %clang --target=x86_64-linux -v -### --cuda-gpu-arch=sm_60 --cuda-path=%S/Inputs/CUDA-unknown/usr/local/cuda 2>&1 %s | \
+ // RUN:    FileCheck %s --check-prefix=UNKNOWN_VERSION
++// Make sure that we don't warn about CUDA version during C++ compilation.
++// RUN: %clang --target=x86_64-linux -v -### -x c++ --cuda-gpu-arch=sm_60 \
++// RUN:    --cuda-path=%S/Inputs/CUDA-unknown/usr/local/cuda 2>&1 %s | \
++// RUN:    FileCheck %s --check-prefix=UNKNOWN_VERSION_CXX
+ 
+ // The installation at Inputs/CUDA is CUDA 7.0, which doesn't support sm_60.
+ // RUN: %clang --target=x86_64-linux -v -### --cuda-gpu-arch=sm_60 --cuda-path=%S/Inputs/CUDA/usr/local/cuda 2>&1 %s | \
+@@ -62,3 +66,4 @@
+ // ERR_SM61-NOT: error: GPU arch sm_61
+ 
+ // UNKNOWN_VERSION: Unknown CUDA version 999.999. Assuming the latest supported version
++// UNKNOWN_VERSION_CXX-NOT: Unknown CUDA version

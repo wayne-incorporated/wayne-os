@@ -1,0 +1,121 @@
+commit 7e760b79ad143b26a5c937afa7666a7c40508f85
+Author: Franck Bui <fbui@suse.com>
+Date:   Thu Sep 28 08:53:46 2017 +0200
+
+    udev-rules: all values can contain escaped double quotes now (#6890)
+    
+    This is primarly useful to support escaped double quotes in PROGRAM or
+    IMPORT{program} directives.
+    
+    The only possibilty before this patch was to use an external shell script but
+    this seems too cumbersome for trivial logics such as
+    
+     PROGRAM=="/bin/sh -c 'FOO=\"%s{model}\"; echo ${FOO:0:4}'"
+    
+    or any similar shell constructs that needs to deals with patterns including
+    whitespaces.
+    
+    As it's the case for single quote and for directives running a program, words
+    within escaped double quotes will be considered as a single argument.
+    
+    Fixes: #6835
+
+diff --git a/src/udev/udev-event.c b/src/udev/udev-event.c
+index 09f7baf08..4cadff7f6 100644
+--- a/src/udev/udev-event.c
++++ b/src/udev/udev-event.c
+@@ -720,10 +720,12 @@ int udev_build_argv(struct udev *udev, char *cmd, int *argc, char *argv[]) {
+ 
+         pos = cmd;
+         while (pos != NULL && pos[0] != '\0') {
+-                if (pos[0] == '\'') {
+-                        /* do not separate quotes */
++                if (IN_SET(pos[0], '\'', '"')) {
++                        /* do not separate quotes or double quotes */
++                        char delim[2] = { pos[0], '\0' };
++
+                         pos++;
+-                        argv[i] = strsep(&pos, "\'");
++                        argv[i] = strsep(&pos, delim);
+                         if (pos != NULL)
+                                 while (pos[0] == ' ')
+                                         pos++;
+diff --git a/src/udev/udev-rules.c b/src/udev/udev-rules.c
+index 2c5bcc38c..5ab697e39 100644
+--- a/src/udev/udev-rules.c
++++ b/src/udev/udev-rules.c
+@@ -718,6 +718,7 @@ static void attr_subst_subdir(char *attr, size_t len) {
+ static int get_key(struct udev *udev, char **line, char **key, enum operation_type *op, char **value) {
+         char *linepos;
+         char *temp;
++        unsigned i, j;
+ 
+         linepos = *line;
+         if (linepos == NULL || linepos[0] == '\0')
+@@ -793,14 +794,25 @@ static int get_key(struct udev *udev, char **line, char **key, enum operation_ty
+         *value = linepos;
+ 
+         /* terminate */
+-        temp = strchr(linepos, '"');
+-        if (!temp)
+-                return -1;
+-        temp[0] = '\0';
+-        temp++;
++        for (i = 0, j = 0; ; i++, j++) {
++
++                if (linepos[i] == '"')
++                        break;
++
++                if (linepos[i] == '\0')
++                        return -1;
++
++                /* double quotes can be escaped */
++                if (linepos[i] == '\\')
++                        if (linepos[i+1] == '"')
++                                i++;
++
++                linepos[j] = linepos[i];
++        }
++        linepos[j] = '\0';
+ 
+         /* move line to next key */
+-        *line = temp;
++        *line = linepos + i + 1;
+         return 0;
+ }
+ 
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 7e3347900..0d348e5c0 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -330,6 +330,30 @@ EOF
+                 exp_name        => "foo7" ,
+                 rules           => <<EOF
+ SUBSYSTEMS=="scsi", PROGRAM=="/bin/echo -n 'foo3 foo4'   'foo5   foo6   foo7 foo8'", KERNEL=="sda5", SYMLINK+="%c{5}"
++EOF
++        },
++        {
++                desc            => "program arguments combined with escaped double quotes, part 1",
++                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda5",
++                exp_name        => "foo2" ,
++                rules           => <<EOF
++SUBSYSTEMS=="scsi", PROGRAM=="/bin/sh -c 'printf %%s \\\"foo1 foo2\\\" | grep \\\"foo1 foo2\\\"'", KERNEL=="sda5", SYMLINK+="%c{2}"
++EOF
++        },
++        {
++                desc            => "program arguments combined with escaped double quotes, part 2",
++                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda5",
++                exp_name        => "foo2" ,
++                rules           => <<EOF
++SUBSYSTEMS=="scsi", PROGRAM=="/bin/sh -c \\\"printf %%s 'foo1 foo2' | grep 'foo1 foo2'\\\"", KERNEL=="sda5", SYMLINK+="%c{2}"
++EOF
++        },
++        {
++                desc            => "program arguments combined with escaped double quotes, part 3",
++                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda5",
++                exp_name        => "foo2" ,
++                rules           => <<EOF
++SUBSYSTEMS=="scsi", PROGRAM=="/bin/sh -c 'printf \\\"%%s %%s\\\" \\\"foo1 foo2\\\" \\\"foo3\\\"| grep \\\"foo1 foo2\\\"'", KERNEL=="sda5", SYMLINK+="%c{2}"
+ EOF
+         },
+         {

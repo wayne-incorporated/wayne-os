@@ -1,0 +1,39 @@
+commit 807fc7cdc97fc172b4967707a7718e7333351bff
+Author: Stefan Pintilie <stefanp@ca.ibm.com>
+Date:   Fri May 28 11:33:45 2021 -0500
+
+    Revert "[NFC] Reuse existing variables instead of re-requesting successors"
+    
+    This reverts commit c467585682dcdda75e645ef3ab47c8b48440db12.
+
+diff --git a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+index acc2056c4a54..cd2a3fc48e3b 100644
+--- a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
++++ b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+@@ -266,7 +266,7 @@ static bool canProveExitOnFirstIteration(Loop *L, DominatorTree &DT,
+     using namespace PatternMatch;
+     ICmpInst::Predicate Pred;
+     Value *LHS, *RHS;
+-    BasicBlock *IfTrue, *IfFalse;
++    const BasicBlock *IfTrue, *IfFalse;
+     auto *Term = BB->getTerminator();
+     // TODO: Handle switches.
+     if (!match(Term, m_Br(m_ICmp(Pred, m_Value(LHS), m_Value(RHS)),
+@@ -287,12 +287,13 @@ static bool canProveExitOnFirstIteration(Loop *L, DominatorTree &DT,
+     // in-loop.
+     // TODO: isKnownPredicateAt is more powerful, but it's too compile time
+     // consuming. So we avoid using it here.
+-    if (L->contains(IfFalse) && SE.isKnownPredicate(Pred, LHSS, RHSS))
+-      MarkLiveEdge(BB, IfTrue);
+-    else if (L->contains(IfTrue) &&
++    if (L->contains(Term->getSuccessor(1)) &&
++        SE.isKnownPredicate(Pred, LHSS, RHSS))
++      MarkLiveEdge(BB, Term->getSuccessor(0));
++    else if (L->contains(Term->getSuccessor(0)) &&
+              SE.isKnownPredicate(ICmpInst::getInversePredicate(Pred), LHSS,
+                                  RHSS))
+-      MarkLiveEdge(BB, IfFalse);
++      MarkLiveEdge(BB, Term->getSuccessor(1));
+     else
+       MarkAllSuccessorsLive(BB);
+   }

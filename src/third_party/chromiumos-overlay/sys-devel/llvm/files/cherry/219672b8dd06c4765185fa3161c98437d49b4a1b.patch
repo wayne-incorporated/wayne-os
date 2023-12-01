@@ -1,0 +1,1677 @@
+From 219672b8dd06c4765185fa3161c98437d49b4a1b Mon Sep 17 00:00:00 2001
+From: James Farrell <jamesfarrell@google.com>
+Date: Mon, 6 Dec 2021 17:41:26 +0000
+Subject: [PATCH] Revert "Revert "Use VersionTuple for parsing versions in
+ Triple, fixing issues that caused the original change to be reverted. This
+ makes it possible to distinguish between "16" and "16.0" after parsing, which
+ previously was not possible.""
+
+This reverts commit 63a6348cad6caccf285c1661bc60d8ba5a40c972.
+
+Differential Revision: https://reviews.llvm.org/D115254
+---
+ clang/lib/ARCMigrate/ARCMT.cpp                |   4 +-
+ clang/lib/Basic/Targets/OSTargets.cpp         |  72 ++++----
+ clang/lib/Basic/Targets/OSTargets.h           |  48 +++---
+ clang/lib/Basic/Targets/X86.h                 |   5 +-
+ clang/lib/Driver/ToolChains/Darwin.cpp        |  40 ++---
+ clang/lib/Driver/ToolChains/Linux.cpp         |  13 +-
+ clang/lib/Driver/ToolChains/MSVC.cpp          |  10 +-
+ clang/lib/Driver/ToolChains/NetBSD.cpp        |  23 ++-
+ clang/test/Sema/attr-availability-android.c   |   2 +-
+ clang/test/Sema/attr-availability.c           |  10 +-
+ clang/test/Sema/availability-guard-format.mm  |   2 +-
+ clang/test/SemaObjC/attr-availability.m       |  20 +--
+ .../SemaObjC/property-deprecated-warning.m    |  14 +-
+ .../unguarded-availability-maccatalyst.m      |   8 +-
+ clang/test/SemaObjC/unguarded-availability.m  |  36 ++--
+ llvm/include/llvm/ADT/Triple.h                |  58 +++----
+ llvm/lib/Analysis/TargetLibraryInfo.cpp       |   5 +-
+ llvm/lib/MC/MCStreamer.cpp                    |  25 ++-
+ llvm/lib/Support/Triple.cpp                   | 119 +++++---------
+ llvm/lib/Target/AArch64/AArch64Subtarget.cpp  |   4 +-
+ llvm/lib/Target/AArch64/AArch64Subtarget.h    |   3 +-
+ llvm/lib/Target/X86/X86Subtarget.h            |   3 +-
+ llvm/unittests/ADT/TripleTest.cpp             | 154 +++++++++---------
+ llvm/unittests/Support/Host.cpp               |  63 ++++---
+ 24 files changed, 326 insertions(+), 415 deletions(-)
+
+diff --git a/clang/lib/ARCMigrate/ARCMT.cpp b/clang/lib/ARCMigrate/ARCMT.cpp
+index 4851c434d765..68ee7c59270e 100644
+--- a/clang/lib/ARCMigrate/ARCMT.cpp
++++ b/clang/lib/ARCMigrate/ARCMT.cpp
+@@ -162,9 +162,7 @@ static bool HasARCRuntime(CompilerInvocation &origCI) {
+     return triple.getOSMajorVersion() >= 11;
+ 
+   if (triple.getOS() == llvm::Triple::MacOSX) {
+-    unsigned Major, Minor, Micro;
+-    triple.getOSVersion(Major, Minor, Micro);
+-    return Major > 10 || (Major == 10 && Minor >= 7);
++    return triple.getOSVersion() >= VersionTuple(10, 7);
+   }
+ 
+   return false;
+diff --git a/clang/lib/Basic/Targets/OSTargets.cpp b/clang/lib/Basic/Targets/OSTargets.cpp
+index 53748bf067cd..695cbafe3655 100644
+--- a/clang/lib/Basic/Targets/OSTargets.cpp
++++ b/clang/lib/Basic/Targets/OSTargets.cpp
+@@ -48,12 +48,12 @@ void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
+     Builder.defineMacro("_REENTRANT");
+ 
+   // Get the platform type and version number from the triple.
+-  unsigned Maj, Min, Rev;
++  VersionTuple OsVersion;
+   if (Triple.isMacOSX()) {
+-    Triple.getMacOSXVersion(Maj, Min, Rev);
++    Triple.getMacOSXVersion(OsVersion);
+     PlatformName = "macos";
+   } else {
+-    Triple.getOSVersion(Maj, Min, Rev);
++    OsVersion = Triple.getOSVersion();
+     PlatformName = llvm::Triple::getOSTypeName(Triple.getOS());
+     if (PlatformName == "ios" && Triple.isMacCatalystEnvironment())
+       PlatformName = "maccatalyst";
+@@ -63,29 +63,29 @@ void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
+   // generating code for Win32 ABI. No need to emit
+   // __ENVIRONMENT_XX_OS_VERSION_MIN_REQUIRED__.
+   if (PlatformName == "win32") {
+-    PlatformMinVersion = VersionTuple(Maj, Min, Rev);
++    PlatformMinVersion = OsVersion;
+     return;
+   }
+ 
+   // Set the appropriate OS version define.
+   if (Triple.isiOS()) {
+-    assert(Maj < 100 && Min < 100 && Rev < 100 && "Invalid version!");
++    assert(OsVersion < VersionTuple(100) && "Invalid version!");
+     char Str[7];
+-    if (Maj < 10) {
+-      Str[0] = '0' + Maj;
+-      Str[1] = '0' + (Min / 10);
+-      Str[2] = '0' + (Min % 10);
+-      Str[3] = '0' + (Rev / 10);
+-      Str[4] = '0' + (Rev % 10);
++    if (OsVersion.getMajor() < 10) {
++      Str[0] = '0' + OsVersion.getMajor();
++      Str[1] = '0' + (OsVersion.getMinor().getValueOr(0) / 10);
++      Str[2] = '0' + (OsVersion.getMinor().getValueOr(0) % 10);
++      Str[3] = '0' + (OsVersion.getSubminor().getValueOr(0) / 10);
++      Str[4] = '0' + (OsVersion.getSubminor().getValueOr(0) % 10);
+       Str[5] = '\0';
+     } else {
+       // Handle versions >= 10.
+-      Str[0] = '0' + (Maj / 10);
+-      Str[1] = '0' + (Maj % 10);
+-      Str[2] = '0' + (Min / 10);
+-      Str[3] = '0' + (Min % 10);
+-      Str[4] = '0' + (Rev / 10);
+-      Str[5] = '0' + (Rev % 10);
++      Str[0] = '0' + (OsVersion.getMajor() / 10);
++      Str[1] = '0' + (OsVersion.getMajor() % 10);
++      Str[2] = '0' + (OsVersion.getMinor().getValueOr(0) / 10);
++      Str[3] = '0' + (OsVersion.getMinor().getValueOr(0) % 10);
++      Str[4] = '0' + (OsVersion.getSubminor().getValueOr(0) / 10);
++      Str[5] = '0' + (OsVersion.getSubminor().getValueOr(0) % 10);
+       Str[6] = '\0';
+     }
+     if (Triple.isTvOS())
+@@ -95,13 +95,13 @@ void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
+                           Str);
+ 
+   } else if (Triple.isWatchOS()) {
+-    assert(Maj < 10 && Min < 100 && Rev < 100 && "Invalid version!");
++    assert(OsVersion < VersionTuple(10) && "Invalid version!");
+     char Str[6];
+-    Str[0] = '0' + Maj;
+-    Str[1] = '0' + (Min / 10);
+-    Str[2] = '0' + (Min % 10);
+-    Str[3] = '0' + (Rev / 10);
+-    Str[4] = '0' + (Rev % 10);
++    Str[0] = '0' + OsVersion.getMajor();
++    Str[1] = '0' + (OsVersion.getMinor().getValueOr(0) / 10);
++    Str[2] = '0' + (OsVersion.getMinor().getValueOr(0) % 10);
++    Str[3] = '0' + (OsVersion.getSubminor().getValueOr(0) / 10);
++    Str[4] = '0' + (OsVersion.getSubminor().getValueOr(0) % 10);
+     Str[5] = '\0';
+     Builder.defineMacro("__ENVIRONMENT_WATCH_OS_VERSION_MIN_REQUIRED__", Str);
+   } else if (Triple.isMacOSX()) {
+@@ -109,22 +109,22 @@ void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
+     // define (because we only get a single digit for the minor and micro
+     // revision numbers). So, we limit them to the maximum representable
+     // version.
+-    assert(Maj < 100 && Min < 100 && Rev < 100 && "Invalid version!");
++    assert(OsVersion < VersionTuple(100) && "Invalid version!");
+     char Str[7];
+-    if (Maj < 10 || (Maj == 10 && Min < 10)) {
+-      Str[0] = '0' + (Maj / 10);
+-      Str[1] = '0' + (Maj % 10);
+-      Str[2] = '0' + std::min(Min, 9U);
+-      Str[3] = '0' + std::min(Rev, 9U);
++    if (OsVersion < VersionTuple(10, 10)) {
++      Str[0] = '0' + (OsVersion.getMajor() / 10);
++      Str[1] = '0' + (OsVersion.getMajor() % 10);
++      Str[2] = '0' + std::min(OsVersion.getMinor().getValueOr(0), 9U);
++      Str[3] = '0' + std::min(OsVersion.getSubminor().getValueOr(0), 9U);
+       Str[4] = '\0';
+     } else {
+       // Handle versions > 10.9.
+-      Str[0] = '0' + (Maj / 10);
+-      Str[1] = '0' + (Maj % 10);
+-      Str[2] = '0' + (Min / 10);
+-      Str[3] = '0' + (Min % 10);
+-      Str[4] = '0' + (Rev / 10);
+-      Str[5] = '0' + (Rev % 10);
++      Str[0] = '0' + (OsVersion.getMajor() / 10);
++      Str[1] = '0' + (OsVersion.getMajor() % 10);
++      Str[2] = '0' + (OsVersion.getMinor().getValueOr(0) / 10);
++      Str[3] = '0' + (OsVersion.getMinor().getValueOr(0) % 10);
++      Str[4] = '0' + (OsVersion.getSubminor().getValueOr(0) / 10);
++      Str[5] = '0' + (OsVersion.getSubminor().getValueOr(0) % 10);
+       Str[6] = '\0';
+     }
+     Builder.defineMacro("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", Str);
+@@ -134,7 +134,7 @@ void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
+   if (Triple.isOSDarwin())
+     Builder.defineMacro("__MACH__");
+ 
+-  PlatformMinVersion = VersionTuple(Maj, Min, Rev);
++  PlatformMinVersion = OsVersion;
+ }
+ 
+ static void addMinGWDefines(const llvm::Triple &Triple, const LangOptions &Opts,
+diff --git a/clang/lib/Basic/Targets/OSTargets.h b/clang/lib/Basic/Targets/OSTargets.h
+index 7fbe2cbc5653..3c1830d5f8e8 100644
+--- a/clang/lib/Basic/Targets/OSTargets.h
++++ b/clang/lib/Basic/Targets/OSTargets.h
+@@ -148,9 +148,7 @@ public:
+       return 64;
+     }
+ 
+-    unsigned Major, Minor, Micro;
+-    T.getOSVersion(Major, Minor, Micro);
+-    if (llvm::VersionTuple(Major, Minor, Micro) < MinVersion)
++    if (T.getOSVersion() < MinVersion)
+       return 64;
+     return OSTargetInfo<Target>::getExnObjectAlignment();
+   }
+@@ -294,7 +292,7 @@ protected:
+     Builder.defineMacro("__HAIKU__");
+     Builder.defineMacro("__ELF__");
+     DefineStd(Builder, "unix", Opts);
+-    if (this->HasFloat128) 
++    if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+   }
+ 
+@@ -376,10 +374,9 @@ protected:
+     Builder.defineMacro("__ELF__");
+     if (Triple.isAndroid()) {
+       Builder.defineMacro("__ANDROID__", "1");
+-      unsigned Maj, Min, Rev;
+-      Triple.getEnvironmentVersion(Maj, Min, Rev);
+       this->PlatformName = "android";
+-      this->PlatformMinVersion = VersionTuple(Maj, Min, Rev);
++      this->PlatformMinVersion = Triple.getEnvironmentVersion();
++      const unsigned Maj = this->PlatformMinVersion.getMajor();
+       if (Maj) {
+         Builder.defineMacro("__ANDROID_MIN_SDK_VERSION__", Twine(Maj));
+         // This historical but ambiguous name for the minSdkVersion macro. Keep
+@@ -693,23 +690,32 @@ protected:
+     if (Opts.EnableAIXExtendedAltivecABI)
+       Builder.defineMacro("__EXTABI__");
+ 
+-    unsigned Major, Minor, Micro;
+-    Triple.getOSVersion(Major, Minor, Micro);
++    VersionTuple OsVersion = Triple.getOSVersion();
+ 
+     // Define AIX OS-Version Macros.
+     // Includes logic for legacy versions of AIX; no specific intent to support.
+-    std::pair<int, int> OsVersion = {Major, Minor};
+-    if (OsVersion >= std::make_pair(3, 2)) Builder.defineMacro("_AIX32");
+-    if (OsVersion >= std::make_pair(4, 1)) Builder.defineMacro("_AIX41");
+-    if (OsVersion >= std::make_pair(4, 3)) Builder.defineMacro("_AIX43");
+-    if (OsVersion >= std::make_pair(5, 0)) Builder.defineMacro("_AIX50");
+-    if (OsVersion >= std::make_pair(5, 1)) Builder.defineMacro("_AIX51");
+-    if (OsVersion >= std::make_pair(5, 2)) Builder.defineMacro("_AIX52");
+-    if (OsVersion >= std::make_pair(5, 3)) Builder.defineMacro("_AIX53");
+-    if (OsVersion >= std::make_pair(6, 1)) Builder.defineMacro("_AIX61");
+-    if (OsVersion >= std::make_pair(7, 1)) Builder.defineMacro("_AIX71");
+-    if (OsVersion >= std::make_pair(7, 2)) Builder.defineMacro("_AIX72");
+-    if (OsVersion >= std::make_pair(7, 3)) Builder.defineMacro("_AIX73");
++    if (OsVersion >= VersionTuple(3, 2))
++      Builder.defineMacro("_AIX32");
++    if (OsVersion >= VersionTuple(4, 1))
++      Builder.defineMacro("_AIX41");
++    if (OsVersion >= VersionTuple(4, 3))
++      Builder.defineMacro("_AIX43");
++    if (OsVersion >= VersionTuple(5, 0))
++      Builder.defineMacro("_AIX50");
++    if (OsVersion >= VersionTuple(5, 1))
++      Builder.defineMacro("_AIX51");
++    if (OsVersion >= VersionTuple(5, 2))
++      Builder.defineMacro("_AIX52");
++    if (OsVersion >= VersionTuple(5, 3))
++      Builder.defineMacro("_AIX53");
++    if (OsVersion >= VersionTuple(6, 1))
++      Builder.defineMacro("_AIX61");
++    if (OsVersion >= VersionTuple(7, 1))
++      Builder.defineMacro("_AIX71");
++    if (OsVersion >= VersionTuple(7, 2))
++      Builder.defineMacro("_AIX72");
++    if (OsVersion >= VersionTuple(7, 3))
++      Builder.defineMacro("_AIX73");
+ 
+     // FIXME: Do not define _LONG_LONG when -fno-long-long is specified.
+     Builder.defineMacro("_LONG_LONG");
+diff --git a/clang/lib/Basic/Targets/X86.h b/clang/lib/Basic/Targets/X86.h
+index 0b420a7972bc..c952b8c9a336 100644
+--- a/clang/lib/Basic/Targets/X86.h
++++ b/clang/lib/Basic/Targets/X86.h
+@@ -472,10 +472,9 @@ public:
+       : NetBSDTargetInfo<X86_32TargetInfo>(Triple, Opts) {}
+ 
+   unsigned getFloatEvalMethod() const override {
+-    unsigned Major, Minor, Micro;
+-    getTriple().getOSVersion(Major, Minor, Micro);
++    VersionTuple OsVersion = getTriple().getOSVersion();
+     // New NetBSD uses the default rounding mode.
+-    if (Major >= 7 || (Major == 6 && Minor == 99 && Micro >= 26) || Major == 0)
++    if (OsVersion >= VersionTuple(6, 99, 26) || OsVersion.getMajor() == 0)
+       return X86_32TargetInfo::getFloatEvalMethod();
+     // NetBSD before 6.99.26 defaults to "double" rounding.
+     return 1;
+diff --git a/clang/lib/Driver/ToolChains/Darwin.cpp b/clang/lib/Driver/ToolChains/Darwin.cpp
+index 89d8fbe795e6..f7da3f187814 100644
+--- a/clang/lib/Driver/ToolChains/Darwin.cpp
++++ b/clang/lib/Driver/ToolChains/Darwin.cpp
+@@ -1410,8 +1410,8 @@ static std::string getSystemOrSDKMacOSVersion(StringRef MacOSSDKVersion) {
+   llvm::Triple SystemTriple(llvm::sys::getProcessTriple());
+   if (!SystemTriple.isMacOSX())
+     return std::string(MacOSSDKVersion);
+-  SystemTriple.getMacOSXVersion(Major, Minor, Micro);
+-  VersionTuple SystemVersion(Major, Minor, Micro);
++  VersionTuple SystemVersion;
++  SystemTriple.getMacOSXVersion(SystemVersion);
+   bool HadExtra;
+   if (!Driver::GetReleaseVersion(MacOSSDKVersion, Major, Minor, Micro,
+                                  HadExtra))
+@@ -1552,12 +1552,10 @@ struct DarwinPlatform {
+                    const Optional<DarwinSDKInfo> &SDKInfo) {
+     DarwinPlatform Result(TargetArg, getPlatformFromOS(TT.getOS()), OSVersion,
+                           A);
+-    unsigned Major, Minor, Micro;
+-    TT.getOSVersion(Major, Minor, Micro);
+-    if (Major == 0)
++    VersionTuple OsVersion = TT.getOSVersion();
++    if (OsVersion.getMajor() == 0)
+       Result.HasOSVersion = false;
+-    Result.setEnvironment(TT.getEnvironment(),
+-                          VersionTuple(Major, Minor, Micro), SDKInfo);
++    Result.setEnvironment(TT.getEnvironment(), OsVersion, SDKInfo);
+     return Result;
+   }
+   static DarwinPlatform
+@@ -1803,7 +1801,7 @@ inferDeploymentTargetFromSDK(DerivedArgList &Args,
+ 
+ std::string getOSVersion(llvm::Triple::OSType OS, const llvm::Triple &Triple,
+                          const Driver &TheDriver) {
+-  unsigned Major, Minor, Micro;
++  VersionTuple OsVersion;
+   llvm::Triple SystemTriple(llvm::sys::getProcessTriple());
+   switch (OS) {
+   case llvm::Triple::Darwin:
+@@ -1812,24 +1810,22 @@ std::string getOSVersion(llvm::Triple::OSType OS, const llvm::Triple &Triple,
+     // macos, use the host triple to infer OS version.
+     if (Triple.isMacOSX() && SystemTriple.isMacOSX() &&
+         !Triple.getOSMajorVersion())
+-      SystemTriple.getMacOSXVersion(Major, Minor, Micro);
+-    else if (!Triple.getMacOSXVersion(Major, Minor, Micro))
++      SystemTriple.getMacOSXVersion(OsVersion);
++    else if (!Triple.getMacOSXVersion(OsVersion))
+       TheDriver.Diag(diag::err_drv_invalid_darwin_version)
+           << Triple.getOSName();
+     break;
+   case llvm::Triple::IOS:
+     if (Triple.isMacCatalystEnvironment() && !Triple.getOSMajorVersion()) {
+-      Major = 13;
+-      Minor = 1;
+-      Micro = 0;
++      OsVersion = VersionTuple(13, 1);
+     } else
+-      Triple.getiOSVersion(Major, Minor, Micro);
++      OsVersion = Triple.getiOSVersion();
+     break;
+   case llvm::Triple::TvOS:
+-    Triple.getOSVersion(Major, Minor, Micro);
++    OsVersion = Triple.getOSVersion();
+     break;
+   case llvm::Triple::WatchOS:
+-    Triple.getWatchOSVersion(Major, Minor, Micro);
++    OsVersion = Triple.getWatchOSVersion();
+     break;
+   default:
+     llvm_unreachable("Unexpected OS type");
+@@ -1837,7 +1833,9 @@ std::string getOSVersion(llvm::Triple::OSType OS, const llvm::Triple &Triple,
+   }
+ 
+   std::string OSVersion;
+-  llvm::raw_string_ostream(OSVersion) << Major << '.' << Minor << '.' << Micro;
++  llvm::raw_string_ostream(OSVersion)
++      << OsVersion.getMajor() << '.' << OsVersion.getMinor().getValueOr(0)
++      << '.' << OsVersion.getSubminor().getValueOr(0);
+   return OSVersion;
+ }
+ 
+@@ -1907,15 +1905,13 @@ getDeploymentTargetFromMTargetOSArg(DerivedArgList &Args,
+     return None;
+   }
+ 
+-  unsigned Major, Minor, Micro;
+-  TT.getOSVersion(Major, Minor, Micro);
+-  if (!Major) {
++  VersionTuple Version = TT.getOSVersion();
++  if (!Version.getMajor()) {
+     TheDriver.Diag(diag::err_drv_invalid_version_number)
+         << A->getAsString(Args);
+     return None;
+   }
+-  return DarwinPlatform::createFromMTargetOS(TT.getOS(),
+-                                             VersionTuple(Major, Minor, Micro),
++  return DarwinPlatform::createFromMTargetOS(TT.getOS(), Version,
+                                              TT.getEnvironment(), A, SDKInfo);
+ }
+ 
+diff --git a/clang/lib/Driver/ToolChains/Linux.cpp b/clang/lib/Driver/ToolChains/Linux.cpp
+index 198774506e5e..7494c2129211 100644
+--- a/clang/lib/Driver/ToolChains/Linux.cpp
++++ b/clang/lib/Driver/ToolChains/Linux.cpp
+@@ -277,14 +277,11 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
+     // Android sysroots contain a library directory for each supported OS
+     // version as well as some unversioned libraries in the usual multiarch
+     // directory.
+-    unsigned Major;
+-    unsigned Minor;
+-    unsigned Micro;
+-    Triple.getEnvironmentVersion(Major, Minor, Micro);
+-    addPathIfExists(D,
+-                    SysRoot + "/usr/lib/" + MultiarchTriple + "/" +
+-                        llvm::to_string(Major),
+-                    Paths);
++    addPathIfExists(
++        D,
++        SysRoot + "/usr/lib/" + MultiarchTriple + "/" +
++            llvm::to_string(Triple.getEnvironmentVersion().getMajor()),
++        Paths);
+   }
+ 
+   addPathIfExists(D, SysRoot + "/usr/lib/" + MultiarchTriple, Paths);
+diff --git a/clang/lib/Driver/ToolChains/MSVC.cpp b/clang/lib/Driver/ToolChains/MSVC.cpp
+index 792b0a51fea0..66e9d8ab525a 100644
+--- a/clang/lib/Driver/ToolChains/MSVC.cpp
++++ b/clang/lib/Driver/ToolChains/MSVC.cpp
+@@ -1194,14 +1194,6 @@ bool MSVCToolChain::getUniversalCRTLibraryPath(const ArgList &Args,
+   return true;
+ }
+ 
+-static VersionTuple getMSVCVersionFromTriple(const llvm::Triple &Triple) {
+-  unsigned Major, Minor, Micro;
+-  Triple.getEnvironmentVersion(Major, Minor, Micro);
+-  if (Major || Minor || Micro)
+-    return VersionTuple(Major, Minor, Micro);
+-  return VersionTuple();
+-}
+-
+ static VersionTuple getMSVCVersionFromExe(const std::string &BinDir) {
+   VersionTuple Version;
+ #ifdef _WIN32
+@@ -1374,7 +1366,7 @@ VersionTuple MSVCToolChain::computeMSVCVersion(const Driver *D,
+   bool IsWindowsMSVC = getTriple().isWindowsMSVCEnvironment();
+   VersionTuple MSVT = ToolChain::computeMSVCVersion(D, Args);
+   if (MSVT.empty())
+-    MSVT = getMSVCVersionFromTriple(getTriple());
++    MSVT = getTriple().getEnvironmentVersion();
+   if (MSVT.empty() && IsWindowsMSVC)
+     MSVT = getMSVCVersionFromExe(getSubDirectoryPath(SubDirectoryType::Bin));
+   if (MSVT.empty() &&
+diff --git a/clang/lib/Driver/ToolChains/NetBSD.cpp b/clang/lib/Driver/ToolChains/NetBSD.cpp
+index 7571398b7cc6..37b1fc5215ff 100644
+--- a/clang/lib/Driver/ToolChains/NetBSD.cpp
++++ b/clang/lib/Driver/ToolChains/NetBSD.cpp
+@@ -270,10 +270,9 @@ void netbsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+     CmdArgs.push_back(Args.MakeArgString(ToolChain.getCompilerRTPath()));
+   }
+ 
+-  unsigned Major, Minor, Micro;
+-  Triple.getOSVersion(Major, Minor, Micro);
++  VersionTuple OsVersion = Triple.getOSVersion();
+   bool useLibgcc = true;
+-  if (Major >= 7 || Major == 0) {
++  if (OsVersion >= VersionTuple(7) || OsVersion.getMajor() == 0) {
+     switch (ToolChain.getArch()) {
+     case llvm::Triple::aarch64:
+     case llvm::Triple::aarch64_be:
+@@ -409,9 +408,8 @@ Tool *NetBSD::buildAssembler() const {
+ Tool *NetBSD::buildLinker() const { return new tools::netbsd::Linker(*this); }
+ 
+ ToolChain::CXXStdlibType NetBSD::GetDefaultCXXStdlibType() const {
+-  unsigned Major, Minor, Micro;
+-  getTriple().getOSVersion(Major, Minor, Micro);
+-  if (Major >= 7 || Major == 0) {
++  VersionTuple OsVersion = getTriple().getOSVersion();
++  if (OsVersion >= VersionTuple(7) || OsVersion.getMajor() == 0) {
+     switch (getArch()) {
+     case llvm::Triple::aarch64:
+     case llvm::Triple::aarch64_be:
+@@ -505,14 +503,13 @@ void NetBSD::addClangTargetOptions(const ArgList &DriverArgs,
+   if (SanArgs.hasAnySanitizer())
+     CC1Args.push_back("-D_REENTRANT");
+ 
+-  unsigned Major, Minor, Micro;
+-  getTriple().getOSVersion(Major, Minor, Micro);
++  VersionTuple OsVersion = getTriple().getOSVersion();
+   bool UseInitArrayDefault =
+-    Major >= 9 || Major == 0 ||
+-    getTriple().getArch() == llvm::Triple::aarch64 ||
+-    getTriple().getArch() == llvm::Triple::aarch64_be ||
+-    getTriple().getArch() == llvm::Triple::arm ||
+-    getTriple().getArch() == llvm::Triple::armeb;
++      OsVersion >= VersionTuple(9) || OsVersion.getMajor() == 0 ||
++      getTriple().getArch() == llvm::Triple::aarch64 ||
++      getTriple().getArch() == llvm::Triple::aarch64_be ||
++      getTriple().getArch() == llvm::Triple::arm ||
++      getTriple().getArch() == llvm::Triple::armeb;
+ 
+   if (!DriverArgs.hasFlag(options::OPT_fuse_init_array,
+                           options::OPT_fno_use_init_array, UseInitArrayDefault))
+diff --git a/clang/test/Sema/attr-availability-android.c b/clang/test/Sema/attr-availability-android.c
+index f38f71fbc783..39638bc38c4a 100644
+--- a/clang/test/Sema/attr-availability-android.c
++++ b/clang/test/Sema/attr-availability-android.c
+@@ -5,7 +5,7 @@ void f0(int) __attribute__((availability(android,introduced=14,deprecated=19)));
+ void f1(int) __attribute__((availability(android,introduced=16)));
+ void f2(int) __attribute__((availability(android,introduced=14,deprecated=16))); // expected-note {{'f2' has been explicitly marked deprecated here}}
+ #ifdef WARN_PARTIAL
+-// expected-note-re@+2 {{'f3' has been marked as being introduced in Android 19 here, but the deployment target is Android 16.0.0{{$}}}}
++// expected-note-re@+2 {{'f3' has been marked as being introduced in Android 19 here, but the deployment target is Android 16{{$}}}}
+ #endif
+ void f3(int) __attribute__((availability(android,introduced=19)));
+ void f4(int) __attribute__((availability(android,introduced=9,deprecated=11,obsoleted=16), availability(ios,introduced=2.0,deprecated=3.0))); // expected-note{{explicitly marked unavailable}}
+diff --git a/clang/test/Sema/attr-availability.c b/clang/test/Sema/attr-availability.c
+index dbdf6593c3f7..b34d3d6b531b 100644
+--- a/clang/test/Sema/attr-availability.c
++++ b/clang/test/Sema/attr-availability.c
+@@ -1,6 +1,6 @@
+ // RUN: %clang_cc1 -triple x86_64-apple-darwin9 -fsyntax-only -fblocks -verify %s
+ // RUN: %clang_cc1 -D WARN_PARTIAL -Wpartial-availability -triple x86_64-apple-darwin9 -fsyntax-only -fblocks -verify %s
+-// 
++//
+ 
+ void f0() __attribute__((availability(macosx,introduced=10.4,deprecated=10.2))); // expected-warning{{feature cannot be deprecated in macOS version 10.2 before it was introduced in version 10.4; attribute ignored}}
+ void f1() __attribute__((availability(ios,obsoleted=2.1,deprecated=3.0)));  // expected-warning{{feature cannot be obsoleted in iOS version 2.1 before it was deprecated in version 3.0; attribute ignored}}
+@@ -9,20 +9,20 @@ void f2() __attribute__((availability(ios,introduced=2.1,deprecated=2.1)));
+ void f3() __attribute__((availability(otheros,introduced=2.2))); // expected-warning{{unknown platform 'otheros' in availability macro}}
+ 
+ // rdar://10095131
+-extern void 
++extern void
+ ATSFontGetName(const char *oName) __attribute__((availability(macosx,introduced=8.0,deprecated=9.0, message="use CTFontCopyFullName"))); // expected-note {{'ATSFontGetName' has been explicitly marked deprecated here}}
+ 
+ extern void
+ ATSFontGetPostScriptName(int flags) __attribute__((availability(macosx,introduced=8.0,obsoleted=9.0, message="use ATSFontGetFullPostScriptName"))); // expected-note {{'ATSFontGetPostScriptName' has been explicitly marked unavailable here}}
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+3 {{'PartiallyAvailable' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+3 {{'PartiallyAvailable' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ extern void
+ PartiallyAvailable() __attribute__((availability(macosx,introduced=10.8)));
+ 
+ #ifdef WARN_PARTIAL
+-// expected-note@+2 2 {{'PartialEnum' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+2 2 {{'PartialEnum' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ enum __attribute__((availability(macosx,introduced=10.8))) PartialEnum {
+   kPartialEnumConstant,
+@@ -41,7 +41,7 @@ void test_10095131() {
+ #ifdef WARN_PARTIAL
+ // FIXME: This note should point to the declaration with the availability
+ // attribute.
+-// expected-note@+2 {{'PartiallyAvailable' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+2 {{'PartiallyAvailable' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ extern void PartiallyAvailable() ;
+ void with_redeclaration() {
+diff --git a/clang/test/Sema/availability-guard-format.mm b/clang/test/Sema/availability-guard-format.mm
+index 0e158c4173c2..e5967d1082b9 100644
+--- a/clang/test/Sema/availability-guard-format.mm
++++ b/clang/test/Sema/availability-guard-format.mm
+@@ -3,7 +3,7 @@
+ // Testing that even for source code using '_' as a delimiter in availability version tuple '.' is actually used in diagnostic output as a delimiter.
+ 
+ @interface foo
+-- (void) method_bar __attribute__((availability(macosx, introduced = 10_12))); // expected-note {{'method_bar' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.11.0}}
++- (void) method_bar __attribute__((availability(macosx, introduced = 10_12))); // expected-note {{'method_bar' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.11}}
+ @end
+ 
+ int main() {
+diff --git a/clang/test/SemaObjC/attr-availability.m b/clang/test/SemaObjC/attr-availability.m
+index cb896150574e..e3f7a38f5889 100644
+--- a/clang/test/SemaObjC/attr-availability.m
++++ b/clang/test/SemaObjC/attr-availability.m
+@@ -5,7 +5,7 @@
+ - (void)proto_method __attribute__((availability(macosx,introduced=10.1,deprecated=10.2))); // expected-note 2 {{'proto_method' has been explicitly marked deprecated here}}
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 2 {{'partial_proto_method' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+2 2 {{'partial_proto_method' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ - (void)partial_proto_method __attribute__((availability(macosx,introduced=10.8)));
+ @end
+@@ -13,7 +13,7 @@
+ @interface A <P>
+ - (void)method __attribute__((availability(macosx,introduced=10.1,deprecated=10.2))); // expected-note {{'method' has been explicitly marked deprecated here}}
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 2 {{'partialMethod' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+2 2 {{'partialMethod' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ - (void)partialMethod __attribute__((availability(macosx,introduced=10.8)));
+ 
+@@ -137,8 +137,8 @@ id NSNibOwner, topNibObjects;
+ 
+ @interface PartialI <PartialProt>
+ #ifdef WARN_PARTIAL
+-// expected-note@+3{{'partialMethod' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
+-// expected-note@+3{{'partialMethod' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+3{{'partialMethod' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
++// expected-note@+3{{'partialMethod' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ - (void)partialMethod __attribute__((availability(macosx,introduced=10.8)));
+ + (void)partialMethod __attribute__((availability(macosx,introduced=10.8)));
+@@ -147,12 +147,12 @@ id NSNibOwner, topNibObjects;
+ @interface PartialI ()
+ - (void)ipartialMethod1 __attribute__((availability(macosx,introduced=10.8)));
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 {{'ipartialMethod2' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+2 {{'ipartialMethod2' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ - (void)ipartialMethod2 __attribute__((availability(macosx,introduced=10.8)));
+ + (void)ipartialMethod1 __attribute__((availability(macosx,introduced=10.8)));
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 {{'ipartialMethod2' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+2 {{'ipartialMethod2' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ + (void)ipartialMethod2 __attribute__((availability(macosx,introduced=10.8)));
+ @end
+@@ -190,7 +190,7 @@ void partialfun(PartialI* a) {
+ }
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 2 {{'PartialI2' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++// expected-note@+2 2 {{'PartialI2' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+ #endif
+ __attribute__((availability(macosx, introduced = 10.8))) @interface PartialI2
+ @end
+@@ -222,7 +222,7 @@ enum MyEnum : int { // expected-note {{'MyEnum' has been explicitly marked unava
+ void use_myEnum() {
+   // expected-error@+2 {{'MyEnum' is unavailable: not available}}
+   // expected-error@+1 {{MyEnum_Blah' is unavailable: not available}}
+-  MyEnum e = MyEnum_Blah; 
++  MyEnum e = MyEnum_Blah;
+ }
+ 
+ // Test that the availability of (optional) protocol methods is not
+@@ -313,8 +313,8 @@ __attribute__((objc_root_class))
+ #if defined(WARN_PARTIAL)
+ 
+ int fn_10_5() __attribute__((availability(macosx, introduced=10.5)));
+-int fn_10_7() __attribute__((availability(macosx, introduced=10.7))); // expected-note{{'fn_10_7' has been marked as being introduced in macOS 10.7 here, but the deployment target is macOS 10.5.0}}
+-int fn_10_8() __attribute__((availability(macosx, introduced=10.8))) { // expected-note{{'fn_10_8' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5.0}}
++int fn_10_7() __attribute__((availability(macosx, introduced=10.7))); // expected-note{{'fn_10_7' has been marked as being introduced in macOS 10.7 here, but the deployment target is macOS 10.5}}
++int fn_10_8() __attribute__((availability(macosx, introduced=10.8))) { // expected-note{{'fn_10_8' has been marked as being introduced in macOS 10.8 here, but the deployment target is macOS 10.5}}
+   return fn_10_7();
+ }
+ 
+diff --git a/clang/test/SemaObjC/property-deprecated-warning.m b/clang/test/SemaObjC/property-deprecated-warning.m
+index a1e971118b2c..45e098baa891 100644
+--- a/clang/test/SemaObjC/property-deprecated-warning.m
++++ b/clang/test/SemaObjC/property-deprecated-warning.m
+@@ -9,7 +9,7 @@ typedef signed char BOOL;
+ @property(nonatomic,assign) id ptarget __attribute__((availability(ios,introduced=2.0,deprecated=3.0))); // expected-note {{property 'ptarget' is declared deprecated here}} expected-note {{'ptarget' has been explicitly marked deprecated here}}
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 {{'partialPtarget' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0.0}}
++// expected-note@+2 {{'partialPtarget' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0}}
+ #endif
+ @property(nonatomic,assign) id partialPtarget __attribute__((availability(ios,introduced=5.0)));
+ @end
+@@ -24,7 +24,7 @@ typedef signed char BOOL;
+ @property(nonatomic,assign) id target __attribute__((availability(ios,introduced=2.0,deprecated=3.0))); // expected-note {{property 'target' is declared deprecated here}} expected-note {{'setTarget:' has been explicitly marked deprecated here}}
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 {{'setPartialTarget:' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0.0}}
++// expected-note@+2 {{'setPartialTarget:' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0}}
+ #endif
+ @property(nonatomic,assign) id partialTarget __attribute__((availability(ios,introduced=5.0)));
+ @end
+@@ -40,8 +40,8 @@ typedef signed char BOOL;
+                                                                                     // expected-note 2 {{'setDep_target:' has been explicitly marked deprecated here}}
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+3 2 {{'partial_dep_target' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0.0}}
+-// expected-note@+2 2 {{'setPartial_dep_target:' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0.0}}
++// expected-note@+3 2 {{'partial_dep_target' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0}}
++// expected-note@+2 2 {{'setPartial_dep_target:' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0}}
+ #endif
+ @property(nonatomic,assign) id partial_dep_target  __attribute__((availability(ios,introduced=5.0)));
+ @end
+@@ -54,7 +54,7 @@ typedef signed char BOOL;
+   [self setTarget: (id)0]; // no-warning
+   [self setDep_target: [self dep_target]]; // expected-warning {{'dep_target' is deprecated: first deprecated in iOS 3.0}} \
+                                            // expected-warning {{'setDep_target:' is deprecated: first deprecated in iOS 3.0}}
+-					   
++
+   [self setPtarget: (id)0]; // no-warning
+   [self setPartialTarget: (id)0]; // no-warning
+ #if defined(WARN_PARTIAL)
+@@ -101,12 +101,12 @@ typedef signed char BOOL;
+ @property(setter=setNewDelegate:,assign) id delegate __attribute__((availability(ios,introduced=2.0,deprecated=3.0))); // expected-note {{'setNewDelegate:' has been explicitly marked deprecated here}} expected-note {{property 'delegate' is declared deprecated here}}
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 {{'partialIsEnabled' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0.0}}
++// expected-note@+2 {{'partialIsEnabled' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0}}
+ #endif
+ @property(getter=partialIsEnabled,assign) BOOL partialEnabled __attribute__((availability(ios,introduced=5.0)));
+ 
+ #if defined(WARN_PARTIAL)
+-// expected-note@+2 {{'partialSetNewDelegate:' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0.0}}
++// expected-note@+2 {{'partialSetNewDelegate:' has been marked as being introduced in iOS 5.0 here, but the deployment target is iOS 3.0}}
+ #endif
+ @property(setter=partialSetNewDelegate:,assign) id partialDelegate __attribute__((availability(ios,introduced=5.0)));
+ @end
+diff --git a/clang/test/SemaObjC/unguarded-availability-maccatalyst.m b/clang/test/SemaObjC/unguarded-availability-maccatalyst.m
+index 590304dda505..9d05a2ba99e5 100644
+--- a/clang/test/SemaObjC/unguarded-availability-maccatalyst.m
++++ b/clang/test/SemaObjC/unguarded-availability-maccatalyst.m
+@@ -15,7 +15,7 @@ void previouslyAvailable() AVAILABLE_PREV;
+ void currentlyAvailable() AVAILABLE_CURRENT;
+ void willBeAvailabile() AVAILABLE_NEXT;
+ #ifndef NO_WARNING
+-// expected-note@-2 {{'willBeAvailabile' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14.0.0}}
++// expected-note@-2 {{'willBeAvailabile' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14}}
+ #endif
+ 
+ 
+@@ -23,7 +23,7 @@ typedef struct {
+ 
+ } Record AVAILABLE_NEXT;
+ #ifndef NO_WARNING
+-// expected-note@-2 {{'Record' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14.0.0}}
++// expected-note@-2 {{'Record' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14}}
+ #endif
+ 
+ AVAILABLE_PREV
+@@ -56,7 +56,7 @@ void previouslyAvailableIOS() __attribute__((availability(ios, introduced = 10))
+ void currentlyAvailableIOS() __attribute__((availability(ios, introduced = 14)));
+ void willBeAvailabileIOS() __attribute__((availability(ios, introduced = 14.1)));
+ #ifndef NO_WARNING
+-// expected-note@-2 {{'willBeAvailabileIOS' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14.0.0}}
++// expected-note@-2 {{'willBeAvailabileIOS' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14}}
+ #endif
+ 
+ void testIOSAvailabilityAlsoWorks() {
+@@ -77,7 +77,7 @@ typedef struct {
+ 
+ } Record2 __attribute__((availability(ios, introduced = 14.1)));
+ #ifndef NO_WARNING
+-// expected-note@-2 {{'Record2' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14.0.0}}
++// expected-note@-2 {{'Record2' has been marked as being introduced in macCatalyst 14.1 here, but the deployment target is macCatalyst 14}}
+ #endif
+ 
+ __attribute__((availability(ios, introduced = 10)))
+diff --git a/clang/test/SemaObjC/unguarded-availability.m b/clang/test/SemaObjC/unguarded-availability.m
+index 0ee57301c3f5..dffad1dbe0f0 100644
+--- a/clang/test/SemaObjC/unguarded-availability.m
++++ b/clang/test/SemaObjC/unguarded-availability.m
+@@ -5,14 +5,14 @@
+ #define AVAILABLE_10_11 __attribute__((availability(macos, introduced = 10.11)))
+ #define AVAILABLE_10_12 __attribute__((availability(macos, introduced = 10.12)))
+ 
+-typedef int AVAILABLE_10_12 new_int; // expected-note + {{'new_int' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++typedef int AVAILABLE_10_12 new_int; // expected-note + {{'new_int' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ 
+-int func_10_11() AVAILABLE_10_11; // expected-note 8 {{'func_10_11' has been marked as being introduced in macOS 10.11 here, but the deployment target is macOS 10.9.0}}
++int func_10_11() AVAILABLE_10_11; // expected-note 8 {{'func_10_11' has been marked as being introduced in macOS 10.11 here, but the deployment target is macOS 10.9}}
+ 
+ #ifdef OBJCPP
+-// expected-note@+2 6 {{'func_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++// expected-note@+2 6 {{'func_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ #endif
+-int func_10_12() AVAILABLE_10_12; // expected-note 7 {{'func_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++int func_10_12() AVAILABLE_10_12; // expected-note 7 {{'func_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ 
+ int func_10_0() AVAILABLE_10_0;
+ 
+@@ -61,11 +61,11 @@ void star_case() {
+   }
+ }
+ 
+-typedef int int_10_11 AVAILABLE_10_11; // expected-note {{'int_10_11' has been marked as being introduced in macOS 10.11 here, but the deployment target is macOS 10.9.0}}
++typedef int int_10_11 AVAILABLE_10_11; // expected-note {{'int_10_11' has been marked as being introduced in macOS 10.11 here, but the deployment target is macOS 10.9}}
+ #ifdef OBJCPP
+-// expected-note@+2 {{'int_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++// expected-note@+2 {{'int_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ #endif
+-typedef int int_10_12 AVAILABLE_10_12; // expected-note 2 {{'int_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++typedef int int_10_12 AVAILABLE_10_12; // expected-note 2 {{'int_10_12' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ 
+ void use_typedef() {
+   int_10_11 x; // expected-warning{{'int_10_11' is only available on macOS 10.11 or newer}} expected-note{{enclose 'int_10_11' in an @available check to silence this warning}}
+@@ -106,10 +106,10 @@ int protected_scope() {
+ 
+ struct S {
+   int m1;
+-  int m2 __attribute__((availability(macos, introduced = 10.12))); // expected-note{{has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++  int m2 __attribute__((availability(macos, introduced = 10.12))); // expected-note{{has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ 
+   struct Nested {
+-    int nested_member __attribute__((availability(macos, introduced = 10.12))); // expected-note{{'nested_member' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++    int nested_member __attribute__((availability(macos, introduced = 10.12))); // expected-note{{'nested_member' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+   } n;
+ };
+ 
+@@ -147,9 +147,9 @@ void (^topLevelBlockDecl)() = ^ {
+ 
+ AVAILABLE_10_12
+ __attribute__((objc_root_class))
+-@interface InterWithProp // expected-note 2 {{'InterWithProp' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++@interface InterWithProp // expected-note 2 {{'InterWithProp' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ @property(class) int x;
+-+ (void) setX: (int)newX AVAILABLE_10_12; // expected-note{{'setX:' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
+++ (void) setX: (int)newX AVAILABLE_10_12; // expected-note{{'setX:' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ @end
+ void test_property(void) {
+   int y = InterWithProp.x; // expected-warning{{'InterWithProp' is only available on macOS 10.12 or newer}} expected-note{{@available}}
+@@ -158,7 +158,7 @@ void test_property(void) {
+ 
+ __attribute__((objc_root_class))
+ @interface Subscriptable
+-- (id)objectAtIndexedSubscript:(int)sub AVAILABLE_10_12; // expected-note{{'objectAtIndexedSubscript:' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++- (id)objectAtIndexedSubscript:(int)sub AVAILABLE_10_12; // expected-note{{'objectAtIndexedSubscript:' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ @end
+ 
+ void test_at(Subscriptable *x) {
+@@ -204,7 +204,7 @@ int instantiate_template() {
+ }
+ 
+ template <class>
+-int with_availability_attr() AVAILABLE_10_11 { // expected-note 2 {{'with_availability_attr<int>' has been marked as being introduced in macOS 10.11 here, but the deployment target is macOS 10.9.0}}
++int with_availability_attr() AVAILABLE_10_11 { // expected-note 2 {{'with_availability_attr<int>' has been marked as being introduced in macOS 10.11 here, but the deployment target is macOS 10.9}}
+   return 0;
+ }
+ 
+@@ -282,9 +282,9 @@ struct InStruct { // expected-note{{annotate 'InStruct' with an availability att
+ };
+ 
+ #ifdef OBJCPP
+-static constexpr int AVAILABLE_10_12 SomeConstexprValue = 2; // expected-note{{'SomeConstexprValue' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++static constexpr int AVAILABLE_10_12 SomeConstexprValue = 2; // expected-note{{'SomeConstexprValue' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ typedef enum { // expected-note{{annotate anonymous enum with an availability attribute}}
+-  SomeValue = SomeConstexprValue // expected-warning{{'SomeConstexprValue' is only available on macOS 10.12 or newer}} 
++  SomeValue = SomeConstexprValue // expected-warning{{'SomeConstexprValue' is only available on macOS 10.12 or newer}}
+ } SomeEnum;
+ #endif
+ 
+@@ -297,7 +297,7 @@ typedef enum { // expected-note{{annotate anonymous enum with an availability at
+ @end
+ 
+ void with_local_struct() {
+-  struct local { 
++  struct local {
+     new_int x; // expected-warning{{'new_int' is only available}} expected-note{{enclose 'new_int' in an @available check}}
+   };
+   if (@available(macos 10.12, *)) {
+@@ -311,7 +311,7 @@ void with_local_struct() {
+ // Avoid the warning on protocol requirements.
+ 
+ AVAILABLE_10_12
+-@protocol NewProtocol // expected-note {{'NewProtocol' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++@protocol NewProtocol // expected-note {{'NewProtocol' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ @end
+ 
+ @protocol ProtocolWithNewProtocolRequirement <NewProtocol> // expected-note {{annotate 'ProtocolWithNewProtocolRequirement' with an availability attribute to silence}}
+@@ -334,7 +334,7 @@ AVAILABLE_10_12
+ typedef enum {
+   AK_Dodo __attribute__((availability(macos, deprecated=10.3))), // expected-note 3 {{marked deprecated here}}
+   AK_Cat __attribute__((availability(macos, introduced=10.4))),
+-  AK_CyborgCat __attribute__((availability(macos, introduced=10.12))), // expected-note {{'AK_CyborgCat' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9.0}}
++  AK_CyborgCat __attribute__((availability(macos, introduced=10.12))), // expected-note {{'AK_CyborgCat' has been marked as being introduced in macOS 10.12 here, but the deployment target is macOS 10.9}}
+ } Animals;
+ 
+ void switchAnimals(Animals a) {
+diff --git a/llvm/include/llvm/ADT/Triple.h b/llvm/include/llvm/ADT/Triple.h
+index 2fd3047acbfd..5dbd4f16bfd5 100644
+--- a/llvm/include/llvm/ADT/Triple.h
++++ b/llvm/include/llvm/ADT/Triple.h
+@@ -10,6 +10,7 @@
+ #define LLVM_ADT_TRIPLE_H
+ 
+ #include "llvm/ADT/Twine.h"
++#include "llvm/Support/VersionTuple.h"
+ 
+ // Some system headers or GCC predefined macros conflict with identifiers in
+ // this file.  Undefine them here.
+@@ -19,8 +20,6 @@
+ 
+ namespace llvm {
+ 
+-class VersionTuple;
+-
+ /// Triple - Helper class for working with autoconf configuration names. For
+ /// historical reasons, we also call these 'triples' (they used to contain
+ /// exactly three fields).
+@@ -332,10 +331,7 @@ public:
+   /// triple, if present.
+   ///
+   /// For example, "fooos1.2.3" would return (1, 2, 3).
+-  ///
+-  /// If an entry is not defined, it will be returned as 0.
+-  void getEnvironmentVersion(unsigned &Major, unsigned &Minor,
+-                             unsigned &Micro) const;
++  VersionTuple getEnvironmentVersion() const;
+ 
+   /// Get the object format for this triple.
+   ObjectFormatType getObjectFormat() const { return ObjectFormat; }
+@@ -344,34 +340,25 @@ public:
+   /// present.
+   ///
+   /// For example, "fooos1.2.3" would return (1, 2, 3).
+-  ///
+-  /// If an entry is not defined, it will be returned as 0.
+-  void getOSVersion(unsigned &Major, unsigned &Minor, unsigned &Micro) const;
++  VersionTuple getOSVersion() const;
+ 
+   /// Return just the major version number, this is specialized because it is a
+   /// common query.
+-  unsigned getOSMajorVersion() const {
+-    unsigned Maj, Min, Micro;
+-    getOSVersion(Maj, Min, Micro);
+-    return Maj;
+-  }
++  unsigned getOSMajorVersion() const { return getOSVersion().getMajor(); }
+ 
+   /// Parse the version number as with getOSVersion and then translate generic
+   /// "darwin" versions to the corresponding OS X versions.  This may also be
+   /// called with IOS triples but the OS X version number is just set to a
+   /// constant 10.4.0 in that case.  Returns true if successful.
+-  bool getMacOSXVersion(unsigned &Major, unsigned &Minor,
+-                        unsigned &Micro) const;
++  bool getMacOSXVersion(VersionTuple &Version) const;
+ 
+   /// Parse the version number as with getOSVersion.  This should only be called
+   /// with IOS or generic triples.
+-  void getiOSVersion(unsigned &Major, unsigned &Minor,
+-                     unsigned &Micro) const;
++  VersionTuple getiOSVersion() const;
+ 
+   /// Parse the version number as with getOSVersion.  This should only be called
+   /// with WatchOS or generic triples.
+-  void getWatchOSVersion(unsigned &Major, unsigned &Minor,
+-                         unsigned &Micro) const;
++  VersionTuple getWatchOSVersion() const;
+ 
+   /// @}
+   /// @name Direct Component Access
+@@ -428,23 +415,17 @@ public:
+   /// the target triple.
+   bool isOSVersionLT(unsigned Major, unsigned Minor = 0,
+                      unsigned Micro = 0) const {
+-    unsigned LHS[3];
+-    getOSVersion(LHS[0], LHS[1], LHS[2]);
+-
+-    if (LHS[0] != Major)
+-      return LHS[0] < Major;
+-    if (LHS[1] != Minor)
+-      return LHS[1] < Minor;
+-    if (LHS[2] != Micro)
+-      return LHS[2] < Micro;
+-
+-    return false;
++    if (Minor == 0) {
++      return getOSVersion() < VersionTuple(Major);
++    }
++    if (Micro == 0) {
++      return getOSVersion() < VersionTuple(Major, Minor);
++    }
++    return getOSVersion() < VersionTuple(Major, Minor, Micro);
+   }
+ 
+   bool isOSVersionLT(const Triple &Other) const {
+-    unsigned RHS[3];
+-    Other.getOSVersion(RHS[0], RHS[1], RHS[2]);
+-    return isOSVersionLT(RHS[0], RHS[1], RHS[2]);
++    return getOSVersion() < Other.getOSVersion();
+   }
+ 
+   /// Comparison function for checking OS X version compatibility, which handles
+@@ -678,14 +659,13 @@ public:
+   bool isAndroidVersionLT(unsigned Major) const {
+     assert(isAndroid() && "Not an Android triple!");
+ 
+-    unsigned Env[3];
+-    getEnvironmentVersion(Env[0], Env[1], Env[2]);
++    VersionTuple Version = getEnvironmentVersion();
+ 
+     // 64-bit targets did not exist before API level 21 (Lollipop).
+-    if (isArch64Bit() && Env[0] < 21)
+-      Env[0] = 21;
++    if (isArch64Bit() && Version.getMajor() < 21)
++      return VersionTuple(21) < VersionTuple(Major);
+ 
+-    return Env[0] < Major;
++    return Version < VersionTuple(Major);
+   }
+ 
+   /// Tests whether the environment is musl-libc
+diff --git a/llvm/lib/Analysis/TargetLibraryInfo.cpp b/llvm/lib/Analysis/TargetLibraryInfo.cpp
+index 72fbd5ad3f68..02923c2c7eb1 100644
+--- a/llvm/lib/Analysis/TargetLibraryInfo.cpp
++++ b/llvm/lib/Analysis/TargetLibraryInfo.cpp
+@@ -238,9 +238,8 @@ static void initialize(TargetLibraryInfoImpl &TLI, const Triple &T,
+     // e.g., x86_64-pc-windows-msvc18.
+     bool hasPartialC99 = true;
+     if (T.isKnownWindowsMSVCEnvironment()) {
+-      unsigned Major, Minor, Micro;
+-      T.getEnvironmentVersion(Major, Minor, Micro);
+-      hasPartialC99 = (Major == 0 || Major >= 19);
++      VersionTuple Version = T.getEnvironmentVersion();
++      hasPartialC99 = (Version.getMajor() == 0 || Version.getMajor() >= 19);
+     }
+ 
+     // Latest targets support C89 math functions, in part.
+diff --git a/llvm/lib/MC/MCStreamer.cpp b/llvm/lib/MC/MCStreamer.cpp
+index f4e64b42c817..b0da490327d4 100644
+--- a/llvm/lib/MC/MCStreamer.cpp
++++ b/llvm/lib/MC/MCStreamer.cpp
+@@ -1316,37 +1316,36 @@ void MCStreamer::emitVersionForTarget(const Triple &Target,
+   if (Target.getOSMajorVersion() == 0)
+     return;
+ 
+-  unsigned Major = 0;
+-  unsigned Minor = 0;
+-  unsigned Update = 0;
++  VersionTuple Version;
+   switch (Target.getOS()) {
+   case Triple::MacOSX:
+   case Triple::Darwin:
+-    Target.getMacOSXVersion(Major, Minor, Update);
++    Target.getMacOSXVersion(Version);
+     break;
+   case Triple::IOS:
+   case Triple::TvOS:
+-    Target.getiOSVersion(Major, Minor, Update);
++    Version = Target.getiOSVersion();
+     break;
+   case Triple::WatchOS:
+-    Target.getWatchOSVersion(Major, Minor, Update);
++    Version = Target.getWatchOSVersion();
+     break;
+   default:
+     llvm_unreachable("unexpected OS type");
+   }
+-  assert(Major != 0 && "A non-zero major version is expected");
+-  auto LinkedTargetVersion = targetVersionOrMinimumSupportedOSVersion(
+-      Target, VersionTuple(Major, Minor, Update));
++  assert(Version.getMajor() != 0 && "A non-zero major version is expected");
++  auto LinkedTargetVersion =
++      targetVersionOrMinimumSupportedOSVersion(Target, Version);
+   auto BuildVersionOSVersion = getMachoBuildVersionSupportedOS(Target);
+   if (BuildVersionOSVersion.empty() ||
+       LinkedTargetVersion >= BuildVersionOSVersion)
+     return emitBuildVersion(getMachoBuildVersionPlatformType(Target),
+                             LinkedTargetVersion.getMajor(),
+-                            *LinkedTargetVersion.getMinor(),
+-                            *LinkedTargetVersion.getSubminor(), SDKVersion);
++                            LinkedTargetVersion.getMinor().getValueOr(0),
++                            LinkedTargetVersion.getSubminor().getValueOr(0),
++                            SDKVersion);
+ 
+   emitVersionMin(getMachoVersionMinLoadCommandType(Target),
+                  LinkedTargetVersion.getMajor(),
+-                 *LinkedTargetVersion.getMinor(),
+-                 *LinkedTargetVersion.getSubminor(), SDKVersion);
++                 LinkedTargetVersion.getMinor().getValueOr(0),
++                 LinkedTargetVersion.getSubminor().getValueOr(0), SDKVersion);
+ }
+diff --git a/llvm/lib/Support/Triple.cpp b/llvm/lib/Support/Triple.cpp
+index b9a92e280576..1b063f6c4214 100644
+--- a/llvm/lib/Support/Triple.cpp
++++ b/llvm/lib/Support/Triple.cpp
+@@ -1091,53 +1091,22 @@ StringRef Triple::getOSAndEnvironmentName() const {
+   return Tmp.split('-').second;                      // Strip second component
+ }
+ 
+-static unsigned EatNumber(StringRef &Str) {
+-  assert(!Str.empty() && isDigit(Str[0]) && "Not a number");
+-  unsigned Result = 0;
+-
+-  do {
+-    // Consume the leading digit.
+-    Result = Result*10 + (Str[0] - '0');
+-
+-    // Eat the digit.
+-    Str = Str.substr(1);
+-  } while (!Str.empty() && isDigit(Str[0]));
+-
+-  return Result;
++static VersionTuple parseVersionFromName(StringRef Name) {
++  VersionTuple Version;
++  Version.tryParse(Name);
++  return Version.withoutBuild();
+ }
+ 
+-static void parseVersionFromName(StringRef Name, unsigned &Major,
+-                                 unsigned &Minor, unsigned &Micro) {
+-  // Any unset version defaults to 0.
+-  Major = Minor = Micro = 0;
+-
+-  // Parse up to three components.
+-  unsigned *Components[3] = {&Major, &Minor, &Micro};
+-  for (unsigned i = 0; i != 3; ++i) {
+-    if (Name.empty() || Name[0] < '0' || Name[0] > '9')
+-      break;
+-
+-    // Consume the leading number.
+-    *Components[i] = EatNumber(Name);
+-
+-    // Consume the separator, if present.
+-    if (Name.startswith("."))
+-      Name = Name.substr(1);
+-  }
+-}
+-
+-void Triple::getEnvironmentVersion(unsigned &Major, unsigned &Minor,
+-                                   unsigned &Micro) const {
++VersionTuple Triple::getEnvironmentVersion() const {
+   StringRef EnvironmentName = getEnvironmentName();
+   StringRef EnvironmentTypeName = getEnvironmentTypeName(getEnvironment());
+   if (EnvironmentName.startswith(EnvironmentTypeName))
+     EnvironmentName = EnvironmentName.substr(EnvironmentTypeName.size());
+ 
+-  parseVersionFromName(EnvironmentName, Major, Minor, Micro);
++  return parseVersionFromName(EnvironmentName);
+ }
+ 
+-void Triple::getOSVersion(unsigned &Major, unsigned &Minor,
+-                          unsigned &Micro) const {
++VersionTuple Triple::getOSVersion() const {
+   StringRef OSName = getOSName();
+   // Assume that the OS portion of the triple starts with the canonical name.
+   StringRef OSTypeName = getOSTypeName(getOS());
+@@ -1146,40 +1115,36 @@ void Triple::getOSVersion(unsigned &Major, unsigned &Minor,
+   else if (getOS() == MacOSX)
+     OSName.consume_front("macos");
+ 
+-  parseVersionFromName(OSName, Major, Minor, Micro);
++  return parseVersionFromName(OSName);
+ }
+ 
+-bool Triple::getMacOSXVersion(unsigned &Major, unsigned &Minor,
+-                              unsigned &Micro) const {
+-  getOSVersion(Major, Minor, Micro);
++bool Triple::getMacOSXVersion(VersionTuple &Version) const {
++  Version = getOSVersion();
+ 
+   switch (getOS()) {
+   default: llvm_unreachable("unexpected OS for Darwin triple");
+   case Darwin:
+     // Default to darwin8, i.e., MacOSX 10.4.
+-    if (Major == 0)
+-      Major = 8;
++    if (Version.getMajor() == 0)
++      Version = VersionTuple(8);
+     // Darwin version numbers are skewed from OS X versions.
+-    if (Major < 4)
++    if (Version.getMajor() < 4) {
+       return false;
+-    if (Major <= 19) {
+-      Micro = 0;
+-      Minor = Major - 4;
+-      Major = 10;
++    }
++    if (Version.getMajor() <= 19) {
++      Version = VersionTuple(10, Version.getMajor() - 4);
+     } else {
+-      Micro = 0;
+-      Minor = 0;
+       // darwin20+ corresponds to macOS 11+.
+-      Major = 11 + Major - 20;
++      Version = VersionTuple(11 + Version.getMajor() - 20);
+     }
+     break;
+   case MacOSX:
+     // Default to 10.4.
+-    if (Major == 0) {
+-      Major = 10;
+-      Minor = 4;
+-    } else if (Major < 10)
++    if (Version.getMajor() == 0) {
++      Version = VersionTuple(10, 4);
++    } else if (Version.getMajor() < 10) {
+       return false;
++    }
+     break;
+   case IOS:
+   case TvOS:
+@@ -1188,16 +1153,13 @@ bool Triple::getMacOSXVersion(unsigned &Major, unsigned &Minor,
+     // the clang driver combines OS X and IOS support into a common Darwin
+     // toolchain that wants to know the OS X version number even when targeting
+     // IOS.
+-    Major = 10;
+-    Minor = 4;
+-    Micro = 0;
++    Version = VersionTuple(10, 4);
+     break;
+   }
+   return true;
+ }
+ 
+-void Triple::getiOSVersion(unsigned &Major, unsigned &Minor,
+-                           unsigned &Micro) const {
++VersionTuple Triple::getiOSVersion() const {
+   switch (getOS()) {
+   default: llvm_unreachable("unexpected OS for Darwin triple");
+   case Darwin:
+@@ -1206,24 +1168,21 @@ void Triple::getiOSVersion(unsigned &Major, unsigned &Minor,
+     // the clang driver combines OS X and IOS support into a common Darwin
+     // toolchain that wants to know the iOS version number even when targeting
+     // OS X.
+-    Major = 5;
+-    Minor = 0;
+-    Micro = 0;
+-    break;
++    return VersionTuple(5);
+   case IOS:
+-  case TvOS:
+-    getOSVersion(Major, Minor, Micro);
++  case TvOS: {
++    VersionTuple Version = getOSVersion();
+     // Default to 5.0 (or 7.0 for arm64).
+-    if (Major == 0)
+-      Major = (getArch() == aarch64) ? 7 : 5;
+-    break;
++    if (Version.getMajor() == 0)
++      return (getArch() == aarch64) ? VersionTuple(7) : VersionTuple(5);
++    return Version;
++  }
+   case WatchOS:
+     llvm_unreachable("conflicting triple info");
+   }
+ }
+ 
+-void Triple::getWatchOSVersion(unsigned &Major, unsigned &Minor,
+-                               unsigned &Micro) const {
++VersionTuple Triple::getWatchOSVersion() const {
+   switch (getOS()) {
+   default: llvm_unreachable("unexpected OS for Darwin triple");
+   case Darwin:
+@@ -1232,15 +1191,13 @@ void Triple::getWatchOSVersion(unsigned &Major, unsigned &Minor,
+     // the clang driver combines OS X and IOS support into a common Darwin
+     // toolchain that wants to know the iOS version number even when targeting
+     // OS X.
+-    Major = 2;
+-    Minor = 0;
+-    Micro = 0;
+-    break;
+-  case WatchOS:
+-    getOSVersion(Major, Minor, Micro);
+-    if (Major == 0)
+-      Major = 2;
+-    break;
++    return VersionTuple(2);
++  case WatchOS: {
++    VersionTuple Version = getOSVersion();
++    if (Version.getMajor() == 0)
++      return VersionTuple(2);
++    return Version;
++  }
+   case IOS:
+     llvm_unreachable("conflicting triple info");
+   }
+diff --git a/llvm/lib/Target/AArch64/AArch64Subtarget.cpp b/llvm/lib/Target/AArch64/AArch64Subtarget.cpp
+index d782d6352cbe..f7d3dd0bc222 100644
+--- a/llvm/lib/Target/AArch64/AArch64Subtarget.cpp
++++ b/llvm/lib/Target/AArch64/AArch64Subtarget.cpp
+@@ -346,9 +346,7 @@ bool AArch64Subtarget::supportsAddressTopByteIgnored() const {
+     return false;
+ 
+   if (TargetTriple.isiOS()) {
+-    unsigned Major, Minor, Micro;
+-    TargetTriple.getiOSVersion(Major, Minor, Micro);
+-    return Major >= 8;
++    return TargetTriple.getiOSVersion() >= VersionTuple(8);
+   }
+ 
+   return false;
+diff --git a/llvm/lib/Target/AArch64/AArch64Subtarget.h b/llvm/lib/Target/AArch64/AArch64Subtarget.h
+index 19db774ccd7b..cbc5f03280e5 100644
+--- a/llvm/lib/Target/AArch64/AArch64Subtarget.h
++++ b/llvm/lib/Target/AArch64/AArch64Subtarget.h
+@@ -632,8 +632,7 @@ public:
+     // extended frames should be flagged as present.
+     const Triple &TT = getTargetTriple();
+ 
+-    unsigned Major, Minor, Micro;
+-    TT.getOSVersion(Major, Minor, Micro);
++    unsigned Major = TT.getOSVersion().getMajor();
+     switch(TT.getOS()) {
+     default:
+       return false;
+diff --git a/llvm/lib/Target/X86/X86Subtarget.h b/llvm/lib/Target/X86/X86Subtarget.h
+index 9da54dc2e9b7..5d773f0c57df 100644
+--- a/llvm/lib/Target/X86/X86Subtarget.h
++++ b/llvm/lib/Target/X86/X86Subtarget.h
+@@ -958,8 +958,7 @@ public:
+     // extended frames should be flagged as present.
+     const Triple &TT = getTargetTriple();
+ 
+-    unsigned Major, Minor, Micro;
+-    TT.getOSVersion(Major, Minor, Micro);
++    unsigned Major = TT.getOSVersion().getMajor();
+     switch(TT.getOS()) {
+     default:
+       return false;
+diff --git a/llvm/unittests/ADT/TripleTest.cpp b/llvm/unittests/ADT/TripleTest.cpp
+index a6a79ed5a39e..4853dfc13558 100644
+--- a/llvm/unittests/ADT/TripleTest.cpp
++++ b/llvm/unittests/ADT/TripleTest.cpp
+@@ -117,6 +117,18 @@ TEST(TripleTest, ParsedIDs) {
+   EXPECT_EQ(Triple::Linux, T.getOS());
+   EXPECT_EQ(Triple::MuslX32, T.getEnvironment());
+ 
++  T = Triple("arm-unknown-linux-android16");
++  EXPECT_EQ(Triple::arm, T.getArch());
++  EXPECT_EQ(Triple::UnknownVendor, T.getVendor());
++  EXPECT_EQ(Triple::Linux, T.getOS());
++  EXPECT_EQ(Triple::Android, T.getEnvironment());
++
++  T = Triple("aarch64-unknown-linux-android21");
++  EXPECT_EQ(Triple::aarch64, T.getArch());
++  EXPECT_EQ(Triple::UnknownVendor, T.getVendor());
++  EXPECT_EQ(Triple::Linux, T.getOS());
++  EXPECT_EQ(Triple::Android, T.getEnvironment());
++
+   // PS4 has two spellings for the vendor.
+   T = Triple("x86_64-scei-ps4");
+   EXPECT_EQ(Triple::x86_64, T.getArch());
+@@ -1261,7 +1273,7 @@ TEST(TripleTest, EndianArchVariants) {
+ 
+ TEST(TripleTest, getOSVersion) {
+   Triple T;
+-  unsigned Major, Minor, Micro;
++  VersionTuple Version;
+ 
+   T = Triple("i386-apple-darwin9");
+   EXPECT_TRUE(T.isMacOSX());
+@@ -1269,14 +1281,10 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_TRUE(T.isArch32Bit());
+   EXPECT_FALSE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)5, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)5, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(10, 5), Version);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(5), Version);
+ 
+   T = Triple("x86_64-apple-darwin9");
+   EXPECT_TRUE(T.isMacOSX());
+@@ -1284,14 +1292,10 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_FALSE(T.isArch32Bit());
+   EXPECT_TRUE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)5, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)5, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(10, 5), Version);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(5), Version);
+ 
+   T = Triple("x86_64-apple-macosx");
+   EXPECT_TRUE(T.isMacOSX());
+@@ -1299,14 +1303,10 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_FALSE(T.isArch32Bit());
+   EXPECT_TRUE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)4, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)5, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(10, 4), Version);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(5), Version);
+ 
+   T = Triple("x86_64-apple-macosx10.7");
+   EXPECT_TRUE(T.isMacOSX());
+@@ -1314,14 +1314,10 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_FALSE(T.isArch32Bit());
+   EXPECT_TRUE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)7, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)5, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(10, 7), Version);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(5), Version);
+ 
+   T = Triple("x86_64-apple-macos11.0");
+   EXPECT_TRUE(T.isMacOSX());
+@@ -1329,10 +1325,8 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_FALSE(T.isArch32Bit());
+   EXPECT_TRUE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)11, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(11, 0), Version);
+ 
+   T = Triple("arm64-apple-macosx11.5.8");
+   EXPECT_TRUE(T.isMacOSX());
+@@ -1340,34 +1334,26 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_FALSE(T.isArch32Bit());
+   EXPECT_TRUE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)11, Major);
+-  EXPECT_EQ((unsigned)5, Minor);
+-  EXPECT_EQ((unsigned)8, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(11, 5, 8), Version);
+ 
+   // 10.16 forms a valid triple, even though it's not
+   // a version of a macOS.
+   T = Triple("x86_64-apple-macos10.16");
+   EXPECT_TRUE(T.isMacOSX());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)16, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(10, 16), Version);
+ 
+   T = Triple("x86_64-apple-darwin20");
+   EXPECT_TRUE(T.isMacOSX());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)11, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(11), Version);
+ 
+   // For darwin triples on macOS 11, only compare the major version.
+   T = Triple("x86_64-apple-darwin20.2");
+   EXPECT_TRUE(T.isMacOSX());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)11, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(11), Version);
+ 
+   T = Triple("armv7-apple-ios");
+   EXPECT_FALSE(T.isMacOSX());
+@@ -1375,14 +1361,10 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_TRUE(T.isArch32Bit());
+   EXPECT_FALSE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)4, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)5, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(10, 4), Version);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(5), Version);
+ 
+   T = Triple("armv7-apple-ios7.0");
+   EXPECT_FALSE(T.isMacOSX());
+@@ -1390,36 +1372,45 @@ TEST(TripleTest, getOSVersion) {
+   EXPECT_FALSE(T.isArch16Bit());
+   EXPECT_TRUE(T.isArch32Bit());
+   EXPECT_FALSE(T.isArch64Bit());
+-  T.getMacOSXVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)4, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)7, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  T.getMacOSXVersion(Version);
++  EXPECT_EQ(VersionTuple(10, 4), Version);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(7, 0), Version);
+   EXPECT_FALSE(T.isSimulatorEnvironment());
+ 
+   T = Triple("x86_64-apple-ios10.3-simulator");
+   EXPECT_TRUE(T.isiOS());
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)10, Major);
+-  EXPECT_EQ((unsigned)3, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(10, 3), Version);
+   EXPECT_TRUE(T.isSimulatorEnvironment());
+   EXPECT_FALSE(T.isMacCatalystEnvironment());
+ 
+   T = Triple("x86_64-apple-ios13.0-macabi");
+   EXPECT_TRUE(T.isiOS());
+-  T.getiOSVersion(Major, Minor, Micro);
+-  EXPECT_EQ((unsigned)13, Major);
+-  EXPECT_EQ((unsigned)0, Minor);
+-  EXPECT_EQ((unsigned)0, Micro);
++  Version = T.getiOSVersion();
++  EXPECT_EQ(VersionTuple(13, 0), Version);
+   EXPECT_TRUE(T.getEnvironment() == Triple::MacABI);
+   EXPECT_TRUE(T.isMacCatalystEnvironment());
+   EXPECT_FALSE(T.isSimulatorEnvironment());
+ }
+ 
++TEST(TripleTest, getEnvironmentVersion) {
++  Triple T;
++  VersionTuple Version;
++
++  T = Triple("arm-unknown-linux-android16");
++  EXPECT_TRUE(T.isAndroid());
++  Version = T.getEnvironmentVersion();
++  EXPECT_EQ(VersionTuple(16), Version);
++  EXPECT_EQ(Triple::Android, T.getEnvironment());
++
++  T = Triple("aarch64-unknown-linux-android21");
++  EXPECT_TRUE(T.isAndroid());
++  Version = T.getEnvironmentVersion();
++  EXPECT_EQ(VersionTuple(21), Version);
++  EXPECT_EQ(Triple::Android, T.getEnvironment());
++}
++
+ TEST(TripleTest, isMacOSVersionLT) {
+   Triple T = Triple("x86_64-apple-macos11");
+   EXPECT_TRUE(T.isMacOSXVersionLT(11, 1, 0));
+@@ -1566,6 +1557,15 @@ TEST(TripleTest, NormalizeWindows) {
+   EXPECT_TRUE(Triple("x86_64-pc-win32").isWindowsMSVCEnvironment());
+ }
+ 
++TEST(TripleTest, NormalizeAndroid) {
++  EXPECT_EQ("arm-unknown-linux-android16",
++            Triple::normalize("arm-linux-androideabi16"));
++  EXPECT_EQ("armv7a-unknown-linux-android",
++            Triple::normalize("armv7a-linux-androideabi"));
++  EXPECT_EQ("aarch64-unknown-linux-android21",
++            Triple::normalize("aarch64-linux-android21"));
++}
++
+ TEST(TripleTest, getARMCPUForArch) {
+   // Platform specific defaults.
+   {
+diff --git a/llvm/unittests/Support/Host.cpp b/llvm/unittests/Support/Host.cpp
+index 0d6e36b0ae7b..9c40cbc910eb 100644
+--- a/llvm/unittests/Support/Host.cpp
++++ b/llvm/unittests/Support/Host.cpp
+@@ -366,7 +366,6 @@ TEST(getLinuxHostCPUName, s390x) {
+   }
+ }
+ 
+-#if defined(__APPLE__) || defined(_AIX)
+ static bool runAndGetCommandOutput(
+     const char *ExePath, ArrayRef<llvm::StringRef> argv,
+     std::unique_ptr<char[]> &Buffer, off_t &Size) {
+@@ -406,12 +405,9 @@ TEST_F(HostTest, DummyRunAndGetCommandOutputUse) {
+   // disabled.
+   (void) runAndGetCommandOutput;
+ }
+-#endif
+ 
+-#if defined(__APPLE__)
+ TEST_F(HostTest, getMacOSHostVersion) {
+-  using namespace llvm::sys;
+-  llvm::Triple HostTriple(getProcessTriple());
++  llvm::Triple HostTriple(llvm::sys::getProcessTriple());
+   if (!HostTriple.isMacOSX())
+     return;
+ 
+@@ -420,34 +416,32 @@ TEST_F(HostTest, getMacOSHostVersion) {
+   std::unique_ptr<char[]> Buffer;
+   off_t Size;
+   ASSERT_EQ(runAndGetCommandOutput(SwVersPath, argv, Buffer, Size), true);
+-  StringRef SystemVersion(Buffer.get(), Size);
++  StringRef SystemVersionStr = StringRef(Buffer.get(), Size).rtrim();
+ 
+   // Ensure that the two versions match.
+-  unsigned SystemMajor, SystemMinor, SystemMicro;
+-  ASSERT_EQ(llvm::Triple((Twine("x86_64-apple-macos") + SystemVersion))
+-                .getMacOSXVersion(SystemMajor, SystemMinor, SystemMicro),
++  VersionTuple SystemVersion;
++  ASSERT_EQ(llvm::Triple((Twine("x86_64-apple-macos") + SystemVersionStr))
++                .getMacOSXVersion(SystemVersion),
+             true);
+-  unsigned HostMajor, HostMinor, HostMicro;
+-  ASSERT_EQ(HostTriple.getMacOSXVersion(HostMajor, HostMinor, HostMicro), true);
++  VersionTuple HostVersion;
++  ASSERT_EQ(HostTriple.getMacOSXVersion(HostVersion), true);
+ 
+-  if (SystemMajor > 10) {
++  if (SystemVersion.getMajor() > 10) {
+     // Don't compare the 'Minor' and 'Micro' versions, as they're always '0' for
+     // the 'Darwin' triples on 11.x.
+-    ASSERT_EQ(SystemMajor, HostMajor);
++    ASSERT_EQ(SystemVersion.getMajor(), HostVersion.getMajor());
+   } else {
+     // Don't compare the 'Micro' version, as it's always '0' for the 'Darwin'
+     // triples.
+-    ASSERT_EQ(std::tie(SystemMajor, SystemMinor), std::tie(HostMajor, HostMinor));
++    ASSERT_EQ(SystemVersion.getMajor(), HostVersion.getMajor());
++    ASSERT_EQ(SystemVersion.getMinor(), HostVersion.getMinor());
+   }
+ }
+-#endif
+ 
+-#if defined(_AIX)
+ TEST_F(HostTest, AIXVersionDetect) {
+-  using namespace llvm::sys;
+-
+-  llvm::Triple HostTriple(getProcessTriple());
+-  ASSERT_EQ(HostTriple.getOS(), Triple::AIX);
++  llvm::Triple HostTriple(llvm::sys::getProcessTriple());
++  if (HostTriple.getOS() != Triple::AIX)
++    return;
+ 
+   llvm::Triple ConfiguredHostTriple(LLVM_HOST_TRIPLE);
+   ASSERT_EQ(ConfiguredHostTriple.getOS(), Triple::AIX);
+@@ -457,22 +451,21 @@ TEST_F(HostTest, AIXVersionDetect) {
+   std::unique_ptr<char[]> Buffer;
+   off_t Size;
+   ASSERT_EQ(runAndGetCommandOutput(ExePath, argv, Buffer, Size), true);
+-  StringRef SystemVersion(Buffer.get(), Size);
++  StringRef SystemVersionStr = StringRef(Buffer.get(), Size).rtrim();
+ 
+-  unsigned SystemMajor, SystemMinor, SystemMicro;
+-  llvm::Triple((Twine("powerpc-ibm-aix") + SystemVersion))
+-      .getOSVersion(SystemMajor, SystemMinor, SystemMicro);
++  VersionTuple SystemVersion =
++      llvm::Triple((Twine("powerpc-ibm-aix") + SystemVersionStr))
++          .getOSVersion();
+ 
+   // Ensure that the host triple version (major) and release (minor) numbers,
+   // unless explicitly configured, match with those of the current system.
+   if (!ConfiguredHostTriple.getOSMajorVersion()) {
+-    unsigned HostMajor, HostMinor, HostMicro;
+-    HostTriple.getOSVersion(HostMajor, HostMinor, HostMicro);
+-    ASSERT_EQ(std::tie(SystemMajor, SystemMinor),
+-              std::tie(HostMajor, HostMinor));
++    VersionTuple HostVersion = HostTriple.getOSVersion();
++    ASSERT_EQ(SystemVersion.getMajor(), HostVersion.getMajor());
++    ASSERT_EQ(SystemVersion.getMinor(), HostVersion.getMinor());
+   }
+ 
+-  llvm::Triple TargetTriple(getDefaultTargetTriple());
++  llvm::Triple TargetTriple(llvm::sys::getDefaultTargetTriple());
+   if (TargetTriple.getOS() != Triple::AIX)
+     return;
+ 
+@@ -482,13 +475,16 @@ TEST_F(HostTest, AIXVersionDetect) {
+   if (ConfiguredTargetTriple.getOSMajorVersion())
+     return; // The version was configured explicitly; skip.
+ 
+-  unsigned TargetMajor, TargetMinor, TargetMicro;
+-  TargetTriple.getOSVersion(TargetMajor, TargetMinor, TargetMicro);
+-  ASSERT_EQ(std::tie(SystemMajor, SystemMinor),
+-            std::tie(TargetMajor, TargetMinor));
++  VersionTuple TargetVersion = TargetTriple.getOSVersion();
++  ASSERT_EQ(SystemVersion.getMajor(), TargetVersion.getMajor());
++  ASSERT_EQ(SystemVersion.getMinor(), TargetVersion.getMinor());
+ }
+ 
+ TEST_F(HostTest, AIXHostCPUDetect) {
++  llvm::Triple HostTriple(llvm::sys::getProcessTriple());
++  if (HostTriple.getOS() != Triple::AIX)
++    return;
++
+   // Return a value based on the current processor implementation mode.
+   const char *ExePath = "/usr/sbin/getsystype";
+   StringRef argv[] = {ExePath, "-i"};
+@@ -516,4 +512,3 @@ TEST_F(HostTest, AIXHostCPUDetect) {
+ 
+   EXPECT_EQ(HostCPU, MCPU);
+ }
+-#endif
+-- 
+2.35.0.263.gb82422642f-goog
+

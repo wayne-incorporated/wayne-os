@@ -1,0 +1,145 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":common-goprotos",
+    ":common-protos",
+    ":container-rpcs",
+    ":fuzzer-protos",
+    ":tremplin-gorpcs",
+    ":tremplin-rpcs",
+    ":vm-crash-gorpcs",
+    ":vm-crash-rpcs",
+    ":vm-gorpcs",
+    ":vm-rpcs",
+    ":vsh-protos",
+  ]
+}
+
+proto_library("common-protos") {
+  proto_in_dir = "./"
+  proto_out_dir = "include/vm_protos/proto_bindings"
+  gen_grpc = true
+  sources = [ "${proto_in_dir}/common.proto" ]
+  standalone = true
+}
+
+goproto_library("common-goprotos") {
+  proto_in_dir = "./"
+  proto_out_dir = "go/src/"
+  sources = [ "${proto_in_dir}/common.proto" ]
+}
+
+proto_library("container-rpcs") {
+  proto_in_dir = "./"
+  proto_out_dir = "include/vm_protos/proto_bindings"
+  gen_grpc = true
+  sources = [
+    "${proto_in_dir}/container_guest.proto",
+    "${proto_in_dir}/container_host.proto",
+  ]
+  deps = [ ":common-protos" ]
+  all_dependent_pkg_deps = [
+    "grpc++",
+    "protobuf",
+  ]
+  standalone = true
+}
+
+proto_library("vm-crash-rpcs") {
+  proto_in_dir = "./"
+  proto_out_dir = "include/vm_protos/proto_bindings"
+  gen_grpc = true
+  sources = [ "${proto_in_dir}/vm_crash.proto" ]
+  deps = [ ":common-protos" ]
+  all_dependent_pkg_deps = [
+    "grpc++",
+    "protobuf",
+  ]
+  standalone = true
+}
+
+goproto_library("vm-crash-gorpcs") {
+  proto_in_dir = "./"
+  proto_out_dir = "go/src/"
+  gen_grpc = true
+  sources = [ "${proto_in_dir}/vm_crash.proto" ]
+}
+
+proto_library("fuzzer-protos") {
+  proto_in_dir = "./"
+  proto_out_dir = "include/vm_protos/proto_bindings"
+  gen_grpc = true
+  standalone = true
+  sources = [ "${proto_in_dir}/fuzzer.proto" ]
+  deps = [
+    ":common-protos",
+    ":container-rpcs",
+    ":tremplin-rpcs",
+    ":vm-crash-rpcs",
+  ]
+}
+
+proto_library("tremplin-rpcs") {
+  proto_in_dir = "./"
+  proto_out_dir = "include/vm_protos/proto_bindings"
+  gen_grpc = true
+  sources = [ "${proto_in_dir}/tremplin.proto" ]
+  all_dependent_pkg_deps = [
+    "grpc++",
+    "protobuf",
+  ]
+  gen_grpc_gmock = true
+  standalone = true
+}
+
+goproto_library("tremplin-gorpcs") {
+  proto_in_dir = "./"
+  proto_out_dir = "go/src/"
+  gen_grpc = true
+  sources = [ "${proto_in_dir}/tremplin.proto" ]
+}
+
+proto_library("vm-rpcs") {
+  proto_in_dir = "./"
+  proto_out_dir = "include/vm_protos/proto_bindings"
+  gen_grpc = true
+  sources = [
+    "${proto_in_dir}/vm_guest.proto",
+    "${proto_in_dir}/vm_host.proto",
+  ]
+  deps = [ ":common-protos" ]
+  all_dependent_pkg_deps = [
+    "grpc++",
+    "protobuf",
+  ]
+  standalone = true
+}
+
+goproto_library("vm-gorpcs") {
+  proto_in_dir = "./"
+  proto_out_dir = "go/src/"
+  gen_grpc = true
+  sources = [
+    "${proto_in_dir}/vm_guest.proto",
+    "${proto_in_dir}/vm_host.proto",
+  ]
+}
+
+proto_library("vsh-protos") {
+  proto_in_dir = "./"
+  proto_out_dir = "include/vm_protos/proto_bindings"
+  sources = [ "${proto_in_dir}/vsh.proto" ]
+  standalone = true
+  if (use.fuzzer) {
+    # Override optimize_for option in proto file.
+    gen_cpp_mode = "speed"
+    all_dependent_pkg_deps = [ "protobuf" ]
+  } else {
+    all_dependent_pkg_deps = [ "protobuf-lite" ]
+  }
+}

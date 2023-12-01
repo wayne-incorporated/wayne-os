@@ -1,0 +1,62 @@
+commit dd3e95fb350d3e47a3675f6a7dc2bac0788cb860
+Author: Luis Lozano <llozano@google.com>
+Date:   Tue May 26 14:15:09 2020 -0700
+
+    Revert "[TargetLoweringObjectFileImpl] Produce .text.hot. instead of .text.hot for -fno-unique-section-names"
+    
+    This reverts commit 66055230bf6673b76e7330fef76d752a1ea8638e.
+
+diff --git a/llvm/lib/CodeGen/TargetLoweringObjectFileImpl.cpp b/llvm/lib/CodeGen/TargetLoweringObjectFileImpl.cpp
+index a3bfd650d4b..a9b1455d13a 100644
+--- a/llvm/lib/CodeGen/TargetLoweringObjectFileImpl.cpp
++++ b/llvm/lib/CodeGen/TargetLoweringObjectFileImpl.cpp
+@@ -611,19 +611,15 @@ getELFSectionNameForGlobal(const GlobalObject *GO, SectionKind Kind,
+     Name = getSectionPrefixForGlobal(Kind);
+   }
+ 
+-  bool HasPrefix = false;
+   if (const auto *F = dyn_cast<Function>(GO)) {
+-    if (Optional<StringRef> Prefix = F->getSectionPrefix()) {
++    if (Optional<StringRef> Prefix = F->getSectionPrefix())
+       Name += *Prefix;
+-      HasPrefix = true;
+-    }
+   }
+ 
+   if (UniqueSectionName) {
+     Name.push_back('.');
+     TM.getNameWithPrefix(Name, GO, Mang, /*MayAlwaysUsePrivate*/true);
+-  } else if (HasPrefix)
+-    Name.push_back('.');
++  }
+   return Name;
+ }
+ 
+diff --git a/llvm/test/Transforms/CodeGenPrepare/X86/section.ll b/llvm/test/Transforms/CodeGenPrepare/X86/section.ll
+index 4347f5761a4..30598ba7afb 100644
+--- a/llvm/test/Transforms/CodeGenPrepare/X86/section.ll
++++ b/llvm/test/Transforms/CodeGenPrepare/X86/section.ll
+@@ -1,14 +1,10 @@
+ ; RUN: opt < %s -codegenprepare -S | FileCheck %s
+-; RUN: llc < %s | FileCheck --check-prefix=ASM1 %s
+-; RUN: llc < %s -function-sections | FileCheck --check-prefix=ASM2 %s
+ 
+ target triple = "x86_64-pc-linux-gnu"
+ 
+ ; This tests that hot/cold functions get correct section prefix assigned
+ 
+ ; CHECK: hot_func1{{.*}}!section_prefix ![[HOT_ID:[0-9]+]]
+-; ASM1: .section .text.hot.,"ax",@progbits
+-; ASM2: .section .text.hot.hot_func1,"ax",@progbits
+ ; The entry is hot
+ define void @hot_func1() !prof !15 {
+   ret void
+@@ -44,8 +40,6 @@ for.end:
+ ; not call site VP metadata (which can exist on value profiled memcpy,
+ ; or possibly left behind after static analysis based devirtualization).
+ ; CHECK: cold_func1{{.*}}!section_prefix ![[COLD_ID:[0-9]+]]
+-; ASM1: .section .text.unlikely.,"ax",@progbits
+-; ASM2: .section .text.unlikely.cold_func1,"ax",@progbits
+ define void @cold_func1() !prof !16 {
+   call void @hot_func1(), !prof !17
+   call void @hot_func1(), !prof !17

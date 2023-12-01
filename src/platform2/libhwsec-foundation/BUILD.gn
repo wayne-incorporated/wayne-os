@@ -1,0 +1,275 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_headers",
+    ":libhwsec-foundation",
+    ":libhwsec-profiling",
+    ":tpm_version_client",
+  ]
+  if (use.test) {
+    deps += [
+      ":hwsec-foundation_testrunner",
+      ":install_test_syscaller_headers",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":install_fuzzer_headers",
+      ":libhwsec_foundation_rsa_oaep_decrypt_fuzzer",
+    ]
+  }
+  if (use.tpm_dynamic) {
+    deps += [
+      ":install_no_tpm_checker",
+      ":install_tpm_version",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  defines = [
+    "ENABLE_PROFILING=${use.profiling}",
+    "USE_TPM1=${use.tpm}",
+    "USE_TPM2=${use.tpm2}",
+    "USE_TPM_DYNAMIC=${use.tpm_dynamic}",
+  ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "openssl",
+    "re2",
+  ]
+  cflags = [ "-Wconsumed" ]
+}
+
+shared_library("libhwsec-foundation") {
+  sources = [
+    "crypto/aes.cc",
+    "crypto/big_num_util.cc",
+    "crypto/ecdh_hkdf.cc",
+    "crypto/elliptic_curve.cc",
+    "crypto/error_util.cc",
+    "crypto/hkdf.cc",
+    "crypto/hmac.cc",
+    "crypto/libscrypt_compat.cc",
+    "crypto/rsa.cc",
+    "crypto/scrypt.cc",
+    "crypto/secure_blob_util.cc",
+    "crypto/sha.cc",
+    "da_reset/da_resetter.cc",
+    "syscaller/syscaller_impl.cc",
+    "tpm/tpm_version.cc",
+    "tpm_error/auth_failure_analysis.cc",
+    "tpm_error/handle_auth_failure.cc",
+    "tpm_error/tpm_error_data.cc",
+    "tpm_error/tpm_error_uma_report.cc",
+    "tpm_error/tpm_error_uma_reporter.cc",
+    "tpm_error/tpm_error_uma_reporter_impl.cc",
+    "utility/crypto.cc",
+    "vpd_reader/vpd_reader_impl.cc",
+  ]
+  if (use.fuzzer) {
+    sources += [
+      "fuzzers/blob_mutator.cc",
+      "fuzzers/fuzzed_proto_generator.cc",
+    ]
+  }
+  pkg_deps = [
+    "libmetrics",
+    "libtpm_manager-client",
+    "system_api",
+  ]
+  configs += [ ":target_defaults" ]
+  if (use.fuzzer) {
+    sources += [ "fuzzed_trousers_utils.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+  }
+  install_path = "lib"
+}
+
+static_library("libhwsec-profiling") {
+  sources = [ "profiling/profiling.cc" ]
+  configs -= [ "//common-mk:use_thin_archive" ]
+  configs += [
+    "//common-mk:nouse_thin_archive",
+    ":target_defaults",
+  ]
+  install_path = "lib"
+}
+
+executable("tpm_version_client") {
+  sources = [ "tool/tpm_version_client.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libhwsec-foundation" ]
+  install_path = "/usr/sbin"
+}
+
+install_config("install_tpm_version") {
+  sources = [ "tool/tpm_version" ]
+  type = "executable"
+  install_path = "/usr/sbin"
+}
+
+install_config("install_no_tpm_checker") {
+  sources = [ "init/no-tpm-checker.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_headers") {
+  sources = [
+    "hwsec-foundation_export.h",
+    "signature_traits.h",
+  ]
+  install_path = "/usr/include/libhwsec-foundation"
+  deps = [
+    ":install_status_headers",
+    ":install_syscaller_headers",
+    ":install_tpm_error_headers",
+    ":install_utility_headers",
+    ":install_vpd_reader_headers",
+  ]
+}
+
+install_config("install_status_headers") {
+  sources = [
+    "status/status_chain.h",
+    "status/status_chain_macros.h",
+    "status/status_chain_or.h",
+  ]
+  install_path = "/usr/include/libhwsec-foundation/status"
+  deps = [ ":install_status_impl_headers" ]
+}
+
+install_config("install_status_impl_headers") {
+  sources = [
+    "status/impl/error.h",
+    "status/impl/stackable_error.h",
+    "status/impl/stackable_error_forward_declarations.h",
+    "status/impl/stackable_error_iterator.h",
+    "status/impl/stackable_error_range.h",
+  ]
+  install_path = "/usr/include/libhwsec-foundation/status/impl"
+}
+
+install_config("install_syscaller_headers") {
+  sources = [
+    "syscaller/syscaller.h",
+    "syscaller/syscaller_impl.h",
+  ]
+  install_path = "/usr/include/libhwsec-foundation/syscaller"
+}
+
+install_config("install_tpm_error_headers") {
+  sources = [
+    "tpm_error/auth_failure_analysis.h",
+    "tpm_error/handle_auth_failure.h",
+    "tpm_error/mock_tpm_error_uma_reporter.h",
+    "tpm_error/tpm_error_constants.h",
+    "tpm_error/tpm_error_data.h",
+    "tpm_error/tpm_error_metrics_constants.h",
+    "tpm_error/tpm_error_uma_report.h",
+    "tpm_error/tpm_error_uma_reporter.h",
+    "tpm_error/tpm_error_uma_reporter_impl.h",
+  ]
+  install_path = "/usr/include/libhwsec-foundation/tpm_error"
+}
+
+install_config("install_utility_headers") {
+  sources = [
+    "utility/conversions.h",
+    "utility/crypto.h",
+    "utility/no_default_init.h",
+    "utility/synchronized.h",
+    "utility/task_dispatching_framework.h",
+  ]
+  install_path = "/usr/include/libhwsec-foundation/utility"
+}
+
+install_config("install_vpd_reader_headers") {
+  sources = [
+    "vpd_reader/vpd_reader.h",
+    "vpd_reader/vpd_reader_impl.h",
+  ]
+  install_path = "/usr/include/libhwsec-foundation/vpd_reader"
+}
+
+install_config("install_test_syscaller_headers") {
+  sources = [ "syscaller/mock_syscaller.h" ]
+  install_path = "/usr/include/libhwsec-foundation/syscaller"
+}
+
+if (use.fuzzer) {
+  install_config("install_fuzzer_headers") {
+    sources = [ "fuzzed_trousers_utils.h" ]
+    install_path = "/usr/include/libhwsec-foundation"
+  }
+
+  executable("libhwsec_foundation_rsa_oaep_decrypt_fuzzer") {
+    sources = [ "fuzzers/rsa_oaep_decrypt_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer" ]
+    deps = [ ":libhwsec-foundation" ]
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+      "libchrome-test",
+      "openssl",
+    ]
+  }
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [
+      "libchrome-test",
+      "libmetrics",
+      "libtpm_manager-client",
+      "libtpm_manager-client-test",
+      "system_api",
+    ]
+    if (use.fuzzer) {
+      pkg_deps += [ "protobuf" ]
+    } else {
+      pkg_deps += [ "protobuf-lite" ]
+    }
+  }
+
+  executable("hwsec-foundation_testrunner") {
+    sources = [
+      "crypto/aes_test.cc",
+      "crypto/big_num_util_test.cc",
+      "crypto/ecdh_hkdf_test.cc",
+      "crypto/elliptic_curve_test.cc",
+      "crypto/error_util_test.cc",
+      "crypto/hkdf_test.cc",
+      "crypto/rsa_test.cc",
+      "crypto/scrypt_test.cc",
+      "da_reset/da_resetter_test.cc",
+      "error/testing_helper_test.cc",
+      "status/status_chain_test.cc",
+      "tpm_error/auth_failure_analysis_test.cc",
+      "tpm_error/handle_auth_failure_test.cc",
+      "tpm_error/tpm_error_uma_reporter_test.cc",
+      "utility/crypto_test.cc",
+      "utility/no_default_init_test.cc",
+      "utility/synchronized_test.cc",
+      "utility/task_dispatching_framework_test.cc",
+      "vpd_reader/vpd_reader_impl_test.cc",
+    ]
+    sources += [ "tpm_error/tpm_error_data.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    deps = [
+      ":libhwsec-foundation",
+      "//common-mk/testrunner",
+    ]
+    run_test = true
+  }
+}

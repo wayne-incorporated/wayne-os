@@ -1,0 +1,31 @@
+#! /bin/sh
+
+# Copyright 2013 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+if [ `eval whoami` != "root" ]; then
+    echo "Must run as root."
+    exit 1
+fi
+
+# Directory where powerd's runtime-settable pref files are stored.
+DIR=/var/lib/power_manager
+
+if [ "$1" = "--reset" ]; then
+    rm -f $DIR/disable_dark_resume
+    rm -f $DIR/dark_resume_suspend_durations
+elif [ -z "$1" ]; then
+    echo 0 > $DIR/disable_dark_resume
+    echo "0.0 15" > $DIR/dark_resume_suspend_durations
+else
+    echo "Usage: $0: [OPTION]"
+    echo "Actives dark resume with a short suspend duration."
+    echo "This is helpful for quickly testing out its functionality."
+    echo "  --help   display this message"
+    echo "  --reset  reset to default timeout values"
+    exit 1
+fi
+
+( (status powerd | fgrep -q "start/running" ) && restart powerd ) || \
+    start powerd

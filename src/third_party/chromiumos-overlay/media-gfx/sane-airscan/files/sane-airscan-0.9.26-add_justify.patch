@@ -1,0 +1,285 @@
+diff --git a/airscan-devops.c b/airscan-devops.c
+index e0d99e4..761090a 100644
+--- a/airscan-devops.c
++++ b/airscan-devops.c
+@@ -11,7 +11,6 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
+-
+ /* Static variables */
+ static const SANE_Range devopt_percent_range = {
+     .min = SANE_FIX(-100.0),
+@@ -379,6 +378,15 @@ devopt_rebuild_opt_desc (devopt *opt)
+     desc->type = SANE_TYPE_BOOL;
+     desc->size = sizeof(SANE_Bool);
+     desc->cap = SANE_CAP_SOFT_SELECT | SANE_CAP_SOFT_DETECT | SANE_CAP_EMULATED;
++
++    /* OPT_JUSTIFICATION */
++    desc = &opt->desc[OPT_JUSTIFICATION_X];
++    desc->name = SANE_NAME_ADF_JUSTIFICATION_X;
++    desc->title = SANE_TITLE_ADF_JUSTIFICATION_X;
++    desc->desc = SANE_DESC_ADF_JUSTIFICATION_X;
++    desc->type = SANE_TYPE_STRING;
++    desc->size = sane_string_array_max_strlen(opt->sane_sources) + 1;
++    desc->cap = SANE_CAP_SOFT_DETECT;
+ }
+ 
+ /* Update scan parameters, according to the currently set
+@@ -617,6 +625,7 @@ devopt_set_defaults (devopt *opt)
+     opt->highlight = SANE_FIX(100.0);
+     opt->gamma = SANE_FIX(1.0);
+ 
++
+     devopt_rebuild_opt_desc(opt);
+     devopt_update_params(opt);
+ }
+@@ -761,6 +770,10 @@ devopt_get_option (devopt *opt, SANE_Int option, void *value)
+         *(SANE_Bool*)value = opt->negative;
+         break;
+ 
++    case OPT_JUSTIFICATION_X:
++        strcpy(value, id_justification_x_sane_name(opt->caps.justification_x));
++        break;
++
+     default:
+         status = SANE_STATUS_INVAL;
+     }
+diff --git a/airscan-escl.c b/airscan-escl.c
+index 32cb96e..35eb970 100644
+--- a/airscan-escl.c
++++ b/airscan-escl.c
+@@ -342,6 +342,29 @@ escl_devcaps_source_parse_setting_profiles (xml_rd *xml, devcaps_source *src)
+ }
+ 
+ 
++/* Parse ADF justification
++ */
++static void
++escl_devcaps_parse_justification (xml_rd *xml, unsigned int *val) {
++    xml_rd_enter(xml); 
++
++    *val = SANE_CAP_INACTIVE;
++    for (; !xml_rd_end(xml); xml_rd_next(xml)) {
++        /* Currently only care about width justification */
++        if(xml_rd_node_name_match(xml, "pwg:XImagePosition")){
++            const char *v = xml_rd_node_value(xml);
++            if (!strcmp(v, "Right")){
++                *val = ID_JUSTIFICATION_X_RIGHT;
++            } else if (!strcmp(v, "Center")) {
++                *val = ID_JUSTIFICATION_X_CENTER;
++            } else if (!strcmp(v, "Left")) {
++                *val = ID_JUSTIFICATION_X_LEFT;
++            }
++        }
++    }
++    xml_rd_leave(xml);
++}
++
+ /* Parse source capabilities. Returns NULL on success, error string otherwise
+  */
+ static error
+@@ -461,6 +484,7 @@ escl_devcaps_parse (proto_handler_escl *escl,
+     bool      quirk_canon_iR2625_2630 = false;
+     ID_SOURCE id_src;
+     bool      src_ok = false;
++    unsigned int justification_x_val = -1;
+ 
+     /* Parse capabilities XML */
+     err = xml_rd_begin(&xml, xml_text, xml_len, NULL);
+@@ -512,6 +536,12 @@ escl_devcaps_parse (proto_handler_escl *escl,
+                         "scan:AdfDuplexInputCaps")) {
+                     err = escl_devcaps_source_parse(xml,
+                         &caps->src[ID_SOURCE_ADF_DUPLEX]);
++                } 
++                else if (xml_rd_node_name_match(xml, "scan:Justification")) {
++                    escl_devcaps_parse_justification(xml, &justification_x_val);
++                    if (justification_x_val != -1) {
++                        caps->justification_x = justification_x_val;
++                    } 
+                 }
+                 xml_rd_next(xml);
+             }
+@@ -558,6 +588,7 @@ escl_devcaps_parse (proto_handler_escl *escl,
+             }
+         }
+     }
++  
+ 
+ DONE:
+     if (err != NULL) {
+diff --git a/airscan-id.c b/airscan-id.c
+index 271d5e5..c55573f 100644
+--- a/airscan-id.c
++++ b/airscan-id.c
+@@ -177,6 +177,36 @@ id_format_short_name (ID_FORMAT id)
+     return name ? name : mime;
+ }
+ 
++
++/******************** ID_JUSTIFICATION_X ********************/
++/* id_justification_x_sane_name_table represents ID_JUSTIFICATION_X to
++ * SANE name mapping
++ */
++static id_name_table id_justification_x_sane_name_table[] = {
++    {ID_JUSTIFICATION_X_LEFT,     OPTVAL_JUSTIFICATION_X_LEFT},
++    {ID_JUSTIFICATION_X_CENTER,   OPTVAL_JUSTIFICATION_X_CENTER},
++    {ID_JUSTIFICATION_X_RIGHT,    OPTVAL_JUSTIFICATION_X_RIGHT},
++    {SANE_CAP_INACTIVE,           OPTVAL_JUSTIFICATION_X_NONE}
++};
++
++/* id_justification_x_sane_name returns SANE name for the justification
++ * For unknown ID returns NULL
++ */
++const char*
++id_justification_x_sane_name (ID_JUSTIFICATION_X id)
++{
++    return id_name(id, id_justification_x_sane_name_table);
++}
++
++/* id_justification_x_by_sane_name returns ID_JUSTIFICATION_X by its SANE name
++ * For unknown name returns ID_JUSTIFICATION_UNKNOWN
++ */
++ID_JUSTIFICATION_X
++id_justification_x_by_sane_name (const char *name)
++{
++    return id_by_name(name, strcasecmp, id_justification_x_sane_name_table);
++}
++
+ /******************** PROTO_OP ********************/
+ /* proto_op_name_table represents PROTO_OP to its
+  * name mappind
+diff --git a/airscan-wsd.c b/airscan-wsd.c
+index 578f4a5..cc8ea52 100644
+--- a/airscan-wsd.c
++++ b/airscan-wsd.c
+@@ -578,6 +578,7 @@ wsd_devcaps_decode (const proto_ctx *ctx, devcaps *caps)
+ 
+     caps->units = 1000;
+     caps->protocol = ctx->proto->name;
++    caps->justification_x = SANE_CAP_INACTIVE;
+ 
+     err = wsd_devcaps_parse(wsd, caps, data->bytes, data->size);
+ 
+diff --git a/airscan.c b/airscan.c
+index 24c6e4d..63b18bb 100644
+--- a/airscan.c
++++ b/airscan.c
+@@ -120,7 +120,16 @@ void
+ sane_close (SANE_Handle handle)
+ {
+     device  *dev = (device*) handle;
+-
++    
++    //TODO: erase; temp for checking devcaps
++    log_debug(device_log_ctx(dev), "API: justifi called: start");
++    char justval[256] = ""; // TODO: fix :) 
++    device_get_option(dev, OPT_JUSTIFICATION_X, &justval);
++    log_debug(device_log_ctx(dev), "API: justifi called, value: ");
++    // if(justval == OPTVAL_JUSTIFICATION_X_NONE){
++        log_debug(device_log_ctx(dev), justval);
++    // }
++    
+     log_debug(device_log_ctx(dev), "API: sane_close(): called");
+ 
+     eloop_mutex_lock();
+diff --git a/airscan.h b/airscan.h
+index dae5810..0029108 100644
+--- a/airscan.h
++++ b/airscan.h
+@@ -81,6 +81,12 @@ typedef struct http_uri http_uri;
+ #define OUTER_STRUCT(member_p,struct_t,field)                            \
+     ((struct_t*)((char*)(member_p) - ((ptrdiff_t) &(((struct_t*) 0)->field))))
+ 
++/* Define option not included in saneopts */
++#define SANE_NAME_ADF_JUSTIFICATION_X       "adf-justification-x"
++#define SANE_TITLE_ADF_JUSTIFICATION_X      SANE_I18N("ADF Width Justification")
++#define SANE_DESC_ADF_JUSTIFICATION_X       SANE_I18N("Width justification options for ADF")
++
++
+ /******************** Circular Linked Lists ********************/
+ /* ll_node represents a linked data node.
+  * Data nodes are embedded into the corresponding data structures:
+@@ -718,6 +724,27 @@ id_source_sane_name (ID_SOURCE id);
+ ID_SOURCE
+ id_source_by_sane_name (const char *name);
+ 
++/* ID_JUSTIFICATION_X represents potential ADF justification
++ */
++typedef enum {
++    ID_JUSTIFICATION_X_LEFT,
++    ID_JUSTIFICATION_X_CENTER,
++    ID_JUSTIFICATION_X_RIGHT,
++
++    NUM_ID_JUSTIFICATION_X
++} ID_JUSTIFICATION_X;
++
++/* id_justification_x_sane_name returns SANE name for the width justification
++ * For unknown ID returns NULL
++ */
++const char* 
++id_justification_x_sane_name (ID_JUSTIFICATION_X id);
++
++/* id_justification_x_by_sane_name returns ID_JUSTIFICATION_X by its SANE name
++ */
++ID_JUSTIFICATION_X
++id_justification_x_by_sane_name (const char *name);
++
+ /* ID_COLORMODE represents color mode
+  */
+ typedef enum {
+@@ -2433,6 +2460,9 @@ enum {
+     OPT_GAMMA,
+     OPT_NEGATIVE,
+ 
++    /* Option specific to some ADF scans */
++    OPT_JUSTIFICATION_X,
++
+     /* Total count of options, computed by compiler */
+     NUM_OPTIONS
+ };
+@@ -2440,9 +2470,14 @@ enum {
+ /* String constants for certain SANE options values
+  * (missed from sane/sameopt.h)
+  */
+-#define OPTVAL_SOURCE_PLATEN      "Flatbed"
+-#define OPTVAL_SOURCE_ADF_SIMPLEX "ADF"
+-#define OPTVAL_SOURCE_ADF_DUPLEX  "ADF Duplex"
++#define OPTVAL_SOURCE_PLATEN        "Flatbed"
++#define OPTVAL_SOURCE_ADF_SIMPLEX   "ADF"
++#define OPTVAL_SOURCE_ADF_DUPLEX    "ADF Duplex"
++#define OPTVAL_JUSTIFICATION_X_LEFT   "Left"
++#define OPTVAL_JUSTIFICATION_X_CENTER "Center"
++#define OPTVAL_JUSTIFICATION_X_RIGHT  "Right"
++#define OPTVAL_JUSTIFICATION_X_NONE   "None"
++
+ 
+ /* Check if option belongs to image enhancement group
+  */
+@@ -2513,6 +2548,7 @@ typedef struct {
+     SANE_Range   res_range;              /* Resolutions range, in DPI */
+     SANE_Range   win_x_range_mm;         /* Window x range, in mm */
+     SANE_Range   win_y_range_mm;         /* Window y range, in mm */
++    
+ } devcaps_source;
+ 
+ /* Allocate devcaps_source
+@@ -2552,6 +2588,10 @@ typedef struct {
+ 
+     /* Sources */
+     devcaps_source *src[NUM_ID_SOURCE];  /* Missed sources are NULL */
++
++    /* ADF X Justification */
++    unsigned int justification_x;  /*Current ADF width justification*/
++
+ } devcaps;
+ 
+ /* Initialize Device Capabilities
+@@ -2595,6 +2635,7 @@ typedef struct {
+     SANE_Fixed             highlight;         /* 0.0 ... +100.0 */
+     SANE_Fixed             gamma;             /* Small positive value */
+     bool                   negative;          /* Flip black and white */
++
+ } devopt;
+ 
+ /* Initialize device options

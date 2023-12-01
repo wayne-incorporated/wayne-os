@@ -1,0 +1,212 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":imageloader",
+    ":imageloader-adaptors",
+    ":install_dbus_config",
+    ":install_dbus_service",
+    ":install_header",
+    ":install_init",
+    ":install_pkgconfig",
+    ":install_seccomp_policy",
+    ":libimageloader_static",
+    ":protos",
+  ]
+  if (use.test) {
+    deps += [ ":run_tests" ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":imageloader_helper_process_receiver_fuzzer",
+      ":imageloader_manifest_fuzzer",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "devmapper",
+    "libbrillo",
+    "libchrome",
+    "libcrypto",
+    "libminijail",
+    "system_api",
+    "vboot_host",
+  ]
+
+  if (use.fuzzer) {
+    # Link against protobuf for fuzzers so we can use libprotobuf-mutator.
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+proto_library("protos") {
+  proto_in_dir = "."
+  proto_out_dir = "include/imageloader"
+  sources = [ "${proto_in_dir}/ipc.proto" ]
+  if (use.fuzzer) {
+    # Override optimize_for option in proto file.
+    gen_cpp_mode = "speed"
+  }
+}
+
+generate_dbus_adaptors("imageloader-adaptors") {
+  dbus_adaptors_out_dir = "include/imageloader/dbus_adaptors"
+  dbus_service_config = "dbus/dbus-service-config.json"
+  sources = [ "dbus/org.chromium.ImageLoaderInterface.xml" ]
+}
+
+shared_library("libimageloader-manifest") {
+  sources = [ "manifest.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "lib"
+}
+
+install_config("install_pkgconfig") {
+  sources = [ "libimageloader-manifest.pc" ]
+  install_path = "${libdir}/pkgconfig"
+}
+
+install_config("install_header") {
+  sources = [ "manifest.h" ]
+  install_path = "/usr/include/libimageloader"
+}
+
+static_library("libimageloader_static") {
+  sources = [
+    "component.cc",
+    "dlc.cc",
+    "global_context.cc",
+    "helper_process_proxy.cc",
+    "helper_process_receiver.cc",
+    "imageloader.cc",
+    "imageloader_impl.cc",
+    "verity_mounter.cc",
+    "verity_mounter_impl.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":imageloader-adaptors",
+    ":libimageloader-manifest",
+    ":protos",
+  ]
+}
+
+pkg_config("imageloader_config") {
+  pkg_deps = [ "libbrillo" ]
+}
+
+executable("imageloader") {
+  sources = [ "imageloader_main.cc" ]
+  configs += [
+    ":target_defaults",
+    ":imageloader_config",
+  ]
+  install_path = "sbin"
+  deps = [
+    ":imageloader-adaptors",
+    ":libimageloader_static",
+  ]
+}
+
+install_config("install_seccomp_policy") {
+  _arch = getenv("ARCH")
+
+  # NOSORT
+  sources = [
+    "seccomp/imageloader-seccomp-${_arch}.policy",
+    "seccomp/imageloader-helper-seccomp-${_arch}.policy",
+  ]
+  install_path = "/usr/share/policy"
+
+  # NOSORT
+  outputs = [
+    "imageloader-seccomp.policy",
+    "imageloader-helper-seccomp.policy",
+  ]
+}
+
+install_config("install_dbus_config") {
+  sources = [ "dbus/org.chromium.ImageLoader.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_dbus_service") {
+  sources = [ "dbus/org.chromium.ImageLoader.service" ]
+  install_path = "/usr/share/dbus-1/system-services"
+}
+
+install_config("install_init") {
+  sources = [
+    "init/imageloader-init.conf",
+    "init/imageloader-shutdown.conf",
+    "init/imageloader.conf",
+  ]
+  install_path = "/etc/init"
+}
+
+if (use.test) {
+  pkg_config("run_tests_config") {
+    pkg_deps = [
+      "libbrillo",
+      "libcrypto",
+    ]
+  }
+
+  executable("run_tests") {
+    sources = [
+      "component_test.cc",
+      "dlc_test.cc",
+      "global_context.cc",
+      "imageloader.cc",
+      "imageloader_test.cc",
+      "manifest_test.cc",
+      "test_utilities.cc",
+      "verity_mounter_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":run_tests_config",
+      ":target_defaults",
+    ]
+    run_test = true
+    deps = [
+      ":libimageloader_static",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("run_fuzzer_config") {
+    pkg_deps = [ "libprotobuf-mutator" ]
+  }
+
+  executable("imageloader_helper_process_receiver_fuzzer") {
+    sources = [ "helper_process_receiver_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer:common_fuzzer",
+      ":run_fuzzer_config",
+      ":target_defaults",
+    ]
+    deps = [ ":libimageloader_static" ]
+  }
+
+  executable("imageloader_manifest_fuzzer") {
+    sources = [ "manifest_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libimageloader_static" ]
+  }
+}

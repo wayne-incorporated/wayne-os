@@ -1,0 +1,115 @@
+#!/bin/sh
+#
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# Install kernel and kernel modules from USB.  This script is used by ChromeOS
+# kernel developers to recover from bad kernel updates.
+
+# If we're not running as root, restart as root.
+if [ "${UID:-$(id -u)}" -ne 0 ]; then
+  exec sudo "$0" "$@"
+fi
+
+# Load functions and constants.
+. /usr/share/misc/shflags || exit 1
+. /usr/share/misc/chromeos-common.sh || exit 1
+. /usr/sbin/write_gpt.sh || exit 1
+load_base_vars
+
+DEFINE_boolean clean "${FLAGS_TRUE}"  "Remove modules for old kernels"
+DEFINE_boolean debug "${FLAGS_FALSE}" "Show debug output"
+
+TMPMNT="$(mktemp -d)"
+
+# Parse the command line.
+FLAGS "$@" || exit 1
+eval set -- "${FLAGS_ARGV}"
+
+# Be aggressive in our error checking.  shflags functions leak non-zero error
+# codes, so this has to be set after we're done parsing flags.
+set -eu
+
+remove_rootfs_verification() {
+  local rootdev="$1"
+  local partition="$2"
+  local device
+
+  device="$(make_partition_dev "${rootdev}" "${partition}")"
+
+  # See remove_rootfs_verification() in make_dev_ssd.sh for how the kernel
+  # config is modified when rootfs verification is off.
+  if dump_kernel_config "${device}" | grep -q "root=/dev/dm"; then
+    /usr/share/vboot/bin/make_dev_ssd.sh --remove_rootfs_verification -i \
+      "${rootdev}" --partitions "${partition}"
+  fi
+}
+
+cleanup() {
+  set +eu
+  if mount | grep -q "${TMPMNT}"; then
+    umount "${TMPMNT}"
+  fi
+  rmdir "${TMPMNT}"
+}
+
+main() {
+  local device
+  local partition
+  local rootdev
+  local usbdev
+  local version
+
+  trap cleanup EXIT
+
+  rootdev="$(get_fixed_dst_drive)"
+  usbdev="$(rootdev -s -d)"
+  version="$(uname -r)"
+
+  if [ "${FLAGS_debug}" = "${FLAGS_TRUE}" ]; then
+    set -x
+  fi
+
+  if [ "${rootdev}" = "${usbdev}" ]; then
+    echo "Error: target and destination are the same: ${rootdev}"
+    exit 1
+  fi
+
+  # Rootfs verification needs to be removed from the rootdev partitions so that
+  # we can mount them and push new modules.  We remove it from the usbdev so
+  # when we copy that kernel to rootdev it will boot successfully.
+  remove_rootfs_verification "${rootdev}" "${PARTITION_NUM_KERN_A}"
+  remove_rootfs_verification "${rootdev}" "${PARTITION_NUM_KERN_B}"
+  remove_rootfs_verification "${usbdev}"  "${PARTITION_NUM_KERN_A}"
+
+  for partition in "${PARTITION_NUM_ROOT_A}" "${PARTITION_NUM_ROOT_B}"; do
+    device="$(make_partition_dev "${rootdev}" "${partition}")"
+
+    mount "${device}" "${TMPMNT}"
+    if [ "${FLAGS_clean}" = "${FLAGS_TRUE}" ]; then
+      rm -rf "${TMPMNT}"/lib/modules/*
+    else
+      rm -rf "${TMPMNT}"/lib/modules/"${version}"
+    fi
+
+    cp -a /lib/modules/"${version}" "${TMPMNT}"/lib/modules/
+    umount "${TMPMNT}"
+  done
+
+  device="$(make_partition_dev "${usbdev}" "${PARTITION_NUM_KERN_A}")"
+  for partition in "${PARTITION_NUM_KERN_A}" "${PARTITION_NUM_KERN_B}"; do
+    local target_device
+    target_device="$(make_partition_dev "${rootdev}" "${partition}")"
+    dd if="${device}" of="${target_device}" bs=4M
+  done
+
+  sync
+  cleanup
+  trap - EXIT
+
+  echo "------------------------------------------------------------"
+  echo "Installation to '${rootdev}' complete."
+}
+
+main "$@"

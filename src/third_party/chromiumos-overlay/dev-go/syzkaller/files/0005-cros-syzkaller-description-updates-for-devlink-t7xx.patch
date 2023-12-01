@@ -1,0 +1,76 @@
+From d0d4fc9050c095c7c34555fe52ef016282f9afb0 Mon Sep 17 00:00:00 2001
+From: Zubin Mithra <zsm@chromium.org>
+Date: Mon, 28 Feb 2022 16:52:30 -0800
+Subject: [PATCH 5/7] cros-syzkaller: description updates for devlink t7xx
+
+description updates for:
+* DEVLINK_CMD_FLASH_UPDATE
+* DEVLINK_CMD_REGION_READ
+---
+ sys/linux/socket_netlink_generic_devlink.txt  | 20 ++++++++++++++++++-
+ .../socket_netlink_generic_devlink.txt.const  |  9 +++++++++
+ 2 files changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/sys/linux/socket_netlink_generic_devlink.txt b/sys/linux/socket_netlink_generic_devlink.txt
+index 4e8ceeb4b..4db35cc7e 100644
+--- a/sys/linux/socket_netlink_generic_devlink.txt
++++ b/sys/linux/socket_netlink_generic_devlink.txt
+@@ -39,6 +39,8 @@ sendmsg$DEVLINK_CMD_RATE_GET(fd sock_nl_generic, msg ptr[in, msghdr_nl_devlink[D
+ sendmsg$DEVLINK_CMD_RATE_SET(fd sock_nl_generic, msg ptr[in, msghdr_nl_devlink[DEVLINK_CMD_RATE_SET, devlink_nl_rate_set_policy]], f flags[send_flags])
+ sendmsg$DEVLINK_CMD_RATE_NEW(fd sock_nl_generic, msg ptr[in, msghdr_nl_devlink[DEVLINK_CMD_RATE_NEW, devlink_nl_rate_set_policy]], f flags[send_flags])
+ sendmsg$DEVLINK_CMD_RATE_DEL(fd sock_nl_generic, msg ptr[in, msghdr_nl_devlink[DEVLINK_CMD_RATE_DEL, devlink_nl_rate_get_policy]], f flags[send_flags])
++sendmsg$DEVLINK_CMD_FLASH_UPDATE(fd sock_nl_generic, msg ptr[in, msghdr_nl_devlink[DEVLINK_CMD_FLASH_UPDATE, devlink_nl_flash_update_info]], f flags[send_flags])
++sendmsg$DEVLINK_CMD_REGION_READ(fd sock_nl_generic, msg ptr[in, msghdr_nl_devlink[DEVLINK_CMD_REGION_READ, devlink_nl_region_read_info]], f flags[send_flags])
+ 
+ devlink_devname {
+ 	prefix	stringnoz["netdevsim"]
+@@ -54,7 +56,7 @@ devlink_nl_policy$nsim {
+ devlink_nl_policy$pci {
+ 	DEVLINK_ATTR_BUS_NAME	nlattr[DEVLINK_ATTR_BUS_NAME, string["pci"]]
+ # 0000:00:10.0 is a fixed pci address what is moved from initial network namespace by initialize_devlink()
+-	DEVLINK_ATTR_DEV_NAME	nlattr[DEVLINK_ATTR_DEV_NAME, string["0000:00:10.0"]]
++	DEVLINK_ATTR_DEV_NAME	nlattr[DEVLINK_ATTR_DEV_NAME, string["0000:82:00.0"]]
+ } [packed, align[4]]
+ 
+ devlink_handle [
+@@ -213,3 +215,19 @@ devlink_nl_rate_set_policy [
+ 	DEVLINK_ATTR_RATE_TX_MAX		nlattr[DEVLINK_ATTR_RATE_TX_MAX, int64]
+ 	DEVLINK_ATTR_RATE_PARENT_NODE_NAME	nlattr[DEVLINK_ATTR_RATE_PARENT_NODE_NAME, devlink_rate_node_name]
+ ] [varlen]
++
++devlink_nl_flash_update_info {
++  handle                                   devlink_nl_policy$pci
++  DEVLINK_ATTR_FLASH_UPDATE_COMPONENT      nlattr[DEVLINK_ATTR_FLASH_UPDATE_COMPONENT, string["todo"]]
++  DEVLINK_ATTR_FLASH_UPDATE_OVERWRITE_MASK nlattr[DEVLINK_ATTR_FLASH_UPDATE_OVERWRITE_MASK, int32:16]
++  DEVLINK_ATTR_FLASH_UPDATE_FILE_NAME      nlattr[DEVLINK_ATTR_FLASH_UPDATE_FILE_NAME, string[filename]]
++} [packed, align[4]]
++
++devlink_nl_region_read_info {
++  handle                                   devlink_nl_policy$pci
++  DEVLINK_ATTR_REGION_NAME		   nlattr[DEVLINK_ATTR_REGION_NAME, string["mr_dump"]]
++  DEVLINK_ATTR_REGION_SNAPSHOT_ID	   nlattr[DEVLINK_ATTR_REGION_SNAPSHOT_ID, int32]
++  DEVLINK_ATTR_PORT_INDEX                  nlattr[DEVLINK_ATTR_PORT_INDEX, int32]
++  DEVLINK_ATTR_REGION_CHUNK_ADDR           nlattr[DEVLINK_ATTR_REGION_CHUNK_ADDR, int64]
++  DEVLINK_ATTR_REGION_CHUNK_LEN            nlattr[DEVLINK_ATTR_REGION_CHUNK_LEN, int64]
++} [packed, align[4]]
+diff --git a/sys/linux/socket_netlink_generic_devlink.txt.const b/sys/linux/socket_netlink_generic_devlink.txt.const
+index f0271e32b..3daeddbb6 100644
+--- a/sys/linux/socket_netlink_generic_devlink.txt.const
++++ b/sys/linux/socket_netlink_generic_devlink.txt.const
+@@ -58,4 +58,13 @@ DEVLINK_SB_THRESHOLD_TYPE_DYNAMIC = 1
+ DEVLINK_SB_THRESHOLD_TYPE_STATIC = 0
+ DEVLINK_TRAP_ACTION_DROP = 0
+ DEVLINK_TRAP_ACTION_TRAP = 1
++DEVLINK_CMD_FLASH_UPDATE = 58
++DEVLINK_ATTR_FLASH_UPDATE_COMPONENT = 1
++DEVLINK_ATTR_FLASH_UPDATE_OVERWRITE_MASK = 152
++DEVLINK_ATTR_FLASH_UPDATE_FILE_NAME = 122
++DEVLINK_CMD_REGION_READ = 46
++DEVLINK_ATTR_REGION_NAME = 88
++DEVLINK_ATTR_REGION_SNAPSHOT_ID = 92
++DEVLINK_ATTR_REGION_CHUNK_ADDR = 126
++DEVLINK_ATTR_REGION_CHUNK_LEN = 127
+ __NR_sendmsg = 211, 386:s390x:370, amd64:46, arm:296, mips64le:5045, ppc64le:341
+-- 
+2.39.2.637.g21b0678d19-goog
+

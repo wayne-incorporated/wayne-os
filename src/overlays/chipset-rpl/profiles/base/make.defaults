@@ -1,0 +1,62 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+LINUX_FIRMWARE=""
+USE=""
+
+CHROMEOS_KERNEL_SPLITCONFIG="chromeos-intel-pineview"
+CHROMEOS_KERNEL_ARCH="x86_64"
+
+BOARD_COMPILER_FLAGS="-march=alderlake"
+BOARD_RUSTFLAGS="-Ctarget-cpu=alderlake"
+USE="${USE} march_alderlake"
+
+# Specify default kernel
+USE="${USE} kernel-5_10"
+
+# Enable DPTF
+USE="${USE} dptf"
+
+# Identify the vendor
+USE="${USE} intel_cpu"
+
+# Enable GpuMemoryBuffers backed by dma-bufs.
+USE="${USE} native_gpu_memory_buffers"
+
+# Build IPU6EP variant in cros-camera-hal-intel-ipu6.
+USE="${USE} ipu6ep"
+
+# Enable fscrypt v2 usage on 5.4+
+USE="${USE} direncription_allow_v2"
+
+# Enable Intel media-driver
+USE="${USE} -video_cards_i965 video_cards_iHD video_cards_iHD_g12"
+
+
+# Use GuC and HuC
+USE="${USE} builtin_fw_guc_adl builtin_fw_huc_adl"
+
+# i915 firmware for ADL
+# i915_tgl needed to add TGL GuC and HuC
+LINUX_FIRMWARE="${LINUX_FIRMWARE} i915_tgl"
+LINUX_FIRMWARE="${LINUX_FIRMWARE} i915_adl"
+
+# Enable DRM/KMS atomic api
+USE="${USE} drm_atomic"
+
+# Enable vulkan
+USE="${USE} vulkan"
+
+# Enable android_aep
+USE="${USE} android_aep"
+
+# Enable VMs
+USE="${USE} kvm_host crosvm-gpu virtio_gpu"
+
+# Allows Chrome to start in the presence of multiple threads.
+USE="${USE} gpu_sandbox_start_early"
+
+# Enable clvk
+USE="${USE} clvk"

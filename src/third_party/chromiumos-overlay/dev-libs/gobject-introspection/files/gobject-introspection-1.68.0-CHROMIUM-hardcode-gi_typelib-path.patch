@@ -1,0 +1,29 @@
+Allow overriding the calculated GOBJECT_INTROSPECTION_LIBDIR path so that we
+may specify a default search path for typelib files in situations where it is
+inconvenient or impossible to set GI_TYPELIB_PATH through the environment.
+
+diff --git a/meson.build b/meson.build
+index e5205e3..acbc295 100644
+--- a/meson.build
++++ b/meson.build
+@@ -100,7 +100,7 @@ else
+ endif
+ girdir = join_paths(gir_dir_prefix, 'gir-1.0')
+ config.set_quoted('GIR_DIR', girdir)
+-config.set_quoted('GOBJECT_INTROSPECTION_LIBDIR', join_paths(get_option('prefix'), get_option('libdir')))
++config.set_quoted('GOBJECT_INTROSPECTION_LIBDIR', get_option('gi_libdir'))
+
+ foreach type : ['char', 'short', 'int', 'long']
+   size = cc.sizeof(type)
+diff --git a/meson_options.txt b/meson_options.txt
+index dff9be8..de8fb16 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -45,3 +45,7 @@ option('build_introspection_data', type: 'boolean', value : true,
+ option('gi_cross_pkgconfig_sysroot_path', type: 'string',
+   description: 'Specify a sysroot path to prepend to pkgconfig output (useful when cross-compiling)'
+ )
++
++option('gi_libdir', type: 'string',
++  description: 'Specify a hardcoded value for GOBJECT_INTROSPECTION_LIBDIR.'
++)

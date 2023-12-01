@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,25 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/socket.h>
 
 #include <algorithm>
 #include <iterator>
 #include <locale>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 
 #include <base/base64.h>
-#include <base/bind.h>
-#include <base/callback_helpers.h>
 #include <base/check.h>
 #include <base/containers/contains.h>
 #include <base/files/file_util.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback_helpers.h>
+#include <base/logging.h>
 #include <base/notreached.h>
 #include <base/rand_util.h>
 #include <base/run_loop.h>
@@ -30,23 +33,28 @@
 #include <base/strings/string_tokenizer.h>
 #include <base/strings/string_util.h>
 #include <base/strings/stringprintf.h>
-#include <base/threading/thread_task_runner_handle.h>
+#include <base/system/sys_info.h>
+#include <base/task/single_thread_task_runner.h>
 #include <base/time/default_tick_clock.h>
 #include <base/time/time.h>
 #include <brillo/cryptohome.h>
 #include <brillo/dbus/dbus_object.h>
 #include <brillo/dbus/utils.h>
+#include <brillo/files/file_util.h>
 #include <brillo/scoped_mount_namespace.h>
 #include <chromeos/dbus/service_constants.h>
 #include <crypto/scoped_nss_types.h>
 #include <dbus/message.h>
 #include <dbus/object_proxy.h>
+#include <dbus/scoped_dbus_error.h>
 #include <install_attributes/libinstallattributes.h>
 #include <libpasswordprovider/password.h>
 #include <libpasswordprovider/password_provider.h>
 
+#include "arc/arc.pb.h"
 #include "bindings/chrome_device_policy.pb.h"
 #include "bindings/device_management_backend.pb.h"
+#include "dbus/login_manager/dbus-constants.h"
 #include "login_manager/arc_sideload_status_interface.h"
 #include "login_manager/blob_util.h"
 #include "login_manager/browser_job.h"
@@ -56,12 +64,11 @@
 #include "login_manager/device_policy_service.h"
 #include "login_manager/init_daemon_controller.h"
 #include "login_manager/key_generator.h"
-#include "login_manager/login_metrics.h"
 #include "login_manager/nss_util.h"
 #include "login_manager/policy_key.h"
 #include "login_manager/policy_service.h"
+#include "login_manager/policy_store.h"
 #include "login_manager/process_manager_service_interface.h"
-#include "login_manager/proto_bindings/arc.pb.h"
 #include "login_manager/proto_bindings/login_screen_storage.pb.h"
 #include "login_manager/proto_bindings/policy_descriptor.pb.h"
 #include "login_manager/regen_mitigator.h"
@@ -72,10 +79,10 @@
 #include "login_manager/vpd_process.h"
 
 using base::FilePath;
-using brillo::cryptohome::home::GetHashedUserPath;
+using brillo::cryptohome::home::GetGuestUsername;
 using brillo::cryptohome::home::GetUserPath;
-using brillo::cryptohome::home::kGuestUserName;
 using brillo::cryptohome::home::SanitizeUserName;
+using brillo::cryptohome::home::Username;
 
 namespace login_manager {  // NOLINT
 
@@ -119,24 +126,19 @@ constexpr char SessionManagerImpl::kScreenUnlockedImpulse[] = "screen-unlocked";
 // TODO(b:66919195): Optimize Android container shutdown time. It
 // needs as long as 3s on kevin to perform graceful shutdown.
 constexpr base::TimeDelta SessionManagerImpl::kContainerTimeout =
-    base::TimeDelta::FromSeconds(3);
+    base::Seconds(3);
 
-constexpr base::TimeDelta SessionManagerImpl::kKeyGenTimeout =
-    base::TimeDelta::FromSeconds(1);
-
-constexpr base::TimeDelta SessionManagerImpl::kBrowserTimeout =
-    base::TimeDelta::FromSeconds(3);
+constexpr base::TimeDelta SessionManagerImpl::kKeyGenTimeout = base::Seconds(1);
 
 constexpr base::TimeDelta SessionManagerImpl::kCrashBeforeSuspendInterval =
-    base::TimeDelta::FromSeconds(5);
+    base::Seconds(5);
 constexpr base::TimeDelta SessionManagerImpl::kCrashAfterSuspendInterval =
-    base::TimeDelta::FromSeconds(5);
+    base::Seconds(5);
 
 namespace {
 
 // Because the cheets logs are huge, we set the D-Bus timeout to 1 minute.
-const base::TimeDelta kBackupArcBugReportTimeout =
-    base::TimeDelta::FromMinutes(1);
+const base::TimeDelta kBackupArcBugReportTimeout = base::Minutes(1);
 
 // The flag to pass to chrome to open a named socket for testing.
 const char kTestingChannelFlag[] = "--testing-channel=NamedTestingInterface:";
@@ -155,11 +157,16 @@ const char kCpuSharesFile[] =
     "/sys/fs/cgroup/cpu/session_manager_containers/cpu.shares";
 const unsigned int kCpuSharesForeground = 1024;
 const unsigned int kCpuSharesBackground = 64;
+
+// Workaround for a presubmit check about long lines.
+constexpr auto
+    kStartArcMiniInstanceRequest_DalvikMemoryProfile_MEM_PROFILE_DEFAULT = arc::
+        StartArcMiniInstanceRequest_DalvikMemoryProfile_MEMORY_PROFILE_DEFAULT;
 #endif
 
 // The interval used to periodically check if time sync was done by tlsdated.
 constexpr base::TimeDelta kSystemClockLastSyncInfoRetryDelay =
-    base::TimeDelta::FromMilliseconds(1000);
+    base::Milliseconds(1000);
 
 // TPM firmware update modes.
 constexpr char kTPMFirmwareUpdateModeFirstBoot[] = "first_boot";
@@ -177,8 +184,8 @@ constexpr char kGetPolicyServiceFailMessage[] = "Failed to get policy service.";
 constexpr char kDefaultUiLogSymlinkPath[] = "/var/log/ui/ui.LATEST";
 
 // A path of the directory that contains all the key-value pairs stored to the
-// pesistent login screen storage.
-const char kLoginScreenStoragePath[] = "/var/lib/login_screen_storage";
+// persistent login screen storage.
+constexpr char kLoginScreenStoragePath[] = "/var/lib/login_screen_storage";
 
 const char* ToSuccessSignal(bool success) {
   return success ? "success" : "failure";
@@ -235,7 +242,7 @@ void HandleDBusSignalConnected(const std::string& interface,
 // Replaces the log file that |symlink_path| (typically /var/log/ui/ui.LATEST)
 // points to with a new file containing the same contents. This is used to
 // disconnect Chrome's stderr and stdout after a user logs in:
-// https://crbug.com/904850
+// https://crbug.com/904850.
 void DisconnectLogFile(const base::FilePath& symlink_path) {
   base::FilePath log_path;
   if (!base::ReadSymbolicLink(symlink_path, &log_path))
@@ -324,17 +331,27 @@ class SessionManagerImpl::DBusService {
   // Adaptor from DBusMethodResponse to PolicyService::Completion callback.
   PolicyService::Completion CreatePolicyServiceCompletionCallback(
       std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response) {
-    return base::Bind(&DBusService::HandlePolicyServiceCompletion,
-                      weak_ptr_factory_.GetWeakPtr(), base::Passed(&response));
+    return base::BindOnce(&DBusService::HandlePolicyServiceCompletion,
+                          weak_ptr_factory_.GetWeakPtr(), std::move(response));
   }
 
   // Adaptor from DBusMethodResponse to
-  // ServerBackedStateKeyGenerator::StateKeyCallback callback.
-  ServerBackedStateKeyGenerator::StateKeyCallback CreateStateKeyCallback(
+  // DeviceIdentifierGenerator::StateKeyCallback callback.
+  DeviceIdentifierGenerator::StateKeyCallback CreateStateKeyCallback(
       std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<
           std::vector<std::vector<uint8_t>>>> response) {
-    return base::Bind(&DBusService::HandleStateKeyCallback,
-                      weak_ptr_factory_.GetWeakPtr(), base::Passed(&response));
+    return base::BindOnce(&DBusService::HandleStateKeyCallback,
+                          weak_ptr_factory_.GetWeakPtr(), std::move(response));
+  }
+
+  // Adaptor for DBusMethodResponse to
+  // DeviceIdentifierGenerator::PsmDeviceActiveSecretCallback callback.
+  DeviceIdentifierGenerator::PsmDeviceActiveSecretCallback
+  CreatePsmDeviceActiveSecretCallback(
+      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<std::string>>
+          response) {
+    return base::BindOnce(&DBusService::HandlePsmDeviceActiveSecretCallback,
+                          weak_ptr_factory_.GetWeakPtr(), std::move(response));
   }
 
  private:
@@ -354,6 +371,13 @@ class SessionManagerImpl::DBusService {
           std::vector<std::vector<uint8_t>>>> response,
       const std::vector<std::vector<uint8_t>>& state_key) {
     response->Return(std::move(state_key));
+  }
+
+  void HandlePsmDeviceActiveSecretCallback(
+      std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<std::string>>
+          response,
+      const std::string& derived_secret) {
+    response->Return(std::move(derived_secret));
   }
 
   org::chromium::SessionManagerInterfaceAdaptor* const adaptor_;
@@ -388,11 +412,11 @@ SessionManagerImpl::SessionManagerImpl(
     std::unique_ptr<InitDaemonController> init_controller,
     const scoped_refptr<dbus::Bus>& bus,
     KeyGenerator* key_gen,
-    ServerBackedStateKeyGenerator* state_key_generator,
+    DeviceIdentifierGenerator* device_identifier_generator,
     ProcessManagerServiceInterface* manager,
     LoginMetrics* metrics,
     NssUtil* nss,
-    base::Optional<base::FilePath> ns_path,
+    std::optional<base::FilePath> ns_path,
     SystemUtils* utils,
     Crossystem* crossystem,
     VpdProcess* vpd_process,
@@ -402,6 +426,7 @@ SessionManagerImpl::SessionManagerImpl(
     dbus::ObjectProxy* powerd_proxy,
     dbus::ObjectProxy* system_clock_proxy,
     dbus::ObjectProxy* debugd_proxy,
+    dbus::ObjectProxy* fwmp_proxy,
     ArcSideloadStatusInterface* arc_sideload_status)
     : init_controller_(std::move(init_controller)),
       system_clock_last_sync_info_retry_delay_(
@@ -411,7 +436,7 @@ SessionManagerImpl::SessionManagerImpl(
       adaptor_(this),
       delegate_(delegate),
       key_gen_(key_gen),
-      state_key_generator_(state_key_generator),
+      device_identifier_generator_(device_identifier_generator),
       manager_(manager),
       login_metrics_(metrics),
       nss_(nss),
@@ -425,6 +450,7 @@ SessionManagerImpl::SessionManagerImpl(
       powerd_proxy_(powerd_proxy),
       system_clock_proxy_(system_clock_proxy),
       debugd_proxy_(debugd_proxy),
+      fwmp_proxy_(fwmp_proxy),
       arc_sideload_status_(arc_sideload_status),
       mitigator_(key_gen),
       ui_log_symlink_path_(kDefaultUiLogSymlinkPath),
@@ -519,24 +545,46 @@ bool SessionManagerImpl::Initialize() {
   powerd_proxy_->ConnectToSignal(
       power_manager::kPowerManagerInterface,
       power_manager::kSuspendImminentSignal,
-      base::Bind(&SessionManagerImpl::OnSuspendImminent,
-                 weak_ptr_factory_.GetWeakPtr()),
-      base::Bind(&HandleDBusSignalConnected));
-  powerd_proxy_->ConnectToSignal(power_manager::kPowerManagerInterface,
-                                 power_manager::kSuspendDoneSignal,
-                                 base::Bind(&SessionManagerImpl::OnSuspendDone,
-                                            weak_ptr_factory_.GetWeakPtr()),
-                                 base::Bind(&HandleDBusSignalConnected));
+      base::BindRepeating(&SessionManagerImpl::OnSuspendImminent,
+                          weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&HandleDBusSignalConnected));
+  powerd_proxy_->ConnectToSignal(
+      power_manager::kPowerManagerInterface, power_manager::kSuspendDoneSignal,
+      base::BindRepeating(&SessionManagerImpl::OnSuspendDone,
+                          weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&HandleDBusSignalConnected));
 
   system_clock_proxy_->WaitForServiceToBeAvailable(
-      base::Bind(&SessionManagerImpl::OnSystemClockServiceAvailable,
-                 weak_ptr_factory_.GetWeakPtr()));
+      base::BindOnce(&SessionManagerImpl::OnSystemClockServiceAvailable,
+                     weak_ptr_factory_.GetWeakPtr()));
+
+  // AD management (Chromad) is no longer supported, so devices in this mode
+  // should fail to boot. Therefore, we request a device reboot, then
+  // intentionally crash the chromeos-login service. By failing to boot the new
+  // OS version, we force the automatic update to fail, making the device stay
+  // in the previous version. Reference:
+  // https://www.chromium.org/chromium-os/chromiumos-design-docs/boot-design/#rollback-protection-after-update
+  // Note: We don't want to return `false` in this `Initialize()` method,
+  // because that would trigger a device wipe.
+  //
+  // TODO(b/263367348): Fully remove the "enterprise_ad" device mode from
+  // install attributes, when all supported devices are guaranteed to not have
+  // this mode.
+  if (install_attributes_reader_->GetAttribute(
+          InstallAttributesReader::kAttrMode) ==
+      InstallAttributesReader::kDeviceModeEnterpriseAD) {
+    RestartDevice(
+        "Device is in an unsupported management mode (Active Directory)");
+    NOTREACHED_NORETURN() << "Device is in an unsupported management mode "
+                             "(Active Directory) - crashing this service to "
+                             "force ChromeOS boot to fail.";
+  }
 
   // Note: If SetPolicyServicesForTesting has been called, all services have
   // already been set and initialized.
   if (!device_policy_) {
     device_policy_ = DevicePolicyService::Create(
-        owner_key_, login_metrics_, &mitigator_, nss_, crossystem_,
+        owner_key_, login_metrics_, &mitigator_, nss_, system_, crossystem_,
         vpd_process_, install_attributes_reader_);
     // Thinking about combining set_delegate() with the 'else' block below and
     // moving it down? Note that device_policy_->Initialize() might call
@@ -561,6 +609,10 @@ bool SessionManagerImpl::Initialize() {
 
   arc_sideload_status_->Initialize();
 
+  dev_mode_unblock_broker_ = DevModeUnblockBroker::Create(
+      system_, crossystem_, vpd_process_, fwmp_proxy_);
+  DCHECK(dev_mode_unblock_broker_);
+
   return true;
 }
 
@@ -569,17 +621,6 @@ void SessionManagerImpl::Finalize() {
   // any outstanding DBusMethodCompletion objects to be abandoned without
   // having been run (http://crbug.com/638774, http://crbug.com/725734).
   dbus_service_.reset();
-
-  device_policy_->PersistAllPolicy();
-  for (const auto& kv : user_sessions_) {
-    if (kv.second)
-      kv.second->policy_service->PersistAllPolicy();
-  }
-
-  // Before persisting policies check if `device_local_account_manager_` was
-  // initialized. Note that if `Initialize()` fails it won't be initialized.
-  if (device_local_account_manager_)
-    device_local_account_manager_->PersistAllPolicy();
 
   // We want to stop all running containers and VMs.  Containers and VMs are
   // per-session and cannot persist across sessions.
@@ -662,6 +703,14 @@ void SessionManagerImpl::LoginScreenStorageDelete(const std::string& in_key) {
 bool SessionManagerImpl::StartSession(brillo::ErrorPtr* error,
                                       const std::string& in_account_id,
                                       const std::string& in_unique_identifier) {
+  return StartSessionEx(error, in_account_id, in_unique_identifier,
+                        /*chrome_owner_key=*/false);
+}
+
+bool SessionManagerImpl::StartSessionEx(brillo::ErrorPtr* error,
+                                        const std::string& in_account_id,
+                                        const std::string& in_unique_identifier,
+                                        bool chrome_owner_key) {
   std::string actual_account_id;
   if (!NormalizeAccountId(in_account_id, &actual_account_id, error)) {
     DCHECK(*error);
@@ -677,23 +726,29 @@ bool SessionManagerImpl::StartSession(brillo::ErrorPtr* error,
   }
 
   // Create a UserSession object for this user.
+  const bool user_is_owner = device_policy_->UserIsOwner(actual_account_id);
+  // NSS is used to store the private key which is generated and used only by
+  // consumer owner users. If no key is present, the current user might become
+  // the owner and also needs the database.
+  // TODO(b/244407123): If Chrome is handling the owner key, session manager
+  // doesn't need NSS.
+  const bool need_nss =
+      (device_policy_->KeyMissing() || user_is_owner) && !chrome_owner_key;
   const bool is_incognito = IsIncognitoAccountId(actual_account_id);
   const OptionalFilePath ns_mnt_path = is_incognito || IsolateUserSession()
                                            ? chrome_mount_ns_path_
-                                           : base::nullopt;
-  auto user_session =
-      CreateUserSession(actual_account_id, ns_mnt_path, is_incognito, error);
+                                           : std::nullopt;
+  auto user_session = CreateUserSession(actual_account_id, ns_mnt_path,
+                                        need_nss, is_incognito, error);
   if (!user_session) {
     DCHECK(*error);
     return false;
   }
 
-  // Check whether the current user is the owner, and if so make sure they are
-  // whitelisted and have an owner key.
-  bool user_is_owner = false;
-  if (!device_policy_->CheckAndHandleOwnerLogin(user_session->username,
-                                                user_session->descriptor.get(),
-                                                &user_is_owner, error)) {
+  // If the current user is the owner, make sure they have an owner key.
+  if (!chrome_owner_key && user_is_owner &&
+      !device_policy_->HandleOwnerLogin(
+          user_session->username, user_session->descriptor.get(), error)) {
     DCHECK(*error);
     return false;
   }
@@ -701,19 +756,20 @@ bool SessionManagerImpl::StartSession(brillo::ErrorPtr* error,
   // If all previous sessions were incognito (or no previous sessions exist).
   bool is_first_real_user = AllSessionsAreIncognito() && !is_incognito;
 
-  // Send each user login event to UMA (right before we start session
-  // since the metrics library does not log events in guest mode).
-  const DevModeState dev_mode_state = system_->GetDevModeState();
-  if (dev_mode_state != DevModeState::DEV_MODE_UNKNOWN) {
-    login_metrics_->SendLoginUserType(
-        dev_mode_state != DevModeState::DEV_MODE_OFF, is_incognito,
-        user_is_owner);
-  }
-
   // Make sure that Chrome's stdout and stderr, which may contain log messages
   // with user-specific data, don't get saved after the first user logs in:
-  // https://crbug.com/904850
-  if (user_sessions_.empty())
+  // https://crbug.com/904850.
+  //
+  // On test images, disable this behavior, so that developers can see
+  // in-process crash dump which is printed to stderr (b/188858313). NOTE: Here
+  // we check the image type instead of the device's mode, so that developers
+  // can verify what's happening on user devices with a developer mode device
+  // running a regular image.
+  std::string channel_string;
+  const bool is_test_image = base::SysInfo::GetLsbReleaseValue(
+                                 "CHROMEOS_RELEASE_TRACK", &channel_string) &&
+                             base::StartsWith(channel_string, "test");
+  if (user_sessions_.empty() && !is_test_image)
     DisconnectLogFile(ui_log_symlink_path_);
 
   init_controller_->TriggerImpulse(kStartUserSessionImpulse,
@@ -726,18 +782,18 @@ bool SessionManagerImpl::StartSession(brillo::ErrorPtr* error,
   if (is_first_real_user) {
     DCHECK(primary_user_account_id_.empty());
     primary_user_account_id_ = actual_account_id;
+  } else if (!is_incognito) {
+    // This means that |StartSessionEx()| is called for a non-primary user i.e.
+    // the device is entering a multi-user session.
+    manager_->SetMultiUserSessionStarted();
   }
   DLOG(INFO) << "Emitting D-Bus signal SessionStateChanged: " << kStarted;
   adaptor_.SendSessionStateChangedSignal(kStarted);
 
-  // Active Directory managed devices are not expected to have a policy key.
-  // Don't create one for them.
-  const bool is_active_directory =
-      install_attributes_reader_->GetAttribute(
-          InstallAttributesReader::kAttrMode) ==
-      InstallAttributesReader::kDeviceModeEnterpriseAD;
-  if (device_policy_->KeyMissing() && !is_active_directory &&
-      !device_policy_->Mitigating() && is_first_real_user) {
+  // TODO(b/244407123): If `chrome_owner_key` is true, Chrome will generate the
+  // key instead.
+  if (device_policy_->KeyMissing() && !device_policy_->Mitigating() &&
+      is_first_real_user && !chrome_owner_key) {
     // This is the first sign-in on this unmanaged device.  Take ownership.
     key_gen_->Start(actual_account_id, ns_mnt_path);
   }
@@ -786,7 +842,7 @@ bool SessionManagerImpl::LoginScreenStorageRetrieve(
     brillo::ErrorPtr* error,
     const std::string& in_key,
     uint64_t* out_value_size,
-    brillo::dbus_utils::FileDescriptor* out_value_fd) {
+    base::ScopedFD* out_value_fd) {
   base::ScopedFD value_fd;
   bool success =
       login_screen_storage_->Retrieve(error, in_key, out_value_size, &value_fd);
@@ -832,21 +888,36 @@ void SessionManagerImpl::StorePolicyEx(
     std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response,
     const std::vector<uint8_t>& in_descriptor_blob,
     const std::vector<uint8_t>& in_policy_blob) {
-  StorePolicyInternalEx(in_descriptor_blob, in_policy_blob,
-                        SignatureCheck::kEnabled, std::move(response));
-}
-
-void SessionManagerImpl::StoreUnsignedPolicyEx(
-    std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response,
-    const std::vector<uint8_t>& in_descriptor_blob,
-    const std::vector<uint8_t>& in_policy_blob) {
-  brillo::ErrorPtr error = VerifyUnsignedPolicyStore();
-  if (error) {
+  brillo::ErrorPtr error;
+  PolicyDescriptor descriptor;
+  if (!ParseAndValidatePolicyDescriptor(in_descriptor_blob,
+                                        PolicyDescriptorUsage::kStore,
+                                        &descriptor, &error)) {
     response->ReplyWithError(error.get());
     return;
   }
-  StorePolicyInternalEx(in_descriptor_blob, in_policy_blob,
-                        SignatureCheck::kDisabled, std::move(response));
+
+  PolicyService* policy_service = GetPolicyService(descriptor, &error);
+  if (!policy_service) {
+    response->ReplyWithError(error.get());
+    return;
+  }
+
+  int key_flags = GetKeyInstallFlags(descriptor);
+  PolicyNamespace ns(descriptor.domain(), descriptor.component_id());
+
+  // If the blob is empty, return an error.
+  DCHECK(dbus_service_);
+  if (in_policy_blob.empty()) {
+    auto error =
+        CreateError(dbus_error::kInvalidParameter, "Empty policy provided");
+    response->ReplyWithError(error.get());
+    return;
+  } else {
+    policy_service->Store(ns, in_policy_blob, key_flags,
+                          dbus_service_->CreatePolicyServiceCompletionCallback(
+                              std::move(response)));
+  }
 }
 
 bool SessionManagerImpl::RetrievePolicyEx(
@@ -863,8 +934,7 @@ bool SessionManagerImpl::RetrievePolicyEx(
     return false;
   }
 
-  std::unique_ptr<PolicyService> storage;
-  PolicyService* policy_service = GetPolicyService(descriptor, &storage, error);
+  PolicyService* policy_service = GetPolicyService(descriptor, error);
   if (!policy_service) {
     LOG(ERROR) << kGetPolicyServiceFailMessage;
     *error =
@@ -893,8 +963,7 @@ bool SessionManagerImpl::ListStoredComponentPolicies(
     return false;
   }
 
-  std::unique_ptr<PolicyService> storage;
-  PolicyService* policy_service = GetPolicyService(descriptor, &storage, error);
+  PolicyService* policy_service = GetPolicyService(descriptor, error);
   if (!policy_service)
     return false;
 
@@ -974,7 +1043,9 @@ void SessionManagerImpl::HandleLockScreenShown() {
 }
 
 bool SessionManagerImpl::StartBrowserDataMigration(
-    brillo::ErrorPtr* error, const std::string& in_account_id) {
+    brillo::ErrorPtr* error,
+    const std::string& in_account_id,
+    const std::string& mode) {
   std::string actual_account_id;
   if (!NormalizeAccountId(in_account_id, &actual_account_id, error)) {
     DCHECK(*error);
@@ -997,7 +1068,35 @@ bool SessionManagerImpl::StartBrowserDataMigration(
     return false;
   }
 
-  manager_->SetBrowserDataMigrationArgsForUser(iter->second->userhash);
+  manager_->SetBrowserDataMigrationArgsForUser(iter->second->userhash, mode);
+  return true;
+}
+
+bool SessionManagerImpl::StartBrowserDataBackwardMigration(
+    brillo::ErrorPtr* error, const std::string& in_account_id) {
+  std::string actual_account_id;
+  if (!NormalizeAccountId(in_account_id, &actual_account_id, error)) {
+    DCHECK(*error);
+    return false;
+  }
+
+  auto iter = user_sessions_.find(actual_account_id);
+  // Check if this user already started a session.
+  if (iter == user_sessions_.end()) {
+    *error = CREATE_ERROR_AND_LOG(
+        dbus_error::kSessionDoesNotExist,
+        "Provided user id does not have a session started.");
+    return false;
+  }
+
+  if (actual_account_id != primary_user_account_id_) {
+    *error = CREATE_ERROR_AND_LOG(
+        dbus_error::kInvalidAccount,
+        "Backward migration should only happen for primary user.");
+    return false;
+  }
+
+  manager_->SetBrowserDataBackwardMigrationArgsForUser(iter->second->userhash);
   return true;
 }
 
@@ -1040,7 +1139,7 @@ bool SessionManagerImpl::RestartJob(brillo::ErrorPtr* error,
   }
 
   // To set "logged-in" state for BWSI mode.
-  if (IsGuestMode(mode) && !StartSession(error, kGuestUserName, "")) {
+  if (IsGuestMode(mode) && !StartSession(error, *GetGuestUsername(), "")) {
     DCHECK(*error);
     return false;
   }
@@ -1068,21 +1167,49 @@ bool SessionManagerImpl::StartDeviceWipe(brillo::ErrorPtr* error) {
   return true;
 }
 
-bool SessionManagerImpl::StartRemoteDeviceWipe(
-    brillo::ErrorPtr* error, const std::vector<uint8_t>& in_signed_command) {
-  if (!device_policy_->ValidateRemoteDeviceWipeCommand(in_signed_command)) {
-    *error = CreateError(dbus_error::kInvalidParameter,
-                         "Remote wipe command validation failed, aborting.");
-    return false;
+void SessionManagerImpl::StartRemoteDeviceWipe(
+    dbus::MethodCall* method_call,
+    dbus::ExportedObject::ResponseSender sender) {
+  dbus::MessageReader reader(method_call);
+
+  const uint8_t* output_bytes = nullptr;
+  size_t length = 0;
+
+  if (reader.GetDataSignature() != "ay" ||
+      !reader.PopArrayOfBytes(&output_bytes, &length) || length <= 0) {
+    std::unique_ptr<dbus::ErrorResponse> error_response =
+        dbus::ErrorResponse::FromMethodCall(
+            method_call, dbus_error::kInvalidParameter,
+            "First parameter is required and should be a serialized remote "
+            "command.");
+    std::move(sender).Run(std::move(error_response));
+    return;
+  }
+
+  std::vector<uint8_t> signed_command(&output_bytes[0], &output_bytes[length]);
+
+  if (!device_policy_->ValidateRemoteDeviceWipeCommand(
+          signed_command,
+          enterprise_management::PolicyFetchRequest_SignatureType_SHA256_RSA)) {
+    brillo::ErrorPtr error =
+        CreateError(dbus_error::kInvalidArgs,
+                    "Remote wipe command validation failed, aborting.");
+    std::unique_ptr<dbus::Response> response =
+        brillo::dbus_utils::GetDBusError(method_call, error.get());
+    std::move(sender).Run(std::move(response));
+    return;
   }
 
   InitiateDeviceWipe("remote_wipe_request");
-  return true;
+
+  std::unique_ptr<dbus::Response> response =
+      dbus::Response::FromMethodCall(method_call);
+  std::move(sender).Run(std::move(response));
 }
 
 void SessionManagerImpl::ClearForcedReEnrollmentVpd(
     std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response) {
-  device_policy_->ClearForcedReEnrollmentFlags(
+  device_policy_->ClearBlockDevmode(
       dbus_service_->CreatePolicyServiceCompletionCallback(
           std::move(response)));
 }
@@ -1207,13 +1334,23 @@ void SessionManagerImpl::GetServerBackedStateKeys(
     std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<
         std::vector<std::vector<uint8_t>>>> response) {
   DCHECK(dbus_service_);
-  ServerBackedStateKeyGenerator::StateKeyCallback callback =
+  DeviceIdentifierGenerator::StateKeyCallback callback =
       dbus_service_->CreateStateKeyCallback(std::move(response));
   if (system_clock_synchronized_) {
-    state_key_generator_->RequestStateKeys(callback);
+    device_identifier_generator_->RequestStateKeys(std::move(callback));
   } else {
-    pending_state_key_callbacks_.push_back(callback);
+    pending_state_key_callbacks_.push_back(std::move(callback));
   }
+}
+
+void SessionManagerImpl::GetPsmDeviceActiveSecret(
+    std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<std::string>>
+        response) {
+  DCHECK(dbus_service_);
+  DeviceIdentifierGenerator::PsmDeviceActiveSecretCallback callback =
+      dbus_service_->CreatePsmDeviceActiveSecretCallback(std::move(response));
+  device_identifier_generator_->RequestPsmDeviceActiveSecret(
+      std::move(callback));
 }
 
 void SessionManagerImpl::OnSuspendImminent(dbus::Signal* signal) {
@@ -1221,7 +1358,7 @@ void SessionManagerImpl::OnSuspendImminent(dbus::Signal* signal) {
 
   // If Chrome crashed recently, it might've missed this SuspendImminent signal
   // and failed to lock the screen. Stop the session as a precaution:
-  // https://crbug.com/867970
+  // https://crbug.com/867970.
   const base::TimeTicks start_time = manager_->GetLastBrowserRestartTime();
   if (!start_time.is_null() &&
       tick_clock_->NowTicks() - start_time <= kCrashBeforeSuspendInterval) {
@@ -1250,8 +1387,8 @@ void SessionManagerImpl::GetSystemClockLastSyncInfo() {
                                system_clock::kSystemLastSyncInfo);
   system_clock_proxy_->CallMethod(
       &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-      base::Bind(&SessionManagerImpl::OnGotSystemClockLastSyncInfo,
-                 weak_ptr_factory_.GetWeakPtr()));
+      base::BindOnce(&SessionManagerImpl::OnGotSystemClockLastSyncInfo,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void SessionManagerImpl::OnGotSystemClockLastSyncInfo(
@@ -1259,10 +1396,10 @@ void SessionManagerImpl::OnGotSystemClockLastSyncInfo(
   if (!response) {
     LOG(ERROR) << system_clock::kSystemClockInterface << "."
                << system_clock::kSystemLastSyncInfo << " request failed.";
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
-        base::Bind(&SessionManagerImpl::GetSystemClockLastSyncInfo,
-                   weak_ptr_factory_.GetWeakPtr()),
+        base::BindOnce(&SessionManagerImpl::GetSystemClockLastSyncInfo,
+                       weak_ptr_factory_.GetWeakPtr()),
         system_clock_last_sync_info_retry_delay_);
     return;
   }
@@ -1278,14 +1415,14 @@ void SessionManagerImpl::OnGotSystemClockLastSyncInfo(
 
   if (network_synchronized) {
     system_clock_synchronized_ = true;
-    for (const auto& callback : pending_state_key_callbacks_)
-      state_key_generator_->RequestStateKeys(callback);
+    for (auto& callback : pending_state_key_callbacks_)
+      device_identifier_generator_->RequestStateKeys(std::move(callback));
     pending_state_key_callbacks_.clear();
   } else {
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
-        base::Bind(&SessionManagerImpl::GetSystemClockLastSyncInfo,
-                   weak_ptr_factory_.GetWeakPtr()),
+        base::BindOnce(&SessionManagerImpl::GetSystemClockLastSyncInfo,
+                       weak_ptr_factory_.GetWeakPtr()),
         system_clock_last_sync_info_retry_delay_);
   }
 }
@@ -1293,12 +1430,12 @@ void SessionManagerImpl::OnGotSystemClockLastSyncInfo(
 bool SessionManagerImpl::InitMachineInfo(brillo::ErrorPtr* error,
                                          const std::string& in_data) {
   std::map<std::string, std::string> params;
-  if (!ServerBackedStateKeyGenerator::ParseMachineInfo(in_data, &params)) {
+  if (!DeviceIdentifierGenerator::ParseMachineInfo(in_data, &params)) {
     *error = CreateError(dbus_error::kInitMachineInfoFail, "Parse failure.");
     return false;
   }
 
-  if (!state_key_generator_->InitMachineInfo(params)) {
+  if (!device_identifier_generator_->InitMachineInfo(params)) {
     *error =
         CreateError(dbus_error::kInitMachineInfoFail, "Missing parameters.");
     return false;
@@ -1309,10 +1446,10 @@ bool SessionManagerImpl::InitMachineInfo(brillo::ErrorPtr* error,
 bool SessionManagerImpl::StartArcMiniContainer(
     brillo::ErrorPtr* error, const std::vector<uint8_t>& in_request) {
 #if USE_CHEETS
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   if (!request.ParseFromArray(in_request.data(), in_request.size())) {
     *error = CreateError(DBUS_ERROR_INVALID_ARGS,
-                         "StartArcMiniContainerRequest parsing failed.");
+                         "StartArcMiniInstanceRequest parsing failed.");
     return false;
   }
 
@@ -1325,12 +1462,21 @@ bool SessionManagerImpl::StartArcMiniContainer(
                          request.arc_file_picker_experiment()),
       base::StringPrintf("ARC_CUSTOM_TABS_EXPERIMENT=%d",
                          request.arc_custom_tabs_experiment()),
-      base::StringPrintf("DISABLE_SYSTEM_DEFAULT_APP=%d",
-                         request.disable_system_default_app()),
       base::StringPrintf("DISABLE_MEDIA_STORE_MAINTENANCE=%d",
                          request.disable_media_store_maintenance()),
       base::StringPrintf("DISABLE_DOWNLOAD_PROVIDER=%d",
-                         request.disable_download_provider())};
+                         request.disable_download_provider()),
+      base::StringPrintf("DISABLE_UREADAHEAD=%d", request.disable_ureadahead()),
+      base::StringPrintf("ENABLE_CONSUMER_AUTO_UPDATE_TOGGLE=%d",
+                         request.enable_consumer_auto_update_toggle()),
+      base::StringPrintf("ENABLE_NOTIFICATIONS_REFRESH=%d",
+                         request.enable_notifications_refresh()),
+      base::StringPrintf("ENABLE_PRIVACY_HUB_FOR_CHROME=%d",
+                         request.enable_privacy_hub_for_chrome()),
+      base::StringPrintf("ENABLE_TTS_CACHING=%d", request.enable_tts_caching()),
+      base::StringPrintf("HOST_UREADAHEAD_GENERATION=%d",
+                         request.host_ureadahead_generation()),
+  };
 
   if (request.arc_generate_pai())
     env_vars.push_back("ARC_GENERATE_PAI=1");
@@ -1341,12 +1487,13 @@ bool SessionManagerImpl::StartArcMiniContainer(
   }
 
   switch (request.play_store_auto_update()) {
-    case StartArcMiniContainerRequest_PlayStoreAutoUpdate_AUTO_UPDATE_DEFAULT:
+    case arc::
+        StartArcMiniInstanceRequest_PlayStoreAutoUpdate_AUTO_UPDATE_DEFAULT:
       break;
-    case StartArcMiniContainerRequest_PlayStoreAutoUpdate_AUTO_UPDATE_ON:
+    case arc::StartArcMiniInstanceRequest_PlayStoreAutoUpdate_AUTO_UPDATE_ON:
       env_vars.emplace_back("PLAY_STORE_AUTO_UPDATE=1");
       break;
-    case StartArcMiniContainerRequest_PlayStoreAutoUpdate_AUTO_UPDATE_OFF:
+    case arc::StartArcMiniInstanceRequest_PlayStoreAutoUpdate_AUTO_UPDATE_OFF:
       env_vars.emplace_back("PLAY_STORE_AUTO_UPDATE=0");
       break;
     default:
@@ -1355,15 +1502,16 @@ bool SessionManagerImpl::StartArcMiniContainer(
   }
 
   switch (request.dalvik_memory_profile()) {
-    case StartArcMiniContainerRequest_DalvikMemoryProfile_MEMORY_PROFILE_DEFAULT:
+    case kStartArcMiniInstanceRequest_DalvikMemoryProfile_MEM_PROFILE_DEFAULT:
       break;
-    case StartArcMiniContainerRequest_DalvikMemoryProfile_MEMORY_PROFILE_4G:
+    case arc::StartArcMiniInstanceRequest_DalvikMemoryProfile_MEMORY_PROFILE_4G:
       env_vars.emplace_back("DALVIK_MEMORY_PROFILE=4G");
       break;
-    case StartArcMiniContainerRequest_DalvikMemoryProfile_MEMORY_PROFILE_8G:
+    case arc::StartArcMiniInstanceRequest_DalvikMemoryProfile_MEMORY_PROFILE_8G:
       env_vars.emplace_back("DALVIK_MEMORY_PROFILE=8G");
       break;
-    case StartArcMiniContainerRequest_DalvikMemoryProfile_MEMORY_PROFILE_16G:
+    case arc::
+        StartArcMiniInstanceRequest_DalvikMemoryProfile_MEMORY_PROFILE_16G:
       env_vars.emplace_back("DALVIK_MEMORY_PROFILE=16G");
       break;
     default:
@@ -1388,10 +1536,10 @@ bool SessionManagerImpl::UpgradeArcContainer(
   // Stop the existing instance if it fails to continue to boot an existing
   // container. Using Unretained() is okay because the closure will be called
   // before this function returns. If container was not running, this is no op.
-  base::ScopedClosureRunner scoped_runner(base::Bind(
+  base::ScopedClosureRunner scoped_runner(base::BindOnce(
       &SessionManagerImpl::OnContinueArcBootFailed, base::Unretained(this)));
 
-  UpgradeArcContainerRequest request;
+  arc::UpgradeArcContainerRequest request;
   if (!request.ParseFromArray(in_request.data(), in_request.size())) {
     *error = CreateError(DBUS_ERROR_INVALID_ARGS,
                          "UpgradeArcContainerRequest parsing failed.");
@@ -1419,7 +1567,7 @@ bool SessionManagerImpl::UpgradeArcContainer(
     *error = CREATE_ERROR_AND_LOG(dbus_error::kLowFreeDisk,
                                   "Low free disk under /home");
     StopArcInstanceInternal(ArcContainerStopReason::LOW_DISK_SPACE);
-    ignore_result(scoped_runner.Release());
+    scoped_runner.ReplaceClosure(base::DoNothing());
     return false;
   }
 
@@ -1441,9 +1589,18 @@ bool SessionManagerImpl::UpgradeArcContainer(
   android_container_->SetStatefulMode(StatefulMode::STATEFUL);
   auto env_vars = CreateUpgradeArcEnvVars(request, account_id, pid);
   const base::TimeTicks arc_continue_boot_impulse_time = base::TimeTicks::Now();
-  if (init_controller_->TriggerImpulse(
+
+  dbus::ScopedDBusError dbus_error;
+  std::unique_ptr<dbus::Response> response =
+      init_controller_->TriggerImpulseWithTimeoutAndError(
           kContinueArcBootImpulse, env_vars,
-          InitDaemonController::TriggerMode::SYNC)) {
+          InitDaemonController::TriggerMode::SYNC, kArcBootContinueTimeout,
+          &dbus_error);
+  LoginMetrics::ArcContinueBootImpulseStatus status =
+      GetArcContinueBootImpulseStatus(&dbus_error);
+  login_metrics_->SendArcContinueBootImpulseStatus(status);
+
+  if (response) {
     login_metrics_->SendArcContinueBootImpulseTime(
         base::TimeTicks::Now() - arc_continue_boot_impulse_time);
   } else {
@@ -1456,7 +1613,7 @@ bool SessionManagerImpl::UpgradeArcContainer(
 
   login_metrics_->StartTrackingArcUseTime();
 
-  ignore_result(scoped_runner.Release());
+  scoped_runner.ReplaceClosure(base::DoNothing());
   DeleteArcBugReportBackup(account_id);
 
   return true;
@@ -1582,14 +1739,14 @@ void SessionManagerImpl::EnableAdbSideloadCallbackAdaptor(
 void SessionManagerImpl::EnableAdbSideload(
     std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<bool>> response) {
   if (system_->Exists(base::FilePath(kLoggedInFlag))) {
-    auto error = CREATE_ERROR_AND_LOG(
-        dbus_error::kSessionExists,
-        "EnableAdbSideload is not allowed once a user logged in this boot.");
+    auto error = CREATE_ERROR_AND_LOG(dbus_error::kSessionExists,
+                                      "EnableAdbSideload is not allowed "
+                                      "once a user logged in this boot.");
     response->ReplyWithError(error.get());
     return;
   }
 
-  arc_sideload_status_->EnableAdbSideload(base::Bind(
+  arc_sideload_status_->EnableAdbSideload(base::BindOnce(
       &SessionManagerImpl::EnableAdbSideloadCallbackAdaptor,
       weak_ptr_factory_.GetWeakPtr(), base::Owned(response.release())));
 }
@@ -1608,9 +1765,36 @@ void SessionManagerImpl::QueryAdbSideloadCallbackAdaptor(
 
 void SessionManagerImpl::QueryAdbSideload(
     std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<bool>> response) {
-  arc_sideload_status_->QueryAdbSideload(base::Bind(
+  arc_sideload_status_->QueryAdbSideload(base::BindOnce(
       &SessionManagerImpl::QueryAdbSideloadCallbackAdaptor,
       weak_ptr_factory_.GetWeakPtr(), base::Owned(response.release())));
+}
+
+void SessionManagerImpl::UnblockDevModeForInitialStateDetermination(
+    std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response) {
+  dev_mode_unblock_broker_->UnblockDevModeForInitialStateDetermination(
+      dbus_service_->CreatePolicyServiceCompletionCallback(
+          std::move(response)));
+}
+
+void SessionManagerImpl::UnblockDevModeForEnrollment(
+    std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response) {
+  dev_mode_unblock_broker_->UnblockDevModeForEnrollment(
+      dbus_service_->CreatePolicyServiceCompletionCallback(
+          std::move(response)));
+}
+
+void SessionManagerImpl::UnblockDevModeForCarrierLock(
+    std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response) {
+  dev_mode_unblock_broker_->UnblockDevModeForCarrierLock(
+      dbus_service_->CreatePolicyServiceCompletionCallback(
+          std::move(response)));
+}
+
+void SessionManagerImpl::IsDevModeBlockedForCarrierLock(
+    std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<bool>> response) {
+  bool is_blocked = dev_mode_unblock_broker_->IsDevModeBlockedForCarrierLock();
+  response->Return(is_blocked);
 }
 
 void SessionManagerImpl::OnPolicyPersisted(bool success) {
@@ -1641,7 +1825,7 @@ void SessionManagerImpl::ImportValidateAndStoreGeneratedKey(
     ns_mnt = brillo::ScopedMountNamespace::CreateFromPath(ns_mnt_path.value());
   }
   base::ReadFileToString(temp_key_file, &key);
-  PLOG_IF(WARNING, !base::DeleteFile(temp_key_file))
+  PLOG_IF(WARNING, !brillo::DeleteFile(temp_key_file))
       << "Can't delete " << temp_key_file.value();
   ns_mnt.reset();
 
@@ -1662,8 +1846,10 @@ void SessionManagerImpl::InitiateDeviceWipe(const std::string& reason) {
       },
       '_');
   const base::FilePath reset_path(kResetFile);
-  system_->AtomicFileWrite(reset_path,
-                           "fast safe keepimg reason=" + sanitized_reason);
+  const std::string reset_file_content =
+      "fast safe keepimg reason=" + sanitized_reason;
+  system_->AtomicFileWrite(reset_path, reset_file_content);
+
   RestartDevice(sanitized_reason);
 }
 
@@ -1698,6 +1884,7 @@ bool SessionManagerImpl::AllSessionsAreIncognito() {
 std::unique_ptr<SessionManagerImpl::UserSession>
 SessionManagerImpl::CreateUserSession(const std::string& username,
                                       const OptionalFilePath& ns_mnt_path,
+                                      bool need_nss,
                                       bool is_incognito,
                                       brillo::ErrorPtr* error) {
   std::unique_ptr<PolicyService> user_policy =
@@ -1708,37 +1895,35 @@ SessionManagerImpl::CreateUserSession(const std::string& username,
     return nullptr;
   }
 
-  ScopedPK11SlotDescriptor desc(
-      nss_->OpenUserDB(GetUserPath(username), ns_mnt_path));
+  ScopedPK11SlotDescriptor nss_desc;
+  // If the user could be the owner of the device, session_manager may need to
+  // use its owner key.
+  if (need_nss) {
+    nss_desc = nss_->OpenUserDB(GetUserPath(Username(username)), ns_mnt_path);
+  } else {
+    // We're sure that the user is not the owner of the device so they don't
+    // have the owner key.
+    // session_manager has code which expects a NSS slot to be associated with
+    // the user session unconditionally and may try to find the owner key on the
+    // slot. This is then expected to return nothing. Avoid opening the user's
+    // real NSS database in this case due to https://crbug.com/1163303 and pass
+    // the read-only NSS internal slot instead.
+    nss_desc = nss_->GetInternalSlot();
+  }
 
-  if (!desc->slot) {
+  if (!nss_desc->slot) {
     LOG(ERROR) << "Could not open the current user's NSS database.";
     *error = CreateError(dbus_error::kNoUserNssDb, "Can't create session.");
     return nullptr;
   }
 
-  return std::make_unique<UserSession>(username, SanitizeUserName(username),
-                                       is_incognito, std::move(desc),
-                                       std::move(user_policy));
-}
-
-brillo::ErrorPtr SessionManagerImpl::VerifyUnsignedPolicyStore() {
-  // Unsigned policy store D-Bus call is allowed only in enterprise_ad mode.
-  if (install_attributes_reader_->GetAttribute(
-          InstallAttributesReader::kAttrMode) !=
-      InstallAttributesReader::kDeviceModeEnterpriseAD) {
-    return CREATE_ERROR_AND_LOG(dbus_error::kPolicySignatureRequired,
-                                "Device mode doesn't permit unsigned policy.");
-  }
-
-  return nullptr;
+  return std::make_unique<UserSession>(
+      username, *SanitizeUserName(Username(username)), is_incognito,
+      std::move(nss_desc), std::move(user_policy));
 }
 
 PolicyService* SessionManagerImpl::GetPolicyService(
-    const PolicyDescriptor& descriptor,
-    std::unique_ptr<PolicyService>* storage,
-    brillo::ErrorPtr* error) {
-  DCHECK(storage);
+    const PolicyDescriptor& descriptor, brillo::ErrorPtr* error) {
   DCHECK(error);
   PolicyService* policy_service = nullptr;
   switch (descriptor.account_type()) {
@@ -1752,15 +1937,6 @@ PolicyService* SessionManagerImpl::GetPolicyService(
       policy_service = it != user_sessions_.end()
                            ? it->second->policy_service.get()
                            : nullptr;
-      break;
-    }
-    case ACCOUNT_TYPE_SESSIONLESS_USER: {
-      // Special case, different lifetime management than all other cases
-      // (unique_ptr vs plain ptr). TODO(crbug.com/771638): Clean this up when
-      // the bug is fixed and sessionless users are handled differently.
-      *storage = user_policy_factory_->CreateForHiddenUserHome(
-          descriptor.account_id());
-      policy_service = storage->get();
       break;
     }
     case ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT: {
@@ -1781,65 +1957,40 @@ PolicyService* SessionManagerImpl::GetPolicyService(
   return nullptr;
 }
 
+bool SessionManagerImpl::OwnerIsSignedIn() {
+  CHECK(device_policy_);
+  for (auto& [account_id, session] : user_sessions_) {
+    if (device_policy_->UserIsOwner(account_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 int SessionManagerImpl::GetKeyInstallFlags(const PolicyDescriptor& descriptor) {
   switch (descriptor.account_type()) {
     case ACCOUNT_TYPE_DEVICE: {
+      // It's safe to always allow rotation because the new key is signed with
+      // the old one.
       int flags = PolicyService::KEY_ROTATE;
-      if (!session_started_)
-        flags |= PolicyService::KEY_INSTALL_NEW | PolicyService::KEY_CLOBBER;
+      // The first non-guest user is supposed to install a new key.
+      // Alternatively, cloud managed devices can receive policies before any
+      // sessions started and install the key from them.
+      if (!AllSessionsAreIncognito() || !session_started_) {
+        flags |= PolicyService::KEY_INSTALL_NEW;
+      }
+      // If the owner is signed in, then allow clobbering the key. Also allow
+      // clobbering on the login screen where ChromeOS is presumably in a more
+      // secure state (primarily for managed devices).
+      if (OwnerIsSignedIn() || !session_started_) {
+        flags |= PolicyService::KEY_CLOBBER;
+      }
       return flags;
     }
     case ACCOUNT_TYPE_USER:
       return PolicyService::KEY_INSTALL_NEW | PolicyService::KEY_ROTATE;
-    case ACCOUNT_TYPE_SESSIONLESS_USER: {
-      // Only supports retrieval, not storage.
-      NOTREACHED();
-      return PolicyService::KEY_NONE;
-    }
     case ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT:
       return PolicyService::KEY_NONE;
-  }
-}
-
-void SessionManagerImpl::StorePolicyInternalEx(
-    const std::vector<uint8_t>& descriptor_blob,
-    const std::vector<uint8_t>& policy_blob,
-    SignatureCheck signature_check,
-    std::unique_ptr<brillo::dbus_utils::DBusMethodResponse<>> response) {
-  brillo::ErrorPtr error;
-  PolicyDescriptor descriptor;
-  if (!ParseAndValidatePolicyDescriptor(descriptor_blob,
-                                        PolicyDescriptorUsage::kStore,
-                                        &descriptor, &error)) {
-    response->ReplyWithError(error.get());
-    return;
-  }
-
-  std::unique_ptr<PolicyService> storage;
-  PolicyService* policy_service =
-      GetPolicyService(descriptor, &storage, &error);
-  if (!policy_service) {
-    response->ReplyWithError(error.get());
-    return;
-  }
-
-  int key_flags = GetKeyInstallFlags(descriptor);
-  PolicyNamespace ns(descriptor.domain(), descriptor.component_id());
-
-  // If the blob is empty, delete the policy.
-  DCHECK(dbus_service_);
-  if (policy_blob.empty()) {
-    if (!policy_service->Delete(ns, signature_check)) {
-      auto error =
-          CreateError(dbus_error::kDeleteFail, "Failed to delete policy");
-      response->ReplyWithError(error.get());
-      return;
-    }
-    response->Return();
-  } else {
-    policy_service->Store(ns, policy_blob, key_flags, signature_check,
-                          dbus_service_->CreatePolicyServiceCompletionCallback(
-                              std::move(response)));
   }
 }
 
@@ -1853,8 +2004,6 @@ void SessionManagerImpl::BackupArcBugReport(const std::string& account_id) {
     return;
   }
 
-  const base::TimeTicks arc_bug_report_backup_time = base::TimeTicks::Now();
-
   dbus::MethodCall method_call(debugd::kDebugdInterface,
                                debugd::kBackupArcBugReport);
   dbus::MessageWriter writer(&method_call);
@@ -1864,10 +2013,7 @@ void SessionManagerImpl::BackupArcBugReport(const std::string& account_id) {
   std::unique_ptr<dbus::Response> response(debugd_proxy_->CallMethodAndBlock(
       &method_call, kBackupArcBugReportTimeout.InMilliseconds()));
 
-  if (response) {
-    login_metrics_->SendArcBugReportBackupTime(base::TimeTicks::Now() -
-                                               arc_bug_report_backup_time);
-  } else {
+  if (!response) {
     LOG(ERROR) << "Error contacting debugd to back up ARC bug report.";
   }
 }
@@ -1904,8 +2050,9 @@ bool SessionManagerImpl::StartArcContainer(
   // propagate some information (such as the CHROMEOS_USER) to the hooks so it
   // can set itself up.
   if (!android_container_->StartContainer(
-          env_vars, base::Bind(&SessionManagerImpl::OnAndroidContainerStopped,
-                               weak_ptr_factory_.GetWeakPtr()))) {
+          env_vars,
+          base::BindOnce(&SessionManagerImpl::OnAndroidContainerStopped,
+                         weak_ptr_factory_.GetWeakPtr()))) {
     // Failed to start container. Thus, trigger stop-arc-instance impulse
     // manually for cleanup.
     init_controller_->TriggerImpulse(kStopArcInstanceImpulse, {},
@@ -1922,7 +2069,7 @@ bool SessionManagerImpl::StartArcContainer(
 }
 
 std::vector<std::string> SessionManagerImpl::CreateUpgradeArcEnvVars(
-    const UpgradeArcContainerRequest& request,
+    const arc::UpgradeArcContainerRequest& request,
     const std::string& account_id,
     pid_t pid) {
   // Only allow for managed account if the policies allow it.
@@ -1943,18 +2090,23 @@ std::vector<std::string> SessionManagerImpl::CreateUpgradeArcEnvVars(
                          request.management_transition()),
       base::StringPrintf("ENABLE_ADB_SIDELOAD=%d",
                          arc_sideload_status_->IsAdbSideloadAllowed() &&
-                             is_adb_sideloading_allowed_for_request)};
+                             is_adb_sideloading_allowed_for_request),
+      base::StringPrintf("ENABLE_ARC_NEARBY_SHARE=%d",
+                         request.enable_arc_nearby_share()),
+      base::StringPrintf("DISABLE_UREADAHEAD=%d",
+                         request.disable_ureadahead())};
 
   switch (request.packages_cache_mode()) {
-    case UpgradeArcContainerRequest_PackageCacheMode_SKIP_SETUP_COPY_ON_INIT:
+    case arc::
+        UpgradeArcContainerRequest_PackageCacheMode_SKIP_SETUP_COPY_ON_INIT:
       env_vars.emplace_back("SKIP_PACKAGES_CACHE_SETUP=1");
       env_vars.emplace_back("COPY_PACKAGES_CACHE=1");
       break;
-    case UpgradeArcContainerRequest_PackageCacheMode_COPY_ON_INIT:
+    case arc::UpgradeArcContainerRequest_PackageCacheMode_COPY_ON_INIT:
       env_vars.emplace_back("SKIP_PACKAGES_CACHE_SETUP=0");
       env_vars.emplace_back("COPY_PACKAGES_CACHE=1");
       break;
-    case UpgradeArcContainerRequest_PackageCacheMode_DEFAULT:
+    case arc::UpgradeArcContainerRequest_PackageCacheMode_DEFAULT:
       env_vars.emplace_back("SKIP_PACKAGES_CACHE_SETUP=0");
       env_vars.emplace_back("COPY_PACKAGES_CACHE=0");
       break;
@@ -1967,6 +2119,12 @@ std::vector<std::string> SessionManagerImpl::CreateUpgradeArcEnvVars(
     env_vars.emplace_back("SKIP_GMS_CORE_CACHE_SETUP=1");
   } else {
     env_vars.emplace_back("SKIP_GMS_CORE_CACHE_SETUP=0");
+  }
+
+  if (request.skip_tts_cache()) {
+    env_vars.emplace_back("SKIP_TTS_CACHE_SETUP=1");
+  } else {
+    env_vars.emplace_back("SKIP_TTS_CACHE_SETUP=0");
   }
 
   DCHECK(request.has_locale());
@@ -2015,6 +2173,24 @@ void SessionManagerImpl::OnAndroidContainerStopped(
   }
 
   adaptor_.SendArcInstanceStoppedSignal(static_cast<uint32_t>(reason));
+}
+
+LoginMetrics::ArcContinueBootImpulseStatus
+SessionManagerImpl::GetArcContinueBootImpulseStatus(
+    dbus::ScopedDBusError* dbus_error) {
+  DCHECK(dbus_error);
+  if (dbus_error->is_set()) {
+    // In case of timeout we see DBUS_ERROR_NO_REPLY
+    // as mentioned in dbus-protocol.h
+    if (strcmp(dbus_error->name(), DBUS_ERROR_NO_REPLY) == 0) {
+      return LoginMetrics::ArcContinueBootImpulseStatus::
+          kArcContinueBootImpulseStatusTimedOut;
+    }
+    return LoginMetrics::ArcContinueBootImpulseStatus::
+        kArcContinueBootImpulseStatusFailed;
+  }
+  return LoginMetrics::ArcContinueBootImpulseStatus::
+      kArcContinueBootImpulseStatusSuccess;
 }
 #endif  // USE_CHEETS
 }  // namespace login_manager

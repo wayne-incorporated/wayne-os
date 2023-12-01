@@ -1,0 +1,71 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+    "libcrossystem",
+    "libdebugd-client",
+    "libshill-client",
+  ]
+}
+
+source_set("system_base") {
+  sources = [
+    "context.cc",
+    "context_helper_impl.cc",
+    "context_impl.cc",
+    "syscaller_impl.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+source_set("helper_invoker_direct") {
+  sources = [ "helper_invoker_direct_impl.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+source_set("context_factory") {
+  sources = [ "context_factory_impl.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":helper_invoker_direct",
+    ":system_base",
+  ]
+}
+
+source_set("context_production") {
+  sources = [
+    "context_runtime_impl.cc",
+    "helper_invoker_debugd_impl.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":system_base" ]
+}
+
+if (use.test) {
+  pkg_config("test_pkg_deps") {
+    pkg_deps = [
+      "libcrossystem-test",
+      "libdebugd-client-test",
+      "libshill-client-test",
+    ]
+  }
+
+  source_set("test_utils") {
+    sources = [ "context_mock_impl.cc" ]
+    public_configs = [
+      ":target_defaults",
+      ":test_pkg_deps",
+    ]
+    deps = [
+      ":helper_invoker_direct",
+      ":system_base",
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
 #include <brillo/errors/error.h>
+#include <brillo/files/file_util.h>
 #include <gtest/gtest.h>
 
 #include "login_manager/fake_secret_util.h"
@@ -222,7 +223,7 @@ TEST_F(LoginScreenStorageTestPersistent, StoreOverridesPersistentKey) {
 }
 
 TEST_F(LoginScreenStorageTestPersistent, StoreCreatesDirectoryIfNotExistant) {
-  base::DeletePathRecursively(storage_path_);
+  brillo::DeletePathRecursively(storage_path_);
 
   base::ScopedFD value_fd = MakeValueFD(test_value_);
   brillo::ErrorPtr error;
@@ -237,7 +238,7 @@ TEST_F(LoginScreenStorageTestPersistent, StoreCreatesDirectoryIfNotExistant) {
 
 TEST_F(LoginScreenStorageTestPersistent, OnlyStoredKeysAreListedInIndex) {
   const std::string kDifferentTestKey = "different_test_key";
-  base::DeletePathRecursively(storage_path_);
+  brillo::DeletePathRecursively(storage_path_);
   brillo::ErrorPtr error;
 
   {

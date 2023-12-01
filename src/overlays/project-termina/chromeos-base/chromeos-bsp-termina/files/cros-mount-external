@@ -1,0 +1,34 @@
+#!/bin/bash
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Mounts the external disk.
+# External disks are experimental, for-developer-only at this point.
+
+set -e
+
+target_path="/mnt/external/0"
+
+external_disk_name=""
+for device in /sys/block/vd*; do
+  [[ -e "${device}/serial" ]] || continue
+  # Reading the serial is a failure if it isn't set
+  [[ "$(<"${device}/serial")" == "cr-extra-disk" ]] || continue
+  external_disk_name="$(basename "${device}")"
+  break
+done
+
+if [[ -z "${external_disk_name}" ]]; then
+  logger --tag mount-external "no external disk attached"
+  exit 0
+fi
+
+external_disk_device="/dev/${external_disk_name}"
+mkdir -p "${target_path}"
+if ! mount "${external_disk_device}" "${target_path}"; then
+  mkfs.btrfs "${external_disk_device}"
+  mount "${external_disk_device}" "${target_path}"
+fi
+chmod 0777 "${target_path}" || umount "${target_path}"
+logger --tag mount-external "${external_disk_device} mnt at ${target_path}"

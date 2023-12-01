@@ -1,0 +1,56 @@
+type cros_cras, chromeos_domain, domain;
+
+# TODO(fqj): enforce after ARC change landed.
+permissive cros_cras;
+
+from_minijail_static(cros_cras, cros_cras_exec)
+allow cros_cras minijail:fd use;
+allow cros_cras minijail:fifo_file { read write };
+
+allow cros_cras cros_passwd_file:file r_file_perms;
+
+allow cros_cras sysfs:file r_file_perms;
+allow cros_cras sysfs:dir r_dir_perms;
+
+allow cros_cras cras_socket:dir create_dir_perms;
+allow cros_cras cras_socket:sock_file create_file_perms;
+
+allow cros_cras cros_var_lib_cras:file create_file_perms;
+
+allow cros_cras self:netlink_kobject_uevent_socket create_socket_perms_no_ioctl;
+
+r_dir_file(cros_cras, cros_run_udev)
+
+filetrans_pattern(cros_cras, tmpfs, cros_shm, file); # android compatibility for cros_shm type.
+allow cros_cras {tmpfs cros_shm}:dir  create_dir_perms;
+allow cros_cras {tmpfs cros_shm}:file create_file_perms;
+
+allow cros_cras audio_device:dir r_dir_perms;
+allow cros_cras audio_device:chr_file { open read write ioctl };
+allow cros_cras audio_device:lnk_file read;
+allow cros_cras input_device:dir { read search };
+allow cros_cras input_device:chr_file { open read ioctl };
+has_arc(`
+allow cros_cras gpu_device:dir search;
+',
+`
+allow cros_cras device:dir search;
+allow cros_cras sysfs:dir search;
+')
+
+allow cros_cras proc_filesystems:file r_file_perms;
+
+allow cros_cras self:socket { create ioctl };
+
+log_writer(cros_cras)
+uma_writer(cros_cras)
+cros_dbus_client(cros_cras)
+
+allow cros_cras_client_domain cros_shm:dir r_dir_perms;
+allow cros_cras_client_domain cros_shm:file rw_file_perms; # /dev/shm/cras-*
+allow cros_cras_client_domain cras_socket:dir r_dir_perms;
+allow cros_cras_client_domain cros_cras:unix_stream_socket { read write };
+allow cros_cras_client_domain cros_cras:fd use;
+allow cros_cras cros_cras_client_domain:fd use;
+allow cros_cras cros_cras_client_domain:unix_stream_socket { read write };
+unix_socket_connect(cros_cras_client_domain, cras, cros_cras)

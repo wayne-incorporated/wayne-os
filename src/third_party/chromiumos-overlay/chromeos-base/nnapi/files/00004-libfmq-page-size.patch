@@ -1,0 +1,63 @@
+diff --git a/platform2/aosp/system/libfmq/include/fmq/MessageQueueBase.h b/platform2/aosp/system/libfmq/include/fmq/MessageQueueBase.h
+index d24dc7c..aab6b3e 100644
+--- a/platform2/aosp/system/libfmq/include/fmq/MessageQueueBase.h
++++ b/platform2/aosp/system/libfmq/include/fmq/MessageQueueBase.h
+@@ -20,6 +20,7 @@
+ #include <cutils/ashmem.h>
+ #include <fmq/EventFlag.h>
+ #include <sys/mman.h>
++#include <unistd.h>
+ #include <sys/user.h>
+ #include <utils/Log.h>
+ #include <utils/SystemClock.h>
+@@ -244,6 +245,10 @@ struct MessageQueueBase {
+     struct MemRegion {
+         MemRegion() : MemRegion(nullptr, 0) {}
+ 
++        MemRegion(const MemRegion& other) {
++            *this = other;
++        }
++
+         MemRegion(T* base, size_t size) : address(base), length(size) {}
+ 
+         MemRegion& operator=(const MemRegion& other) {
+@@ -674,15 +679,16 @@ MessageQueueBase<MQDescriptorType, T, flavor>::MessageQueueBase(size_t numElemen
+      * in the grantorDescriptor will be word aligned.
+      */
+     size_t kAshmemSizePageAligned;
++    size_t page_size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
+     if (bufferFd != -1) {
+         // Allocate read counter and write counter only. User-supplied memory will be used for the
+         // ringbuffer.
+-        kAshmemSizePageAligned = (kMetaDataSize + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
++        kAshmemSizePageAligned = (kMetaDataSize + page_size - 1) & ~(page_size - 1);
+     } else {
+         // Allocate ringbuffer, read counter and write counter.
+         kAshmemSizePageAligned = (hardware::details::alignToWordBoundary(kQueueSizeBytes) +
+-                                  kMetaDataSize + PAGE_SIZE - 1) &
+-                                 ~(PAGE_SIZE - 1);
++                                  kMetaDataSize + page_size - 1) &
++                                 ~(page_size - 1);
+     }
+ 
+     /*
+@@ -1236,7 +1242,8 @@ void* MessageQueueBase<MQDescriptorType, T, flavor>::mapGrantorDescr(uint32_t gr
+     /*
+      * Offset for mmap must be a multiple of PAGE_SIZE.
+      */
+-    int mapOffset = (grantors[grantorIdx].offset / PAGE_SIZE) * PAGE_SIZE;
++    size_t page_size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
++    int mapOffset = (grantors[grantorIdx].offset / page_size) * page_size;
+     int mapLength = grantors[grantorIdx].offset - mapOffset + grantors[grantorIdx].extent;
+ 
+     void* address = mmap(0, mapLength, PROT_READ | PROT_WRITE, MAP_SHARED, handle->data[fdIndex],
+@@ -1256,7 +1263,8 @@ void MessageQueueBase<MQDescriptorType, T, flavor>::unmapGrantorDescr(void* addr
+         return;
+     }
+ 
+-    int mapOffset = (grantors[grantorIdx].offset / PAGE_SIZE) * PAGE_SIZE;
++    size_t page_size = static_cast<size_t>(sysconf(_SC_PAGE_SIZE));
++    int mapOffset = (grantors[grantorIdx].offset / page_size) * page_size;
+     int mapLength = grantors[grantorIdx].offset - mapOffset + grantors[grantorIdx].extent;
+     void* baseAddress =
+             reinterpret_cast<uint8_t*>(address) - (grantors[grantorIdx].offset - mapOffset);

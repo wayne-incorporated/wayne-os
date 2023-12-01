@@ -1,0 +1,49 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = []
+  if (use.kvm_host) {
+    deps += [ "//vm_tools/host" ]
+  }
+  if (use.kvm_guest) {
+    deps += [ "//vm_tools/guest" ]
+  }
+}
+
+static_library("libvsh") {
+  sources = [ "vsh/utils.cc" ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+executable("vshd") {
+  sources = [
+    "vsh/vsh_forwarder.cc",
+    "vsh/vshd.cc",
+  ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "vm_protos",
+  ]
+  deps = [ ":libvsh" ]
+}
+
+static_library("libvm_tools_common") {
+  sources = [
+    "common/naming.cc",
+    "common/spawn_util.cc",
+  ]
+  pkg_deps = [ "libchrome" ]
+}

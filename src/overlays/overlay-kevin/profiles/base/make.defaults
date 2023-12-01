@@ -1,0 +1,49 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+USE=""
+
+USE="${USE} kevin"
+USE="${USE} pointer_events"
+USE="${USE} passive_event_listeners"
+USE="${USE} edge_touch_filtering"
+
+# override the baseboard in this one exception (combo of TPM2 + cr50)
+USE="${USE} -cr50_onboard"
+USE="${USE} tpm -tpm2"
+
+# Declare TPM model.
+USE="${USE} tpm_slb9645"
+
+# Allow consumer kiosk.
+# NOTE: Deprecating feature. New board should NOT have it.
+USE="${USE} allow_consumer_kiosk"
+
+# Disable touchpad wakeup since it can't be turned off dynamically when the
+# system is converted to tablet mode while it's suspended.
+USE="${USE} -touchpad_wakeup"
+
+# This indicates that this board has a -kernelnext overlay.
+USE="${USE} has-kernelnext"
+
+INPUT_DEVICES="wacom"
+
+# The device had ARC M in version 60 and will get ARC N in 61. This flag is
+# used to decide the default behavior for data migration, when no policy was set
+# by admin.
+USE="${USE} arc_transition_m_to_n"
+
+# Disable instant tethering due to a lack of hardware vendor support.
+USE="${USE} disable_instant_tethering"
+
+# Disable WPA3-SAE, because mwifiex (Marvell WiFi) does not support it. See
+# also b/184395063.
+USE="${USE} -wpa3_sae"
+
+# Enable chromeos-config.
+USE="${USE} unibuild has_chromeos_config_bsp"
+
+# Use default LE connection intervals
+USE="${USE} bluez_default_conn_int"

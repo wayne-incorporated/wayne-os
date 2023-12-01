@@ -1,0 +1,137 @@
+From 0a3d74c947be03c52a0233df4acfe2a9e2573487 Mon Sep 17 00:00:00 2001
+From: Dmitry Torokhov <dtor@chromium.org>
+Date: Wed, 5 Jun 2019 10:40:56 -0700
+Subject: [PATCH 3/6] CHROMIUM: linux_usbfs: wire up IOCTL_USBFS_CONNINFO_EX
+
+This new ioctl provides important information, such as device's assigned
+bus number, port connection information, and speed, when using usbfs
+file descriptors. Such information is usually available via sysfs, but
+when using file descriptors sysfs is often not accessible.
+
+Signed-off-by: Dmitry Torokhov <dtor@chromium.org>
+---
+ libusb/os/linux_usbfs.c | 29 ++++++++++++++++++++++++++++-
+ libusb/os/linux_usbfs.h | 34 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/libusb/os/linux_usbfs.c b/libusb/os/linux_usbfs.c
+index 6f4d189f..8348734a 100644
+--- a/libusb/os/linux_usbfs.c
++++ b/libusb/os/linux_usbfs.c
+@@ -995,6 +995,21 @@ static int device_speed_from_sysfs(struct libusb_context *ctx,
+ 	}
+ }
+ 
++static int device_speed_from_kernel(struct libusb_context *ctx, int speed)
++{
++	switch (speed) {
++	case KERNEL_SPEED_LOW:		return LIBUSB_SPEED_LOW;
++	case KERNEL_SPEED_FULL:		return LIBUSB_SPEED_FULL;
++	case KERNEL_SPEED_HIGH:		return LIBUSB_SPEED_HIGH;
++	case KERNEL_SPEED_WIRELESS:	return LIBUSB_SPEED_HIGH;
++	case KERNEL_SPEED_SUPER:	return LIBUSB_SPEED_SUPER;
++	case KERNEL_SPEED_SUPER_PLUS:	return LIBUSB_SPEED_SUPER_PLUS;
++	default:
++		usbi_warn(ctx, "Unknown device kernel speed: %d", speed);
++		return LIBUSB_SPEED_UNKNOWN;
++	}
++}
++
+ static int initialize_from_sysfs(struct libusb_device *dev, const char *sysfs_dir)
+ {
+ 	struct linux_device_priv *priv = usbi_get_device_priv(dev);
+@@ -1028,6 +1043,8 @@ static int initialize_from_usbfs(struct libusb_device *dev, int wrapped_fd)
+ {
+ 	struct linux_device_priv *priv = usbi_get_device_priv(dev);
+ 	struct libusb_context *ctx = DEVICE_CTX(dev);
++	struct usbfs_conninfo_ex ci = { 0 };
++	uint32_t caps;
+ 	int fd;
+ 	int r;
+ 
+@@ -1076,7 +1093,17 @@ static int initialize_from_usbfs(struct libusb_device *dev, int wrapped_fd)
+ 	if (r != LIBUSB_SUCCESS)
+ 		goto out;
+ 
+-	dev->speed = usbfs_get_speed(ctx, fd);
++	if (ioctl(fd, IOCTL_USBFS_GET_CAPABILITIES, &caps) >= 0 &&
++	    (caps & USBFS_CAP_CONNINFO_EX) &&
++	    ioctl(fd, IOCTL_USBFS_CONNINFO_EX(sizeof(ci)), &ci) >= 0 &&
++	    /* Kernel should support at least as much as we want */
++	    ci.size >= sizeof(ci)) {
++		dev->bus_number = ci.busnum;
++		dev->device_address = ci.devnum;
++		dev->speed = device_speed_from_kernel(ctx, ci.speed);
++	} else {
++		dev->speed = usbfs_get_speed(ctx, fd);
++	}
+ 
+ out:
+ 	close(fd);
+diff --git a/libusb/os/linux_usbfs.h b/libusb/os/linux_usbfs.h
+index 4a2ffaf5..944755bd 100644
+--- a/libusb/os/linux_usbfs.h
++++ b/libusb/os/linux_usbfs.h
+@@ -99,6 +99,33 @@ struct usbfs_connectinfo {
+ 	unsigned char slow;
+ };
+ 
++#define KERNEL_SPEED_LOW		1
++#define KERNEL_SPEED_FULL		2
++#define KERNEL_SPEED_HIGH		3
++#define KERNEL_SPEED_WIRELESS		4
++#define KERNEL_SPEED_SUPER		5
++#define KERNEL_SPEED_SUPER_PLUS		6
++
++struct usbfs_conninfo_ex {
++	uint32_t size;		/* Size of the structure from the kernel's */
++				/* point of view. Can be used by userspace */
++				/* to determine how much data can be       */
++				/* used/trusted.                           */
++	uint32_t busnum;	/* USB bus number, as enumerated by the    */
++				/* kernel, the device is connected to.     */
++	uint32_t devnum;	/* Device address on the bus.              */
++	uint32_t speed;		/* KERNEL_SPEED_*                          */
++	uint8_t num_ports;	/* Number of ports the device is connected */
++				/* to on the way to the root hub. It may   */
++				/* be bigger than size of 'ports' array so */
++				/* userspace can detect overflows.         */
++	uint8_t ports[7];	/* List of ports on the way from the root  */
++				/* hub to the device. Current limit in     */
++				/* USB specification is 7 tiers (root hub, */
++				/* 5 intermediate hubs, device), which     */
++				/* gives at most 6 port entries.           */
++};
++
+ struct usbfs_ioctl {
+ 	int ifno;	/* interface 0..N ; negative numbers reserved */
+ 	int ioctl_code;	/* MUST encode size + direction of data so the
+@@ -106,11 +133,17 @@ struct usbfs_ioctl {
+ 	void *data;	/* param buffer (in, or out) */
+ };
+ 
++struct usbfs_hub_portinfo {
++	unsigned char numports;
++	unsigned char port[127];	/* port to device num mapping */
++};
++
+ #define USBFS_CAP_ZERO_PACKET			0x01
+ #define USBFS_CAP_BULK_CONTINUATION		0x02
+ #define USBFS_CAP_NO_PACKET_SIZE_LIM		0x04
+ #define USBFS_CAP_BULK_SCATTER_GATHER		0x08
+ #define USBFS_CAP_REAP_AFTER_DISCONNECT		0x10
++#define USBFS_CAP_CONNINFO_EX			0x80
+ 
+ #define USBFS_DISCONNECT_CLAIM_IF_DRIVER	0x01
+ #define USBFS_DISCONNECT_CLAIM_EXCEPT_DRIVER	0x02
+@@ -156,6 +189,7 @@ struct usbfs_streams {
+ #define IOCTL_USBFS_FREE_STREAMS	_IOR('U', 29, struct usbfs_streams)
+ #define IOCTL_USBFS_DROP_PRIVILEGES	_IOW('U', 30, __u32)
+ #define IOCTL_USBFS_GET_SPEED		_IO('U', 31)
++#define IOCTL_USBFS_CONNINFO_EX(len)	_IOC(_IOC_READ, 'U', 32, len)
+ 
+ extern usbi_mutex_static_t linux_hotplug_lock;
+ 
+-- 
+2.38.1.584.g0f3c55d4c2-goog
+

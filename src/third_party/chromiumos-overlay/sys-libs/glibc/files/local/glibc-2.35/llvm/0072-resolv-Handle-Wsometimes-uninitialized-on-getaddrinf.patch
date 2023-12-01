@@ -1,0 +1,49 @@
+From ce0c64bfc0352b06ad8925e4e898ac4c818684b0 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 22 Mar 2022 16:01:34 -0300
+Subject: [PATCH 072/163] resolv: Handle -Wsometimes-uninitialized on
+ getaddrinfo
+
+---
+ sysdeps/posix/getaddrinfo.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/sysdeps/posix/getaddrinfo.c b/sysdeps/posix/getaddrinfo.c
+index 2cca006f3d..e6ea7d14dd 100644
+--- a/sysdeps/posix/getaddrinfo.c
++++ b/sysdeps/posix/getaddrinfo.c
+@@ -337,7 +337,11 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 
+   /* Reserve stack memory for the scratch buffer in the getaddrinfo
+      function.  */
++  /* clang warns alloca_used is set but not used.  */
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wunused-but-set-variable");
+   size_t alloca_used = sizeof (struct scratch_buffer);
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+ 
+   if (req->ai_protocol || req->ai_socktype)
+     {
+@@ -1901,6 +1905,11 @@ gaiconf_init (void)
+ 		  unsigned long int val;
+ 		  char *endp;
+ 
++		  /* clang warns that endp is used uninitialized whenever '||'
++		     condition is true, however it will be evaluated after
++		     strtoul call.  */
++		  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++		  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wsometimes-uninitialized");
+ 		  bits = 32;
+ 		  __set_errno (0);
+ 		  cp = strchr (val1, '/');
+@@ -1958,6 +1967,7 @@ gaiconf_init (void)
+ 		      bits += 96;
+ 		      goto new_scope;
+ 		    }
++		  DIAG_POP_NEEDS_COMMENT_CLANG;
+ 		}
+ 	      break;
+ 
+-- 
+2.37.2
+

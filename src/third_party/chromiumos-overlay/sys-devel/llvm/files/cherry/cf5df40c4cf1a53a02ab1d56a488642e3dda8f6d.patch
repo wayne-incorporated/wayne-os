@@ -1,0 +1,91 @@
+commit cf5df40c4cf1a53a02ab1d56a488642e3dda8f6d
+Author: Leonard Chan <leonardchan@google.com>
+Date:   Fri Jul 17 15:29:50 2020 -0700
+
+    Revert "[AddressSanitizer] Don't use weak linkage for __{start,stop}_asan_globals"
+    
+    This reverts commit d76e62fdb7a93d9a33f642b6b528f2562cc3c3f4.
+    
+    Reverting since this can lead to linker errors:
+    
+    ```
+    ld.lld: error: undefined hidden symbol: __start_asan_globals
+    ```
+    
+    when using --gc-sections. The linker can discard __start_asan_globals
+    once there are no more `asan_globals` sections left, which can lead to
+    this error if we have external linkages to them.
+
+diff --git a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+index ee09a4d9db7..7516a64c6a3 100644
+--- a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+@@ -2103,23 +2103,10 @@ void ModuleAddressSanitizer::InstrumentGlobalsELF(
+     SetComdatForGlobalMetadata(G, Metadata, UniqueModuleId);
+   }
+ 
+-  // This should never be called when there are no globals, by the logic that
+-  // computes the UniqueModuleId string, which is "" when there are no globals.
+-  // It's important that this path is only used when there are actually some
+-  // globals, because that means that there will certainly be a live
+-  // `asan_globals` input section at link time and thus `__start_asan_globals`
+-  // and `__stop_asan_globals` symbols will definitely be defined at link time.
+-  // This means there's no need for the references to them to be weak, which
+-  // enables better code generation because ExternalWeakLinkage implies
+-  // isInterposable() and thus requires GOT indirection for PIC.  Since these
+-  // are known-defined hidden/dso_local symbols, direct PIC accesses without
+-  // dynamic relocation are always sufficient.
+-  assert(!MetadataGlobals.empty());
+-  assert(!UniqueModuleId.empty());
+-
+   // Update llvm.compiler.used, adding the new metadata globals. This is
+   // needed so that during LTO these variables stay alive.
+-  appendToCompilerUsed(M, MetadataGlobals);
++  if (!MetadataGlobals.empty())
++    appendToCompilerUsed(M, MetadataGlobals);
+ 
+   // RegisteredFlag serves two purposes. First, we can pass it to dladdr()
+   // to look up the loaded image that contains it. Second, we can store in it
+@@ -2132,18 +2119,15 @@ void ModuleAddressSanitizer::InstrumentGlobalsELF(
+       ConstantInt::get(IntptrTy, 0), kAsanGlobalsRegisteredFlagName);
+   RegisteredFlag->setVisibility(GlobalVariable::HiddenVisibility);
+ 
+-  // Create start and stop symbols.  These are known to be defined by
+-  // the linker, see comment above.
+-  auto MakeStartStopGV = [&](const char *Prefix) {
+-    GlobalVariable *StartStop =
+-        new GlobalVariable(M, IntptrTy, false, GlobalVariable::ExternalLinkage,
+-                           nullptr, Prefix + getGlobalMetadataSection());
+-    StartStop->setVisibility(GlobalVariable::HiddenVisibility);
+-    assert(StartStop->isImplicitDSOLocal());
+-    return StartStop;
+-  };
+-  GlobalVariable *StartELFMetadata = MakeStartStopGV("__start_");
+-  GlobalVariable *StopELFMetadata = MakeStartStopGV("__stop_");
++  // Create start and stop symbols.
++  GlobalVariable *StartELFMetadata = new GlobalVariable(
++      M, IntptrTy, false, GlobalVariable::ExternalWeakLinkage, nullptr,
++      "__start_" + getGlobalMetadataSection());
++  StartELFMetadata->setVisibility(GlobalVariable::HiddenVisibility);
++  GlobalVariable *StopELFMetadata = new GlobalVariable(
++      M, IntptrTy, false, GlobalVariable::ExternalWeakLinkage, nullptr,
++      "__stop_" + getGlobalMetadataSection());
++  StopELFMetadata->setVisibility(GlobalVariable::HiddenVisibility);
+ 
+   // Create a call to register the globals with the runtime.
+   IRB.CreateCall(AsanRegisterElfGlobals,
+diff --git a/llvm/test/Instrumentation/AddressSanitizer/global_metadata.ll b/llvm/test/Instrumentation/AddressSanitizer/global_metadata.ll
+index 4a6f4264437..ea9f2cf3f1a 100644
+--- a/llvm/test/Instrumentation/AddressSanitizer/global_metadata.ll
++++ b/llvm/test/Instrumentation/AddressSanitizer/global_metadata.ll
+@@ -28,10 +28,6 @@ target triple = "x86_64-unknown-linux-gnu"
+ ; during LTO.
+ ; CHECK: @llvm.compiler.used {{.*}} @__asan_global_global {{.*}} section "llvm.metadata"
+ 
+-; Check that start and stop symbols will be accessed as dso_local.
+-; CHECK: @__start_asan_globals = external hidden global i64
+-; CHECK: @__stop_asan_globals = external hidden global i64
+-
+ ; Check that location descriptors and global names were passed into __asan_register_globals:
+ ; CHECK: call void @__asan_register_elf_globals(i64 ptrtoint (i64* @___asan_globals_registered to i64), i64 ptrtoint (i64* @__start_asan_globals to i64), i64 ptrtoint (i64* @__stop_asan_globals to i64))
+ 

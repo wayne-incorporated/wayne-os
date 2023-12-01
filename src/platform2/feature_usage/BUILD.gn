@@ -1,0 +1,62 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":feature_usage_static",
+    ":libfeature_usage_pc",
+  ]
+  if (use.test) {
+    deps += [ ":unit_tests" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libchrome",
+    "libmetrics",
+  ]
+}
+
+generate_pkg_config("libfeature_usage_pc") {
+  name = "libfeature_usage"
+  description = "feature_usage library"
+  version = getenv("PV")
+  requires_private = [ "libchrome" ]
+  libs = [ "-lfeature_usage_static" ]
+  cflags = [ "-I/usr/include/libfeature_usage" ]
+}
+
+static_library("feature_usage_static") {
+  sources = [
+    "feature_usage_metrics.cc",
+    "feature_usage_metrics.h",
+  ]
+  configs += [ ":target_defaults" ]
+
+  # Generate a standalone static library.
+  configs -= [ "//common-mk:use_thin_archive" ]
+  configs += [ "//common-mk:nouse_thin_archive" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("unit_tests") {
+    sources = [ "feature_usage_metrics_test.cc" ]
+    configs += [
+      ":target_defaults",
+      ":test_config",
+    ]
+    run_test = true
+    deps = [
+      ":feature_usage_static",
+      "//common-mk/testrunner",
+    ]
+  }
+}

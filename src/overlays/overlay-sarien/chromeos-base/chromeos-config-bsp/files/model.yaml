@@ -1,0 +1,109 @@
+base_config: &base_config
+  name: "{{$device-name}}"
+  identity:
+    platform-name: "Sarien"
+    frid: "Google_{{$fw-name}}"
+    sku-id: "{{$sku-id}}"
+  firmware:
+    no-firmware: True
+  power:
+    low-battery-shutdown-percent: "4.0"
+    power-supply-full-factor: "1.00"
+    suspend-to-idle: "1"
+    has-charge-controller: "1"
+    $internal-backlight-no-als-battery-brightness: "50"
+    internal-backlight-no-als-battery-brightness: "{{$internal-backlight-no-als-battery-brightness}}"
+    min-visible-backlight-level: "8400"
+    max-dark-suspend-delay-timeout-ms: "1800000"
+    disable-dark-resume: "0"
+    has-barreljack: "1"
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    is-lid-convertible: "{{$is-lid-convertible-val}}"
+    has-lid-accelerometer: "{{$has-lid-accelerometer-val}}"
+    has-base-accelerometer: "{{$has-base-accelerometer-val}}"
+    has-lid-gyroscope: "{{$has-lid-gyroscope-val}}"
+    has-lid-magnetometer: "{{$has-lid-magnetometer-val}}"
+    has-touchscreen: "{{$has-touchscreen-val}}"
+  audio:
+    main:
+      $cras_root: "/etc/cras"
+      $ucm_src_root: "{{$audio-device-name}}"
+      $ucm_root: "/usr/share/alsa/ucm"
+      $card: "HDA\ Intel\ PCH"
+      cras-config-dir: "{{$audio-device-name}}"
+      ucm-suffix: "{{$audio-device-name}}"
+      $alsa_module_src_root: "common"
+      $modprobe_root: "/etc/modprobe.d"
+      $fw_patch_root: "/lib/firmware"
+      files:
+        # ALSA UCM configuration file
+        - source: "{{$ucm_src_root}}/audio/ucm-config/{{$card}}/{{$card}}.conf"
+          destination: "{{$ucm_root}}/{{$card}}.{{ucm-suffix}}/{{$card}}.{{ucm-suffix}}.conf"
+        # ALSA UCM SectionUseCase configuration (defined in UCM conf file)
+        - source: "{{$ucm_src_root}}/audio/ucm-config/{{$card}}/HiFi.conf"
+          destination: "{{$ucm_root}}/{{$card}}.{{ucm-suffix}}/HiFi.conf"
+        # ALSA module conf file
+        - source: "{{$alsa_module_src_root}}/audio/alsa-module-config/alsa-sarien.conf"
+          destination: "{{$modprobe_root}}/alsa-sarien.conf"
+        # ALSA module patch file
+        - source: "{{$alsa_module_src_root}}/audio/alsa-module-config/sarien_alsa.fw"
+          destination: "{{$fw_patch_root}}/sarien_alsa.fw"
+        # Volume Curve configuration file
+        - source: "{{$audio-device-name}}/audio/cras-config/{{$card}}"
+          destination: "{{$cras_root}}/{{cras-config-dir}}/{{$card}}"
+        # EQ/DRC DSP configuration file
+        - source: "{{$audio-device-name}}/audio/cras-config/dsp.ini"
+          destination: "{{$cras_root}}/{{cras-config-dir}}/dsp.ini"
+  test-label: "{{$device-name}}"
+
+sarien-config: &sarien-config
+  <<: *base_config
+  $fw-name: "Sarien"
+  $is-lid-convertible-val: False
+  $has-lid-accelerometer-val: False
+  $has-base-accelerometer-val: False
+  $has-lid-gyroscope-val: False
+  $has-lid-magnetometer-val: False
+  $has-touchscreen-val: True
+  # Set default panel brightness to ~80nits on battery for 220 nits panel.
+  $internal-backlight-no-als-battery-brightness: "60"
+  $audio-device-name: "sarien"
+
+sarien-signed-config: &sarien-signed-config
+  <<: *sarien-config
+
+arcada-config: &arcada-config
+  <<: *base_config
+  $fw-name: "Arcada"
+  $is-lid-convertible-val: True
+  $has-lid-accelerometer-val: True
+  $has-base-accelerometer-val: True
+  $has-lid-gyroscope-val: True
+  $has-lid-magnetometer-val: True
+  $has-touchscreen-val: True
+  $audio-device-name: "arcada"
+
+arcada-signed-config: &arcada-signed-config
+  <<: *arcada-config
+
+chromeos:
+  devices:
+    - $device-name: "sarien"
+      skus:
+        - $sku-id: 1
+          config: *sarien-config
+    # Same model as Sarien but with signed EC image
+    - $device-name: "sarien_signed"
+      skus:
+        - $sku-id: 3
+          config: *sarien-signed-config
+    - $device-name: "arcada"
+      skus:
+        - $sku-id: 2
+          config: *arcada-config
+    # Same model as Arcada but with signed EC image
+    - $device-name: "arcada_signed"
+      skus:
+        - $sku-id: 4
+          config: *arcada-signed-config

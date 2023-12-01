@@ -1,0 +1,269 @@
+From 023b2899c0949e76e6b2a0a98670f98190f22a76 Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Fri, 8 Jul 2022 10:23:46 +0300
+Subject: [PATCH] BACKPORT: add rseq syscall definitions
+
+This is a squash + backport of the following upstream
+commits and the header was taken from the v4.18 kernel
+when the syscall was introduced, no new changes since.
+
+The backport is required because newer version of glibc
+will start probing for sys_rseq existence and call it if
+it exists. Mainjail will need to be built against these
+headers in order to allow the glibc calls.
+
+commit 05c17cedf8 ("x86: Wire up restartable sequence system call")
+commit 338035edc9 ("arm: Wire up restartable sequences system call")
+commit 409d5db498 ("arm64: rseq: Implement backend rseq calls and select HAVE_RSEQ")
+commit d7822b1e24 ("rseq: Introduce restartable sequences system call")
+---
+ arch/arm/tools/syscall.tbl             |   1 +
+ arch/arm64/include/asm/unistd32.h      |   2 +
+ arch/x86/entry/syscalls/syscall_32.tbl |   1 +
+ arch/x86/entry/syscalls/syscall_64.tbl |   1 +
+ include/linux/syscalls.h               |   3 +
+ include/uapi/asm-generic/unistd.h      |   4 +-
+ include/uapi/linux/rseq.h              | 147 +++++++++++++++++++++++++
+ 7 files changed, 158 insertions(+), 1 deletion(-)
+ create mode 100644 include/uapi/linux/rseq.h
+
+diff --git a/arch/arm/tools/syscall.tbl b/arch/arm/tools/syscall.tbl
+index 0bb0e9c6376c..fbc74b5fa3ed 100644
+--- a/arch/arm/tools/syscall.tbl
++++ b/arch/arm/tools/syscall.tbl
+@@ -412,5 +412,6 @@
+ 395	common	pkey_alloc		sys_pkey_alloc
+ 396	common	pkey_free		sys_pkey_free
+ 397	common	statx			sys_statx
+-# 398-402 unused
++398	common	rseq			sys_rseq
++# 399-402 unused
+ 403	common	clock_gettime64			sys_clock_gettime
+diff --git a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+index ef292160748c..0fdc7ef8a776 100644
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -817,7 +817,9 @@ __SYSCALL(__NR_pkey_alloc, sys_pkey_alloc)
+ __SYSCALL(__NR_pkey_free, sys_pkey_free)
+ #define __NR_statx 397
+ __SYSCALL(__NR_statx, sys_statx)
+-/* 398-402 is unused */
++#define __NR_rseq 398
++__SYSCALL(__NR_rseq, sys_rseq)
++/* 399-402 is unused */
+ #define __NR_clock_gettime64 403
+ __SYSCALL(__NR_clock_gettime64, sys_clock_gettime)
+ #define __NR_clock_settime64 404
+diff --git a/arch/x86/entry/syscalls/syscall_32.tbl b/arch/x86/entry/syscalls/syscall_32.tbl
+index 448ac2161112..0b9256526c4e 100644
+--- a/arch/x86/entry/syscalls/syscall_32.tbl
++++ b/arch/x86/entry/syscalls/syscall_32.tbl
+@@ -391,4 +391,5 @@
+ 382	i386	pkey_free		sys_pkey_free
+ 383	i386	statx			sys_statx
+ 384	i386	arch_prctl		sys_arch_prctl			compat_sys_arch_prctl
++386	i386	rseq			sys_rseq
+ # don't use numbers 387 through 392, add new calls at the end
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index 5aef183e2f85..92472653bcd3 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -339,6 +339,7 @@
+ 330	common	pkey_alloc		sys_pkey_alloc
+ 331	common	pkey_free		sys_pkey_free
+ 332	common	statx			sys_statx
++334	common	rseq			sys_rseq
+ 425	common	io_uring_setup		__x64_sys_io_uring_setup
+ 426	common	io_uring_enter		__x64_sys_io_uring_enter
+ 439	common	faccessat2		sys_faccessat2
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index a78186d826d7..2336c0985c41 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -66,6 +66,7 @@ struct old_linux_dirent;
+ struct perf_event_attr;
+ struct file_handle;
+ struct sigaltstack;
++struct rseq;
+ union bpf_attr;
+ 
+ #include <linux/types.h>
+@@ -940,5 +941,7 @@ asmlinkage long sys_pkey_alloc(unsigned long flags, unsigned long init_val);
+ asmlinkage long sys_pkey_free(int pkey);
+ asmlinkage long sys_statx(int dfd, const char __user *path, unsigned flags,
+ 			  unsigned mask, struct statx __user *buffer);
++asmlinkage long sys_rseq(struct rseq __user *rseq, uint32_t rseq_len,
++			 int flags, uint32_t sig);
+ 
+ #endif
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index 8b87de067bc7..96ef821fb044 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -732,7 +732,9 @@ __SYSCALL(__NR_pkey_alloc,    sys_pkey_alloc)
+ __SYSCALL(__NR_pkey_free,     sys_pkey_free)
+ #define __NR_statx 291
+ __SYSCALL(__NR_statx,     sys_statx)
+-/* 292 through 402 are unassigned to sync up with generic numbers, don't use */
++#define __NR_rseq 293
++__SYSCALL(__NR_rseq, sys_rseq)
++/* 294 through 402 are unassigned to sync up with generic numbers, don't use */
+ #if __BITS_PER_LONG == 32
+ #define __NR_clock_gettime64 403
+ __SYSCALL(__NR_clock_gettime64, sys_clock_gettime)
+diff --git a/include/uapi/linux/rseq.h b/include/uapi/linux/rseq.h
+new file mode 100644
+index 000000000000..9a402fdb60e9
+--- /dev/null
++++ b/include/uapi/linux/rseq.h
+@@ -0,0 +1,147 @@
++/* SPDX-License-Identifier: GPL-2.0+ WITH Linux-syscall-note */
++#ifndef _UAPI_LINUX_RSEQ_H
++#define _UAPI_LINUX_RSEQ_H
++
++/*
++ * linux/rseq.h
++ *
++ * Restartable sequences system call API
++ *
++ * Copyright (c) 2015-2018 Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
++ */
++
++#include <linux/types.h>
++#include <asm/byteorder.h>
++
++enum rseq_cpu_id_state {
++	RSEQ_CPU_ID_UNINITIALIZED		= -1,
++	RSEQ_CPU_ID_REGISTRATION_FAILED		= -2,
++};
++
++enum rseq_flags {
++	RSEQ_FLAG_UNREGISTER = (1 << 0),
++};
++
++enum rseq_cs_flags_bit {
++	RSEQ_CS_FLAG_NO_RESTART_ON_PREEMPT_BIT	= 0,
++	RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL_BIT	= 1,
++	RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE_BIT	= 2,
++};
++
++enum rseq_cs_flags {
++	RSEQ_CS_FLAG_NO_RESTART_ON_PREEMPT	=
++		(1U << RSEQ_CS_FLAG_NO_RESTART_ON_PREEMPT_BIT),
++	RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL	=
++		(1U << RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL_BIT),
++	RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE	=
++		(1U << RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE_BIT),
++};
++
++/*
++ * struct rseq_cs is aligned on 4 * 8 bytes to ensure it is always
++ * contained within a single cache-line. It is usually declared as
++ * link-time constant data.
++ */
++struct rseq_cs {
++	/* Version of this structure. */
++	__u32 version;
++	/* enum rseq_cs_flags */
++	__u32 flags;
++	__u64 start_ip;
++	/* Offset from start_ip. */
++	__u64 post_commit_offset;
++	__u64 abort_ip;
++} __attribute__((aligned(4 * sizeof(__u64))));
++
++/*
++ * struct rseq is aligned on 4 * 8 bytes to ensure it is always
++ * contained within a single cache-line.
++ *
++ * A single struct rseq per thread is allowed.
++ */
++struct rseq {
++	/*
++	 * Restartable sequences cpu_id_start field. Updated by the
++	 * kernel. Read by user-space with single-copy atomicity
++	 * semantics. This field should only be read by the thread which
++	 * registered this data structure. Aligned on 32-bit. Always
++	 * contains a value in the range of possible CPUs, although the
++	 * value may not be the actual current CPU (e.g. if rseq is not
++	 * initialized). This CPU number value should always be compared
++	 * against the value of the cpu_id field before performing a rseq
++	 * commit or returning a value read from a data structure indexed
++	 * using the cpu_id_start value.
++	 */
++	__u32 cpu_id_start;
++	/*
++	 * Restartable sequences cpu_id field. Updated by the kernel.
++	 * Read by user-space with single-copy atomicity semantics. This
++	 * field should only be read by the thread which registered this
++	 * data structure. Aligned on 32-bit. Values
++	 * RSEQ_CPU_ID_UNINITIALIZED and RSEQ_CPU_ID_REGISTRATION_FAILED
++	 * have a special semantic: the former means "rseq uninitialized",
++	 * and latter means "rseq initialization failed". This value is
++	 * meant to be read within rseq critical sections and compared
++	 * with the cpu_id_start value previously read, before performing
++	 * the commit instruction, or read and compared with the
++	 * cpu_id_start value before returning a value loaded from a data
++	 * structure indexed using the cpu_id_start value.
++	 */
++	__u32 cpu_id;
++	/*
++	 * Restartable sequences rseq_cs field.
++	 *
++	 * Contains NULL when no critical section is active for the current
++	 * thread, or holds a pointer to the currently active struct rseq_cs.
++	 *
++	 * Updated by user-space, which sets the address of the currently
++	 * active rseq_cs at the beginning of assembly instruction sequence
++	 * block, and set to NULL by the kernel when it restarts an assembly
++	 * instruction sequence block, as well as when the kernel detects that
++	 * it is preempting or delivering a signal outside of the range
++	 * targeted by the rseq_cs. Also needs to be set to NULL by user-space
++	 * before reclaiming memory that contains the targeted struct rseq_cs.
++	 *
++	 * Read and set by the kernel. Set by user-space with single-copy
++	 * atomicity semantics. This field should only be updated by the
++	 * thread which registered this data structure. Aligned on 64-bit.
++	 */
++	union {
++		__u64 ptr64;
++#ifdef __LP64__
++		__u64 ptr;
++#else
++		struct {
++#if (defined(__BYTE_ORDER) && (__BYTE_ORDER == __BIG_ENDIAN)) || defined(__BIG_ENDIAN)
++			__u32 padding;		/* Initialized to zero. */
++			__u32 ptr32;
++#else /* LITTLE */
++			__u32 ptr32;
++			__u32 padding;		/* Initialized to zero. */
++#endif /* ENDIAN */
++		} ptr;
++#endif
++	} rseq_cs;
++
++	/*
++	 * Restartable sequences flags field.
++	 *
++	 * This field should only be updated by the thread which
++	 * registered this data structure. Read by the kernel.
++	 * Mainly used for single-stepping through rseq critical sections
++	 * with debuggers.
++	 *
++	 * - RSEQ_CS_FLAG_NO_RESTART_ON_PREEMPT
++	 *     Inhibit instruction sequence block restart on preemption
++	 *     for this thread.
++	 * - RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL
++	 *     Inhibit instruction sequence block restart on signal
++	 *     delivery for this thread.
++	 * - RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE
++	 *     Inhibit instruction sequence block restart on migration for
++	 *     this thread.
++	 */
++	__u32 flags;
++} __attribute__((aligned(4 * sizeof(__u64))));
++
++#endif /* _UAPI_LINUX_RSEQ_H */
+-- 
+2.36.1
+

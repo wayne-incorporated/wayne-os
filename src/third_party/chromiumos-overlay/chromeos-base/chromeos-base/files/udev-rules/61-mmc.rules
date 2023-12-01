@@ -1,0 +1,13 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# eMMC devices queue features are not currently supported, so the IO queue
+# length is 2.
+# Leaving the IO scheduler queue length at 128 mean up to 126 IOs can be
+# sitting in the queue. An IO can sit up to 4s in the queue.
+# Instead, reduce the IO scheduler queue length to 32, putting processes that
+# read or write to sleep earlier.
+# 30 IOs are more than enough for finding merging candidates.
+ACTION=="add", SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]", SUBSYSTEMS=="mmc", \
+    ATTR{queue/nr_requests}="32"

@@ -1,0 +1,21 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/install_seccomp_policy.gni")
+
+group("seccomp") {
+  if (use.wilco) {
+    deps = [ ":diagnostics_seccomp_wilco" ]
+  }
+}
+
+install_seccomp_policy("diagnostics_seccomp_wilco") {
+  _arch = getenv("ARCH")
+  sources = [
+    "${_arch}/wilco-dtc-e2fsck-seccomp.policy",
+    "${_arch}/wilco-dtc-resize2fs-seccomp.policy",
+    "${_arch}/wilco_dtc_supportd-seccomp.policy",
+  ]
+  install_path = "/usr/share/policy"
+}

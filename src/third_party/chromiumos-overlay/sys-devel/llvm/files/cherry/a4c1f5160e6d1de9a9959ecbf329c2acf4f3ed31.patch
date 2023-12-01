@@ -1,0 +1,587 @@
+commit a4c1f5160e6d1de9a9959ecbf329c2acf4f3ed31
+Author: Kristof Beyls <kristof.beyls@arm.com>
+Date:   Fri Nov 20 16:11:17 2020 +0000
+
+    [ARM] Harden indirect calls against SLS
+    
+    To make sure that no barrier gets placed on the architectural execution
+    path, each indirect call calling the function in register rN, it gets
+    transformed to a direct call to __llvm_slsblr_thunk_mode_rN.  mode is
+    either arm or thumb, depending on the mode of where the indirect call
+    happens.
+    
+    The llvm_slsblr_thunk_mode_rN thunk contains:
+    
+    bx rN
+    <speculation barrier>
+    
+    Therefore, the indirect call gets split into 2; one direct call and one
+    indirect jump.
+    This transformation results in not inserting a speculation barrier on
+    the architectural execution path.
+    
+    The mitigation is off by default and can be enabled by the
+    harden-sls-blr subtarget feature.
+    
+    As a linker is allowed to clobber r12 on function calls, the
+    above code transformation is not correct in case a linker does so.
+    Similarly, the transformation is not correct when register lr is used.
+    Avoiding r12/lr being used is done in a follow-on patch to make
+    reviewing this code easier.
+    
+    Differential Revision: https://reviews.llvm.org/D92468
+
+diff --git a/llvm/lib/Target/ARM/ARM.h b/llvm/lib/Target/ARM/ARM.h
+index 51dfaaa96892..d8a4e4c31012 100644
+--- a/llvm/lib/Target/ARM/ARM.h
++++ b/llvm/lib/Target/ARM/ARM.h
+@@ -56,6 +56,7 @@ createARMInstructionSelector(const ARMBaseTargetMachine &TM, const ARMSubtarget
+                              const ARMRegisterBankInfo &RBI);
+ Pass *createMVEGatherScatterLoweringPass();
+ FunctionPass *createARMSLSHardeningPass();
++FunctionPass *createARMIndirectThunks();
+ 
+ void LowerARMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
+                                   ARMAsmPrinter &AP);
+diff --git a/llvm/lib/Target/ARM/ARM.td b/llvm/lib/Target/ARM/ARM.td
+index 4d4ace51e13f..8111346c74f6 100644
+--- a/llvm/lib/Target/ARM/ARM.td
++++ b/llvm/lib/Target/ARM/ARM.td
+@@ -570,6 +570,10 @@ def FeatureHardenSlsRetBr : SubtargetFeature<"harden-sls-retbr",
+   "HardenSlsRetBr", "true",
+   "Harden against straight line speculation across RETurn and BranchRegister "
+   "instructions">;
++def FeatureHardenSlsBlr : SubtargetFeature<"harden-sls-blr",
++  "HardenSlsBlr", "true",
++  "Harden against straight line speculation across indirect calls">;
++
+ 
+ 
+ //===----------------------------------------------------------------------===//
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+index 1435bba776a3..9a71b9264fcd 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+@@ -691,6 +691,8 @@ bool ARMBaseInstrInfo::isPredicable(const MachineInstr &MI) const {
+   const ARMSubtarget &ST = MF->getSubtarget<ARMSubtarget>();
+   if (ST.hardenSlsRetBr() && isIndirectControlFlowNotComingBack(MI))
+     return false;
++  if (ST.hardenSlsBlr() && isIndirectCall(MI))
++    return false;
+ 
+   if (AFI->isThumb2Function()) {
+     if (getSubtarget().restrictIT())
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+index e4e71e4925b9..47a2cf44f3a9 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+@@ -635,6 +635,51 @@ bool isIndirectBranchOpcode(int Opc) {
+   return Opc == ARM::BX || Opc == ARM::MOVPCRX || Opc == ARM::tBRIND;
+ }
+ 
++static inline bool isIndirectCall(const MachineInstr &MI) {
++  int Opc = MI.getOpcode();
++  switch (Opc) {
++    // indirect calls:
++  case ARM::BLX:
++  case ARM::BLX_pred:
++  case ARM::BX_CALL:
++  case ARM::BMOVPCRX_CALL:
++  case ARM::TCRETURNri:
++  case ARM::TAILJMPr:
++  case ARM::TAILJMPr4:
++  case ARM::tBLXr:
++  case ARM::tBLXNSr:
++  case ARM::tBLXNS_CALL:
++  case ARM::tBX_CALL:
++  case ARM::tTAILJMPr:
++    assert(MI.isCall(MachineInstr::IgnoreBundle));
++    return true;
++    // direct calls:
++  case ARM::BL:
++  case ARM::BL_pred:
++  case ARM::BMOVPCB_CALL:
++  case ARM::BL_PUSHLR:
++  case ARM::BLXi:
++  case ARM::TCRETURNdi:
++  case ARM::TAILJMPd:
++  case ARM::SVC:
++  case ARM::HVC:
++  case ARM::TPsoft:
++  case ARM::tTAILJMPd:
++  case ARM::t2SMC:
++  case ARM::t2HVC:
++  case ARM::tBL:
++  case ARM::tBLXi:
++  case ARM::tBL_PUSHLR:
++  case ARM::tTAILJMPdND:
++  case ARM::tSVC:
++  case ARM::tTPsoft:
++    assert(MI.isCall(MachineInstr::IgnoreBundle));
++    return false;
++  }
++  assert(!MI.isCall(MachineInstr::IgnoreBundle));
++  return false;
++}
++
+ static inline bool isIndirectControlFlowNotComingBack(const MachineInstr &MI) {
+   int opc = MI.getOpcode();
+   return MI.isReturn() || isIndirectBranchOpcode(MI.getOpcode()) ||
+diff --git a/llvm/lib/Target/ARM/ARMSLSHardening.cpp b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+index 3f6fa8a47d6a..e6d40d41653a 100644
+--- a/llvm/lib/Target/ARM/ARMSLSHardening.cpp
++++ b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+@@ -14,6 +14,7 @@
+ #include "ARM.h"
+ #include "ARMInstrInfo.h"
+ #include "ARMSubtarget.h"
++#include "llvm/CodeGen/IndirectThunks.h"
+ #include "llvm/CodeGen/MachineBasicBlock.h"
+ #include "llvm/CodeGen/MachineFunction.h"
+ #include "llvm/CodeGen/MachineFunctionPass.h"
+@@ -53,6 +54,10 @@ public:
+ 
+ private:
+   bool hardenReturnsAndBRs(MachineBasicBlock &MBB) const;
++  bool hardenIndirectCalls(MachineBasicBlock &MBB) const;
++  MachineBasicBlock &
++  ConvertIndirectCallToIndirectJump(MachineBasicBlock &MBB,
++                                    MachineBasicBlock::iterator) const;
+ };
+ 
+ } // end anonymous namespace
+@@ -91,8 +96,10 @@ bool ARMSLSHardening::runOnMachineFunction(MachineFunction &MF) {
+   TII = MF.getSubtarget().getInstrInfo();
+ 
+   bool Modified = false;
+-  for (auto &MBB : MF)
++  for (auto &MBB : MF) {
+     Modified |= hardenReturnsAndBRs(MBB);
++    Modified |= hardenIndirectCalls(MBB);
++  }
+ 
+   return Modified;
+ }
+@@ -117,6 +124,298 @@ bool ARMSLSHardening::hardenReturnsAndBRs(MachineBasicBlock &MBB) const {
+   return Modified;
+ }
+ 
++static const char SLSBLRNamePrefix[] = "__llvm_slsblr_thunk_";
++
++static const struct ThunkNameRegMode {
++  const char* Name;
++  Register Reg;
++  bool isThumb;
++} SLSBLRThunks[] = {
++    {"__llvm_slsblr_thunk_arm_r0", ARM::R0, false},
++    {"__llvm_slsblr_thunk_arm_r1", ARM::R1, false},
++    {"__llvm_slsblr_thunk_arm_r2", ARM::R2, false},
++    {"__llvm_slsblr_thunk_arm_r3", ARM::R3, false},
++    {"__llvm_slsblr_thunk_arm_r4", ARM::R4, false},
++    {"__llvm_slsblr_thunk_arm_r5", ARM::R5, false},
++    {"__llvm_slsblr_thunk_arm_r6", ARM::R6, false},
++    {"__llvm_slsblr_thunk_arm_r7", ARM::R7, false},
++    {"__llvm_slsblr_thunk_arm_r8", ARM::R8, false},
++    {"__llvm_slsblr_thunk_arm_r9", ARM::R9, false},
++    {"__llvm_slsblr_thunk_arm_r10", ARM::R10, false},
++    {"__llvm_slsblr_thunk_arm_r11", ARM::R11, false},
++    {"__llvm_slsblr_thunk_arm_r12", ARM::R12, false},
++    {"__llvm_slsblr_thunk_arm_sp", ARM::SP, false},
++    {"__llvm_slsblr_thunk_arm_lr", ARM::LR, false},
++    {"__llvm_slsblr_thunk_arm_pc", ARM::PC, false},
++    {"__llvm_slsblr_thunk_thumb_r0", ARM::R0, true},
++    {"__llvm_slsblr_thunk_thumb_r1", ARM::R1, true},
++    {"__llvm_slsblr_thunk_thumb_r2", ARM::R2, true},
++    {"__llvm_slsblr_thunk_thumb_r3", ARM::R3, true},
++    {"__llvm_slsblr_thunk_thumb_r4", ARM::R4, true},
++    {"__llvm_slsblr_thunk_thumb_r5", ARM::R5, true},
++    {"__llvm_slsblr_thunk_thumb_r6", ARM::R6, true},
++    {"__llvm_slsblr_thunk_thumb_r7", ARM::R7, true},
++    {"__llvm_slsblr_thunk_thumb_r8", ARM::R8, true},
++    {"__llvm_slsblr_thunk_thumb_r9", ARM::R9, true},
++    {"__llvm_slsblr_thunk_thumb_r10", ARM::R10, true},
++    {"__llvm_slsblr_thunk_thumb_r11", ARM::R11, true},
++    {"__llvm_slsblr_thunk_thumb_r12", ARM::R12, true},
++    {"__llvm_slsblr_thunk_thumb_sp", ARM::SP, true},
++    {"__llvm_slsblr_thunk_thumb_lr", ARM::LR, true},
++    {"__llvm_slsblr_thunk_thumb_pc", ARM::PC, true},
++};
++
++namespace {
++struct SLSBLRThunkInserter : ThunkInserter<SLSBLRThunkInserter> {
++  const char *getThunkPrefix() { return SLSBLRNamePrefix; }
++  bool mayUseThunk(const MachineFunction &MF) {
++    // FIXME: This could also check if there are any indirect calls in the
++    // function to more accurately reflect if a thunk will be needed.
++    return MF.getSubtarget<ARMSubtarget>().hardenSlsBlr();
++  }
++  void insertThunks(MachineModuleInfo &MMI);
++  void populateThunk(MachineFunction &MF);
++};
++} // namespace
++
++void SLSBLRThunkInserter::insertThunks(MachineModuleInfo &MMI) {
++  // FIXME: It probably would be possible to filter which thunks to produce
++  // based on which registers are actually used in indirect calls in this
++  // function. But would that be a worthwhile optimization?
++  for (auto T : SLSBLRThunks)
++    createThunkFunction(MMI, T.Name);
++}
++
++void SLSBLRThunkInserter::populateThunk(MachineFunction &MF) {
++  // FIXME: How to better communicate Register number, rather than through
++  // name and lookup table?
++  assert(MF.getName().startswith(getThunkPrefix()));
++  auto ThunkIt = llvm::find_if(
++      SLSBLRThunks, [&MF](auto T) { return T.Name == MF.getName(); });
++  assert(ThunkIt != std::end(SLSBLRThunks));
++  Register ThunkReg = ThunkIt->Reg;
++  bool isThumb = ThunkIt->isThumb;
++
++  const TargetInstrInfo *TII = MF.getSubtarget<ARMSubtarget>().getInstrInfo();
++  MachineBasicBlock *Entry = &MF.front();
++  Entry->clear();
++
++  //  These thunks need to consist of the following instructions:
++  //  __llvm_slsblr_thunk_(arm/thumb)_rN:
++  //      bx  rN
++  //      barrierInsts
++  Entry->addLiveIn(ThunkReg);
++  if (isThumb)
++    BuildMI(Entry, DebugLoc(), TII->get(ARM::tBX))
++        .addReg(ThunkReg)
++        .add(predOps(ARMCC::AL));
++  else
++    BuildMI(Entry, DebugLoc(), TII->get(ARM::BX))
++        .addReg(ThunkReg);
++
++  // Make sure the thunks do not make use of the SB extension in case there is
++  // a function somewhere that will call to it that for some reason disabled
++  // the SB extension locally on that function, even though it's enabled for
++  // the module otherwise. Therefore set AlwaysUseISBSDB to true.
++  insertSpeculationBarrier(&MF.getSubtarget<ARMSubtarget>(), *Entry,
++                           Entry->end(), DebugLoc(), true /*AlwaysUseISBDSB*/);
++}
++
++MachineBasicBlock &ARMSLSHardening::ConvertIndirectCallToIndirectJump(
++    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI) const {
++  // Transform an indirect call to an indirect jump as follows:
++  // Before:
++  //   |-----------------------------|
++  //   |      ...                    |
++  //   |  instI                      |
++  //   |  BLX rN                     |
++  //   |  instJ                      |
++  //   |      ...                    |
++  //   |-----------------------------|
++  //
++  // After:
++  //   |----------   -------------------------|
++  //   |      ...                             |
++  //   |  instI                               |
++  //   |  *call* __llvm_slsblr_thunk_mode_xN  |
++  //   |  instJ                               |
++  //   |      ...                             |
++  //   |--------------------------------------|
++  //
++  //   __llvm_slsblr_thunk_mode_xN:
++  //   |-----------------------------|
++  //   |  BX rN                      |
++  //   |  barrierInsts               |
++  //   |-----------------------------|
++  //
++  // The __llvm_slsblr_thunk_mode_xN thunks are created by the
++  // SLSBLRThunkInserter.
++  // This function merely needs to transform an indirect call to a direct call
++  // to __llvm_slsblr_thunk_xN.
++  //
++  // Since linkers are allowed to clobber R12 on function calls, the above
++  // mitigation only works if the original indirect call instruction was not
++  // using R12. Code generation before must make sure that no indirect call
++  // using R12 was produced if the mitigation is enabled.
++  // Also, the transformation is incorrect if the indirect call uses LR, so
++  // also have to avoid that.
++  // FIXME: that will be done in a follow-on patch.
++
++  MachineInstr &IndirectCall = *MBBI;
++  assert(isIndirectCall(IndirectCall) && !IndirectCall.isReturn());
++  int RegOpIdxOnIndirectCall = -1;
++  bool isThumb;
++  switch (IndirectCall.getOpcode()) {
++  case ARM::BLX:      // !isThumb2
++    isThumb = false;
++    RegOpIdxOnIndirectCall = 0;
++    break;
++  case ARM::tBLXr:      // isThumb2
++    isThumb = true;
++    RegOpIdxOnIndirectCall = 2;
++    break;
++  default:
++    llvm_unreachable("unhandled Indirect Call");
++  }
++
++  Register Reg = IndirectCall.getOperand(RegOpIdxOnIndirectCall).getReg();
++  assert(Reg != ARM::R12 && Reg != ARM::LR);
++  bool RegIsKilled = IndirectCall.getOperand(RegOpIdxOnIndirectCall).isKill();
++
++  DebugLoc DL = IndirectCall.getDebugLoc();
++
++  MachineFunction &MF = *MBBI->getMF();
++  auto ThunkIt = llvm::find_if(SLSBLRThunks, [Reg, isThumb](auto T) {
++    return T.Reg == Reg && T.isThumb == isThumb;
++  });
++  assert(ThunkIt != std::end(SLSBLRThunks));
++  Module *M = MF.getFunction().getParent();
++  const GlobalValue *GV = cast<GlobalValue>(M->getNamedValue(ThunkIt->Name));
++
++  MachineInstr *BL =
++      isThumb ? BuildMI(MBB, MBBI, DL, TII->get(ARM::tBL))
++                    .addImm(IndirectCall.getOperand(0).getImm())
++                    .addReg(IndirectCall.getOperand(1).getReg())
++                    .addGlobalAddress(GV)
++              : BuildMI(MBB, MBBI, DL, TII->get(ARM::BL)).addGlobalAddress(GV);
++
++  // Now copy the implicit operands from IndirectCall to BL and copy other
++  // necessary info.
++  // However, both IndirectCall and BL instructions implictly use SP and
++  // implicitly define LR. Blindly copying implicit operands would result in SP
++  // and LR operands to be present multiple times. While this may not be too
++  // much of an issue, let's avoid that for cleanliness, by removing those
++  // implicit operands from the BL created above before we copy over all
++  // implicit operands from the IndirectCall.
++  int ImpLROpIdx = -1;
++  int ImpSPOpIdx = -1;
++  for (unsigned OpIdx = BL->getNumExplicitOperands();
++       OpIdx < BL->getNumOperands(); OpIdx++) {
++    MachineOperand Op = BL->getOperand(OpIdx);
++    if (!Op.isReg())
++      continue;
++    if (Op.getReg() == ARM::LR && Op.isDef())
++      ImpLROpIdx = OpIdx;
++    if (Op.getReg() == ARM::SP && !Op.isDef())
++      ImpSPOpIdx = OpIdx;
++  }
++  assert(ImpLROpIdx != -1);
++  assert(ImpSPOpIdx != -1);
++  int FirstOpIdxToRemove = std::max(ImpLROpIdx, ImpSPOpIdx);
++  int SecondOpIdxToRemove = std::min(ImpLROpIdx, ImpSPOpIdx);
++  BL->RemoveOperand(FirstOpIdxToRemove);
++  BL->RemoveOperand(SecondOpIdxToRemove);
++  // Now copy over the implicit operands from the original IndirectCall
++  BL->copyImplicitOps(MF, IndirectCall);
++  MF.moveCallSiteInfo(&IndirectCall, BL);
++  // Also add the register called in the IndirectCall as being used in the
++  // called thunk.
++  BL->addOperand(MachineOperand::CreateReg(Reg, false /*isDef*/, true /*isImp*/,
++                                           RegIsKilled /*isKill*/));
++  // Remove IndirectCallinstruction
++  MBB.erase(MBBI);
++  return MBB;
++}
++
++bool ARMSLSHardening::hardenIndirectCalls(MachineBasicBlock &MBB) const {
++  if (!ST->hardenSlsBlr())
++    return false;
++  bool Modified = false;
++  MachineBasicBlock::iterator MBBI = MBB.begin(), E = MBB.end();
++  MachineBasicBlock::iterator NextMBBI;
++  for (; MBBI != E; MBBI = NextMBBI) {
++    MachineInstr &MI = *MBBI;
++    NextMBBI = std::next(MBBI);
++    // Tail calls are both indirect calls and "returns".
++    // They are also indirect jumps, so should be handled by sls-harden-retbr,
++    // rather than sls-harden-blr.
++    if (isIndirectCall(MI) && !MI.isReturn()) {
++      ConvertIndirectCallToIndirectJump(MBB, MBBI);
++      Modified = true;
++    }
++  }
++  return Modified;
++}
++
++
++
+ FunctionPass *llvm::createARMSLSHardeningPass() {
+   return new ARMSLSHardening();
+ }
++
++namespace {
++class ARMIndirectThunks : public MachineFunctionPass {
++public:
++  static char ID;
++
++  ARMIndirectThunks() : MachineFunctionPass(ID) {}
++
++  StringRef getPassName() const override { return "ARM Indirect Thunks"; }
++
++  bool doInitialization(Module &M) override;
++  bool runOnMachineFunction(MachineFunction &MF) override;
++
++  void getAnalysisUsage(AnalysisUsage &AU) const override {
++    MachineFunctionPass::getAnalysisUsage(AU);
++    AU.addRequired<MachineModuleInfoWrapperPass>();
++    AU.addPreserved<MachineModuleInfoWrapperPass>();
++  }
++
++private:
++  std::tuple<SLSBLRThunkInserter> TIs;
++
++  // FIXME: When LLVM moves to C++17, these can become folds
++  template <typename... ThunkInserterT>
++  static void initTIs(Module &M,
++                      std::tuple<ThunkInserterT...> &ThunkInserters) {
++    (void)std::initializer_list<int>{
++        (std::get<ThunkInserterT>(ThunkInserters).init(M), 0)...};
++  }
++  template <typename... ThunkInserterT>
++  static bool runTIs(MachineModuleInfo &MMI, MachineFunction &MF,
++                     std::tuple<ThunkInserterT...> &ThunkInserters) {
++    bool Modified = false;
++    (void)std::initializer_list<int>{
++        Modified |= std::get<ThunkInserterT>(ThunkInserters).run(MMI, MF)...};
++    return Modified;
++  }
++};
++
++} // end anonymous namespace
++
++char ARMIndirectThunks::ID = 0;
++
++FunctionPass *llvm::createARMIndirectThunks() {
++  return new ARMIndirectThunks();
++}
++
++bool ARMIndirectThunks::doInitialization(Module &M) {
++  initTIs(M, TIs);
++  return false;
++}
++
++bool ARMIndirectThunks::runOnMachineFunction(MachineFunction &MF) {
++  LLVM_DEBUG(dbgs() << getPassName() << '\n');
++  auto &MMI = getAnalysis<MachineModuleInfoWrapperPass>().getMMI();
++  return runTIs(MMI, MF, TIs);
++}
+diff --git a/llvm/lib/Target/ARM/ARMSubtarget.h b/llvm/lib/Target/ARM/ARMSubtarget.h
+index bfde47290dcd..778d3ba22a2f 100644
+--- a/llvm/lib/Target/ARM/ARMSubtarget.h
++++ b/llvm/lib/Target/ARM/ARMSubtarget.h
+@@ -468,6 +468,9 @@ protected:
+   /// Branches.
+   bool HardenSlsRetBr = false;
+ 
++  /// Harden against Straight Line Speculation for indirect calls.
++  bool HardenSlsBlr = false;
++
+   /// stackAlignment - The minimum alignment known to hold of the stack frame on
+   /// entry to the function and which must be maintained by every function.
+   Align stackAlignment = Align(4);
+@@ -911,6 +914,7 @@ public:
+   unsigned getGPRAllocationOrder(const MachineFunction &MF) const;
+ 
+   bool hardenSlsRetBr() const { return HardenSlsRetBr; }
++  bool hardenSlsBlr() const { return HardenSlsBlr; }
+ };
+ 
+ } // end namespace llvm
+diff --git a/llvm/lib/Target/ARM/ARMTargetMachine.cpp b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+index 2e20070833e6..269dc08af13c 100644
+--- a/llvm/lib/Target/ARM/ARMTargetMachine.cpp
++++ b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+@@ -540,6 +540,7 @@ void ARMPassConfig::addPreSched2() {
+     addPass(&PostRASchedulerID);
+   }
+ 
++  addPass(createARMIndirectThunks());
+   addPass(createARMSLSHardeningPass());
+ }
+ 
+diff --git a/llvm/test/CodeGen/ARM/O3-pipeline.ll b/llvm/test/CodeGen/ARM/O3-pipeline.ll
+index 6390e42570d7..6efb9209fd4f 100644
+--- a/llvm/test/CodeGen/ARM/O3-pipeline.ll
++++ b/llvm/test/CodeGen/ARM/O3-pipeline.ll
+@@ -159,8 +159,11 @@
+ ; CHECK-NEXT:      Machine Natural Loop Construction
+ ; CHECK-NEXT:      PostRA Machine Instruction Scheduler
+ ; CHECK-NEXT:      Post RA top-down list latency scheduler
++; CHECK-NEXT:      ARM Indirect Thunks
+ ; CHECK-NEXT:      ARM sls hardening pass
+ ; CHECK-NEXT:      Analyze Machine Code For Garbage Collection
++; CHECK-NEXT:      MachineDominator Tree Construction
++; CHECK-NEXT:      Machine Natural Loop Construction
+ ; CHECK-NEXT:      Machine Block Frequency Analysis
+ ; CHECK-NEXT:      MachinePostDominator Tree Construction
+ ; CHECK-NEXT:      Branch Probability Basic Block Placement
+diff --git a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+index 14b17e62c930..a2166e4520cb 100644
+--- a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
++++ b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+@@ -1,13 +1,17 @@
+-; RUN: llc -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB,ISBDSBDAGISEL -dump-input-context=100
+-; RUN: llc -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB,ISBDSBDAGISEL -dump-input-context=100
+-; RUN: llc -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB,SBDAGISEL -dump-input-context=100
+-; RUN: llc -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB,SBDAGISEL -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB,ISBDSBDAGISEL -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB,ISBDSBDAGISEL -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB,SBDAGISEL -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB,SBDAGISEL -dump-input-context=100
+ ; RUN: llc -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,NOHARDEN,NOHARDENARM -dump-input-context=100
+ ; RUN: llc -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,NOHARDEN,NOHARDENTHUMB
+-; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB
+-; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB
+-; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB
+-; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB
++; RUN: llc -fast-isel -mattr=harden-sls-retbr -mattr=harden-sls-blr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB
+ 
+ ; Function Attrs: norecurse nounwind readnone
+ define dso_local i32 @double_return(i32 %a, i32 %b) local_unnamed_addr {
+@@ -149,3 +153,43 @@ sw.epilog:                                        ; preds = %sw.bb5, %entry
+ ; ISBDSB-NEXT: isb
+ ; SB-NEXT:     {{ sb$}}
+ }
++
++define dso_local i32 @indirect_call(
++i32 (...)* nocapture %f1, i32 (...)* nocapture %f2) {
++entry:
++; CHECK-LABEL: indirect_call:
++  %callee.knr.cast = bitcast i32 (...)* %f1 to i32 ()*
++  %call = tail call i32 %callee.knr.cast()
++; HARDENARM: bl {{__llvm_slsblr_thunk_arm_r[0-9]+$}}
++; HARDENTHUMB: bl {{__llvm_slsblr_thunk_thumb_r[0-9]+$}}
++  %callee.knr.cast1 = bitcast i32 (...)* %f2 to i32 ()*
++  %call2 = tail call i32 %callee.knr.cast1()
++; HARDENARM: bl {{__llvm_slsblr_thunk_arm_r[0-9]+$}}
++; HARDENTHUMB: bl {{__llvm_slsblr_thunk_thumb_r[0-9]+$}}
++  %add = add nsw i32 %call2, %call
++  ret i32 %add
++; CHECK: .Lfunc_end
++}
++
++; verify calling through a function pointer.
++@a = dso_local local_unnamed_addr global i32 (...)* null, align 8
++@b = dso_local local_unnamed_addr global i32 0, align 4
++define dso_local void @indirect_call_global() local_unnamed_addr {
++; CHECK-LABEL: indirect_call_global:
++entry:
++  %0 = load i32 ()*, i32 ()** bitcast (i32 (...)** @a to i32 ()**), align 8
++  %call = tail call i32 %0()  nounwind
++; HARDENARM: bl {{__llvm_slsblr_thunk_arm_r[0-9]+$}}
++; HARDENTHUMB: bl {{__llvm_slsblr_thunk_thumb_r[0-9]+$}}
++  store i32 %call, i32* @b, align 4
++  ret void
++; CHECK: .Lfunc_end
++}
++
++; HARDEN-label: __llvm_slsblr_thunk_(arm|thumb)_r5:
++; HARDEN:    bx r5
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     dsb sy
++; SB-NEXT:     isb
++; HARDEN-NEXT: .Lfunc_end

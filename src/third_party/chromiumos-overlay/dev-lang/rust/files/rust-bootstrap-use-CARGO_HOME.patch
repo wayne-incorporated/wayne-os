@@ -1,0 +1,45 @@
+See these links for attempts to get something like this change upstream,
+but it's not entirely clear that this is the right general solution.
+
+https://github.com/rust-lang/rust/pull/106017
+
+https://github.com/rust-lang/rust/issues/106019
+
+From f2b35ea1a09284cf30e75759a8727a3f84c352c0 Mon Sep 17 00:00:00 2001
+From: Michael Benfield <mbenfield@google.com>
+Date: Mon, 19 Dec 2022 20:30:19 +0000
+Subject: [PATCH] bootstrap: use CARGO_HOME
+
+---
+ src/bootstrap/bootstrap.py | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/bootstrap/bootstrap.py b/src/bootstrap/bootstrap.py
+index 2d5018d934e..4d202f969e3 100644
+--- a/src/bootstrap/bootstrap.py
++++ b/src/bootstrap/bootstrap.py
+@@ -811,7 +811,11 @@ class RustBuild(object):
+                 print('      and so in order to preserve your $HOME this will now')
+                 print('      use vendored sources by default.')
+ 
+-        cargo_dir = os.path.join(self.rust_root, '.cargo')
++        use_cargo_home_env = 'CARGO_HOME' in os.environ
++        if use_cargo_home_env:
++            cargo_dir = os.environ['CARGO_HOME']
++        else:
++            cargo_dir = os.path.join(self.rust_root, '.cargo')
+         if self.use_vendored_sources:
+             vendor_dir = os.path.join(self.rust_root, 'vendor')
+             if not os.path.exists(vendor_dir):
+@@ -825,7 +829,7 @@ class RustBuild(object):
+                 raise Exception("{} not found".format(vendor_dir))
+ 
+             if not os.path.exists(cargo_dir):
+-                print('error: vendoring required, but .cargo/config does not exist.')
++                print('error: vendoring required, but {}/config does not exist'.format(cargo_dir))
+                 raise Exception("{} not found".format(cargo_dir))
+         else:
+             if os.path.exists(cargo_dir):
+-- 
+2.37.3
+

@@ -1,0 +1,22 @@
+diff --git a/retrace/glws_waffle.cpp b/retrace/glws_waffle.cpp
+index 6b34eb04..633381ce 100644
+--- a/retrace/glws_waffle.cpp
++++ b/retrace/glws_waffle.cpp
+@@ -130,7 +130,7 @@ init(void)
+     waffle_platform = WAFFLE_PLATFORM_CGL
+ #elif defined(_WIN32)
+     waffle_platform = WAFFLE_PLATFORM_WGL
+-#else
++#elif defined(HAVE_X11)
+     waffle_platform = WAFFLE_PLATFORM_GLX;
+ 
+     const char *waffle_platform_name = getenv("WAFFLE_PLATFORM");
+@@ -148,6 +148,8 @@ init(void)
+             exit(1);
+         }
+     }
++#else
++    waffle_platform = WAFFLE_PLATFORM_NULL;
+ #endif
+ 
+     Attributes<int32_t> waffle_init_attrib_list;

@@ -1,0 +1,48 @@
+From 609375563c02a5ba6d48e5b165224a3ad4b3ef4a Mon Sep 17 00:00:00 2001
+From: Bertrand SIMONNET <bsimonnet@google.com>
+Date: Fri, 18 Dec 2015 16:15:25 -0800
+Subject: [PATCH] dbus: Raise SIGTERM when the connection drops.
+
+Instead of exiting directly when a client notices that the connection
+got dropped, raise a SIGTERM signal to allow the client to clean up and
+exit cleanly.
+
+Bug: 26267381
+Test: stop dbus. Clients exit cleanly.
+
+Change-Id: I7e1faf1aa8b761b1b05dfde82a48882f61124acb
+---
+ dbus/dbus-connection.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/dbus/dbus-connection.c b/dbus/dbus-connection.c
+index c525b6dc..252629b3 100644
+--- a/dbus/dbus-connection.c
++++ b/dbus/dbus-connection.c
+@@ -22,6 +22,7 @@
+  */
+ 
+ #include <config.h>
++#include <signal.h>
+ #include "dbus-shared.h"
+ #include "dbus-connection.h"
+ #include "dbus-list.h"
+@@ -4331,8 +4332,13 @@ _dbus_connection_update_dispatch_status_and_unlock (DBusConnection    *connectio
+           CONNECTION_UNLOCK (connection);            
+           
+           _dbus_verbose ("Exiting on Disconnected signal\n");
+-          _dbus_exit (1);
+-          _dbus_assert_not_reached ("Call to exit() returned");
++          if (raise (SIGTERM) != 0)
++            {
++              _dbus_verbose ("Failed to raise a SIGTERM signal. Exiting\n");
++              _dbus_exit (1);
++              _dbus_assert_not_reached ("Call to exit() returned");
++            }
++          return;
+         }
+     }
+   
+-- 
+2.30.1
+

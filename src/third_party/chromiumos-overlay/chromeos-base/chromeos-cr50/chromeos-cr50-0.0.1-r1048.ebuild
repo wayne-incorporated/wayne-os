@@ -1,0 +1,1 @@
+chromeos-cr50-0.0.1.ebuild

@@ -1,0 +1,67 @@
+commit d893278bba01b0e1209e8b8accbdd5cfa75a0932
+Author: Petar Avramovic <Petar.Avramovic@amd.com>
+Date:   Thu Aug 6 14:26:10 2020 +0200
+
+    [GlobalISel][InlineAsm] Fix matching input constraint to physreg
+    
+    Add given input and mark it as tied.
+    Doesn't create additional copy compared to
+    matching input constraint to virtual register.
+    
+    Differential Revision: https://reviews.llvm.org/D85122
+
+diff --git a/llvm/lib/CodeGen/GlobalISel/InlineAsmLowering.cpp b/llvm/lib/CodeGen/GlobalISel/InlineAsmLowering.cpp
+index 7acf9c84323..bb4d41cfd69 100644
+--- a/llvm/lib/CodeGen/GlobalISel/InlineAsmLowering.cpp
++++ b/llvm/lib/CodeGen/GlobalISel/InlineAsmLowering.cpp
+@@ -455,19 +455,23 @@ bool InlineAsmLowering::lowerInlineAsm(
+         unsigned DefRegIdx = InstFlagIdx + 1;
+         Register Def = Inst->getOperand(DefRegIdx).getReg();
+ 
+-        // Copy input to new vreg with same reg class as Def
+-        const TargetRegisterClass *RC = MRI->getRegClass(Def);
+         ArrayRef<Register> SrcRegs = GetOrCreateVRegs(*OpInfo.CallOperandVal);
+         assert(SrcRegs.size() == 1 && "Single register is expected here");
+-        Register Tmp = MRI->createVirtualRegister(RC);
+-        if (!buildAnyextOrCopy(Tmp, SrcRegs[0], MIRBuilder))
+-          return false;
+ 
+-        // Add Flag and input register operand (Tmp) to Inst. Tie Tmp to Def.
++        // When Def is physreg: use given input.
++        Register In = SrcRegs[0];
++        // When Def is vreg: copy input to new vreg with same reg class as Def.
++        if (Def.isVirtual()) {
++          In = MRI->createVirtualRegister(MRI->getRegClass(Def));
++          if (!buildAnyextOrCopy(In, SrcRegs[0], MIRBuilder))
++            return false;
++        }
++
++        // Add Flag and input register operand (In) to Inst. Tie In to Def.
+         unsigned UseFlag = InlineAsm::getFlagWord(InlineAsm::Kind_RegUse, 1);
+         unsigned Flag = InlineAsm::getFlagWordForMatchingOp(UseFlag, DefIdx);
+         Inst.addImm(Flag);
+-        Inst.addReg(Tmp);
++        Inst.addReg(In);
+         Inst->tieOperands(DefRegIdx, Inst->getNumOperands() - 1);
+         break;
+       }
+diff --git a/llvm/test/CodeGen/AArch64/GlobalISel/irtranslator-inline-asm.ll b/llvm/test/CodeGen/AArch64/GlobalISel/irtranslator-inline-asm.ll
+index b7b2f0c9814..341ee743eda 100644
+--- a/llvm/test/CodeGen/AArch64/GlobalISel/irtranslator-inline-asm.ll
++++ b/llvm/test/CodeGen/AArch64/GlobalISel/irtranslator-inline-asm.ll
+@@ -243,3 +243,15 @@ define i16 @test_anyext_input_with_matching_constraint() {
+   %1 = call i16 asm sideeffect "", "=r,0"(i16 1)
+   ret i16 %1
+ }
++
++define i64 @test_input_with_matching_constraint_to_physical_register() {
++  ; CHECK-LABEL: name: test_input_with_matching_constraint_to_physical_register
++  ; CHECK: bb.1 (%ir-block.0):
++  ; CHECK:   [[C:%[0-9]+]]:_(s64) = G_CONSTANT i64 0
++  ; CHECK:   INLINEASM &"", 0 /* attdialect */, 10 /* regdef */, implicit-def $x2, 2147483657 /* reguse tiedto:$0 */, [[C]](tied-def 3)(s64)
++  ; CHECK:   [[COPY:%[0-9]+]]:_(s64) = COPY $x2
++  ; CHECK:   $x0 = COPY [[COPY]](s64)
++  ; CHECK:   RET_ReallyLR implicit $x0
++  %1 = tail call i64 asm "", "={x2},0"(i64 0)
++  ret i64 %1
++}

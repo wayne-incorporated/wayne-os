@@ -1,0 +1,62 @@
+From: Pranav Batra <batrapranav@chromium.org>
+
+Abort the print job if cupsBytesPerLine is greater than the size of the input
+buffer or cupsWidth for the first page is smaller than cupsWidth of a
+subsequent page. Also zero-initialize m_pPrinterBuffer.
+
+--- a/prnt/hpcups/HPCupsFilter.cpp
++++ b/prnt/hpcups/HPCupsFilter.cpp
+@@ -510,8 +510,6 @@ DRIVER_ERROR HPCupsFilter::startPage (cups_page_header2_t *cups_header)
+         dbglog("HPCUPS: returning NO_ERROR from startPage\n");
+     }
+ 
+-    m_pPrinterBuffer = new BYTE[cups_header->cupsWidth * 4 + 32];
+-
+     return NO_ERROR;
+ }
+ 
+@@ -673,8 +671,31 @@ int HPCupsFilter::processRasterData(cups_raster_t *cups_raster)
+ 		imageProcessor = imageProcessorCreate();
+ 	    }
+     #endif
++
++    unsigned buffer_size = 0;
++    unsigned cups_width = 0;
+     while (cupsRasterReadHeader2(cups_raster, &cups_header))
+     {
++        if (buffer_size == 0) {
++            buffer_size = cups_header.cupsWidth * 4 + 32;
++            cups_width = cups_header.cupsWidth;
++        }
++
++        // cupsBytesPerLine cannot be larger than the buffer size.
++        if (cups_header.cupsBytesPerLine > buffer_size) {
++            dbglog("ERROR: cupsBytesPerLine (%d) is larger than buffer size (%d)\n",
++                   cups_header.cupsBytesPerLine, buffer_size);
++            return SYSTEM_ERROR;
++        }
++
++        // cupsWidth cannot increase in size since the buffer allocated
++        // for the first page is reused for subsequent pages.
++        if (cups_header.cupsWidth  > cups_width) {
++            dbglog("ERROR: cupsWidth %d for page %d is larger than %d\n",
++                   cups_header.cupsWidth, current_page_number + 1, cups_width);
++            return SYSTEM_ERROR;
++        }
++
+        #ifndef DISABLE_IMAGEPROCESSOR 
+ 		   if(strncmp(m_JA.printer_platform, "ljzjstream",10) == 0){
+ 		    result = imageProcessorStartPage(imageProcessor, &cups_header);
+@@ -691,6 +712,12 @@ int HPCupsFilter::processRasterData(cups_raster_t *cups_raster)
+                 return JOB_CANCELED;
+             }
+ 
++            if (m_pPrinterBuffer) {
++                abort();
++            }
++
++            m_pPrinterBuffer = new BYTE[buffer_size]();
++
+             if (m_JA.pre_process_raster) {
+ 		    	// CC ToDo: Why pSwapedPagesFileName should be sent as a parameter? 
+                   	// Remove if not required to send it as parameter

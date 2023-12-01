@@ -1,0 +1,13 @@
+auth sufficient pam_exec.so \
+  quiet seteuid \
+  /usr/bin/awk -F: [ \
+    BEGIN { ret = 1 } \
+    $1 == ENVIRON["PAM_USER"\] && $2 == "x" { ret = 0 } \
+    END { exit ret }] /etc/passwd
+
+account sufficient pam_exec.so \
+  quiet seteuid \
+  /usr/bin/awk -F: [ \
+    BEGIN { ret = 1 } \
+    $1 == ENVIRON["PAM_USER"\] && $2 == "x" { ret = 0 } \
+    END { exit ret }] /etc/passwd

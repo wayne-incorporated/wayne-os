@@ -1,0 +1,33 @@
+commit 269bc3f5df6c3b75de515a48063c6941ef8fbbe6
+Author: Richard Smith <richard@metafoo.co.uk>
+Date:   Wed Aug 12 12:24:08 2020 -0700
+
+    PR47138: Don't crash if the preferred alignment of an invalid record
+    type is requested.
+
+diff --git a/clang/lib/AST/ASTContext.cpp b/clang/lib/AST/ASTContext.cpp
+index 4d708d57cab..544bbb5b074 100644
+--- a/clang/lib/AST/ASTContext.cpp
++++ b/clang/lib/AST/ASTContext.cpp
+@@ -2457,7 +2457,7 @@ unsigned ASTContext::getPreferredTypeAlign(const Type *T) const {
+     return ABIAlign;
+ 
+   if (const auto *RT = T->getAs<RecordType>()) {
+-    if (TI.AlignIsRequired)
++    if (TI.AlignIsRequired || RT->getDecl()->isInvalidDecl())
+       return ABIAlign;
+ 
+     unsigned PreferredAlign = static_cast<unsigned>(
+diff --git a/clang/test/SemaCXX/alignof.cpp b/clang/test/SemaCXX/alignof.cpp
+index f2854024da1..64986d3103e 100644
+--- a/clang/test/SemaCXX/alignof.cpp
++++ b/clang/test/SemaCXX/alignof.cpp
+@@ -102,3 +102,8 @@ typedef int __attribute__((aligned(16))) aligned_int;
+ template <typename>
+ using template_alias = aligned_int;
+ static_assert(alignof(template_alias<void>) == 16, "Expected alignment of 16" );
++
++struct PR47138 {
++  invalid_type a; // expected-error {{unknown type}}
++};
++static_assert(__alignof__(PR47138) == 1, ""); // Don't crash.

@@ -1,0 +1,21 @@
+Author: cmtice@google.com
+Date: 15-Sep-2020
+
+Clang has a new warning, -Wstring-contatenation, which fails without this
+patch (crosbug/1128147).
+
+diff --git a/src/core/lib/debug/stats_data.cc b/src/core/lib/debug/stats_data.cc
+index f8c27db..567b341 100644
+--- a/src/core/lib/debug/stats_data.cc
++++ b/src/core/lib/debug/stats_data.cc
+@@ -280,8 +280,8 @@ const char* grpc_stats_histogram_doc[GRPC_STATS_HISTOGRAM_COUNT] = {
+     "Number of streams whose payload was written per TCP write",
+     "Number of streams terminated per TCP write",
+     "Number of flow control updates written per TCP write",
+-    "How many completion queues were checked looking for a CQ that had "
+-    "requested the incoming call",
++    ("How many completion queues were checked looking for a CQ that had "
++    "requested the incoming call"),
+ };
+ const int grpc_stats_table_0[65] = {
+     0,      1,      2,      3,      4,     5,     7,     9,     11,    14,

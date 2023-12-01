@@ -1,0 +1,57 @@
+From f011096d573d5f8b298d961e5a0045d950842af1 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <maskray@google.com>
+Date: Sat, 25 Sep 2021 22:03:08 -0700
+Subject: [PATCH 055/163] configure: remove overly restrictive check for clang
+
+---
+ configure    | 4 ++--
+ configure.ac | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/configure b/configure
+index 04bf5cd4a4..9b4ad842e5 100755
+--- a/configure
++++ b/configure
+@@ -5291,7 +5291,7 @@ int
+ main ()
+ {
+ 
+-#if !defined __GNUC__ || __GNUC__ < 6 || (__GNUC__ == 6 && __GNUC_MINOR__ < 2)
++#if (__GNUC__ < 6 || (__GNUC__ == 6 && __GNUC_MINOR__ < 2)) && !defined __clang__
+ #error insufficient compiler
+ #endif
+   ;
+@@ -6392,7 +6392,7 @@ else
+ extern char *strstr (const char *, const char *) __asm ("my_strstr");
+ char *foo (const char *a, const char *b)
+ {
+-  return __builtin_strstr (a, b);
++  return strstr (a, b);
+ }
+ EOF
+ if { ac_try='${CC-cc} -O3 -S conftest.c -o - | grep -F "my_strstr" > /dev/null'
+diff --git a/configure.ac b/configure.ac
+index f8175c584c..d208a28794 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1060,7 +1060,7 @@ AC_CHECK_PROG_VER(BISON, bison, --version,
+ 
+ AC_CACHE_CHECK([if $CC is sufficient to build libc], libc_cv_compiler_ok, [
+ AC_PREPROC_IFELSE([AC_LANG_PROGRAM([[]], [[
+-#if !defined __GNUC__ || __GNUC__ < 6 || (__GNUC__ == 6 && __GNUC_MINOR__ < 2)
++#if (__GNUC__ < 6 || (__GNUC__ == 6 && __GNUC_MINOR__ < 2)) && !defined __clang__
+ #error insufficient compiler
+ #endif]])],
+ 	       [libc_cv_compiler_ok=yes],
+@@ -1494,7 +1494,7 @@ cat > conftest.c <<\EOF
+ extern char *strstr (const char *, const char *) __asm ("my_strstr");
+ char *foo (const char *a, const char *b)
+ {
+-  return __builtin_strstr (a, b);
++  return strstr (a, b);
+ }
+ EOF
+ dnl
+-- 
+2.37.2
+

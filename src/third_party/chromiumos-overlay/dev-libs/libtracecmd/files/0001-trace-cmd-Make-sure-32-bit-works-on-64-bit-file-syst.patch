@@ -1,0 +1,32 @@
+From a7103061c8778b51e7661451ad2fbd310f4f5021 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (Google)" <rostedt@goodmis.org>
+Date: Wed, 21 Dec 2022 13:51:54 -0500
+Subject: [PATCH] trace-cmd: Make sure 32 bit works on 64 bit file systems
+
+As stat() can overflow if a 32 bit user space reads a file on a file
+system that has inodes greater than MAX_INT. Compile with
+_FILE_OFFSET_BITS=64 that mitigates this problem on 32 bit user space.
+
+Reported-by: Mike Frysinger <vapier@google.com>
+Signed-off-by: Steven Rostedt (Google) <rostedt@goodmis.org>
+---
+ Makefile | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Makefile b/Makefile
+index bda49dd..1f27976 100644
+--- a/Makefile
++++ b/Makefile
+@@ -350,6 +350,9 @@ export INCLUDES
+ # Required CFLAGS
+ override CFLAGS += -D_GNU_SOURCE
+ 
++# Make sure 32 bit stat() works on large file systems
++override CFLAGS += -D_FILE_OFFSET_BITS=64
++
+ ifndef NO_PTRACE
+ ifneq ($(call try-cc,$(SOURCE_PTRACE),),y)
+ 	NO_PTRACE = 1
+-- 
+2.39.0.314.g84b9a713c41-goog
+

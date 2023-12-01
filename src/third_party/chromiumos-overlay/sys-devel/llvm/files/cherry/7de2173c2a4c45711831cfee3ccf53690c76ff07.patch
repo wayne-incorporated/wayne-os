@@ -1,0 +1,115 @@
+commit 7de2173c2a4c45711831cfee3ccf53690c76ff07
+Author: Fangrui Song <i@maskray.me>
+Date:   Wed Jul 14 10:18:30 2021 -0700
+
+    [ELF] --fortran-common: prefer STB_WEAK to COMMON
+    
+    The ELF specification says "The link editor honors the common definition and
+    ignores the weak ones." GNU ld and our Symbol::compare follow this, but the
+    --fortran-common code (D86142) made a mistake on the precedence.
+    
+    Fixes https://bugs.llvm.org/show_bug.cgi?id=51082
+    
+    Reviewed By: peter.smith, sfertile
+    
+    Differential Revision: https://reviews.llvm.org/D105945
+
+diff --git a/lld/ELF/InputFiles.cpp b/lld/ELF/InputFiles.cpp
+index 83a3788e0dc6..8487210eb6e1 100644
+--- a/lld/ELF/InputFiles.cpp
++++ b/lld/ELF/InputFiles.cpp
+@@ -1262,7 +1262,7 @@ void ArchiveFile::fetch(const Archive::Symbol &sym) {
+ //
+ // 2) Consider the tentative definition as still undefined (ie the promotion to
+ //    a real definition happens only after all symbol resolution is done).
+-//    The linker searches archive members for global or weak definitions to
++//    The linker searches archive members for STB_GLOBAL definitions to
+ //    replace the tentative definition with. This is the behavior used by
+ //    GNU ld.
+ //
+@@ -1278,7 +1278,7 @@ static bool isBitcodeNonCommonDef(MemoryBufferRef mb, StringRef symName,
+   for (const irsymtab::Reader::SymbolRef &sym :
+        symtabFile.TheReader.symbols()) {
+     if (sym.isGlobal() && sym.getName() == symName)
+-      return !sym.isUndefined() && !sym.isCommon();
++      return !sym.isUndefined() && !sym.isWeak() && !sym.isCommon();
+   }
+   return false;
+ }
+@@ -1292,7 +1292,8 @@ static bool isNonCommonDef(MemoryBufferRef mb, StringRef symName,
+   for (auto sym : obj->template getGlobalELFSyms<ELFT>()) {
+     Expected<StringRef> name = sym.getName(stringtable);
+     if (name && name.get() == symName)
+-      return sym.isDefined() && !sym.isCommon();
++      return sym.isDefined() && sym.getBinding() == STB_GLOBAL &&
++             !sym.isCommon();
+   }
+   return false;
+ }
+diff --git a/lld/test/ELF/common-archive-lookup.s b/lld/test/ELF/common-archive-lookup.s
+index efaad669b724..bbfadb448f2d 100644
+--- a/lld/test/ELF/common-archive-lookup.s
++++ b/lld/test/ELF/common-archive-lookup.s
+@@ -20,6 +20,7 @@
+ ## Bitcode files.
+ # RUN: llvm-as -o 1.bc commonblock.ll
+ # RUN: llvm-as -o 2.bc blockdata.ll
++# RUN: llvm-as -o 3.bc weak.ll
+ 
+ ## Bitcode archive.
+ # RUN: llvm-ar crs 4.a 1.bc 2.bc
+@@ -31,10 +32,10 @@
+ # RUN: llvm-objdump -D -j .data 2 | FileCheck --check-prefix=TEST1 %s
+ 
+ # RUN: ld.lld -o 3 main.o 2.a
+-# RUN: llvm-objdump -D -j .data 3 | FileCheck --check-prefix=TEST1 %s
++# RUN: llvm-objdump -t 3 | FileCheck --check-prefix=BSS %s
+ 
+ # RUN: ld.lld -o 4 main.o --start-lib 1.o weak_data_only.o --end-lib
+-# RUN: llvm-objdump -D -j .data 4 | FileCheck --check-prefix=TEST1 %s
++# RUN: llvm-objdump -t 4 | FileCheck --check-prefix=BSS %s
+ 
+ # RUN: ld.lld -o 5 main.o 3.a --print-map | FileCheck --check-prefix=MAP %s
+ 
+@@ -63,6 +64,9 @@
+ # RUN: ld.lld -o - main.o  --start-lib 1.bc 2.bc --end-lib --lto-emit-asm | \
+ # RUN:   FileCheck --check-prefix=ASM %s
+ 
++## COMMON overrides weak. Don't extract 3.bc which provides a weak definition.
++# RUN: ld.lld -o /dev/null main.o --start-lib 1.bc 3.bc --end-lib -y block | FileCheck --check-prefix=LTO_WEAK %s
++
+ ## Old FORTRAN that mixes use of COMMON blocks and BLOCK DATA requires that we
+ ## search through archives for non-tentative definitions (from the BLOCK DATA)
+ ## to replace the tentative definitions (from the COMMON block(s)).
+@@ -75,6 +79,7 @@
+ # TEST1-NEXT:       fb 21 09 40
+ # TEST1-NEXT:       ...
+ 
++# BSS:       [[#%x,]] g     O .bss   0000000000000028 block
+ 
+ # NFC:       Name: block
+ # NFC-NEXT:  Value:
+@@ -100,6 +105,10 @@
+ # ASM-NEXT:    .long 5
+ # ASM:         .size   block, 20
+ 
++# LTO_WEAK:     1.bc: common definition of block
++# LTO_WEAK:     <internal>: reference to block
++# LTO_WEAK-NOT: {{.}}
++
+ #--- ref.s
+   .text
+   .abiversion 2
+@@ -167,6 +176,12 @@ target triple = "powerpc64le-unknown-linux-gnu"
+ 
+ @block = dso_local local_unnamed_addr global [5 x i32] [i32 5, i32 0, i32 0, i32 0, i32 0], align 4
+ 
++#--- weak.ll
++target datalayout = "e-m:e-i64:64-n32:64-S128-v256:256:256-v512:512:512"
++target triple = "powerpc64le-unknown-linux-gnu"
++
++@block = weak dso_local global [5 x i32] [i32 5, i32 0, i32 0, i32 0, i32 0], align 4
++
+ #--- commonblock.ll
+ target datalayout = "e-m:e-i64:64-n32:64-S128-v256:256:256-v512:512:512"
+ target triple = "powerpc64le-unknown-linux-gnu"

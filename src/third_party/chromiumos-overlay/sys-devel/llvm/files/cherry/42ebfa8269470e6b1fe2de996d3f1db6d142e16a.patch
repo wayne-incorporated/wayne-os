@@ -1,0 +1,319 @@
+commit 42ebfa8269470e6b1fe2de996d3f1db6d142e16a
+Author: Muhammad Omair Javaid <omair.javaid@linaro.org>
+Date:   Wed Apr 13 04:51:25 2022 +0500
+
+    Revert "[AArch64] Set maximum VF with shouldMaximizeVectorBandwidth"
+    
+    This reverts commit 64b6192e812977092242ae34d6eafdcd42fea39d.
+    
+    This broke LLVM AArch64 buildbot clang-aarch64-sve-vls-2stage:
+    
+    https://lab.llvm.org/buildbot/#/builders/176/builds/1515
+    
+    llvm-tblgen crashes after applying this patch.
+
+diff --git a/llvm/include/llvm/Analysis/TargetTransformInfo.h b/llvm/include/llvm/Analysis/TargetTransformInfo.h
+index acda8a0e6022..7e2424d8eb04 100644
+--- a/llvm/include/llvm/Analysis/TargetTransformInfo.h
++++ b/llvm/include/llvm/Analysis/TargetTransformInfo.h
+@@ -937,8 +937,7 @@ public:
+   /// creating vectors that span multiple vector registers.
+   /// If false, the vectorization factor will be chosen based on the
+   /// size of the widest element type.
+-  /// \p K Register Kind for vectorization.
+-  bool shouldMaximizeVectorBandwidth(TargetTransformInfo::RegisterKind K) const;
++  bool shouldMaximizeVectorBandwidth() const;
+ 
+   /// \return The minimum vectorization factor for types of given element
+   /// bit width, or 0 if there is no minimum VF. The returned value only
+@@ -1630,8 +1629,7 @@ public:
+   virtual unsigned getMinVectorRegisterBitWidth() const = 0;
+   virtual Optional<unsigned> getMaxVScale() const = 0;
+   virtual Optional<unsigned> getVScaleForTuning() const = 0;
+-  virtual bool
+-  shouldMaximizeVectorBandwidth(TargetTransformInfo::RegisterKind K) const = 0;
++  virtual bool shouldMaximizeVectorBandwidth() const = 0;
+   virtual ElementCount getMinimumVF(unsigned ElemWidth,
+                                     bool IsScalable) const = 0;
+   virtual unsigned getMaximumVF(unsigned ElemWidth, unsigned Opcode) const = 0;
+@@ -2128,9 +2126,8 @@ public:
+   Optional<unsigned> getVScaleForTuning() const override {
+     return Impl.getVScaleForTuning();
+   }
+-  bool shouldMaximizeVectorBandwidth(
+-      TargetTransformInfo::RegisterKind K) const override {
+-    return Impl.shouldMaximizeVectorBandwidth(K);
++  bool shouldMaximizeVectorBandwidth() const override {
++    return Impl.shouldMaximizeVectorBandwidth();
+   }
+   ElementCount getMinimumVF(unsigned ElemWidth,
+                             bool IsScalable) const override {
+diff --git a/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h b/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h
+index 42d38ac570fd..538e099cf76c 100644
+--- a/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h
++++ b/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h
+@@ -417,10 +417,7 @@ public:
+   Optional<unsigned> getMaxVScale() const { return None; }
+   Optional<unsigned> getVScaleForTuning() const { return None; }
+ 
+-  bool
+-  shouldMaximizeVectorBandwidth(TargetTransformInfo::RegisterKind K) const {
+-    return false;
+-  }
++  bool shouldMaximizeVectorBandwidth() const { return false; }
+ 
+   ElementCount getMinimumVF(unsigned ElemWidth, bool IsScalable) const {
+     return ElementCount::get(0, IsScalable);
+diff --git a/llvm/lib/Analysis/TargetTransformInfo.cpp b/llvm/lib/Analysis/TargetTransformInfo.cpp
+index eded89b16c22..6186f0061eb8 100644
+--- a/llvm/lib/Analysis/TargetTransformInfo.cpp
++++ b/llvm/lib/Analysis/TargetTransformInfo.cpp
+@@ -626,9 +626,8 @@ Optional<unsigned> TargetTransformInfo::getVScaleForTuning() const {
+   return TTIImpl->getVScaleForTuning();
+ }
+ 
+-bool TargetTransformInfo::shouldMaximizeVectorBandwidth(
+-    TargetTransformInfo::RegisterKind K) const {
+-  return TTIImpl->shouldMaximizeVectorBandwidth(K);
++bool TargetTransformInfo::shouldMaximizeVectorBandwidth() const {
++  return TTIImpl->shouldMaximizeVectorBandwidth();
+ }
+ 
+ ElementCount TargetTransformInfo::getMinimumVF(unsigned ElemWidth,
+diff --git a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
+index 1cf79450b62e..e14849b7f5da 100644
+--- a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
+@@ -50,12 +50,6 @@ bool AArch64TTIImpl::areInlineCompatible(const Function *Caller,
+   return (CallerBits & CalleeBits) == CalleeBits;
+ }
+ 
+-bool AArch64TTIImpl::shouldMaximizeVectorBandwidth(
+-    TargetTransformInfo::RegisterKind K) const {
+-  assert(K != TargetTransformInfo::RGK_Scalar);
+-  return K == TargetTransformInfo::RGK_FixedWidthVector;
+-}
+-
+ /// Calculate the cost of materializing a 64-bit value. This helper
+ /// method might only calculate a fraction of a larger immediate. Therefore it
+ /// is valid to return a cost of ZERO.
+diff --git a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.h b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.h
+index 6c2255b9d550..92005b3ba40c 100644
+--- a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.h
++++ b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.h
+@@ -135,8 +135,6 @@ public:
+     return ST->getVScaleForTuning();
+   }
+ 
+-  bool shouldMaximizeVectorBandwidth(TargetTransformInfo::RegisterKind K) const;
+-
+   /// Try to return an estimate cost factor that can be used as a multiplier
+   /// when scalarizing an operation for a vector with ElementCount \p VF.
+   /// For scalable vectors this currently takes the most pessimistic view based
+diff --git a/llvm/lib/Target/Hexagon/HexagonTargetTransformInfo.h b/llvm/lib/Target/Hexagon/HexagonTargetTransformInfo.h
+index 1c87b9d44ecd..65eb9d9fb5bb 100644
+--- a/llvm/lib/Target/Hexagon/HexagonTargetTransformInfo.h
++++ b/llvm/lib/Target/Hexagon/HexagonTargetTransformInfo.h
+@@ -86,11 +86,12 @@ public:
+   unsigned getMinVectorRegisterBitWidth() const;
+   ElementCount getMinimumVF(unsigned ElemWidth, bool IsScalable) const;
+ 
+-  bool
+-  shouldMaximizeVectorBandwidth(TargetTransformInfo::RegisterKind K) const {
++  bool shouldMaximizeVectorBandwidth() const {
+     return true;
+   }
+-  bool supportsEfficientVectorElementLoadStore() { return false; }
++  bool supportsEfficientVectorElementLoadStore() {
++    return false;
++  }
+   bool hasBranchDivergence() {
+     return false;
+   }
+diff --git a/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp b/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
+index f0c14da98142..4f7e8cd1c9f3 100644
+--- a/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
++++ b/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp
+@@ -5198,12 +5198,9 @@ ElementCount LoopVectorizationCostModel::getMaximizedVFForTarget(
+     return ElementCount::getFixed(ClampedConstTripCount);
+   }
+ 
+-  TargetTransformInfo::RegisterKind RegKind =
+-      ComputeScalableMaxVF ? TargetTransformInfo::RGK_ScalableVector
+-                           : TargetTransformInfo::RGK_FixedWidthVector;
+   ElementCount MaxVF = MaxVectorElementCount;
+   if (MaximizeBandwidth || (MaximizeBandwidth.getNumOccurrences() == 0 &&
+-                            TTI.shouldMaximizeVectorBandwidth(RegKind))) {
++                            TTI.shouldMaximizeVectorBandwidth())) {
+     auto MaxVectorElementCountMaxBW = ElementCount::get(
+         PowerOf2Floor(WidestRegister.getKnownMinSize() / SmallestType),
+         ComputeScalableMaxVF);
+diff --git a/llvm/test/Transforms/LoopVectorize/AArch64/extend-vectorization-factor-for-unprofitable-memops.ll b/llvm/test/Transforms/LoopVectorize/AArch64/extend-vectorization-factor-for-unprofitable-memops.ll
+index a1ca0fea7972..371d209bafff 100644
+--- a/llvm/test/Transforms/LoopVectorize/AArch64/extend-vectorization-factor-for-unprofitable-memops.ll
++++ b/llvm/test/Transforms/LoopVectorize/AArch64/extend-vectorization-factor-for-unprofitable-memops.ll
+@@ -4,12 +4,11 @@
+ ; are not profitable.
+ 
+ ; Test with a loop that contains memory accesses of i8 and i32 types. The
+-; maximum VF for NEON is calculated by 128/size of smallest type in loop.
+-; And while we don't have an instruction to  load 4 x i8, vectorization
+-; might still be profitable.
++; default maximum VF for NEON is 4. And while we don't have an instruction to
++; load 4 x i8, vectorization might still be profitable.
+ define void @test_load_i8_store_i32(i8* noalias %src, i32* noalias %dst, i32 %off, i64 %N) {
+ ; CHECK-LABEL: @test_load_i8_store_i32(
+-; CHECK:       <16 x i8>
++; CHECK:       <4 x i8>
+ ;
+ entry:
+   br label %loop
+@@ -33,7 +32,7 @@ exit:
+ ; Same as test_load_i8_store_i32, but with types flipped for load and store.
+ define void @test_load_i32_store_i8(i32* noalias %src, i8* noalias %dst, i32 %off, i64 %N) {
+ ; CHECK-LABEL: @test_load_i32_store_i8(
+-; CHECK:     <16 x i8>
++; CHECK:     <4 x i8>
+ ;
+ entry:
+   br label %loop
+@@ -85,7 +84,7 @@ exit:
+ ; vectorization factor.
+ define void @test_load_i8_store_i64_large(i8* noalias %src, i64* noalias %dst, i64* noalias %dst.2, i64* noalias %dst.3, i64* noalias %dst.4, i64* noalias %dst.5, i64%off, i64 %off.2, i64 %N) {
+ ; CHECK-LABEL: @test_load_i8_store_i64_large
+-; CHECK: <8 x i64>
++; CHECK: <2 x i64>
+ ;
+ entry:
+   br label %loop
+diff --git a/llvm/test/Transforms/LoopVectorize/AArch64/loop-vectorization-factors.ll b/llvm/test/Transforms/LoopVectorize/AArch64/loop-vectorization-factors.ll
+index 28eabe382dfb..e6e43375204d 100644
+--- a/llvm/test/Transforms/LoopVectorize/AArch64/loop-vectorization-factors.ll
++++ b/llvm/test/Transforms/LoopVectorize/AArch64/loop-vectorization-factors.ll
+@@ -116,9 +116,9 @@ for.body:                                         ; preds = %entry, %for.body
+ }
+ 
+ ; CHECK-LABEL: @add_d(
+-; CHECK: load <8 x i16>
+-; CHECK: add nsw <8 x i32>
+-; CHECK: store <8 x i32>
++; CHECK: load <4 x i16>
++; CHECK: add nsw <4 x i32>
++; CHECK: store <4 x i32>
+ define void @add_d(i16* noalias nocapture readonly %p, i32* noalias nocapture %q, i32 %len) #0 {
+ entry:
+   %cmp7 = icmp sgt i32 %len, 0
+diff --git a/llvm/test/Transforms/LoopVectorize/AArch64/reduction-small-size.ll b/llvm/test/Transforms/LoopVectorize/AArch64/reduction-small-size.ll
+index 071255c4f4f0..a95c0aa6f375 100644
+--- a/llvm/test/Transforms/LoopVectorize/AArch64/reduction-small-size.ll
++++ b/llvm/test/Transforms/LoopVectorize/AArch64/reduction-small-size.ll
+@@ -123,16 +123,16 @@ for.body:
+ ; }
+ ;
+ ; CHECK: vector.body:
+-; CHECK:   phi <16 x i16>
+-; CHECK:   [[Ld1:%[a-zA-Z0-9.]+]] = load <16 x i8>
+-; CHECK:   zext <16 x i8> [[Ld1]] to <16 x i16>
+-; CHECK:   [[Ld2:%[a-zA-Z0-9.]+]] = load <16 x i8>
+-; CHECK:   zext <16 x i8> [[Ld2]] to <16 x i16>
+-; CHECK:   add <16 x i16>
+-; CHECK:   add <16 x i16>
++; CHECK:   phi <8 x i16>
++; CHECK:   [[Ld1:%[a-zA-Z0-9.]+]] = load <8 x i8>
++; CHECK:   zext <8 x i8> [[Ld1]] to <8 x i16>
++; CHECK:   [[Ld2:%[a-zA-Z0-9.]+]] = load <8 x i8>
++; CHECK:   zext <8 x i8> [[Ld2]] to <8 x i16>
++; CHECK:   add <8 x i16>
++; CHECK:   add <8 x i16>
+ ;
+ ; CHECK: middle.block:
+-; CHECK:   [[Rdx:%[a-zA-Z0-9.]+]] = call i16 @llvm.vector.reduce.add.v16i16(<16 x i16>
++; CHECK:   [[Rdx:%[a-zA-Z0-9.]+]] = call i16 @llvm.vector.reduce.add.v8i16(<8 x i16>
+ ; CHECK:   zext i16 [[Rdx]] to i32
+ ;
+ define i16 @reduction_i16_2(i8* nocapture readonly %a, i8* nocapture readonly %b, i32 %n) {
+diff --git a/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization-cost-tuning.ll b/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization-cost-tuning.ll
+index 262236075f7c..27868480c23b 100644
+--- a/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization-cost-tuning.ll
++++ b/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization-cost-tuning.ll
+@@ -29,7 +29,7 @@
+ ; NEOVERSE-N2: LV: Vector loop of width vscale x 4 costs: 3 (assuming a minimum vscale of 1).
+ 
+ ; VF-4: <4 x i32>
+-; VF-VSCALE4: <16 x i32>
++; VF-VSCALE4: <vscale x 4 x i32>
+ define void @test0(i32* %a, i8* %b, i32* %c) #0 {
+ entry:
+   br label %loop
+diff --git a/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization.ll b/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization.ll
+index d15199662be0..0e96c62e2ad0 100644
+--- a/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization.ll
++++ b/llvm/test/Transforms/LoopVectorize/AArch64/scalable-vectorization.ll
+@@ -9,9 +9,9 @@
+ define void @test0(i32* %a, i8* %b, i32* %c) #0 {
+ ; CHECK: LV: Checking a loop in 'test0'
+ ; CHECK_SCALABLE_ON: LV: Found feasible scalable VF = vscale x 4
+-; CHECK_SCALABLE_ON: LV: Selecting VF: 16
++; CHECK_SCALABLE_ON: LV: Selecting VF: vscale x 4
+ ; CHECK_SCALABLE_DISABLED-NOT: LV: Found feasible scalable VF
+-; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 16
++; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 4
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Found feasible scalable VF = vscale x 16
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Selecting VF: vscale x 16
+ entry:
+@@ -40,9 +40,9 @@ exit:
+ define void @test1(i32* %a, i8* %b) #0 {
+ ; CHECK: LV: Checking a loop in 'test1'
+ ; CHECK_SCALABLE_ON: LV: Found feasible scalable VF = vscale x 4
+-; CHECK_SCALABLE_ON: LV: Selecting VF: 16
++; CHECK_SCALABLE_ON: LV: Selecting VF: vscale x 4
+ ; CHECK_SCALABLE_DISABLED-NOT: LV: Found feasible scalable VF
+-; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 16
++; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 4
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Found feasible scalable VF = vscale x 4
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Selecting VF: 16
+ entry:
+@@ -72,9 +72,9 @@ exit:
+ define void @test2(i32* %a, i8* %b) #0 {
+ ; CHECK: LV: Checking a loop in 'test2'
+ ; CHECK_SCALABLE_ON: LV: Found feasible scalable VF = vscale x 2
+-; CHECK_SCALABLE_ON: LV: Selecting VF: 16
++; CHECK_SCALABLE_ON: LV: Selecting VF: vscale x 2
+ ; CHECK_SCALABLE_DISABLED-NOT: LV: Found feasible scalable VF
+-; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 16
++; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 4
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Found feasible scalable VF = vscale x 2
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Selecting VF: 16
+ entry:
+@@ -104,9 +104,9 @@ exit:
+ define void @test3(i32* %a, i8* %b) #0 {
+ ; CHECK: LV: Checking a loop in 'test3'
+ ; CHECK_SCALABLE_ON: LV: Found feasible scalable VF = vscale x 1
+-; CHECK_SCALABLE_ON: LV: Selecting VF: 16
++; CHECK_SCALABLE_ON: LV: Selecting VF: 4
+ ; CHECK_SCALABLE_DISABLED-NOT: LV: Found feasible scalable VF
+-; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 16
++; CHECK_SCALABLE_DISABLED: LV: Selecting VF: 4
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Found feasible scalable VF = vscale x 1
+ ; CHECK_SCALABLE_ON_MAXBW: LV: Selecting VF: 16
+ entry:
+diff --git a/llvm/test/Transforms/LoopVectorize/AArch64/sve-illegal-type.ll b/llvm/test/Transforms/LoopVectorize/AArch64/sve-illegal-type.ll
+index 43ef43c11507..4d0886f4d953 100644
+--- a/llvm/test/Transforms/LoopVectorize/AArch64/sve-illegal-type.ll
++++ b/llvm/test/Transforms/LoopVectorize/AArch64/sve-illegal-type.ll
+@@ -83,11 +83,11 @@ for.end:
+ define void @uniform_store_i1(i1* noalias %dst, i64* noalias %start, i64 %N) {
+ ; CHECK-LABEL: @uniform_store_i1
+ ; CHECK: vector.body
+-; CHECK: %[[GEP:.*]] = getelementptr inbounds i64, <64 x i64*> {{.*}}, i64 1
+-; CHECK: %[[ICMP:.*]] = icmp eq <64 x i64*> %[[GEP]], %[[SPLAT:.*]]
+-; CHECK: %[[EXTRACT1:.*]] = extractelement <64 x i1> %[[ICMP]], i32 0
++; CHECK: %[[GEP:.*]] = getelementptr inbounds i64, <2 x i64*> {{.*}}, i64 1
++; CHECK: %[[ICMP:.*]] = icmp eq <2 x i64*> %[[GEP]], %[[SPLAT:.*]]
++; CHECK: %[[EXTRACT1:.*]] = extractelement <2 x i1> %[[ICMP]], i32 0
+ ; CHECK: store i1 %[[EXTRACT1]], i1* %dst
+-; CHECK: %[[EXTRACT2:.*]] = extractelement <64 x i1> %[[ICMP]], i32 1
++; CHECK: %[[EXTRACT2:.*]] = extractelement <2 x i1> %[[ICMP]], i32 1
+ ; CHECK: store i1 %[[EXTRACT2]], i1* %dst
+ ; CHECK-NOT: vscale
+ entry:

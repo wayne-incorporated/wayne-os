@@ -1,0 +1,544 @@
+commit 418f18c6cdfe56e77669e2f4d3df3bca1020156d
+Author: Hans Wennborg <hans@chromium.org>
+Date:   Wed Nov 11 15:55:52 2020 +0100
+
+    Revert "Reland [CFGuard] Add address-taken IAT tables and delay-load support"
+    
+    This broke both Firefox and Chromium (PR47905) due to what seems like dllimport
+    function not being handled correctly.
+    
+    > This patch adds support for creating Guard Address-Taken IAT Entry Tables (.giats$y sections) in object files, matching the behavior of MSVC. These contain lists of address-taken imported functions, which are used by the linker to create the final GIATS table.
+    > Additionally, if any DLLs are delay-loaded, the linker must look through the .giats tables and add the respective load thunks of address-taken imports to the GFIDS table, as these are also valid call targets.
+    >
+    > Reviewed By: rnk
+    >
+    > Differential Revision: https://reviews.llvm.org/D87544
+    
+    This reverts commit cfd8481da1adba1952e0f6ecd00440986e49a946.
+
+diff --git a/lld/COFF/DLL.cpp b/lld/COFF/DLL.cpp
+index e88a6b1bffb..50301ad91b1 100644
+--- a/lld/COFF/DLL.cpp
++++ b/lld/COFF/DLL.cpp
+@@ -19,7 +19,6 @@
+ 
+ #include "DLL.h"
+ #include "Chunks.h"
+-#include "SymbolTable.h"
+ #include "llvm/Object/COFF.h"
+ #include "llvm/Support/Endian.h"
+ #include "llvm/Support/Path.h"
+@@ -654,18 +653,9 @@ void DelayLoadContents::create(Defined *h) {
+         auto *c = make<HintNameChunk>(extName, 0);
+         names.push_back(make<LookupChunk>(c));
+         hintNames.push_back(c);
+-        // Add a syntentic symbol for this load thunk, using the "__imp_load"
+-        // prefix, in case this thunk needs to be added to the list of valid
+-        // call targets for Control Flow Guard.
+-        StringRef symName = saver.save("__imp_load_" + extName);
+-        s->loadThunkSym =
+-            cast<DefinedSynthetic>(symtab->addSynthetic(symName, t));
+       }
+     }
+     thunks.push_back(tm);
+-    StringRef tmName =
+-        saver.save("__tailMerge_" + syms[0]->getDLLName().lower());
+-    symtab->addSynthetic(tmName, tm);
+     // Terminate with null values.
+     addresses.push_back(make<NullChunk>(8));
+     names.push_back(make<NullChunk>(8));
+diff --git a/lld/COFF/ICF.cpp b/lld/COFF/ICF.cpp
+index 386f861fb27..1b33634b63d 100644
+--- a/lld/COFF/ICF.cpp
++++ b/lld/COFF/ICF.cpp
+@@ -131,7 +131,7 @@ bool ICF::assocEquals(const SectionChunk *a, const SectionChunk *b) {
+   auto considerForICF = [](const SectionChunk &assoc) {
+     StringRef Name = assoc.getSectionName();
+     return !(Name.startswith(".debug") || Name == ".gfids$y" ||
+-             Name == ".giats$y" || Name == ".gljmp$y");
++             Name == ".gljmp$y");
+   };
+   auto ra = make_filter_range(a->children(), considerForICF);
+   auto rb = make_filter_range(b->children(), considerForICF);
+diff --git a/lld/COFF/InputFiles.cpp b/lld/COFF/InputFiles.cpp
+index 37f66131620..aaa00d0f727 100644
+--- a/lld/COFF/InputFiles.cpp
++++ b/lld/COFF/InputFiles.cpp
+@@ -280,8 +280,6 @@ SectionChunk *ObjFile::readSection(uint32_t sectionNumber,
+     debugChunks.push_back(c);
+   else if (name == ".gfids$y")
+     guardFidChunks.push_back(c);
+-  else if (name == ".giats$y")
+-    guardIATChunks.push_back(c);
+   else if (name == ".gljmp$y")
+     guardLJmpChunks.push_back(c);
+   else if (name == ".sxdata")
+diff --git a/lld/COFF/InputFiles.h b/lld/COFF/InputFiles.h
+index f657d8f0a80..13b606cf474 100644
+--- a/lld/COFF/InputFiles.h
++++ b/lld/COFF/InputFiles.h
+@@ -144,7 +144,6 @@ public:
+   ArrayRef<SectionChunk *> getDebugChunks() { return debugChunks; }
+   ArrayRef<SectionChunk *> getSXDataChunks() { return sxDataChunks; }
+   ArrayRef<SectionChunk *> getGuardFidChunks() { return guardFidChunks; }
+-  ArrayRef<SectionChunk *> getGuardIATChunks() { return guardIATChunks; }
+   ArrayRef<SectionChunk *> getGuardLJmpChunks() { return guardLJmpChunks; }
+   ArrayRef<Symbol *> getSymbols() { return symbols; }
+ 
+@@ -286,11 +285,9 @@ private:
+   // 32-bit x86.
+   std::vector<SectionChunk *> sxDataChunks;
+ 
+-  // Chunks containing symbol table indices of address taken symbols, address
+-  // taken IAT entries, and longjmp targets. These are not linked into the
+-  // final binary when /guard:cf is set.
++  // Chunks containing symbol table indices of address taken symbols and longjmp
++  // targets.  These are not linked into the final binary when /guard:cf is set.
+   std::vector<SectionChunk *> guardFidChunks;
+-  std::vector<SectionChunk *> guardIATChunks;
+   std::vector<SectionChunk *> guardLJmpChunks;
+ 
+   // This vector contains a list of all symbols defined or referenced by this
+diff --git a/lld/COFF/Symbols.h b/lld/COFF/Symbols.h
+index 13e7488d6b8..a833d2fad6b 100644
+--- a/lld/COFF/Symbols.h
++++ b/lld/COFF/Symbols.h
+@@ -353,13 +353,6 @@ public:
+   uint16_t getOrdinal() { return file->hdr->OrdinalHint; }
+ 
+   ImportFile *file;
+-
+-  // This is a pointer to the synthetic symbol associated with the load thunk
+-  // for this symbol that will be called if the DLL is delay-loaded. This is
+-  // needed for Control Flow Guard because if this DefinedImportData symbol is a
+-  // valid call target, the corresponding load thunk must also be marked as a
+-  // valid call target.
+-  DefinedSynthetic *loadThunkSym = nullptr;
+ };
+ 
+ // This class represents a symbol for a jump table entry which jumps
+diff --git a/lld/COFF/Writer.cpp b/lld/COFF/Writer.cpp
+index 344e83f4101..6be22cef5ef 100644
+--- a/lld/COFF/Writer.cpp
++++ b/lld/COFF/Writer.cpp
+@@ -227,9 +227,6 @@ private:
+   void markSymbolsForRVATable(ObjFile *file,
+                               ArrayRef<SectionChunk *> symIdxChunks,
+                               SymbolRVASet &tableSymbols);
+-  void getSymbolsFromSections(ObjFile *file,
+-                              ArrayRef<SectionChunk *> symIdxChunks,
+-                              std::vector<Symbol *> &symbols);
+   void maybeAddRVATable(SymbolRVASet tableSymbols, StringRef tableSym,
+                         StringRef countSym);
+   void setSectionPermissions();
+@@ -610,9 +607,8 @@ void Writer::run() {
+ 
+   createImportTables();
+   createSections();
+-  appendImportThunks();
+-  // Import thunks must be added before the Control Flow Guard tables are added.
+   createMiscChunks();
++  appendImportThunks();
+   createExportTable();
+   mergeSections();
+   removeUnusedSections();
+@@ -1632,8 +1628,6 @@ static void markSymbolsWithRelocations(ObjFile *file,
+ // table.
+ void Writer::createGuardCFTables() {
+   SymbolRVASet addressTakenSyms;
+-  SymbolRVASet giatsRVASet;
+-  std::vector<Symbol *> giatsSymbols;
+   SymbolRVASet longJmpTargets;
+   for (ObjFile *file : ObjFile::instances) {
+     // If the object was compiled with /guard:cf, the address taken symbols
+@@ -1643,8 +1637,6 @@ void Writer::createGuardCFTables() {
+     // possibly address-taken.
+     if (file->hasGuardCF()) {
+       markSymbolsForRVATable(file, file->getGuardFidChunks(), addressTakenSyms);
+-      markSymbolsForRVATable(file, file->getGuardIATChunks(), giatsRVASet);
+-      getSymbolsFromSections(file, file->getGuardIATChunks(), giatsSymbols);
+       markSymbolsForRVATable(file, file->getGuardLJmpChunks(), longJmpTargets);
+     } else {
+       markSymbolsWithRelocations(file, addressTakenSyms);
+@@ -1659,16 +1651,6 @@ void Writer::createGuardCFTables() {
+   for (Export &e : config->exports)
+     maybeAddAddressTakenFunction(addressTakenSyms, e.sym);
+ 
+-  // For each entry in the .giats table, check if it has a corresponding load
+-  // thunk (e.g. because the DLL that defines it will be delay-loaded) and, if
+-  // so, add the load thunk to the address taken (.gfids) table.
+-  for (Symbol *s : giatsSymbols) {
+-    if (auto *di = dyn_cast<DefinedImportData>(s)) {
+-      if (di->loadThunkSym)
+-        addSymbolToRVASet(addressTakenSyms, di->loadThunkSym);
+-    }
+-  }
+-
+   // Ensure sections referenced in the gfid table are 16-byte aligned.
+   for (const ChunkAndOffset &c : addressTakenSyms)
+     if (c.inputChunk->getAlignment() < 16)
+@@ -1677,10 +1659,6 @@ void Writer::createGuardCFTables() {
+   maybeAddRVATable(std::move(addressTakenSyms), "__guard_fids_table",
+                    "__guard_fids_count");
+ 
+-  // Add the Guard Address Taken IAT Entry Table (.giats).
+-  maybeAddRVATable(std::move(giatsRVASet), "__guard_iat_table",
+-                   "__guard_iat_count");
+-
+   // Add the longjmp target table unless the user told us not to.
+   if (config->guardCF == GuardCFLevel::Full)
+     maybeAddRVATable(std::move(longJmpTargets), "__guard_longjmp_table",
+@@ -1697,11 +1675,11 @@ void Writer::createGuardCFTables() {
+ }
+ 
+ // Take a list of input sections containing symbol table indices and add those
+-// symbols to a vector. The challenge is that symbol RVAs are not known and
++// symbols to an RVA table. The challenge is that symbol RVAs are not known and
+ // depend on the table size, so we can't directly build a set of integers.
+-void Writer::getSymbolsFromSections(ObjFile *file,
++void Writer::markSymbolsForRVATable(ObjFile *file,
+                                     ArrayRef<SectionChunk *> symIdxChunks,
+-                                    std::vector<Symbol *> &symbols) {
++                                    SymbolRVASet &tableSymbols) {
+   for (SectionChunk *c : symIdxChunks) {
+     // Skip sections discarded by linker GC. This comes up when a .gfids section
+     // is associated with something like a vtable and the vtable is discarded.
+@@ -1719,7 +1697,7 @@ void Writer::getSymbolsFromSections(ObjFile *file,
+     }
+ 
+     // Read each symbol table index and check if that symbol was included in the
+-    // final link. If so, add it to the vector of symbols.
++    // final link. If so, add it to the table symbol set.
+     ArrayRef<ulittle32_t> symIndices(
+         reinterpret_cast<const ulittle32_t *>(data.data()), data.size() / 4);
+     ArrayRef<Symbol *> objSymbols = file->getSymbols();
+@@ -1731,24 +1709,12 @@ void Writer::getSymbolsFromSections(ObjFile *file,
+       }
+       if (Symbol *s = objSymbols[symIndex]) {
+         if (s->isLive())
+-          symbols.push_back(cast<Symbol>(s));
++          addSymbolToRVASet(tableSymbols, cast<Defined>(s));
+       }
+     }
+   }
+ }
+ 
+-// Take a list of input sections containing symbol table indices and add those
+-// symbols to an RVA table.
+-void Writer::markSymbolsForRVATable(ObjFile *file,
+-                                    ArrayRef<SectionChunk *> symIdxChunks,
+-                                    SymbolRVASet &tableSymbols) {
+-  std::vector<Symbol *> syms;
+-  getSymbolsFromSections(file, symIdxChunks, syms);
+-
+-  for (Symbol *s : syms)
+-    addSymbolToRVASet(tableSymbols, cast<Defined>(s));
+-}
+-
+ // Replace the absolute table symbol with a synthetic symbol pointing to
+ // tableChunk so that we can emit base relocations for it and resolve section
+ // relative relocations.
+diff --git a/lld/test/COFF/giats.s b/lld/test/COFF/giats.s
+deleted file mode 100644
+index f18720f3692..00000000000
+--- a/lld/test/COFF/giats.s
++++ /dev/null
+@@ -1,117 +0,0 @@
+-# REQUIRES: x86
+-
+-# Make a DLL that exports exportfn1.
+-# RUN: yaml2obj %p/Inputs/export.yaml -o %basename_t-exp.obj
+-# RUN: lld-link /out:%basename_t-exp.dll /dll %basename_t-exp.obj /export:exportfn1 /implib:%basename_t-exp.lib
+-
+-# Make an object file that imports exportfn1.
+-# RUN: llvm-mc -triple x86_64-windows-msvc %s -filetype=obj -o %basename_t.obj
+-
+-# Check that the Guard address-taken IAT entry tables are propagated to the final executable.
+-# RUN: lld-link %basename_t.obj -guard:cf -entry:main -out:%basename_t-nodelay.exe %basename_t-exp.lib
+-# RUN: llvm-readobj --file-headers --coff-load-config %basename_t-nodelay.exe | FileCheck %s --check-prefix CHECK
+-
+-# CHECK: ImageBase: 0x140000000
+-# CHECK: LoadConfig [
+-# CHECK:   GuardCFFunctionTable: 0x140002114
+-# CHECK:   GuardCFFunctionCount: 1
+-# CHECK:   GuardFlags: 0x10500
+-# CHECK:   GuardAddressTakenIatEntryTable: 0x140002118
+-# CHECK:   GuardAddressTakenIatEntryCount: 1
+-# CHECK: ]
+-# CHECK:      GuardFidTable [
+-# CHECK-NEXT:   0x14000{{.*}}
+-# CHECK-NEXT: ]
+-# CHECK:      GuardIatTable [
+-# CHECK-NEXT:   0x14000{{.*}}
+-# CHECK-NEXT: ]
+-
+-
+-# Check that the additional load thunk symbol is added to the GFIDs table.
+-# RUN: lld-link %basename_t.obj -guard:cf -entry:main -out:%basename_t-delay.exe %basename_t-exp.lib -alternatename:__delayLoadHelper2=main -delayload:%basename_t-exp.dll
+-# RUN: llvm-readobj --file-headers --coff-load-config %basename_t-delay.exe | FileCheck %s --check-prefix DELAY-CHECK
+-
+-# DELAY-CHECK: ImageBase: 0x140000000
+-# DELAY-CHECK: LoadConfig [
+-# DELAY-CHECK:   GuardCFFunctionTable: 0x140002114
+-# DELAY-CHECK:   GuardCFFunctionCount: 2
+-# DELAY-CHECK:   GuardFlags: 0x10500
+-# DELAY-CHECK:   GuardAddressTakenIatEntryTable: 0x14000211C
+-# DELAY-CHECK:   GuardAddressTakenIatEntryCount: 1
+-# DELAY-CHECK: ]
+-# DELAY-CHECK:      GuardFidTable [
+-# DELAY-CHECK-NEXT:   0x14000{{.*}}
+-# DELAY-CHECK-NEXT:   0x14000{{.*}}
+-# DELAY-CHECK-NEXT: ]
+-# DELAY-CHECK:      GuardIatTable [
+-# DELAY-CHECK-NEXT:   0x14000{{.*}}
+-# DELAY-CHECK-NEXT: ]
+-
+-
+-# This assembly is reduced from C code like:
+-# __declspec(noinline)
+-# void IndirectCall(BOOL (func)(HANDLE)) {
+-#   (*func)(NULL);
+-# }
+-# int main(int argc, char** argv) {
+-#   IndirectCall(exportfn1);
+-# }
+-
+-	.text
+-	.def	 @feat.00;
+-	.scl	3;
+-	.type	0;
+-	.endef
+-	.globl	@feat.00
+-.set @feat.00, 2048
+-	.def	 IndirectCall;	.scl	2;	.type	32;	.endef
+-	.globl	IndirectCall                    # -- Begin function IndirectCall
+-	.p2align	4, 0x90
+-IndirectCall:                           # @IndirectCall
+-# %bb.0:
+-	subq	$40, %rsp
+-	movq	%rcx, 32(%rsp)
+-	movq	32(%rsp), %rax
+-	movq	%rax, %rdx        # This would otherwise have be: movq __guard_dispatch_icall_fptr(%rip), %rdx
+-	xorl	%ecx, %ecx
+-	callq	*%rdx
+-	nop
+-	addq	$40, %rsp
+-	retq
+-                                        # -- End function
+-	.def	 main;	.scl	2;	.type	32;	.endef
+-	.globl	main                            # -- Begin function main
+-	.p2align	4, 0x90
+-main:                                   # @main
+-# %bb.0:
+-	subq	$56, %rsp
+-	movq	__imp_exportfn1(%rip), %rax
+-	movq	%rdx, 48(%rsp)
+-	movl	%ecx, 44(%rsp)
+-	movq	%rax, %rcx
+-	callq	IndirectCall
+-	xorl	%eax, %eax
+-	addq	$56, %rsp
+-	retq
+-                                        # -- End function
+-	.section	.gfids$y,"dr"
+-	.section	.giats$y,"dr"
+-	.symidx	__imp_exportfn1
+-	.section	.gljmp$y,"dr"
+-
+-# Load configuration directory entry (winnt.h _IMAGE_LOAD_CONFIG_DIRECTORY64).
+-# The linker will define the __guard_* symbols.
+-        .section .rdata,"dr"
+-.globl _load_config_used
+-_load_config_used:
+-        .long 256
+-        .fill 124, 1, 0
+-        .quad __guard_fids_table
+-        .quad __guard_fids_count
+-        .long __guard_flags
+-        .fill 12, 1, 0
+-        .quad __guard_iat_table
+-        .quad __guard_iat_count
+-        .quad __guard_longjmp_table
+-        .quad __guard_fids_count
+-        .fill 84, 1, 0
+\ No newline at end of file
+diff --git a/llvm/include/llvm/MC/MCObjectFileInfo.h b/llvm/include/llvm/MC/MCObjectFileInfo.h
+index 29bd13fe0a3..1420180e26c 100644
+--- a/llvm/include/llvm/MC/MCObjectFileInfo.h
++++ b/llvm/include/llvm/MC/MCObjectFileInfo.h
+@@ -215,7 +215,6 @@ protected:
+   MCSection *XDataSection = nullptr;
+   MCSection *SXDataSection = nullptr;
+   MCSection *GFIDsSection = nullptr;
+-  MCSection *GIATsSection = nullptr;
+   MCSection *GLJMPSection = nullptr;
+ 
+   // XCOFF specific sections
+@@ -398,7 +397,6 @@ public:
+   MCSection *getXDataSection() const { return XDataSection; }
+   MCSection *getSXDataSection() const { return SXDataSection; }
+   MCSection *getGFIDsSection() const { return GFIDsSection; }
+-  MCSection *getGIATsSection() const { return GIATsSection; }
+   MCSection *getGLJMPSection() const { return GLJMPSection; }
+ 
+   // XCOFF specific sections
+diff --git a/llvm/lib/CodeGen/AsmPrinter/WinCFGuard.cpp b/llvm/lib/CodeGen/AsmPrinter/WinCFGuard.cpp
+index 09bcf5cb25a..914308d9147 100644
+--- a/llvm/lib/CodeGen/AsmPrinter/WinCFGuard.cpp
++++ b/llvm/lib/CodeGen/AsmPrinter/WinCFGuard.cpp
+@@ -7,7 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ //
+ // This file contains support for writing the metadata for Windows Control Flow
+-// Guard, including address-taken functions and valid longjmp targets.
++// Guard, including address-taken functions, and valid longjmp targets.
+ //
+ //===----------------------------------------------------------------------===//
+ 
+@@ -17,8 +17,8 @@
+ #include "llvm/CodeGen/MachineModuleInfo.h"
+ #include "llvm/CodeGen/MachineOperand.h"
+ #include "llvm/IR/Constants.h"
+-#include "llvm/IR/Instructions.h"
+ #include "llvm/IR/Metadata.h"
++#include "llvm/IR/Instructions.h"
+ #include "llvm/MC/MCAsmInfo.h"
+ #include "llvm/MC/MCObjectFileInfo.h"
+ #include "llvm/MC/MCStreamer.h"
+@@ -78,49 +78,20 @@ static bool isPossibleIndirectCallTarget(const Function *F) {
+   return false;
+ }
+ 
+-/// Returns true if this function should be added to the Guard Address Taken IAT
+-/// Entry Table (GIATs) instead of the Guard Function ID Table (GFIDs).
+-static bool isIATAddressTaken(const Function *F) {
+-  if (F->hasDLLImportStorageClass()) {
+-    return true;
+-  }
+-  return false;
+-}
+-
+ void WinCFGuard::endModule() {
+   const Module *M = Asm->MMI->getModule();
+-  std::vector<const Function *> GFIDsEntries;
+-  std::vector<const Function *> GIATsEntries;
+-  for (const Function &F : *M) {
+-    if (isPossibleIndirectCallTarget(&F)) {
+-      if (isIATAddressTaken(&F)) {
+-        // If the possible call target is reached via the IAT, add it to the
+-        // GIATs table instead of the GFIDs table.
+-        GIATsEntries.push_back(&F);
+-      } else {
+-        // Otherwise add it to the GFIDs table.
+-        GFIDsEntries.push_back(&F);
+-      }
+-    }
+-  }
+-
+-  if (GFIDsEntries.empty() && GIATsEntries.empty() && LongjmpTargets.empty())
++  std::vector<const Function *> Functions;
++  for (const Function &F : *M)
++    if (isPossibleIndirectCallTarget(&F))
++      Functions.push_back(&F);
++  if (Functions.empty() && LongjmpTargets.empty())
+     return;
+-
+-  // Emit the symbol index of each GFIDs entry to form the GFIDs table.
+   auto &OS = *Asm->OutStreamer;
+   OS.SwitchSection(Asm->OutContext.getObjectFileInfo()->getGFIDsSection());
+-  for (const Function *F : GFIDsEntries)
++  for (const Function *F : Functions)
+     OS.EmitCOFFSymbolIndex(Asm->getSymbol(F));
+ 
+-  // Emit the symbol index of each GIATs entry to form the GIATs table.
+-  OS.SwitchSection(Asm->OutContext.getObjectFileInfo()->getGIATsSection());
+-  for (const Function *F : GIATsEntries) {
+-    OS.EmitCOFFSymbolIndex(Asm->OutContext.getOrCreateSymbol(
+-        Twine("__imp_") + Asm->getSymbol(F)->getName()));
+-  }
+-
+-  // Emit the symbol index of each longjmp target to form the GLJMP table.
++  // Emit the symbol index of each longjmp target.
+   OS.SwitchSection(Asm->OutContext.getObjectFileInfo()->getGLJMPSection());
+   for (const MCSymbol *S : LongjmpTargets) {
+     OS.EmitCOFFSymbolIndex(S);
+diff --git a/llvm/lib/MC/MCObjectFileInfo.cpp b/llvm/lib/MC/MCObjectFileInfo.cpp
+index b8c66c68f71..6632220d275 100644
+--- a/llvm/lib/MC/MCObjectFileInfo.cpp
++++ b/llvm/lib/MC/MCObjectFileInfo.cpp
+@@ -754,11 +754,6 @@ void MCObjectFileInfo::initCOFFMCObjectFileInfo(const Triple &T) {
+                                          COFF::IMAGE_SCN_MEM_READ,
+                                      SectionKind::getMetadata());
+ 
+-  GIATsSection = Ctx->getCOFFSection(".giats$y",
+-                                     COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+-                                         COFF::IMAGE_SCN_MEM_READ,
+-                                     SectionKind::getMetadata());
+-
+   GLJMPSection = Ctx->getCOFFSection(".gljmp$y",
+                                      COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                          COFF::IMAGE_SCN_MEM_READ,
+diff --git a/llvm/test/CodeGen/WinCFGuard/cfguard-giats.ll b/llvm/test/CodeGen/WinCFGuard/cfguard-giats.ll
+deleted file mode 100644
+index 0ac436cc6ad..00000000000
+--- a/llvm/test/CodeGen/WinCFGuard/cfguard-giats.ll
++++ /dev/null
+@@ -1,22 +0,0 @@
+-; RUN: llc < %s -mtriple=x86_64-pc-windows-msvc | FileCheck %s
+-; Control Flow Guard is currently only available on Windows
+-
+-declare dllimport i32 @target_func()
+-
+-; Test address-taken functions from imported DLLs are added to the 
+-; Guard Address-Taken IAT Entry table (.giats).
+-define i32 @func_cf_giats() {
+-entry:
+-  %func_ptr = alloca i32 ()*, align 8
+-  store i32 ()* @target_func, i32 ()** %func_ptr, align 8
+-  %0 = load i32 ()*, i32 ()** %func_ptr, align 8
+-  %1 = call i32 %0()
+-  ret i32 %1
+-}
+-
+-!llvm.module.flags = !{!0}
+-!0 = !{i32 2, !"cfguard", i32 2}
+-
+-; CHECK-LABEL: .section .giats$y,"dr"
+-; CHECK-NEXT:  .symidx __imp_target_func
+-; CHECK-NOT:   .symidx
+\ No newline at end of file
+diff --git a/llvm/tools/llvm-readobj/COFFDumper.cpp b/llvm/tools/llvm-readobj/COFFDumper.cpp
+index b1ac1d9d0f3..f59bfd8b7cb 100644
+--- a/llvm/tools/llvm-readobj/COFFDumper.cpp
++++ b/llvm/tools/llvm-readobj/COFFDumper.cpp
+@@ -67,8 +67,6 @@ struct LoadConfigTables {
+   uint32_t GuardFlags = 0;
+   uint64_t GuardFidTableVA = 0;
+   uint64_t GuardFidTableCount = 0;
+-  uint64_t GuardIatTableVA = 0;
+-  uint64_t GuardIatTableCount = 0;
+   uint64_t GuardLJmpTableVA = 0;
+   uint64_t GuardLJmpTableCount = 0;
+ };
+@@ -809,11 +807,6 @@ void COFFDumper::printCOFFLoadConfig() {
+     }
+   }
+ 
+-  if (Tables.GuardIatTableVA) {
+-    ListScope LS(W, "GuardIatTable");
+-    printRVATable(Tables.GuardIatTableVA, Tables.GuardIatTableCount, 4);
+-  }
+-
+   if (Tables.GuardLJmpTableVA) {
+     ListScope LS(W, "GuardLJmpTable");
+     printRVATable(Tables.GuardLJmpTableVA, Tables.GuardLJmpTableCount, 4);
+@@ -898,9 +891,6 @@ void COFFDumper::printCOFFLoadConfig(const T *Conf, LoadConfigTables &Tables) {
+              Conf->GuardRFVerifyStackPointerFunctionPointer);
+   W.printHex("HotPatchTableOffset", Conf->HotPatchTableOffset);
+ 
+-  Tables.GuardIatTableVA = Conf->GuardAddressTakenIatEntryTable;
+-  Tables.GuardIatTableCount = Conf->GuardAddressTakenIatEntryCount;
+-
+   Tables.GuardLJmpTableVA = Conf->GuardLongJumpTargetTable;
+   Tables.GuardLJmpTableCount = Conf->GuardLongJumpTargetCount;
+ }

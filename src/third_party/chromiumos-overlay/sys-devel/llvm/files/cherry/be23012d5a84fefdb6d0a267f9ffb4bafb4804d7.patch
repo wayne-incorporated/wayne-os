@@ -1,0 +1,300 @@
+commit be23012d5a84fefdb6d0a267f9ffb4bafb4804d7
+Author: Kazu Hirata <kazu@google.com>
+Date:   Sun Feb 7 09:49:36 2021 -0800
+
+    [Transforms/Utils] Use range-based for loops (NFC)
+
+diff --git a/llvm/lib/Transforms/Utils/CloneFunction.cpp b/llvm/lib/Transforms/Utils/CloneFunction.cpp
+index 51a49574e55d..a953ba5c6b14 100644
+--- a/llvm/lib/Transforms/Utils/CloneFunction.cpp
++++ b/llvm/lib/Transforms/Utils/CloneFunction.cpp
+@@ -563,9 +563,8 @@ void llvm::CloneAndPruneIntoFromInst(Function *NewFunc, const Function *OldFunc,
+       assert(NumPreds < PN->getNumIncomingValues());
+       // Count how many times each predecessor comes to this block.
+       std::map<BasicBlock*, unsigned> PredCount;
+-      for (pred_iterator PI = pred_begin(NewBB), E = pred_end(NewBB);
+-           PI != E; ++PI)
+-        --PredCount[*PI];
++      for (BasicBlock *Pred : predecessors(NewBB))
++        --PredCount[Pred];
+ 
+       // Figure out how many entries to remove from each PHI.
+       for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+diff --git a/llvm/lib/Transforms/Utils/CloneModule.cpp b/llvm/lib/Transforms/Utils/CloneModule.cpp
+index a6327bbf21bc..6de679bc9640 100644
+--- a/llvm/lib/Transforms/Utils/CloneModule.cpp
++++ b/llvm/lib/Transforms/Utils/CloneModule.cpp
+@@ -115,28 +115,27 @@ std::unique_ptr<Module> llvm::CloneModule(
+   // have been created, loop through and copy the global variable referrers
+   // over...  We also set the attributes on the global now.
+   //
+-  for (Module::const_global_iterator I = M.global_begin(), E = M.global_end();
+-       I != E; ++I) {
+-    GlobalVariable *GV = cast<GlobalVariable>(VMap[&*I]);
++  for (const GlobalVariable &G : M.globals()) {
++    GlobalVariable *GV = cast<GlobalVariable>(VMap[&G]);
+ 
+     SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
+-    I->getAllMetadata(MDs);
++    G.getAllMetadata(MDs);
+     for (auto MD : MDs)
+       GV->addMetadata(MD.first,
+                       *MapMetadata(MD.second, VMap, RF_MoveDistinctMDs));
+ 
+-    if (I->isDeclaration())
++    if (G.isDeclaration())
+       continue;
+ 
+-    if (!ShouldCloneDefinition(&*I)) {
++    if (!ShouldCloneDefinition(&G)) {
+       // Skip after setting the correct linkage for an external reference.
+       GV->setLinkage(GlobalValue::ExternalLinkage);
+       continue;
+     }
+-    if (I->hasInitializer())
+-      GV->setInitializer(MapValue(I->getInitializer(), VMap));
++    if (G.hasInitializer())
++      GV->setInitializer(MapValue(G.getInitializer(), VMap));
+ 
+-    copyComdat(GV, &*I);
++    copyComdat(GV, &G);
+   }
+ 
+   // Similarly, copy over function bodies now...
+diff --git a/llvm/lib/Transforms/Utils/CodeExtractor.cpp b/llvm/lib/Transforms/Utils/CodeExtractor.cpp
+index 461be91f2623..ec316dec9361 100644
+--- a/llvm/lib/Transforms/Utils/CodeExtractor.cpp
++++ b/llvm/lib/Transforms/Utils/CodeExtractor.cpp
+@@ -1611,15 +1611,14 @@ CodeExtractor::extractCodeRegion(const CodeExtractorAnalysisCache &CEAC) {
+   DenseMap<BasicBlock *, BlockFrequency> ExitWeights;
+   SmallPtrSet<BasicBlock *, 1> ExitBlocks;
+   for (BasicBlock *Block : Blocks) {
+-    for (succ_iterator SI = succ_begin(Block), SE = succ_end(Block); SI != SE;
+-         ++SI) {
+-      if (!Blocks.count(*SI)) {
++    for (BasicBlock *Succ : successors(Block)) {
++      if (!Blocks.count(Succ)) {
+         // Update the branch weight for this successor.
+         if (BFI) {
+-          BlockFrequency &BF = ExitWeights[*SI];
+-          BF += BFI->getBlockFreq(Block) * BPI->getEdgeProbability(Block, *SI);
++          BlockFrequency &BF = ExitWeights[Succ];
++          BF += BFI->getBlockFreq(Block) * BPI->getEdgeProbability(Block, Succ);
+         }
+-        ExitBlocks.insert(*SI);
++        ExitBlocks.insert(Succ);
+       }
+     }
+   }
+diff --git a/llvm/lib/Transforms/Utils/FixIrreducible.cpp b/llvm/lib/Transforms/Utils/FixIrreducible.cpp
+index 44af95eef67d..10f48fe827f4 100644
+--- a/llvm/lib/Transforms/Utils/FixIrreducible.cpp
++++ b/llvm/lib/Transforms/Utils/FixIrreducible.cpp
+@@ -129,8 +129,7 @@ static void reconnectChildLoops(LoopInfo &LI, Loop *ParentLoop, Loop *NewLoop,
+   SmallVector<Loop *, 8> ChildLoops(FirstChild, CandidateLoops.end());
+   CandidateLoops.erase(FirstChild, CandidateLoops.end());
+ 
+-  for (auto II = ChildLoops.begin(), IE = ChildLoops.end(); II != IE; ++II) {
+-    auto Child = *II;
++  for (Loop *Child : ChildLoops) {
+     LLVM_DEBUG(dbgs() << "child loop: " << Child->getHeader()->getName()
+                       << "\n");
+     // TODO: A child loop whose header is also a header in the current
+diff --git a/llvm/lib/Transforms/Utils/Local.cpp b/llvm/lib/Transforms/Utils/Local.cpp
+index 948bf08e7cfe..f8c792a34f0e 100644
+--- a/llvm/lib/Transforms/Utils/Local.cpp
++++ b/llvm/lib/Transforms/Utils/Local.cpp
+@@ -743,11 +743,11 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB,
+   SmallVector<DominatorTree::UpdateType, 32> Updates;
+ 
+   if (DTU) {
+-    for (auto I = pred_begin(PredBB), E = pred_end(PredBB); I != E; ++I) {
++    for (BasicBlock *PredPredBB : predecessors(PredBB)) {
+       // This predecessor of PredBB may already have DestBB as a successor.
+-      if (!llvm::is_contained(successors(*I), DestBB))
+-        Updates.push_back({DominatorTree::Insert, *I, DestBB});
+-      Updates.push_back({DominatorTree::Delete, *I, PredBB});
++      if (!llvm::is_contained(successors(PredPredBB), DestBB))
++        Updates.push_back({DominatorTree::Insert, PredPredBB, DestBB});
++      Updates.push_back({DominatorTree::Delete, PredPredBB, PredBB});
+     }
+     Updates.push_back({DominatorTree::Delete, PredBB, DestBB});
+   }
+@@ -1040,8 +1040,8 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
+ 
+   // We cannot fold the block if it's a branch to an already present callbr
+   // successor because that creates duplicate successors.
+-  for (auto I = pred_begin(BB), E = pred_end(BB); I != E; ++I) {
+-    if (auto *CBI = dyn_cast<CallBrInst>((*I)->getTerminator())) {
++  for (BasicBlock *PredBB : predecessors(BB)) {
++    if (auto *CBI = dyn_cast<CallBrInst>(PredBB->getTerminator())) {
+       if (Succ == CBI->getDefaultDest())
+         return false;
+       for (unsigned i = 0, e = CBI->getNumIndirectDests(); i != e; ++i)
+@@ -1102,10 +1102,8 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
+   Instruction *TI = BB->getTerminator();
+   if (TI)
+     if (MDNode *LoopMD = TI->getMetadata(LoopMDKind))
+-      for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
+-        BasicBlock *Pred = *PI;
++      for (BasicBlock *Pred : predecessors(BB))
+         Pred->getTerminator()->setMetadata(LoopMDKind, LoopMD);
+-      }
+ 
+   // Everything that jumped to BB now goes to Succ.
+   BB->replaceAllUsesWith(Succ);
+diff --git a/llvm/lib/Transforms/Utils/LoopSimplify.cpp b/llvm/lib/Transforms/Utils/LoopSimplify.cpp
+index 2e104334ad96..6adfeaf4fd5f 100644
+--- a/llvm/lib/Transforms/Utils/LoopSimplify.cpp
++++ b/llvm/lib/Transforms/Utils/LoopSimplify.cpp
+@@ -127,9 +127,7 @@ BasicBlock *llvm::InsertPreheaderForLoop(Loop *L, DominatorTree *DT,
+ 
+   // Compute the set of predecessors of the loop that are not in the loop.
+   SmallVector<BasicBlock*, 8> OutsideBlocks;
+-  for (pred_iterator PI = pred_begin(Header), PE = pred_end(Header);
+-       PI != PE; ++PI) {
+-    BasicBlock *P = *PI;
++  for (BasicBlock *P : predecessors(Header)) {
+     if (!L->contains(P)) {         // Coming in from outside the loop?
+       // If the loop is branched to from an indirect terminator, we won't
+       // be able to fully transform the loop, because it prohibits
+@@ -381,9 +379,7 @@ static BasicBlock *insertUniqueBackedgeBlock(Loop *L, BasicBlock *Preheader,
+ 
+   // Figure out which basic blocks contain back-edges to the loop header.
+   std::vector<BasicBlock*> BackedgeBlocks;
+-  for (pred_iterator I = pred_begin(Header), E = pred_end(Header); I != E; ++I){
+-    BasicBlock *P = *I;
+-
++  for (BasicBlock *P : predecessors(Header)) {
+     // Indirect edges cannot be split, so we must fail if we find one.
+     if (P->getTerminator()->isIndirectTerminator())
+       return nullptr;
+@@ -505,12 +501,9 @@ ReprocessLoop:
+     if (*BB == L->getHeader()) continue;
+ 
+     SmallPtrSet<BasicBlock*, 4> BadPreds;
+-    for (pred_iterator PI = pred_begin(*BB),
+-         PE = pred_end(*BB); PI != PE; ++PI) {
+-      BasicBlock *P = *PI;
++    for (BasicBlock *P : predecessors(*BB))
+       if (!L->contains(P))
+         BadPreds.insert(P);
+-    }
+ 
+     // Delete each unique out-of-loop (and thus dead) predecessor.
+     for (BasicBlock *P : BadPreds) {
+@@ -904,9 +897,8 @@ static void verifyLoop(Loop *L) {
+   // Indirectbr can interfere with preheader and unique backedge insertion.
+   if (!L->getLoopPreheader() || !L->getLoopLatch()) {
+     bool HasIndBrPred = false;
+-    for (pred_iterator PI = pred_begin(L->getHeader()),
+-         PE = pred_end(L->getHeader()); PI != PE; ++PI)
+-      if (isa<IndirectBrInst>((*PI)->getTerminator())) {
++    for (BasicBlock *Pred : predecessors(L->getHeader()))
++      if (isa<IndirectBrInst>(Pred->getTerminator())) {
+         HasIndBrPred = true;
+         break;
+       }
+diff --git a/llvm/lib/Transforms/Utils/MetaRenamer.cpp b/llvm/lib/Transforms/Utils/MetaRenamer.cpp
+index e350320e7569..b1965cf2becb 100644
+--- a/llvm/lib/Transforms/Utils/MetaRenamer.cpp
++++ b/llvm/lib/Transforms/Utils/MetaRenamer.cpp
+@@ -67,9 +67,9 @@ struct Renamer {
+ };
+ 
+ void MetaRename(Function &F) {
+-  for (auto AI = F.arg_begin(), AE = F.arg_end(); AI != AE; ++AI)
+-    if (!AI->getType()->isVoidTy())
+-      AI->setName("arg");
++  for (Argument &Arg : F.args())
++    if (!Arg.getType()->isVoidTy())
++      Arg.setName("arg");
+ 
+   for (auto &BB : F) {
+     BB.setName("bb");
+@@ -101,12 +101,12 @@ void MetaRename(Module &M,
+   }
+ 
+   // Rename all global variables
+-  for (auto GI = M.global_begin(), GE = M.global_end(); GI != GE; ++GI) {
+-    StringRef Name = GI->getName();
++  for (GlobalVariable &GV : M.globals()) {
++    StringRef Name = GV.getName();
+     if (Name.startswith("llvm.") || (!Name.empty() && Name[0] == 1))
+       continue;
+ 
+-    GI->setName("global");
++    GV.setName("global");
+   }
+ 
+   // Rename all struct types
+diff --git a/llvm/lib/Transforms/Utils/SimplifyCFG.cpp b/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
+index b7184f25c183..df851c1b4a4c 100644
+--- a/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
++++ b/llvm/lib/Transforms/Utils/SimplifyCFG.cpp
+@@ -2279,8 +2279,8 @@ bool SimplifyCFGOpt::SpeculativelyExecuteBB(BranchInst *BI, BasicBlock *ThenBB,
+     // Do not hoist the instruction if any of its operands are defined but not
+     // used in BB. The transformation will prevent the operand from
+     // being sunk into the use block.
+-    for (User::op_iterator i = I->op_begin(), e = I->op_end(); i != e; ++i) {
+-      Instruction *OpI = dyn_cast<Instruction>(*i);
++    for (Use &Op : I->operands()) {
++      Instruction *OpI = dyn_cast<Instruction>(Op);
+       if (!OpI || OpI->getParent() != BB || OpI->mayHaveSideEffects())
+         continue; // Not a candidate for sinking.
+ 
+@@ -2479,10 +2479,10 @@ static bool FoldCondBranchOnPHI(BranchInst *BI, DomTreeUpdater *DTU,
+         N->setName(BBI->getName() + ".c");
+ 
+       // Update operands due to translation.
+-      for (User::op_iterator i = N->op_begin(), e = N->op_end(); i != e; ++i) {
+-        DenseMap<Value *, Value *>::iterator PI = TranslateMap.find(*i);
++      for (Use &Op : N->operands()) {
++        DenseMap<Value *, Value *>::iterator PI = TranslateMap.find(Op);
+         if (PI != TranslateMap.end())
+-          *i = PI->second;
++          Op = PI->second;
+       }
+ 
+       // Check for trivial simplification.
+@@ -3032,8 +3032,7 @@ bool llvm::FoldBranchToCommonDest(BranchInst *BI, DomTreeUpdater *DTU,
+   if (is_contained(successors(BB), BB))
+     return Changed;
+ 
+-  for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
+-    BasicBlock *PredBlock = *PI;
++  for (BasicBlock *PredBlock : predecessors(BB)) {
+     BranchInst *PBI = dyn_cast<BranchInst>(PredBlock->getTerminator());
+ 
+     // Check that we have two conditional branches.  If there is a PHI node in
+@@ -4410,8 +4409,7 @@ bool SimplifyCFGOpt::simplifyReturn(ReturnInst *RI, IRBuilder<> &Builder) {
+   // Find predecessors that end with branches.
+   SmallVector<BasicBlock *, 8> UncondBranchPreds;
+   SmallVector<BranchInst *, 8> CondBranchPreds;
+-  for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
+-    BasicBlock *P = *PI;
++  for (BasicBlock *P : predecessors(BB)) {
+     Instruction *PTI = P->getTerminator();
+     if (BranchInst *BI = dyn_cast<BranchInst>(PTI)) {
+       if (BI->isUnconditional())
+@@ -5641,8 +5639,7 @@ static void reuseTableCompare(
+   // Although this check is invariant in the calling loops, it's better to do it
+   // at this late stage. Practically we do it at most once for a switch.
+   BasicBlock *BranchBlock = RangeCheckBranch->getParent();
+-  for (auto PI = pred_begin(PhiBlock), E = pred_end(PhiBlock); PI != E; ++PI) {
+-    BasicBlock *Pred = *PI;
++  for (BasicBlock *Pred : predecessors(PhiBlock)) {
+     if (Pred != BranchBlock && Pred->getUniquePredecessor() != BranchBlock)
+       return;
+   }
+@@ -6361,8 +6358,8 @@ bool SimplifyCFGOpt::simplifyCondBranch(BranchInst *BI, IRBuilder<> &Builder) {
+         return requestResimplify();
+ 
+   // Scan predecessor blocks for conditional branches.
+-  for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI)
+-    if (BranchInst *PBI = dyn_cast<BranchInst>((*PI)->getTerminator()))
++  for (BasicBlock *Pred : predecessors(BB))
++    if (BranchInst *PBI = dyn_cast<BranchInst>(Pred->getTerminator()))
+       if (PBI != BI && PBI->isConditional())
+         if (SimplifyCondBranchToCondBranch(PBI, BI, DTU, DL, TTI))
+           return requestResimplify();

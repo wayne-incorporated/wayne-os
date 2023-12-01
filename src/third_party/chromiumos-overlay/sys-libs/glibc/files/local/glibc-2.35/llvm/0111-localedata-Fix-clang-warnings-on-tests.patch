@@ -1,0 +1,40 @@
+From a22d07d0e54fab37da9823ec222a28af19e43452 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 15 Mar 2022 15:29:47 -0300
+Subject: [PATCH 111/163] localedata: Fix clang warnings on tests
+
+clang does not support 'I' specifier and handles it as a 'length
+modifier'.
+---
+ localedata/tst-trans.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/localedata/tst-trans.c b/localedata/tst-trans.c
+index c97c44aaeb..99b63016f0 100644
+--- a/localedata/tst-trans.c
++++ b/localedata/tst-trans.c
+@@ -22,6 +22,7 @@
+ #include <string.h>
+ #include <wchar.h>
+ #include <wctype.h>
++#include <libc-diag.h>
+ 
+ static int
+ do_test (void)
+@@ -59,7 +60,12 @@ do_test (void)
+   errors |= len != 10;
+   printf ("len = %d, wbuf = L\"%ls\"\n", len, wbuf);
+ 
+-  snprintf (buf, sizeof buf, "%Id", 0x499602D2);
++  /* clang does not support 'I' specifier and handles it as a 'length
++   * modifier'.  */
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wformat");
++  snprintf (buf, sizeof buf, "%Id", 0x499602D2U);
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   errors |= strcmp (buf, "bcdefghija") != 0;
+   len = strlen (buf);
+   errors |= len != 10;
+-- 
+2.37.2
+

@@ -1,0 +1,118 @@
+commit 09d27bdb86ced873c69bd42864bf82c5adca342b
+Author: Arthur Eubanks <aeubanks@google.com>
+Date:   Wed May 3 08:52:30 2023 -0700
+
+    Revert "[Pipeline] Don't limit ArgumentPromotion to -O3"
+    
+    This reverts commit 5b386b864c7619897c51a1da97d78f1cf6f3eff6.
+    
+    Causes noticeable size increases under -Oz.
+
+diff --git a/llvm/lib/Passes/PassBuilderPipelines.cpp b/llvm/lib/Passes/PassBuilderPipelines.cpp
+index 2b392f128243..3f929906313a 100644
+--- a/llvm/lib/Passes/PassBuilderPipelines.cpp
++++ b/llvm/lib/Passes/PassBuilderPipelines.cpp
+@@ -884,8 +884,10 @@ PassBuilder::buildInlinerPipeline(OptimizationLevel Level,
+   // functions.
+   MainCGPipeline.addPass(PostOrderFunctionAttrsPass(/*SkipNonRecursive*/ true));
+ 
+-  // Try to promote pointer arguments for internal functions.
+-  MainCGPipeline.addPass(ArgumentPromotionPass());
++  // When at O3 add argument promotion to the pass pipeline.
++  // FIXME: It isn't at all clear why this should be limited to O3.
++  if (Level == OptimizationLevel::O3)
++    MainCGPipeline.addPass(ArgumentPromotionPass());
+ 
+   // Try to perform OpenMP specific optimizations. This is a (quick!) no-op if
+   // there are no OpenMP runtime calls present in the module.
+diff --git a/llvm/test/Other/new-pm-defaults.ll b/llvm/test/Other/new-pm-defaults.ll
+index ddde17fb7e0c..59770fa6b177 100644
+--- a/llvm/test/Other/new-pm-defaults.ll
++++ b/llvm/test/Other/new-pm-defaults.ll
+@@ -139,7 +139,7 @@
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+-; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
++; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
+ ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass on (foo)
+ ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass on (foo)
+ ; CHECK-EP-CGSCC-LATE-NEXT: Running pass: NoOpCGSCCPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll
+index d8ce164628ee..032ace3ec9f7 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-defaults.ll
+@@ -85,7 +85,7 @@
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+-; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
++; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
+ ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass on (foo)
+ ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass on (foo)
+ ; CHECK-O-NEXT: Running pass: SROAPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+index 781911b7be97..ec68f582f985 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-pgo-defaults.ll
+@@ -74,7 +74,7 @@
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+-; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
++; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
+ ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O-NEXT: Running pass: SROAPass
+diff --git a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+index 46fd7f1a12a1..918800f2b467 100644
+--- a/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-postlink-samplepgo-defaults.ll
+@@ -81,7 +81,7 @@
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+-; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
++; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
+ ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O-NEXT: Running pass: SROAPass
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
+index 2ad8e0dde2d9..252b68fab469 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
+@@ -85,7 +85,7 @@
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+-; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
++; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
+ ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass on (foo)
+ ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass on (foo)
+ ; CHECK-O-NEXT: Running pass: SROAPass
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
+index fe68369b7238..fa0ec4eeeaeb 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
+@@ -99,7 +99,7 @@
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+-; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
++; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
+ ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O-NEXT: Running pass: SROAPass
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
+index 81f326fe70f7..a3784aee11bc 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
+@@ -78,7 +78,7 @@
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: InlinerPass
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+-; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
++; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
+ ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass
+ ; CHECK-O-NEXT: Running pass: SROAPass

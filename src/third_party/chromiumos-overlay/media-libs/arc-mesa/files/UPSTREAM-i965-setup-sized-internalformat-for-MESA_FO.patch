@@ -1,0 +1,51 @@
+From 1c1e1fe522cd2739341cd77612c6a1f63b62ea7b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Tapani=20P=C3=A4lli?= <tapani.palli@intel.com>
+Date: Fri, 11 Oct 2019 09:42:21 +0300
+Subject: [PATCH] FROMLIST: i965: setup sized internalformat for
+ MESA_FORMAT_R10G10B10A2_UNORM
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Commit d2b60e433e5 introduced restrictions (as per GLES spec) on the
+internal format. We need to setup a sized format for the texture image
+so framebuffers created with that are considered complete.
+
+This change fixes following Android CTS test in AHardwareBufferNativeTests
+category:
+
+   SingleLayer_ColorTest_GpuColorOutputAndSampledImage_R10G10B10A2_UNORM
+
+Change-Id: Ic23eae7c97a8b55b30ef07759f122ea8bacc10b3
+Signed-off-by: Tapani Pälli <tapani.palli@intel.com>
+(cherry picked from commit 412badd059de6f55cbcab10a55d052986a74b4cd)
+---
+ src/mesa/drivers/dri/i965/intel_tex_image.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/mesa/drivers/dri/i965/intel_tex_image.c b/src/mesa/drivers/dri/i965/intel_tex_image.c
+index 8d4ca7fed72..a6fd2aeeddc 100644
+--- a/src/mesa/drivers/dri/i965/intel_tex_image.c
++++ b/src/mesa/drivers/dri/i965/intel_tex_image.c
+@@ -630,9 +630,17 @@ intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
+    struct intel_texture_object *intel_texobj = intel_texture_object(texObj);
+    intel_texobj->planar_format = image->planar_format;
+ 
+-   const GLenum internal_format =
++   GLenum internal_format =
+       image->internal_format != 0 ?
+       image->internal_format : _mesa_get_format_base_format(mt->format);
++
++   /* Setup a sized internal format for MESA_FORMAT_R10G10B10[X2|A2]_UNORM. */
++   if (brw->mesa_format_supports_render[image->format]) {
++      if (image->format == MESA_FORMAT_R10G10B10A2_UNORM ||
++          image->format == MESA_FORMAT_R10G10B10X2_UNORM)
++         internal_format = GL_RGB10_A2;
++   }
++
+    intel_set_texture_image_mt(brw, texImage, internal_format, mt->format, mt);
+    intel_miptree_release(&mt);
+ }
+-- 
+2.21.0
+

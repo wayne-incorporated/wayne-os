@@ -1,0 +1,30 @@
+From c9e1637ceecfb73b11a281abaf0cd7e14b8c1b5e Mon Sep 17 00:00:00 2001
+From: Frank Henigman <fjhenigman@google.com>
+Date: Mon, 2 Nov 2015 16:59:13 -0500
+Subject: [PATCH] null: use EGL_DEFAULT_DISPLAY
+
+In the null platform it shouldn't matter which display we use with EGL
+since we don't asking EGL to show anything.  Passing EGL_DEFAULT_DISPLAY
+instead of the actual native display lets waffle work on implementations
+that get confused by a native display.
+---
+ src/waffle/null/wnull_display.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/src/waffle/null/wnull_display.c b/src/waffle/null/wnull_display.c
+index 5ed621d..210d208 100644
+--- a/src/waffle/null/wnull_display.c
++++ b/src/waffle/null/wnull_display.c
+@@ -203,8 +203,7 @@ wnull_display_connect(struct wcore_platform *wc_plat,
+     if (!self->drm)
+         goto error;
+ 
+-    if (!wegl_display_init(&self->wegl, wc_plat,
+-                           (intptr_t) self->drm->gbm_device))
++    if (!wegl_display_init(&self->wegl, wc_plat, (intptr_t)EGL_DEFAULT_DISPLAY))
+         goto error;
+ 
+     self->param.width = self->drm->width;
+-- 
+2.6.0.rc2.230.g3dd15c0
+

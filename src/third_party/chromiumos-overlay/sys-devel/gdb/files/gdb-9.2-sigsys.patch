@@ -1,0 +1,29 @@
+This patch adds information about _sigsys structure from newer kernels, so that
+$_siginfo decoding can show information about _sigsys, making it easier for
+developers to debug seccomp failures.
+
+Code is copied from suggested patch for this issue in
+https://sourceware.org/bugzilla/show_bug.cgi?id=24283.
+
+This fixes crosbug/937009.
+
+Author: cmtice@google.com
+Date: 09-Mar-2021
+diff --git a/gdb/linux-tdep.c b/gdb/linux-tdep.c
+index 59d04c4..c52d425 100644
+--- a/gdb/linux-tdep.c
++++ b/gdb/linux-tdep.c
+@@ -350,6 +350,13 @@ linux_get_siginfo_type_with_fields (struct gdbarch *gdbarch,
+   append_composite_type_field (type, "si_fd", int_type);
+   append_composite_type_field (sifields_type, "_sigpoll", type);
+ 
++  /* _sigsys */
++  type = arch_composite_type (gdbarch, NULL, TYPE_CODE_STRUCT);
++  append_composite_type_field (type, "_call_addr", void_ptr_type);
++  append_composite_type_field (type, "_syscall", int_type);
++  append_composite_type_field (type, "_arch", uint_type);
++  append_composite_type_field (sifields_type, "_sigsys", type);
++
+   /* struct siginfo */
+   siginfo_type = arch_composite_type (gdbarch, NULL, TYPE_CODE_STRUCT);
+   TYPE_NAME (siginfo_type) = xstrdup ("siginfo");

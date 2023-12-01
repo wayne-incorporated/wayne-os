@@ -1,0 +1,50 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":dev_install" ]
+  if (use.test) {
+    deps += [ ":dev_install_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "vboot_host",
+  ]
+}
+
+static_library("libdev_install") {
+  sources = [ "dev_install.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("dev_install") {
+  sources = [ "dev_install_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libdev_install" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("dev_install_test") {
+    sources = [ "dev_install_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    deps = [
+      ":libdev_install",
+      "//common-mk/testrunner",
+    ]
+  }
+}

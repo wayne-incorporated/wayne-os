@@ -1,0 +1,30 @@
+This patch stops any tampering with library path variables and ensures that
+the SDK's version of shlibsign is always used in the signing process. See
+crbug/884946 for more information.
+
+diff --git a/nss/cmd/shlibsign/sign.sh b/nss/cmd/shlibsign/sign.sh
+index d8bd837..1944aa9 100644
+--- nss/cmd/shlibsign/sign.sh
++++ nss/cmd/shlibsign/sign.sh
+@@ -33,19 +33,7 @@ WIN*)
+     "${2}"/shlibsign -v -i "${5}"
+     ;;
+ *)
+-    LIBPATH=`(cd "${1}"/lib; pwd)`:`(cd "${4}"; pwd)`:$LIBPATH
+-    export LIBPATH
+-    SHLIB_PATH=${1}/lib:${4}:$SHLIB_PATH
+-    export SHLIB_PATH
+-    LD_LIBRARY_PATH=${1}/lib:${4}:$LD_LIBRARY_PATH
+-    export LD_LIBRARY_PATH
+-    DYLD_LIBRARY_PATH=${1}/lib:${4}:$DYLD_LIBRARY_PATH
+-    export DYLD_LIBRARY_PATH
+-    LIBRARY_PATH=${1}/lib:${4}:$LIBRARY_PATH
+-    export LIBRARY_PATH
+-    ADDON_PATH=${1}/lib:${4}:$ADDON_PATH
+-    export ADDON_PATH
+-    echo "${2}"/shlibsign -v -i "${5}"
+-    "${2}"/shlibsign -v -i "${5}"
++    echo shlibsign -v -i "${5}"
++    shlibsign -v -i "${5}"
+     ;;
+ esac

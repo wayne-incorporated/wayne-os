@@ -1,0 +1,35 @@
+From 15f361ac1b13c122d37626cad8de324b20cc8178 Mon Sep 17 00:00:00 2001
+From: Jorge Lucangeli Obes <jorgelo@chromium.org>
+Date: Tue, 1 Jun 2021 20:16:58 +0000
+Subject: [PATCH 08/19] Fix OOB read in dhcpcd.
+
+Should have done this sooner, but hey, late is better than never.
+
+Based on https://googleplex-android-review.git.corp.google.com/#/c/588010/.
+
+BUG=chromium:433078
+TEST=Deploy to Chromebook, connect to network, get DHCP lease.
+
+Reviewed-on: https://chromium-review.googlesource.com/242880
+---
+ src/dhcp-common.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/dhcp-common.c b/src/dhcp-common.c
+index 866c3ccb..b9b6fbbb 100644
+--- a/src/dhcp-common.c
++++ b/src/dhcp-common.c
+@@ -819,6 +819,10 @@ print_option(char *s, size_t len, const struct dhcp_opt *opt,
+ 		}
+ 		if (sl == -1)
+ 			return bytes == 0 ? -1 : bytes;
++		if (len <= (size_t)sl) {
++			bytes += len;
++			break;
++		}
+ 		len -= (size_t)sl;
+ 		bytes += sl;
+ 		s += sl;
+-- 
+2.33.0.800.g4c38ced690-goog
+

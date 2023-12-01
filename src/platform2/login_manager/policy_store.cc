@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,20 @@
 #include <base/files/file_util.h>
 #include <base/logging.h>
 #include <base/notreached.h>
+#include <brillo/files/file_util.h>
 #include <policy/policy_util.h>
 
 #include "login_manager/system_utils_impl.h"
 
 namespace login_manager {
 
-namespace {
-
-const char kPrefsFileName[] = "preferences";
-
-}  // namespace
-
 PolicyStore::PolicyStore(const base::FilePath& policy_path)
-    : policy_path_(policy_path) {}
+    : PolicyStore(policy_path, /*is_resilient=*/false) {}
+
+PolicyStore::PolicyStore(const base::FilePath& policy_path, bool is_resilient)
+    : policy_path_(policy_path), is_resilient_store_(is_resilient) {}
 
 PolicyStore::~PolicyStore() {}
-
-bool PolicyStore::DefunctPrefsFilePresent() {
-  return base::PathExists(policy_path_.DirName().Append(kPrefsFileName));
-}
 
 bool PolicyStore::EnsureLoadedOrCreated() {
   if (load_result_ == NOT_LOADED)
@@ -48,21 +42,24 @@ bool PolicyStore::LoadOrCreate() {
 }
 
 bool PolicyStore::LoadOrCreateFromPath(const base::FilePath& policy_path) {
+  DCHECK(!is_resilient_store_);
   std::string polstr;
-  cached_policy_data_.clear();
   policy::LoadPolicyResult result =
       policy::LoadPolicyFromPath(policy_path, &polstr, &policy_);
   switch (result) {
     case policy::LoadPolicyResult::kSuccess:
-      cached_policy_data_ = polstr;
       return true;
     case policy::LoadPolicyResult::kFileNotFound:
       return true;
     case policy::LoadPolicyResult::kFailedToReadFile:
+      LOG(WARNING) << "Failed to read policy file: " << policy_path.value();
+      return false;
     case policy::LoadPolicyResult::kEmptyFile:
+      LOG(WARNING) << "Empty policy file: " << policy_path.value();
       return false;
     case policy::LoadPolicyResult::kInvalidPolicyData:
-      base::DeleteFile(policy_path);
+      LOG(WARNING) << "Invalid policy data: " << policy_path.value();
+      brillo::DeleteFile(policy_path);
       policy_.Clear();
       return false;
   }
@@ -71,6 +68,10 @@ bool PolicyStore::LoadOrCreateFromPath(const base::FilePath& policy_path) {
 }
 
 bool PolicyStore::PersistToPath(const base::FilePath& policy_path) {
+  // Skip if there's no change in policy data.
+  if (!explicit_update_persist_pending_)
+    return true;
+
   SystemUtilsImpl utils;
   std::string policy_blob;
   if (!policy_.SerializeToString(&policy_blob)) {
@@ -78,16 +79,11 @@ bool PolicyStore::PersistToPath(const base::FilePath& policy_path) {
     return false;
   }
 
-  // Skip writing to the file if the contents of policy data haven't been
-  // changed.
-  if (cached_policy_data_ == policy_blob)
-    return true;
-
   if (!utils.AtomicFileWrite(policy_path, policy_blob))
     return false;
 
   LOG(INFO) << "Persisted policy to disk, path: " << policy_path.value();
-  cached_policy_data_ = policy_blob;
+  explicit_update_persist_pending_ = false;
   return true;
 }
 
@@ -96,13 +92,7 @@ void PolicyStore::Set(
   policy_.Clear();
   // This can only fail if |policy| and |policy_| are different types.
   policy_.CheckTypeAndMergeFrom(policy);
-}
-
-bool PolicyStore::Delete() {
-  if (!base::DeleteFile(policy_path_))
-    return false;
-  policy_.Clear();
-  return true;
+  explicit_update_persist_pending_ = true;
 }
 
 }  // namespace login_manager

@@ -1,0 +1,64 @@
+commit e517a2405f39a174e65e4105106ae39704f88e4d
+Author: David Spickett <david.spickett@linaro.org>
+Date:   Fri Jul 30 16:36:33 2021 +0100
+
+    Revert "[libcxx][CI] Work around Arm buildkite failures"
+    
+    This reverts commit f8bef4734845226c079900de3c273c8ab1915b49.
+    
+    Buildkite agent 3.32.0 includes a fix for the PATH issue.
+    https://github.com/buildkite/agent/releases/tag/v3.32.0
+    
+    Differential Revision: https://reviews.llvm.org/D107172
+
+diff --git a/libcxx/utils/ci/run-buildbot b/libcxx/utils/ci/run-buildbot
+index 2dfd3ab0f680..0c5b17e9c52b 100755
+--- a/libcxx/utils/ci/run-buildbot
++++ b/libcxx/utils/ci/run-buildbot
+@@ -480,15 +480,11 @@ legacy-standalone)
+     ${NINJA} -vC "${BUILD_DIR}/libcxxabi" check-cxxabi
+ ;;
+ aarch64)
+-    export CC=/usr/local/bin/cc
+-    export CXX=/usr/local/bin/c++
+     clean
+     generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/AArch64.cmake"
+     check-cxx-cxxabi
+ ;;
+ aarch64-noexceptions)
+-    export CC=/usr/local/bin/cc
+-    export CXX=/usr/local/bin/c++
+     clean
+     generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/AArch64.cmake" \
+                    -DLIBCXX_ENABLE_EXCEPTIONS=OFF \
+@@ -497,30 +493,22 @@ aarch64-noexceptions)
+ ;;
+ # Aka Armv8 32 bit
+ armv8)
+-    export CC=/usr/local/bin/cc
+-    export CXX=/usr/local/bin/c++
+     clean
+     generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/Armv8Arm.cmake"
+     check-cxx-cxxabi
+ ;;
+ armv8-noexceptions)
+-    export CC=/usr/local/bin/cc
+-    export CXX=/usr/local/bin/c++
+     clean
+     generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/Armv8Thumb-noexceptions.cmake"
+     check-cxx-cxxabi
+ ;;
+ # Armv7 32 bit. One building Arm only one Thumb only code.
+ armv7)
+-    export CC=/usr/local/bin/cc
+-    export CXX=/usr/local/bin/c++
+     clean
+     generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/Armv7Arm.cmake"
+     check-cxx-cxxabi
+ ;;
+ armv7-noexceptions)
+-    export CC=/usr/local/bin/cc
+-    export CXX=/usr/local/bin/c++
+     clean
+     generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/Armv7Thumb-noexceptions.cmake"
+     check-cxx-cxxabi

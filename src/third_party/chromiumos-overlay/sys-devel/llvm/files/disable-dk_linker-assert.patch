@@ -1,0 +1,51 @@
+From 898925c94fef9c5822b2910024cf716bf295b9da Mon Sep 17 00:00:00 2001
+From: Bob Haarman <llvm@inglorion.net>
+Date: Tue, 24 Nov 2020 21:40:26 +0000
+Subject: [PATCH] clang: disable assert for DK_Linker diagnostics
+
+CodeGenAction.cpp contained an assert requiring that CurLinkModule is
+set to a non-null value for DK_Linker diagnostics. The intent here to
+always report the module name when we are reporting such diagnostics.
+In practice, CurLinkModule is not always set, so this assert can
+trigger. When it does, the compiler crashes and we get neither the
+module name nor the diagnostic. This happens even for warnings that
+have been suppressed with -Wno-*, so we are failing builds that
+otherwise would have succeeded. Long-term, we probably want to ensure
+that the module name is always provided, but short term, it seems
+strictly better to report the diagnostic without the module name
+than to crash the compiler. This change removes the assert and
+modifies the code to handle the case where CurLinkModule is not
+set.
+---
+ clang/lib/CodeGen/CodeGenAction.cpp | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/clang/lib/CodeGen/CodeGenAction.cpp b/clang/lib/CodeGen/CodeGenAction.cpp
+index 1e935bbeeca..7590c9b2c29 100644
+--- a/clang/lib/CodeGen/CodeGenAction.cpp
++++ b/clang/lib/CodeGen/CodeGenAction.cpp
+@@ -794,7 +794,6 @@ void BackendConsumer::DiagnosticHandlerImpl(const DiagnosticInfo &DI) {
+     ComputeDiagID(Severity, backend_frame_larger_than, DiagID);
+     break;
+   case DK_Linker:
+-    assert(CurLinkModule);
+     // FIXME: stop eating the warnings and notes.
+     if (Severity != DS_Error)
+       return;
+@@ -861,8 +860,11 @@ void BackendConsumer::DiagnosticHandlerImpl(const DiagnosticInfo &DI) {
+   }
+ 
+   if (DiagID == diag::err_fe_cannot_link_module) {
+-    Diags.Report(diag::err_fe_cannot_link_module)
+-        << CurLinkModule->getModuleIdentifier() << MsgStorage;
++    if (CurLinkModule)
++      Diags.Report(DiagID)
++          << CurLinkModule->getModuleIdentifier() << MsgStorage;
++    else
++      Diags.Report(DiagID) << MsgStorage;
+     return;
+   }
+ 
+-- 
+2.29.2.454.gaff20da3a2-goog
+

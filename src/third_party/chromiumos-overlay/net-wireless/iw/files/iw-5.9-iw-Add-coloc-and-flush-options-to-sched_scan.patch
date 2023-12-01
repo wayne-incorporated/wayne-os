@@ -1,0 +1,46 @@
+From 5ec60ed9aa7bf06f31d40028c6e1c42c8ea09a50 Mon Sep 17 00:00:00 2001
+From: Ilan Peer <ilan.peer@intel.com>
+Date: Thu, 26 Mar 2020 09:17:21 +0200
+Subject: [PATCH 03/56] iw: Add 'coloc' and 'flush' options to sched_scan
+
+Add new 'coloc' (from 6 GHz scanning) and 'flush' options
+to the scan command.
+
+Signed-off-by: Ilan Peer <ilan.peer@intel.com>
+Signed-off-by: Johannes Berg <johannes.berg@intel.com>
+---
+ iw.h   | 2 +-
+ scan.c | 4 ++++
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/iw.h b/iw.h
+index 1acf189..77ed097 100644
+--- a/iw.h
++++ b/iw.h
+@@ -249,7 +249,7 @@ int parse_random_mac_addr(struct nl_msg *msg, char *addrs);
+ 
+ #define SCHED_SCAN_OPTIONS "[interval <in_msecs> | scan_plans [<interval_secs:iterations>*] <interval_secs>] "	\
+ 	"[delay <in_secs>] [freqs <freq>+] [matches [ssid <ssid>]+]] [active [ssid <ssid>]+|passive] "	\
+-	"[randomise[=<addr>/<mask>]]"
++	"[randomise[=<addr>/<mask>]] [coloc] [flush]"
+ int parse_sched_scan(struct nl_msg *msg, int *argc, char ***argv);
+ 
+ DECLARE_SECTION(switch);
+diff --git a/scan.c b/scan.c
+index a068384..02fa6e2 100644
+--- a/scan.c
++++ b/scan.c
+@@ -202,6 +202,10 @@ int parse_sched_scan(struct nl_msg *msg, int *argc, char ***argv)
+ 				err = parse_random_mac_addr(msg, v[0] + 9);
+ 				if (err)
+ 					goto nla_put_failure;
++			} else if (!strncmp(v[0], "coloc", 5)) {
++				flags |= NL80211_SCAN_FLAG_COLOCATED_6GHZ;
++			} else if (!strncmp(v[0], "flush", 5)) {
++				flags |= NL80211_SCAN_FLAG_FLUSH;
+ 			} else {
+ 				/* this element is not for us, so
+ 				 * return to continue parsing.
+-- 
+2.38.1.584.g0f3c55d4c2-goog
+

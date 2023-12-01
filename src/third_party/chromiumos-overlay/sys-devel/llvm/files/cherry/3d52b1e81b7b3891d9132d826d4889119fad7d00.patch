@@ -1,0 +1,80 @@
+commit 3d52b1e81b7b3891d9132d826d4889119fad7d00
+Author: Vedant Kumar <vsk@apple.com>
+Date:   Mon Jul 13 15:17:03 2020 -0700
+
+    Revert "[InstCombine] Drop debug loc in TryToSinkInstruction (reland)"
+    
+    This reverts commit 9649c2095f07a392bc2b2a93b5bd6c4c9bf5ba34. See
+    discussion on the llvm-commits thread: if it's OK to preserve the
+    location when sinking a call, it's probably OK to always preserve the
+    location.
+
+diff --git a/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp b/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+index d1c1e541882..ec934906355 100644
+--- a/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
++++ b/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+@@ -3356,12 +3356,6 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
+   I->moveBefore(&*InsertPos);
+   ++NumSunkInst;
+ 
+-  // Drop the debug loc of non-inlinable instructions. This prevents
+-  // single-stepping from going backwards. See HowToUpdateDebugInfo.rst for
+-  // the full rationale.
+-  if (!isa<CallBase>(I))
+-    I->setDebugLoc(DebugLoc());
+-
+   // Also sink all related debug uses from the source basic block. Otherwise we
+   // get debug use before the def. Attempt to salvage debug uses first, to
+   // maximise the range variables have location for. If we cannot salvage, then
+diff --git a/llvm/test/Transforms/InstCombine/sink_to_unreachable_dbg.ll b/llvm/test/Transforms/InstCombine/sink_to_unreachable_dbg.ll
+deleted file mode 100644
+index e642276224b..00000000000
+--- a/llvm/test/Transforms/InstCombine/sink_to_unreachable_dbg.ll
++++ /dev/null
+@@ -1,46 +0,0 @@
+-; RUN: opt -debugify -debugify-level=locations -instcombine -S < %s | FileCheck %s
+-
+-; CHECK-LABEL: @test1(
+-; CHECK: [[phi:%.*]] = phi i32
+-; CHECK-NEXT: [[add:%.*]] = add i32 {{.*}}, 1{{$}}
+-; CHECK-NEXT: add i32 [[phi]], [[add]], !dbg
+-define i32 @test1(i32 %0, i1 %1) {
+-  %3 = add i32 %0, 1
+-  br i1 %1, label %4, label %5
+-
+-4:                                                ; preds = %2
+-  br label %6
+-
+-5:                                                ; preds = %2
+-  br label %6
+-
+-6:                                                ; preds = %5, %4
+-  %7 = phi i32 [ 0, %4 ], [ 1, %5 ]
+-  %8 = add i32 %7, %3
+-  ret i32 %8
+-}
+-
+-; Function Attrs: nounwind readnone
+-declare i32 @external(i32) #0
+-
+-; CHECK-LABEL: @test2(
+-; CHECK: [[phi:%.*]] = phi i32
+-; CHECK-NEXT: [[add:%.*]] = call i32 @external(i32 {{.*}}), !dbg
+-; CHECK-NEXT: add i32 [[phi]], [[add]], !dbg
+-define i32 @test2(i32 %0, i1 %1) {
+-  %3 = call i32 @external(i32 %0)
+-  br i1 %1, label %4, label %5
+-
+-4:                                                ; preds = %2
+-  br label %6
+-
+-5:                                                ; preds = %2
+-  br label %6
+-
+-6:                                                ; preds = %5, %4
+-  %7 = phi i32 [ 0, %4 ], [ 1, %5 ]
+-  %8 = add i32 %7, %3
+-  ret i32 %8
+-}
+-
+-attributes #0 = { nounwind readnone }

@@ -1,0 +1,75 @@
+# Copyright 2014 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This file specifies udev rules to identify a tty or usb device associated
+# with a modem and change the file permissions of the device such that
+# ModemManager can access the device. The rules should be checked after those
+# specified in 51-mist.rules, and before those specified in 55-serial.rules and
+# 77-mm-*.rules.
+
+#-------------------------------------------------------------------------------
+# 'pcie' devices
+KERNEL=="ttyCMBIM[0-9]", SUBSYSTEM=="ccci_node", GOTO="modem_change_mode"
+KERNEL=="wwan0mbim*", SUBSYSTEM=="wwan", GOTO="modem_change_mode"
+KERNEL=="wwan0at0", SUBSYSTEM=="wwan", GOTO="modem_change_mode"
+
+# Allow modem group to call for cold reboot of FM350 (mtk_t7xx driver).
+# In this case, we catch the following path:
+# /devices/pci0000:00/0000:00:AA.0/0000:BB:00.0/wwan/wwan0 (wwan)
+# We set wwan device's cold_reboot endpoint as writable by modem group.
+DRIVERS=="mtk_t7xx", ACTION=="add", DEVPATH=="*wwan/wwan0", \
+    RUN+="/bin/chgrp modem $sys/$devpath/device/cold_reboot" \
+    RUN+="/bin/chmod g+w $sys/$devpath/device/cold_reboot"
+
+#-------------------------------------------------------------------------------
+# 'usb' devices
+
+# A 'cdc-wdm' device is from a MBIM and QMI-based modems.
+KERNEL=="cdc-wdm[0-9]", SUBSYSTEM=="usbmisc", GOTO="modem_change_mode"
+
+#-------------------------------------------------------------------------------
+# 'tty' devices
+
+KERNEL!="tty[A-Z]*[0-9]", GOTO="modem_end"
+SUBSYSTEM!="tty", GOTO="modem_end"
+
+# A tty device that has MIST_SUPPORTED_DEVICE=1 is from an external USB dongle
+# supported by mist.
+ENV{MIST_SUPPORTED_DEVICE}=="1", GOTO="modem_change_mode"
+
+# A tty device backed by the 'option' driver is from an AT-based modem.
+DRIVERS=="option", GOTO="modem_change_mode"
+
+# A tty device backed by the 'qcserial' driver is from a Gobi modem.
+DRIVERS=="qcserial", GOTO="modem_change_mode"
+
+# A tty device backed by the 'cdc_acm' driver may be a serial adapter or from
+# an AT-based modem. The following rules whitelist the supported modem devices.
+# Unlike the option and qcserial driver, the cdc_acm driver seems to organize
+# tty differently. Neither DRIVER=="cdc_acm" nor DRIVERS=="cdc_acm" is used in
+# the following rules to match the tty device backed by the cdc_acm driver.
+#
+# Samsung Icera Y3300
+ATTRS{idVendor}=="04e8", ATTRS{idProduct}=="6872", GOTO="modem_change_mode"
+# Samsung Icera Y3400
+ATTRS{idVendor}=="04e8", ATTRS{idProduct}=="6906", GOTO="modem_change_mode"
+# Altair LTE ALT3100
+ATTRS{idVendor}=="216f", ATTRS{idProduct}=="0047", GOTO="modem_change_mode"
+# Telit HE910
+ATTRS{idVendor}=="1bc7", ATTRS{idProduct}=="0021", GOTO="modem_change_mode"
+# Fibocom L850-GL
+ATTRS{idVendor}=="2cb7", ATTRS{idProduct}=="0007", GOTO="modem_change_mode"
+
+#-------------------------------------------------------------------------------
+GOTO="modem_end"
+
+# Grant the 'modem' group read and write access of the tty or usb device
+# associated with a modem such that ModemManager can access the device.  Also
+# set 'ID_MM_DEVICE_IS_MODEM' to 1 to inform 55-serial.rules that the device is
+# associated with a modem.
+LABEL="modem_change_mode"
+GROUP="modem", MODE="0660", ENV{ID_MM_DEVICE_IS_MODEM}="1"
+
+#-------------------------------------------------------------------------------
+LABEL="modem_end"

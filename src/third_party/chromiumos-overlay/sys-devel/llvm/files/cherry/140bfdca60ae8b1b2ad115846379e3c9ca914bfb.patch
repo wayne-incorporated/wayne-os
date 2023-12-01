@@ -1,0 +1,107 @@
+commit 140bfdca60ae8b1b2ad115846379e3c9ca914bfb
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Thu Jul 14 11:25:21 2022 -0700
+
+    [clang][CodeGen] add fn_ret_thunk_extern to synthetic fns
+    
+    Follow up fix to
+    commit 2240d72f15f3 ("[X86] initial -mfunction-return=thunk-extern
+    support")
+    https://reviews.llvm.org/D129572
+    
+    @nathanchance reported that -mfunction-return=thunk-extern was failing
+    to annotate the asan and tsan contructors.
+    https://lore.kernel.org/llvm/Ys7pLq+tQk5xEa%2FB@dev-arch.thelio-3990X/
+    
+    I then noticed the same occurring for gcov synthetic functions.
+    
+    Similar to
+    commit 2786e67 ("[IR][sanitizer] Add module flag "frame-pointer" and set
+    it for cc1 -mframe-pointer={non-leaf,all}")
+    define a new module level MetaData, "fn_ret_thunk_extern", then when set
+    adds the fn_ret_thunk_extern IR Fn Attr to synthetically created
+    Functions.
+    
+    Fixes https://github.com/llvm/llvm-project/issues/56514
+    
+    Reviewed By: MaskRay
+    
+    Differential Revision: https://reviews.llvm.org/D129709
+
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index c372bab1eccb..bdee31b504ae 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -756,6 +756,9 @@ void CodeGenModule::Release() {
+   if (CodeGenOpts.IBTSeal)
+     getModule().addModuleFlag(llvm::Module::Override, "ibt-seal", 1);
+ 
++  if (CodeGenOpts.FunctionReturnThunks)
++    getModule().addModuleFlag(llvm::Module::Override, "function_return_thunk_extern", 1);
++
+   // Add module metadata for return address signing (ignoring
+   // non-leaf/all) and stack tagging. These are actually turned on by function
+   // attributes, but we use module metadata to emit build attributes. This is
+diff --git a/clang/test/CodeGen/attr-function-return.c b/clang/test/CodeGen/attr-function-return.c
+index 2ec3fb146432..2187e014aaba 100644
+--- a/clang/test/CodeGen/attr-function-return.c
++++ b/clang/test/CodeGen/attr-function-return.c
+@@ -7,6 +7,15 @@
+ // RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
+ // RUN:   -Werror=ignored-attributes -mfunction-return=thunk-extern \
+ // RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-EXTERN
++// RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:  -mfunction-return=thunk-extern -fprofile-arcs \
++// RUN:   | FileCheck %s --check-prefix=CHECK-GCOV
++// RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:  -mfunction-return=thunk-extern -fsanitize=address \
++// RUN:   | FileCheck %s --check-prefix=CHECK-ASAN
++// RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:  -mfunction-return=thunk-extern -fsanitize=thread \
++// RUN:   | FileCheck %s --check-prefix=CHECK-TSAN
+ 
+ #if !__has_attribute(function_return)
+ #error "missing attribute support for function_return"
+@@ -92,6 +101,16 @@ __attribute__((function_return("thunk-extern"))) void change_def4(void) {}
+ // CHECK-EXTERN: @no_attrs() [[EXTERN]]
+ void no_attrs(void) {}
+ 
++// Test synthetic functions.
++// CHECK-GCOV: @__llvm_gcov_writeout() unnamed_addr [[EXTERNGCOV:#[0-9]+]]
++// CHECK-GCOV: @__llvm_gcov_reset() unnamed_addr [[EXTERNGCOV]]
++// CHECK-GCOV: @__llvm_gcov_init() unnamed_addr [[EXTERNGCOV]]
++// CHECK-ASAN: @asan.module_ctor() [[EXTERNASAN:#[0-9]+]]
++// CHECK-TSAN: @tsan.module_ctor() [[EXTERNTSAN:#[0-9]+]]
++
+ // CHECK-NOM-NOT:  [[NOATTR]] = {{.*}}fn_ret_thunk_extern
+ // CHECK-KEEP-NOT: [[NOATTR]] = {{.*}}fn_ret_thunk_extern
+ // CHECK: [[EXTERN]] = {{.*}}fn_ret_thunk_extern
++// CHECK-GCOV: [[EXTERNGCOV]] = {{.*}}fn_ret_thunk_extern
++// CHECK-ASAN: [[EXTERNASAN]] = {{.*}}fn_ret_thunk_extern
++// CHECK-TSAN: [[EXTERNTSAN]] = {{.*}}fn_ret_thunk_extern
+diff --git a/llvm/docs/LangRef.rst b/llvm/docs/LangRef.rst
+index 54ed0cc3f8d3..24b3b5183da8 100644
+--- a/llvm/docs/LangRef.rst
++++ b/llvm/docs/LangRef.rst
+@@ -7364,6 +7364,8 @@ functions is small.
+ - "frame-pointer": **Max**. The value can be 0, 1, or 2. A synthesized function
+   will get the "frame-pointer" function attribute, with value being "none",
+   "non-leaf", or "all", respectively.
++- "function_return_thunk_extern": The synthesized function will get the
++  ``fn_return_thunk_extern`` function attribute.
+ - "uwtable": **Max**. The value can be 0, 1, or 2. If the value is 1, a synthesized
+   function will get the ``uwtable(sync)`` function attribute, if the value is 2,
+   a synthesized function will get the ``uwtable(async)`` function attribute.
+diff --git a/llvm/lib/IR/Function.cpp b/llvm/lib/IR/Function.cpp
+index 53df94366760..d4138133721e 100644
+--- a/llvm/lib/IR/Function.cpp
++++ b/llvm/lib/IR/Function.cpp
+@@ -354,6 +354,8 @@ Function *Function::createWithDefaultAttr(FunctionType *Ty,
+     B.addAttribute("frame-pointer", "all");
+     break;
+   }
++  if (M->getModuleFlag("function_return_thunk_extern"))
++    B.addAttribute(Attribute::FnRetThunkExtern);
+   F->addFnAttrs(B);
+   return F;
+ }

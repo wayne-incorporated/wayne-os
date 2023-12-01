@@ -1,0 +1,63 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":printscanmgr",
+    "//printscanmgr/dbus:dbus_config",
+    "//printscanmgr/dbus_bindings:printscanmgr-adaptors",
+    "//printscanmgr/dbus_service:dbus_service",
+    "//printscanmgr/init:init_config",
+    "//printscanmgr/mojom:mojo_bindings",
+    "//printscanmgr/seccomp:seccomp_policy",
+  ]
+  if (use.test) {
+    deps += [ ":printscanmgr_test" ]
+  }
+  if (use.fuzzer) {
+    deps += [ "//printscanmgr/cups_uri_helper:cups_uri_helper_utils_fuzzer" ]
+  }
+}
+
+pkg_config("printscanmgr_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmojo",
+  ]
+}
+
+executable("printscanmgr") {
+  sources = [ "main.cc" ]
+  configs += [ ":printscanmgr_pkg_deps" ]
+  install_path = "bin"
+  deps = [
+    "daemon:libdaemon",
+    "executor:libexecutor",
+    "minijail:libminijail",
+  ]
+}
+
+if (use.test) {
+  pkg_config("printscanmgr_test_pkg_deps") {
+    pkg_deps = [ "libmojo" ]
+  }
+
+  executable("printscanmgr_test") {
+    sources = [ "testrunner.cc" ]
+    configs += [
+      ":printscanmgr_test_pkg_deps",
+      "//common-mk:test",
+    ]
+    run_test = true
+    deps = [
+      "//common-mk/testrunner",
+      "//printscanmgr/cups_uri_helper:cups_uri_helper_utils_test",
+      "//printscanmgr/daemon:libdaemon_test",
+      "//printscanmgr/executor:libexecutor_test",
+    ]
+  }
+}

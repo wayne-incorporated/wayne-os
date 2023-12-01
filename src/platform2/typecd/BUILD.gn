@@ -1,0 +1,208 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_minijail_config",
+    ":typecd",
+    ":typecd_tool",
+  ]
+  if (use.test) {
+    deps += [ ":typecd_testrunner" ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":typecd_cable_fuzzer",
+      ":typecd_cros_ec_util_fuzzer",
+      ":typecd_partner_fuzzer",
+      ":typecd_pdo_fuzzer",
+      ":typecd_port_fuzzer",
+      ":typecd_port_manager_fuzzer",
+      ":typecd_session_manager_proxy_fuzzer",
+      ":typecd_udev_monitor_fuzzer",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+    "libdebugd-client",
+    "libmetrics",
+    "libsession_manager-client",
+    "libstructuredmetrics",
+    "libudev",
+    "re2",
+  ]
+}
+
+install_config("install_minijail_config") {
+  sources = ["minijail/typecd.conf"]
+  install_path = "/usr/share/minijail"
+}
+
+executable("typecd") {
+  sources = [
+    "cros_config_util.cc",
+    "daemon.cc",
+    "main.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":typecd_common" ]
+}
+
+executable("typecd_tool") {
+  sources = [ "typecd_tool.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":typecd_common" ]
+}
+
+generate_dbus_adaptors("typecd-adaptors") {
+  sources = [ "dbus_bindings/org.chromium.typecd.xml" ]
+  dbus_adaptors_out_dir = "include/typecd/dbus_adaptors"
+}
+
+static_library("typecd_common") {
+  sources = [
+    "alt_mode.cc",
+    "cable.cc",
+    "chrome_features_service_client.cc",
+    "cros_ec_util.cc",
+    "dbus_manager.cc",
+    "metrics.cc",
+    "partner.cc",
+    "pdo.cc",
+    "peripheral.cc",
+    "port.cc",
+    "port_manager.cc",
+    "power_profile.cc",
+    "session_manager_proxy.cc",
+    "udev_monitor.cc",
+    "utils.cc",
+  ]
+  all_dependent_configs = [ ":target_defaults" ]
+  deps = [ ":typecd-adaptors" ]
+}
+
+pkg_config("test_defaults") {
+  pkg_deps = [
+    "libbrillo-test",
+    "libchrome-test",
+    "libudev",
+    "re2",
+  ]
+}
+
+if (use.test) {
+  executable("typecd_testrunner") {
+    sources = [
+      "cable_test.cc",
+      "cros_ec_util_test.cc",
+      "metrics_test.cc",
+      "partner_test.cc",
+      "pdo_test.cc",
+      "peripheral_test.cc",
+      "port_manager_notification_test.cc",
+      "port_manager_test.cc",
+      "port_test.cc",
+      "power_profile_test.cc",
+      "test_utils.cc",
+      "udev_monitor_test.cc",
+    ]
+    configs += [
+      ":test_defaults",
+      "//common-mk:test",
+    ]
+    deps = [
+      ":typecd_common",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("typecd_cable_fuzzer") {
+    sources = [
+      "cable_fuzzer.cc",
+      "test_utils.cc",
+    ]
+    configs += [
+      ":target_defaults",
+      "//common-mk/common_fuzzer",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+
+  executable("typecd_partner_fuzzer") {
+    sources = [ "partner_fuzzer.cc" ]
+    configs += [
+      ":target_defaults",
+      "//common-mk/common_fuzzer",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+
+  executable("typecd_pdo_fuzzer") {
+    sources = [ "pdo_fuzzer.cc" ]
+    configs += [
+      ":target_defaults",
+      "//common-mk/common_fuzzer",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+
+  executable("typecd_cros_ec_util_fuzzer") {
+    sources = [ "cros_ec_util_fuzzer.cc" ]
+    configs += [
+      ":test_defaults",
+      "//common-mk/common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+
+  executable("typecd_udev_monitor_fuzzer") {
+    sources = [ "udev_monitor_fuzzer.cc" ]
+    configs += [
+      ":test_defaults",
+      "//common-mk/common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+
+  executable("typecd_port_fuzzer") {
+    sources = [ "port_fuzzer.cc" ]
+    configs += [
+      ":target_defaults",
+      "//common-mk/common_fuzzer",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+
+  executable("typecd_port_manager_fuzzer") {
+    sources = [ "port_manager_fuzzer.cc" ]
+    configs += [
+      ":test_defaults",
+      "//common-mk/common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+
+  executable("typecd_session_manager_proxy_fuzzer") {
+    sources = [ "session_manager_proxy_fuzzer.cc" ]
+    configs += [
+      ":test_defaults",
+      "//common-mk/common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [ ":typecd_common" ]
+  }
+}

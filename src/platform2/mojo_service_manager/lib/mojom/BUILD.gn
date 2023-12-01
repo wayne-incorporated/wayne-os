@@ -1,0 +1,23 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/mojom_bindings_generator.gni")
+
+# TODO(b/233325104): Link this target to a shared library. This target is linked
+# to each binary which using service manager. Currently, we use static link
+# which could cause more disk and memory usage. However, the shared library
+# support of mojo bindings in platform2 is still under discussion.
+generate_mojom_bindings("libmojo_service_manager-mojom") {
+  sources = [
+    "service_manager.mojom",
+    "time.mojom",
+  ]
+  mojo_root = "${platform2_root}"
+  mojo_extra_args = [
+    "--typemap",
+    rebase_path("type_mappings.json"),
+  ]
+  use_pic = true
+  install_package = "mojo_service_manager"
+}

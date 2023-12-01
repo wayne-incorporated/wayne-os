@@ -1,0 +1,94 @@
+From 0cdf89c23ae8f23e1affcb0aa20a3f38621f308e Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 21 Jul 2022 14:12:01 -0300
+Subject: [PATCH 074/163] argp: Expand argp_usage, _option_is_short, and
+ _option_is_end
+
+---
+ argp/argp-xinl.c | 34 +++++++++++++++++++++++-----------
+ argp/argp.h      | 10 +++-------
+ 2 files changed, 26 insertions(+), 18 deletions(-)
+
+diff --git a/argp/argp-xinl.c b/argp/argp-xinl.c
+index 74b4971e44..e112fee31e 100644
+--- a/argp/argp-xinl.c
++++ b/argp/argp-xinl.c
+@@ -25,19 +25,31 @@
+ # include <features.h>
+ #endif
+ 
+-#ifndef __USE_EXTERN_INLINES
+-# define __USE_EXTERN_INLINES	1
+-#endif
+-#define ARGP_EI
+-#undef __OPTIMIZE__
+-#define __OPTIMIZE__ 1
+ #include <argp.h>
+ 
+-/* Add weak aliases.  */
+-#if _LIBC - 0 && defined (weak_alias)
+-
++void
++__argp_usage (const struct argp_state *__state)
++{
++  __argp_state_help (__state, stderr, ARGP_HELP_STD_USAGE);
++}
+ weak_alias (__argp_usage, argp_usage)
++
++int
++__option_is_short (const struct argp_option *__opt)
++{
++  if (__opt->flags & OPTION_DOC)
++    return 0;
++  else
++    {
++      int __key = __opt->key;
++      return __key > 0 && __key <= UCHAR_MAX && isprint (__key);
++    }
++}
+ weak_alias (__option_is_short, _option_is_short)
+-weak_alias (__option_is_end, _option_is_end)
+ 
+-#endif
++int
++__option_is_end (const struct argp_option *__opt)
++{
++  return !__opt->key && !__opt->name && !__opt->doc && !__opt->group;
++}
++weak_alias (__option_is_end, _option_is_end)
+diff --git a/argp/argp.h b/argp/argp.h
+index d6a04069d5..f82196dfb2 100644
+--- a/argp/argp.h
++++ b/argp/argp.h
+@@ -518,17 +518,13 @@ extern void *__argp_input (const struct argp *__restrict __argp,
+ #  define __option_is_end _option_is_end
+ # endif
+ 
+-# ifndef ARGP_EI
+-#  define ARGP_EI __extern_inline
+-# endif
+-
+-ARGP_EI void
++__extern_inline void
+ __argp_usage (const struct argp_state *__state)
+ {
+   __argp_state_help (__state, stderr, ARGP_HELP_STD_USAGE);
+ }
+ 
+-ARGP_EI int
++__extern_inline int
+ __NTH (__option_is_short (const struct argp_option *__opt))
+ {
+   if (__opt->flags & OPTION_DOC)
+@@ -540,7 +536,7 @@ __NTH (__option_is_short (const struct argp_option *__opt))
+     }
+ }
+ 
+-ARGP_EI int
++__extern_inline int
+ __NTH (__option_is_end (const struct argp_option *__opt))
+ {
+   return !__opt->key && !__opt->name && !__opt->doc && !__opt->group;
+-- 
+2.37.2
+

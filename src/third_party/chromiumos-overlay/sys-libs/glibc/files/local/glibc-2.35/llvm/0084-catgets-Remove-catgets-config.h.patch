@@ -1,0 +1,56 @@
+From 51dffb3cfe3ae0d8f6d407d0363148a62929b173 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 10:52:14 -0300
+Subject: [PATCH 084/163] catgets: Remove catgets/config.h
+
+It simplifies the code a bit and avoid the clang warning:
+
+  ./config.h:12:2: error: #include_next in file found relative to primary
+  source file or found by absolute path; will search from start of include
+  path [-Werror,-Winclude-next-absolute-path]
+  #include_next <config.h>
+   ^
+---
+ catgets/config.h | 14 --------------
+ catgets/gencat.c |  3 ++-
+ 2 files changed, 2 insertions(+), 15 deletions(-)
+ delete mode 100644 catgets/config.h
+
+diff --git a/catgets/config.h b/catgets/config.h
+deleted file mode 100644
+index ce7887b351..0000000000
+--- a/catgets/config.h
++++ /dev/null
+@@ -1,14 +0,0 @@
+-#ifndef _CG_CONFIG_H
+-#define _CG_CONFIG_H
+-
+-/* Use the internal textdomain used for libc messages.  */
+-#define PACKAGE _libc_intl_domainname
+-#ifndef VERSION
+-/* Get libc version number.  */
+-#include "../version.h"
+-#endif
+-
+-
+-#include_next <config.h>
+-
+-#endif
+diff --git a/catgets/gencat.c b/catgets/gencat.c
+index dec4d936a7..8c284a975d 100644
+--- a/catgets/gencat.c
++++ b/catgets/gencat.c
+@@ -14,8 +14,9 @@
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, see <https://www.gnu.org/licenses/>.  */
+ 
++#define PACKAGE _libc_intl_domainname
+ #ifdef HAVE_CONFIG_H
+-# include "config.h"
++# include <config.h>
+ #endif
+ 
+ #include <argp.h>
+-- 
+2.37.2
+

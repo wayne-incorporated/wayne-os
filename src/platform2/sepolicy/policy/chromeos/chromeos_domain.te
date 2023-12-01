@@ -1,0 +1,105 @@
+allow chromeos_domain selinuxfs:dir search;
+allow chromeos_domain selinuxfs:file getattr;
+allow chromeos_domain selinuxfs:filesystem getattr;
+
+allow chromeos_domain self:process {
+    fork
+    sigchld
+    sigkill
+    sigstop
+    signull
+    signal
+    getsched
+    setsched
+    getsession
+    getpgid
+    setpgid
+    getcap
+    setcap
+    getattr
+    setrlimit
+};
+
+allow chromeos_domain self:fd use;
+
+r_dir_file(chromeos_domain, self)
+
+r_dir_file(chromeos_domain, proc)
+allow chromeos_domain proc_cpuinfo:file r_file_perms;
+
+allow chromeos_domain self:{ fifo_file file } rw_file_perms;
+allow chromeos_domain self:unix_dgram_socket { create_socket_perms sendto };
+allow chromeos_domain self:unix_stream_socket { create_stream_socket_perms connectto };
+allow chromeos_domain self:{ fifo_file file } rw_file_perms;
+
+allow chromeos_domain rootfs:dir { read search };
+allow chromeos_domain cros_var:dir search;
+allow chromeos_domain rootfs:lnk_file r_file_perms;
+
+allow chromeos_domain sysfs:dir search;
+allow chromeos_domain sysfs:lnk_file { read getattr };
+allow chromeos_domain sysfs_cpuidle:dir search;
+allow chromeos_domain sysfs_cpuidle:lnk_file { read getattr };
+r_dir_file(chromeos_domain, sysfs_devices_system_cpu)
+
+allow chromeos_domain device:dir search;
+allow chromeos_domain cros_labeled_dev_type:lnk_file r_file_perms;
+allow chromeos_domain devpts:dir search;
+
+allow chromeos_domain fs_type:dir getattr;
+allow chromeos_domain fs_type:filesystem getattr;
+
+allow chromeos_domain cros_system_file:file execute;
+r_dir_file(chromeos_domain, cros_system_file)
+
+allow chromeos_domain cros_run:dir r_dir_perms;
+allow chromeos_domain cros_var:dir r_dir_perms;
+allow chromeos_domain cros_var_cache:dir r_dir_perms;
+allow chromeos_domain cros_var_lib:dir r_dir_perms;
+allow chromeos_domain cros_var_log:dir r_dir_perms;
+allow chromeos_domain cros_run_lock:dir r_dir_perms;
+
+r_dir_file(chromeos_domain, cros_conf_file)
+
+# Files in /var/{spool,lib,log,cache,...} and /run with scontext unidentified yet.
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_bluetooth, dir, "bluetooth")
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_imageloader, dir, "imageloader")
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_oemcrypto, dir, "oemcrypto")
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_oobe_config_restore, dir, "oobe_config_restore")
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_oobe_config_save, dir, "oobe_config_save")
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_trim, dir, "trim")
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_ureadahead, dir, "ureadahead")
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_ui, dir, "ui")
+filetrans_pattern(chromeos_domain, cros_var_cache, cros_var_cache_camera, dir, "camera")
+dev_only(`
+auditallow {chromeos_domain -cros_init -cros_init_scripts} {cros_var_lib_bluetooth cros_var_lib_oemcrypto cros_var_lib_oobe_config_restore cros_var_lib_oobe_config_save cros_var_lib_trim cros_var_lib_ureadahead}:dir create;
+auditallow {chromeos_domain -cros_init_ui_respawn} cros_var_lib_ui:dir create;
+auditallow chromeos_domain cros_var_lib_imageloader:dir create;
+')
+
+# Files in home with creation scontext unidentified yet.
+filetrans_pattern(chromeos_domain, cros_home_shadow_uid_root, cros_home_shadow_uid_root_shill, dir, "shill")
+filetrans_pattern(chromeos_domain, cros_home_shadow_uid_root, cros_home_shadow_uid_root_shill_logs, dir, "shill_logs")
+dev_only(`
+auditallow chromeos_domain cros_home_shadow_uid_root_shill:dir create;
+auditallow chromeos_domain cros_home_shadow_uid_root_shill_logs:dir create;
+')
+
+# Do the same xperm restriction as Android for ioctl.
+
+# Restrict all domains to an allowlist for common socket types. Additional
+# ioctl commands may be added to individual domains, but this sets safe
+# defaults for all processes. Note that granting this allowlist to domain does
+# not grant the ioctl permission on these socket types. That must be granted
+# separately.
+allowxperm domain domain:{ rawip_socket tcp_socket udp_socket }
+  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
+# default allowlist for unix sockets.
+allowxperm domain domain:{ unix_dgram_socket unix_stream_socket }
+  ioctl unpriv_unix_sock_ioctls;
+
+# Restrict PTYs to only allowlisted ioctls.
+# Note that granting this allowlist to domain does
+# not grant the wider ioctl permission. That must be granted
+# separately.
+allowxperm chromeos_domain devpts:chr_file ioctl unpriv_tty_ioctls;

@@ -1,0 +1,63 @@
+From aa590e5823c352358fbeefa8bbd47a4b9c7de93f Mon Sep 17 00:00:00 2001
+From: Florian Hahn <flo@fhahn.com>
+Date: Fri, 11 Mar 2022 10:27:17 +0000
+Subject: [PATCH] [AArch64] Improve costs for some conversions to fp16.
+
+Currently the cost model under-estimates the cost of certain
+FP16 conversions.
+
+This patch updates getCastInstrCost to return more accurate costs for
+the cases improved in c2ed9fd05479.
+
+Reviewed By: dmgreen
+
+Differential Revision: https://reviews.llvm.org/D113700
+---
+ llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp | 4 ++++
+ llvm/test/Analysis/CostModel/AArch64/cast.ll           | 8 ++++----
+ 2 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
+index ec360a21e0d4..1bf2dcf309fe 100644
+--- a/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp
+@@ -1627,6 +1627,10 @@ InstructionCost AArch64TTIImpl::getCastInstrCost(unsigned Opcode, Type *Dst,
+       {ISD::FP_TO_UINT, MVT::v16i16, MVT::v16f16, 2},
+       {ISD::FP_TO_SINT, MVT::v16i32, MVT::v16f16, 8}, // 4*fcvtl+4*fcvtzs
+       {ISD::FP_TO_UINT, MVT::v16i32, MVT::v16f16, 8},
++      {ISD::UINT_TO_FP, MVT::v8f16, MVT::v8i8, 2},   // ushll + ucvtf
++      {ISD::SINT_TO_FP, MVT::v8f16, MVT::v8i8, 2},   // sshll + scvtf
++      {ISD::UINT_TO_FP, MVT::v16f16, MVT::v16i8, 4}, // 2 * ushl(2) + 2 * ucvtf
++      {ISD::SINT_TO_FP, MVT::v16f16, MVT::v16i8, 4}, // 2 * sshl(2) + 2 * scvtf
+   };
+ 
+   if (ST->hasFullFP16())
+diff --git a/llvm/test/Analysis/CostModel/AArch64/cast.ll b/llvm/test/Analysis/CostModel/AArch64/cast.ll
+index 48fd3e948d3f..44d5cc253bdd 100644
+--- a/llvm/test/Analysis/CostModel/AArch64/cast.ll
++++ b/llvm/test/Analysis/CostModel/AArch64/cast.ll
+@@ -1107,8 +1107,8 @@ define void @fp16cast() {
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 70 for instruction: %r159 = fptosi <16 x half> undef to <16 x i64>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %r250 = uitofp <8 x i1> undef to <8 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %r251 = sitofp <8 x i1> undef to <8 x half>
+-; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %r252 = uitofp <8 x i8> undef to <8 x half>
+-; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %r253 = sitofp <8 x i8> undef to <8 x half>
++; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 2 for instruction: %r252 = uitofp <8 x i8> undef to <8 x half>
++; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 2 for instruction: %r253 = sitofp <8 x i8> undef to <8 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %r254 = uitofp <8 x i16> undef to <8 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 1 for instruction: %r255 = sitofp <8 x i16> undef to <8 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 3 for instruction: %r256 = uitofp <8 x i32> undef to <8 x half>
+@@ -1117,8 +1117,8 @@ define void @fp16cast() {
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 7 for instruction: %r259 = sitofp <8 x i64> undef to <8 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 3 for instruction: %r260 = uitofp <16 x i1> undef to <16 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 3 for instruction: %r261 = sitofp <16 x i1> undef to <16 x half>
+-; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 3 for instruction: %r262 = uitofp <16 x i8> undef to <16 x half>
+-; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 3 for instruction: %r263 = sitofp <16 x i8> undef to <16 x half>
++; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 4 for instruction: %r262 = uitofp <16 x i8> undef to <16 x half>
++; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 4 for instruction: %r263 = sitofp <16 x i8> undef to <16 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 2 for instruction: %r264 = uitofp <16 x i16> undef to <16 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 2 for instruction: %r265 = sitofp <16 x i16> undef to <16 x half>
+ ; CHECK-FP16-NEXT:  Cost Model: Found an estimated cost of 6 for instruction: %r266 = uitofp <16 x i32> undef to <16 x half>
+-- 
+2.36.0.rc0.470.gd361397f0d-goog
+

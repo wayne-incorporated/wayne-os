@@ -1,0 +1,508 @@
+From 3ab97668c1e89de2541cfe2e782ae8b827a585d2 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 11 Mar 2022 10:40:44 -0300
+Subject: [PATCH 062/163] configure: Use -Wno-ignored-attributes if compiler
+ warns about multiple aliases
+
+clang emits an warning when a double alias redirection is used, to warn
+the the original symbol will be used even when weak definition is
+overridden.  Howerver, this is a common pattern for weak_alias, where
+multiple alias are set to same symbol.
+---
+ argp/Makefile                |  7 ++++---
+ configure                    | 29 +++++++++++++++++++++++++++++
+ configure.ac                 | 22 ++++++++++++++++++++++
+ dirent/Makefile              |  1 +
+ inet/Makefile                |  3 +++
+ io/Makefile                  | 18 ++++++++++--------
+ libio/Makefile               | 14 +++++++++++---
+ login/Makefile               |  1 +
+ misc/Makefile                |  2 ++
+ posix/Makefile               |  6 +++---
+ resolv/Makefile              |  1 +
+ resource/Makefile            |  3 +++
+ socket/Makefile              | 10 +++++-----
+ stdio-common/Makefile        |  2 ++
+ stdlib/Makefile              | 12 ++++++++++++
+ string/Makefile              |  9 +++++++++
+ sysdeps/aarch64/Makefile     |  1 +
+ sysdeps/arm/Makefile         |  4 ++++
+ sysdeps/wordsize-64/Makefile |  5 +++++
+ termios/Makefile             |  1 +
+ time/Makefile                |  1 +
+ wcsmbs/Makefile              | 24 ++++++++++++++++--------
+ wctype/Makefile              |  2 ++
+ 23 files changed, 148 insertions(+), 30 deletions(-)
+
+diff --git a/argp/Makefile b/argp/Makefile
+index 586136f2fe..8de8fd6113 100644
+--- a/argp/Makefile
++++ b/argp/Makefile
+@@ -29,9 +29,10 @@ routines	= $(addprefix argp-, ba fmtstream fs-xinl help parse pv \
+ tests		= argp-test tst-argp1 bug-argp1 tst-argp2 bug-argp2 \
+ 		  tst-ldbl-argp
+ 
+-CFLAGS-argp-help.c += $(uses-callbacks) -fexceptions
+-CFLAGS-argp-parse.c += $(uses-callbacks)
+-CFLAGS-argp-fmtstream.c += -fexceptions
++CFLAGS-argp-help.c += $(uses-callbacks) -fexceptions $(config-cflags-wno-ignored-attributes)
++CFLAGS-argp-parse.c += $(uses-callbacks) $(config-cflags-wno-ignored-attributes)
++CFLAGS-argp-fmtstream.c += -fexceptions $(config-cflags-wno-ignored-attributes)
++CFLAGS-argp-fs-xinl.c += $(config-cflags-wno-ignored-attributes)
+ 
+ bug-argp1-ARGS = -- --help
+ bug-argp2-ARGS = -- -d 111 --dstaddr 222 -p 333 --peer 444
+diff --git a/configure b/configure
+index cd4d5075c0..af4748e05f 100755
+--- a/configure
++++ b/configure
+@@ -6324,6 +6324,35 @@ $as_echo "$libc_cv_mtls_dialect_gnu2" >&6; }
+ config_vars="$config_vars
+ have-mtls-dialect-gnu2 = $libc_cv_mtls_dialect_gnu2"
+ 
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking if -Wno-ignored-attributes is required for aliases" >&5
++$as_echo_n "checking if -Wno-ignored-attributes is required for aliases... " >&6; }
++if ${libc_cv_wno_ignored_attributes+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  cat > conftest.c <<EOF
++void __foo (void)
++{
++}
++extern __typeof (__foo) foo __attribute__ ((weak, alias ("__foo")));
++extern __typeof (__foo) bar __attribute__ ((weak, alias ("foo")));
++EOF
++libc_cv_wno_ignored_attributes=""
++if ! { ac_try='${CC-cc} $CFLAGS $CPPFLAGS -Werror -c conftest.c'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }
++then
++  libc_cv_wno_ignored_attributes="-Wno-ignored-attributes"
++fi
++rm -f conftest*
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_wno_ignored_attributes" >&5
++$as_echo "$libc_cv_wno_ignored_attributes" >&6; }
++config_vars="$config_vars
++config-cflags-wno-ignored-attributes = $libc_cv_wno_ignored_attributes"
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether cc puts quotes around section names" >&5
+ $as_echo_n "checking whether cc puts quotes around section names... " >&6; }
+ if ${libc_cv_have_section_quotes+:} false; then :
+diff --git a/configure.ac b/configure.ac
+index 04ec52569d..6d7a1c30d9 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1449,6 +1449,28 @@ rm -f conftest*])
+ AC_SUBST(libc_cv_mtls_dialect_gnu2)
+ LIBC_CONFIG_VAR([have-mtls-dialect-gnu2], [$libc_cv_mtls_dialect_gnu2])
+ 
++dnl clang emits an warning when a double alias redirection is used, to warn
++dnl the the original symbol will be used even when weak definition is overridden.
++dnl This is a common pattern for weak_alias, where multiple alias are set to
++dnl same symbol.
++AC_CACHE_CHECK([if -Wno-ignored-attributes is required for aliases],
++	       libc_cv_wno_ignored_attributes, [dnl
++cat > conftest.c <<EOF
++void __foo (void)
++{
++}
++extern __typeof (__foo) foo __attribute__ ((weak, alias ("__foo")));
++extern __typeof (__foo) bar __attribute__ ((weak, alias ("foo")));
++EOF
++libc_cv_wno_ignored_attributes=""
++if ! AC_TRY_COMMAND([${CC-cc} $CFLAGS $CPPFLAGS -Werror -c conftest.c])
++then
++  libc_cv_wno_ignored_attributes="-Wno-ignored-attributes"
++fi
++rm -f conftest*])
++LIBC_CONFIG_VAR([config-cflags-wno-ignored-attributes],
++		[$libc_cv_wno_ignored_attributes])
++
+ AC_CACHE_CHECK(whether cc puts quotes around section names,
+ 	       libc_cv_have_section_quotes,
+ 	       [cat > conftest.c <<EOF
+diff --git a/dirent/Makefile b/dirent/Makefile
+index 65119db578..9a9d91b8a5 100644
+--- a/dirent/Makefile
++++ b/dirent/Makefile
+@@ -37,6 +37,7 @@ CFLAGS-scandir.c += $(uses-callbacks)
+ CFLAGS-scandir64.c += $(uses-callbacks)
+ CFLAGS-scandir-tail.c += $(uses-callbacks)
+ CFLAGS-scandir64-tail.c += $(uses-callbacks)
++CFLAGS-dirfd.c += $(config-cflags-wno-ignored-attributes)
+ 
+ include ../Rules
+ 
+diff --git a/inet/Makefile b/inet/Makefile
+index 9b96e57cac..a5ef1ec0a3 100644
+--- a/inet/Makefile
++++ b/inet/Makefile
+@@ -106,6 +106,9 @@ CFLAGS-either_ntoh.c += -fexceptions
+ CFLAGS-either_hton.c += -fexceptions
+ CFLAGS-getnetgrent.c += -fexceptions
+ CFLAGS-getnetgrent_r.c += -fexceptions
++CFLAGS-in6_addr.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-if_index.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-ifaddrs.c += $(config-cflags-wno-ignored-attributes)
+ 
+ CFLAGS-tst-checks-posix.c += -std=c99
+ CFLAGS-tst-sockaddr.c += -fno-strict-aliasing
+diff --git a/io/Makefile b/io/Makefile
+index b1710407d0..14329e58fe 100644
+--- a/io/Makefile
++++ b/io/Makefile
+@@ -107,20 +107,21 @@ endif
+ 
+ include ../Rules
+ 
+-CFLAGS-open.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-open.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
++CFLAGS-openat.c += $(config-cflags-wno-ignored-attributes)
+ CFLAGS-open64.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-creat.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-creat64.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-fcntl.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-fcntl64.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-fcntl.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
++CFLAGS-fcntl64.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
+ CFLAGS-poll.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-ppoll.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-lockf.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-lockf64.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-lockf64.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
+ CFLAGS-statfs.c += -fexceptions
+ CFLAGS-fstatfs.c += -fexceptions
+-CFLAGS-statvfs.c += -fexceptions
+-CFLAGS-fstatvfs.c += -fexceptions
++CFLAGS-statvfs.c += -fexceptions $(config-cflags-wno-ignored-attributes)
++CFLAGS-fstatvfs.c += -fexceptions $(config-cflags-wno-ignored-attributes)
+ CFLAGS-fts.c += -Wno-uninitialized $(uses-callbacks) -fexceptions
+ CFLAGS-fts64.c += -Wno-uninitialized $(uses-callbacks) -fexceptions
+ CFLAGS-fts64-time64.c += -Wno-uninitialized $(uses-callbacks) -fexceptions
+@@ -131,9 +132,10 @@ CFLAGS-posix_fallocate.c += -fexceptions
+ CFLAGS-posix_fallocate64.c += -fexceptions
+ CFLAGS-fallocate.c += -fexceptions
+ CFLAGS-fallocate64.c += -fexceptions
+-CFLAGS-read.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-write.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-read.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
++CFLAGS-write.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
+ CFLAGS-close.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-lseek64.c += $(config-cflags-wno-ignored-attributes)
+ 
+ CFLAGS-test-stat.c += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE
+ CFLAGS-test-lfs.c += -D_LARGEFILE64_SOURCE
+diff --git a/libio/Makefile b/libio/Makefile
+index 0e5f348bea..8da4260593 100644
+--- a/libio/Makefile
++++ b/libio/Makefile
+@@ -112,18 +112,18 @@ CFLAGS-getchar.c += -fexceptions
+ CFLAGS-getwc.c += -fexceptions
+ CFLAGS-getwchar.c += -fexceptions
+ CFLAGS-iofclose.c += -fexceptions
+-CFLAGS-iofflush.c += -fexceptions
++CFLAGS-iofflush.c += -fexceptions $(config-cflags-wno-ignored-attributes)
+ CFLAGS-iofgetpos64.c += -fexceptions
+ CFLAGS-iofgetpos.c += -fexceptions
+ CFLAGS-iofgets.c += -fexceptions
+ CFLAGS-iofgetws.c += -fexceptions
+-CFLAGS-iofputs.c += -fexceptions
++CFLAGS-iofputs.c += -fexceptions $(config-cflags-wno-ignored-attributes)
+ CFLAGS-iofputws.c += -fexceptions
+ CFLAGS-iofread.c += -fexceptions
+ CFLAGS-iofsetpos64.c += -fexceptions
+ CFLAGS-iofsetpos.c += -fexceptions
+ CFLAGS-ioftell.c += -fexceptions
+-CFLAGS-iofwrite.c += -fexceptions
++CFLAGS-iofwrite.c += -fexceptions $(config-cflags-wno-ignored-attributes)
+ CFLAGS-iogetdelim.c += -fexceptions
+ CFLAGS-iogetline.c += -fexceptions
+ CFLAGS-iogets.c += -fexceptions
+@@ -153,6 +153,14 @@ CFLAGS-oldiofopen.c += -fexceptions
+ CFLAGS-iofopen.c += -fexceptions
+ CFLAGS-iofopen64.c += -fexceptions
+ CFLAGS-oldtmpfile.c += -fexceptions
++CFLAGS-fileno.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-feof_u.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-ferror_u.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-getc_u.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-iofflush_u.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-putc_u.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-iofgets_u.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-iofputs_u.c += $(config-cflags-wno-ignored-attributes)
+ # XXX Do we need filedoalloc and wfiledoalloc?  Others?
+ 
+ CFLAGS-tst_putwc.c += -DOBJPFX=\"$(objpfx)\"
+diff --git a/login/Makefile b/login/Makefile
+index 62440499bc..a0a96f3bbe 100644
+--- a/login/Makefile
++++ b/login/Makefile
+@@ -64,6 +64,7 @@ endif # $(have-GLIBC_2.33)
+ include ../Rules
+ 
+ CFLAGS-getpt.c += -fexceptions
++CFLAGS-getlogin_r.c += $(config-cflags-wno-ignored-attributes)
+ 
+ ifeq (yesyes,$(have-fpie)$(build-shared))
+ pt_chown-cflags += $(pie-ccflag)
+diff --git a/misc/Makefile b/misc/Makefile
+index 3d8a569d06..5565ca284d 100644
+--- a/misc/Makefile
++++ b/misc/Makefile
+@@ -142,6 +142,8 @@ CFLAGS-tst-tsearch.c += $(stack-align-test-flags)
+ CFLAGS-msync.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-fdatasync.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-fsync.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-makedev.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-mmap64.c += $(config-cflags-wno-ignored-attributes)
+ 
+ # Called during static library initialization, so turn stack-protection
+ # off for non-shared builds.
+diff --git a/posix/Makefile b/posix/Makefile
+index 9b30b53a7c..695e8a0a55 100644
+--- a/posix/Makefile
++++ b/posix/Makefile
+@@ -248,9 +248,9 @@ $(objpfx)config-name.h: $(..)scripts/config-uname.sh $(common-objpfx)config.make
+ CFLAGS-getaddrinfo.c += -DRESOLVER -fexceptions
+ CFLAGS-pause.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-pread.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-pread64.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-pread64.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
+ CFLAGS-pwrite.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-pwrite64.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-pwrite64.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
+ CFLAGS-sleep.c += -fexceptions
+ CFLAGS-wait.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-waitid.c += -fexceptions -fasynchronous-unwind-tables
+@@ -279,7 +279,7 @@ CFLAGS-execl.os = -fomit-frame-pointer
+ CFLAGS-execvp.os = -fomit-frame-pointer
+ CFLAGS-execlp.os = -fomit-frame-pointer
+ CFLAGS-nanosleep.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-fork.c = $(libio-mtsafe)
++CFLAGS-fork.c = $(libio-mtsafe) $(config-cflags-wno-ignored-attributes)
+ 
+ tstgetopt-ARGS = -a -b -cfoobar --required foobar --optional=bazbug \
+ 		--none random --col --color --colour
+diff --git a/resolv/Makefile b/resolv/Makefile
+index 438672786f..a5dd0dc69f 100644
+--- a/resolv/Makefile
++++ b/resolv/Makefile
+@@ -213,6 +213,7 @@ LOCALES := en_US.UTF-8 en_US.ISO-8859-1
+ include ../gen-locales.mk
+ 
+ CFLAGS-res_hconf.c += -fexceptions
++CFLAGS-inet_pton.c += $(config-cflags-wno-ignored-attributes)
+ 
+ # The DNS NSS modules needs the resolver.
+ $(objpfx)libnss_dns.so: $(objpfx)libresolv.so
+diff --git a/resource/Makefile b/resource/Makefile
+index d3d230a538..a005eab3e5 100644
+--- a/resource/Makefile
++++ b/resource/Makefile
+@@ -28,3 +28,6 @@ routines := getrlimit setrlimit getrlimit64 setrlimit64 getrusage ulimit      \
+ tests = tst-getrlimit bug-ulimit1
+ 
+ include ../Rules
++
++CFLAGS-getrlimit64.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-getrlimit.c += $(config-cflags-wno-ignored-attributes)
+diff --git a/socket/Makefile b/socket/Makefile
+index 2bde78387f..bd659a5ad1 100644
+--- a/socket/Makefile
++++ b/socket/Makefile
+@@ -49,11 +49,11 @@ aux	 := sa_len
+ 
+ include ../Rules
+ 
+-CFLAGS-recv.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-recv.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
+ CFLAGS-recvfrom.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-sendto.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-recvmsg.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-sendmsg.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-send.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-connect.c += -fexceptions -fasynchronous-unwind-tables
+-CFLAGS-accept.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-sendmsg.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
++CFLAGS-send.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
++CFLAGS-connect.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
++CFLAGS-accept.c += -fexceptions -fasynchronous-unwind-tables $(config-cflags-wno-ignored-attributes)
+diff --git a/stdio-common/Makefile b/stdio-common/Makefile
+index ee0544d9f6..7bee974ed4 100644
+--- a/stdio-common/Makefile
++++ b/stdio-common/Makefile
+@@ -213,6 +213,8 @@ CFLAGS-isoc99_vscanf.c += -fexceptions
+ CFLAGS-isoc99_fscanf.c += -fexceptions
+ CFLAGS-isoc99_scanf.c += -fexceptions
+ 
++CFLAGS-dprintf.c += $(config-cflags-wno-ignored-attributes)
++
+ # scanf14a.c and scanf16a.c test a deprecated extension which is no
+ # longer visible under most conformance levels; see the source files
+ # for more detail.
+diff --git a/stdlib/Makefile b/stdlib/Makefile
+index 8236741984..c524009eaf 100644
+--- a/stdlib/Makefile
++++ b/stdlib/Makefile
+@@ -212,6 +212,18 @@ CFLAGS-strfromd.c += $(libio-mtsafe)
+ CFLAGS-strfromf.c += $(libio-mtsafe)
+ CFLAGS-strfroml.c += $(libio-mtsafe)
+ 
++CFLAGS-strtol.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtoul.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtoll.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtoull.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtof.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtof_l.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtod.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtod_l.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtold.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strtold_l.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-secure-getenv.c += $(config-cflags-wno-ignored-attributes)
++
+ CFLAGS-tst-bsearch.c += $(stack-align-test-flags)
+ CFLAGS-tst-qsort.c += $(stack-align-test-flags)
+ CFLAGS-tst-makecontext.c += -funwind-tables
+diff --git a/string/Makefile b/string/Makefile
+index b65f6027b7..1e35eb6c33 100644
+--- a/string/Makefile
++++ b/string/Makefile
+@@ -109,6 +109,15 @@ LDFLAGS-tst-xbzero-opt = -z now
+ CFLAGS-memcpy.c += $(no-stack-protector)
+ CFLAGS-wordcopy.c += $(no-stack-protector)
+ 
++CFLAGS-argz-next.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-basename.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-ffs.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-memmem.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-memchr.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-mempcpy.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-stpcpy.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-strnlen.c += $(config-cflags-wno-ignored-attributes)
++
+ ifeq ($(run-built-tests),yes)
+ $(objpfx)tst-svc-cmp.out: tst-svc.expect $(objpfx)tst-svc.out
+ 	cmp $^ > $@; \
+diff --git a/sysdeps/aarch64/Makefile b/sysdeps/aarch64/Makefile
+index 7183895d04..f5367e01ca 100644
+--- a/sysdeps/aarch64/Makefile
++++ b/sysdeps/aarch64/Makefile
+@@ -56,6 +56,7 @@ endif
+ 
+ ifeq ($(subdir),math)
+ CPPFLAGS += -I../soft-fp
++CFLAGS-feupdateenv.c += $(config-cflags-wno-ignored-attributes)
+ endif
+ 
+ ifeq ($(subdir),misc)
+diff --git a/sysdeps/arm/Makefile b/sysdeps/arm/Makefile
+index da4226c8c8..d5cea717a9 100644
+--- a/sysdeps/arm/Makefile
++++ b/sysdeps/arm/Makefile
+@@ -54,6 +54,10 @@ ifeq ($(subdir),gmon)
+ sysdep_routines += arm-mcount
+ endif
+ 
++ifeq ($(subdir),math)
++CFLAGS-feupdateenv.c += $(config-cflags-wno-ignored-attributes)
++endif
++
+ ifeq ($(subdir),rt)
+ librt-sysdep_routines += rt-aeabi_unwind_cpp_pr1 rt-arm-unwind-resume
+ librt-shared-only-routines += rt-aeabi_unwind_cpp_pr1 rt-arm-unwind-resume
+diff --git a/sysdeps/wordsize-64/Makefile b/sysdeps/wordsize-64/Makefile
+index 2fa934751f..db7764f664 100644
+--- a/sysdeps/wordsize-64/Makefile
++++ b/sysdeps/wordsize-64/Makefile
+@@ -1,3 +1,8 @@
+ ifeq ($(subdir),misc)
+ tests += tst-writev
+ endif
++
++# strtol is aliased to stroll
++CFLAGS-strtol.c += -fno-builtin-strtoll $(config-cflags-wno-ignored-attributes)
++# strtoul is aliased to strtoull
++CFLAGS-strtoul.c += -fno-builtin-strtoull $(config-cflags-wno-ignored-attributes)
+diff --git a/termios/Makefile b/termios/Makefile
+index 54ed9fe51e..1490dd17b2 100644
+--- a/termios/Makefile
++++ b/termios/Makefile
+@@ -31,3 +31,4 @@ routines	:= speed cfsetspeed tcsetattr tcgetattr tcgetpgrp tcsetpgrp \
+ include ../Rules
+ 
+ CFLAGS-tcdrain.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-tcsetattr.c += $(config-cflags-wno-ignored-attributes)
+diff --git a/time/Makefile b/time/Makefile
+index 470275b90c..dc6e2c93ad 100644
+--- a/time/Makefile
++++ b/time/Makefile
+@@ -98,6 +98,7 @@ CFLAGS-tzset.c += $(tz-cflags)
+ CFLAGS-getdate.c += -fexceptions
+ CFLAGS-clock_nanosleep.c += -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-nanosleep.c += -fexceptions -fasynchronous-unwind-tables
++CFLAGS-mktime.c += $(config-cflags-wno-ignored-attributes)
+ 
+ # Don't warn about Y2k problem in strftime format string.
+ CFLAGS-test_time.c += -Wno-format
+diff --git a/wcsmbs/Makefile b/wcsmbs/Makefile
+index df9a85f4a9..1a3474599f 100644
+--- a/wcsmbs/Makefile
++++ b/wcsmbs/Makefile
+@@ -80,24 +80,32 @@ CFLAGS-wcwidth.c += -I../wctype
+ CFLAGS-wcswidth.c += -I../wctype
+ 
+ strtox-CFLAGS = -I../include
+-CFLAGS-wcstol.c += $(strtox-CFLAGS)
+-CFLAGS-wcstoul.c += $(strtox-CFLAGS)
++CFLAGS-wcstol.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
++CFLAGS-wcstoul.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
+ CFLAGS-wcstoll.c += $(strtox-CFLAGS)
+ CFLAGS-wcstoull.c += $(strtox-CFLAGS)
+-CFLAGS-wcstod.c += $(strtox-CFLAGS)
+-CFLAGS-wcstold.c += $(strtox-CFLAGS)
++CFLAGS-wcstod.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
++CFLAGS-wcstold.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
+ CFLAGS-wcstof128.c += $(strtox-CFLAGS)
+-CFLAGS-wcstof.c += $(strtox-CFLAGS)
++CFLAGS-wcstof.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
+ CFLAGS-wcstol_l.c += $(strtox-CFLAGS)
+ CFLAGS-wcstoul_l.c += $(strtox-CFLAGS)
+ CFLAGS-wcstoll_l.c += $(strtox-CFLAGS)
+ CFLAGS-wcstoull_l.c += $(strtox-CFLAGS)
+-CFLAGS-wcstod_l.c += $(strtox-CFLAGS)
+-CFLAGS-wcstold_l.c += $(strtox-CFLAGS)
++CFLAGS-wcstod_l.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
++CFLAGS-wcstold_l.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
+ CFLAGS-wcstof128_l.c += $(strtox-CFLAGS)
+-CFLAGS-wcstof_l.c += $(strtox-CFLAGS)
++CFLAGS-wcstof_l.c += $(strtox-CFLAGS) $(config-cflags-wno-ignored-attributes)
+ CPPFLAGS-tst-wchar-h.c += -D_FORTIFY_SOURCE=2
+ 
++CFLAGS-wcschr.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-wmemchr.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-wmemset.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-mbrtowc.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-wcrtomb.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-wcstoll.c += $(config-cflags-wno-ignored-attributes)
++CFLAGS-wcstoull.c += $(config-cflags-wno-ignored-attributes)
++
+ CFLAGS-isoc99_wscanf.c += -fexceptions
+ CFLAGS-isoc99_fwscanf.c += -fexceptions
+ CFLAGS-isoc99_vwscanf.c += -fexceptions
+diff --git a/wctype/Makefile b/wctype/Makefile
+index a3540203cc..79d9608cb9 100644
+--- a/wctype/Makefile
++++ b/wctype/Makefile
+@@ -29,3 +29,5 @@ routines	:= wcfuncs wctype iswctype wctrans towctrans \
+ tests	:= test_wctype test_wcfuncs bug-wctypeh
+ 
+ include ../Rules
++
++CFLAGS-wcfuncs.c += $(config-cflags-wno-ignored-attributes)
+-- 
+2.37.2
+

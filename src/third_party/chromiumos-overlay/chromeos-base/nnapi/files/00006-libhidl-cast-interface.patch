@@ -1,0 +1,49 @@
+Create an alternate implementation of castInterface<> that doesn't depend on
+any of the hwbinder / remote object layer. Makes the assumption that we
+will not be dealing with remoteable objects.
+
+diff --git a/platform2/aosp/system/libhidl/transport/include/hidl/HidlTransportSupport.h b/platform2/aosp/system/libhidl/transport/include/hidl/HidlTransportSupport.h
+index 454a4e5..d60dd0d 100644
+--- a/platform2/aosp/system/libhidl/transport/include/hidl/HidlTransportSupport.h
++++ b/platform2/aosp/system/libhidl/transport/include/hidl/HidlTransportSupport.h
+@@ -18,7 +18,6 @@
+ #define ANDROID_HIDL_TRANSPORT_SUPPORT_H
+
+ #include <android/hidl/base/1.0/IBase.h>
+-#include <hidl/HidlBinderSupport.h>
+ #include <hidl/HidlPassthroughSupport.h>
+ #include <hidl/HidlSupport.h>
+ #include <hidl/HidlTransportUtils.h>
+@@ -130,7 +129,7 @@ int32_t getPidIfSharable();
+ // 3. !emitError, calling into parent fails.
+ // Return an error Return object if:
+ // 1. emitError, calling into parent fails.
+-template <typename IChild, typename IParent, typename BpChild>
++template <typename IChild, typename IParent>
+ Return<sp<IChild>> castInterface(sp<IParent> parent, const char* childIndicator, bool emitError) {
+     if (parent.get() == nullptr) {
+         // casts always succeed with nullptrs.
+@@ -147,11 +146,6 @@ Return<sp<IChild>> castInterface(sp<IParent> parent, const char* childIndicator,
+     if (!canCastRet) {
+         return sp<IChild>(nullptr); // cast failed.
+     }
+-    // TODO b/32001926 Needs to be fixed for socket mode.
+-    if (parent->isRemote()) {
+-        // binderized mode. Got BpChild. grab the remote and wrap it.
+-        return sp<IChild>(new BpChild(getOrCreateCachedBinder(parent.get())));
+-    }
+     // Passthrough mode. Got BnChild or BsChild.
+     return sp<IChild>(static_cast<IChild *>(parent.get()));
+ }
+@@ -168,11 +162,6 @@ sp<IType> getServiceInternal(const std::string& instance, bool retry, bool getSt
+         return nullptr;
+     }
+
+-    if (base->isRemote()) {
+-        // getRawServiceInternal guarantees we get the proper class
+-        return sp<IType>(new BpType(getOrCreateCachedBinder(base.get())));
+-    }
+-
+     return IType::castFrom(base);
+ }
+

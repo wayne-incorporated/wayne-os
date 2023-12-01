@@ -1,0 +1,47 @@
+From 7ab8292e8377bf282bded1ba71908a8b2c60b6f9 Mon Sep 17 00:00:00 2001
+From: Andrzej Ostruszka <amo@semihalf.com>
+Date: Tue, 5 Jul 2022 11:19:06 +0000
+Subject: [PATCH] Drop ARP on DHCP drop
+
+If dhcpcd has/gets an offer and is starting ARPing (either as part of
+DAD or checking GW address) then it is possible that over DBus it gets
+request to release the lease.  Together with DHCP lease drop, dhcpcd
+should drop all ARP states because in both events mentioned above it
+would proceed with dhcp_bind() which would lead to crash (since the
+offer has been released).
+---
+ src/dhcp.c   | 3 +++
+ src/dhcpcd.c | 3 ---
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/dhcp.c b/src/dhcp.c
+index cedb950b..0f1dfd48 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -3082,6 +3082,9 @@ dhcp_drop(struct interface *ifp, const char *reason)
+ 
+ #ifdef ARPING
+ 	state->arping_index = -1;
++#endif
++#ifdef ARP
++	arp_drop(ifp);
+ #endif
+ 	if ((ifp->options->options & DHCPCD_RELEASE ||
+              strcmp(reason, "RELEASE") == 0) &&
+diff --git a/src/dhcpcd.c b/src/dhcpcd.c
+index 681f5a34..20806f88 100644
+--- a/src/dhcpcd.c
++++ b/src/dhcpcd.c
+@@ -405,9 +405,6 @@ dhcpcd_drop(struct interface *ifp, int stop)
+ #ifdef INET
+ 	dhcp_drop(ifp, stop ? "STOP" : "EXPIRE");
+ #endif
+-#ifdef ARP
+-	arp_drop(ifp);
+-#endif
+ #if !defined(DHCP6) && !defined(DHCP)
+ 	UNUSED(stop);
+ #endif
+-- 
+2.37.0.rc0.161.g10f37bed90-goog
+

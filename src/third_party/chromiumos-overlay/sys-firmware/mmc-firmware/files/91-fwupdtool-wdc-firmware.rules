@@ -1,0 +1,25 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+ACTION!="add", GOTO="emmc_fw_end"
+SUBSYSTEM!="block", GOTO="emmc_fw_end"
+KERNEL!="mmcblk[0-9]", GOTO="emmc_fw_end"
+ATTRS{manfid}!="0x000045", GOTO="emmc_fw_end"
+
+# DA4032 @ QS1.0|QS1.0D|QS1.1D
+ATTRS{name}=="DA4032", \
+ATTRS{fwrev}=="0x3536323330613137|0x3637303330363138|0x3739323330363138", \
+RUN+="/sbin/initctl emit fwupdtool-update PLUGIN=emmc GUID=5500994c-1b73-52b4-acf4-bb574b6f3029"
+
+# DA4064 @ QS1.0|QS1.0D|QS1.1D
+ATTRS{name}=="DA4064", \
+ATTRS{fwrev}=="0x3536323330613137|0x3637303330363138|0x3739323330363138", \
+RUN+="/sbin/initctl emit fwupdtool-update PLUGIN=emmc GUID=f2e60d79-dc6c-519c-babb-95e68d6d5f16"
+
+# DA4128 @ QS1.0|QS1.0D|QS1.1D
+ATTRS{name}=="DA4128", \
+ATTRS{fwrev}=="0x3536323330613137|0x3637303330363138|0x3739323330363138", \
+RUN+="/sbin/initctl emit fwupdtool-update PLUGIN=emmc GUID=4fc1a707-0290-53f8-aa18-2f2d0e1f4627"
+
+LABEL="emmc_fw_end"

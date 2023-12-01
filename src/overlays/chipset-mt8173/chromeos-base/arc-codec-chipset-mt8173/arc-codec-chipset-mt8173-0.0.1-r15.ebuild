@@ -1,0 +1,1 @@
+arc-codec-chipset-mt8173-0.0.1.ebuild

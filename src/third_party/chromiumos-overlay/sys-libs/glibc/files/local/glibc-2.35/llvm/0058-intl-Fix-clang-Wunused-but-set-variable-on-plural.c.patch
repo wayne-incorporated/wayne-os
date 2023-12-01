@@ -1,0 +1,35 @@
+From fcd46dd269e63cff666aebd96afd51de36e0aa40 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 24 Aug 2022 11:13:23 -0300
+Subject: [PATCH 058/163] intl: Fix clang -Wunused-but-set-variable on plural.c
+
+Clang warns that '__gettextnerrs' set but not used:
+
+  intl/plural.c:1034:9: error: variable '__gettextnerrs' set but not used
+  [-Werror,-Wunused-but-set-variable]
+      int yynerrs = 0;
+        ^
+
+Since the file is auto-generated, suppress the warning with a compiler
+flag.
+---
+ intl/Makefile | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/intl/Makefile b/intl/Makefile
+index 315c75a18f..1c3b2a2273 100644
+--- a/intl/Makefile
++++ b/intl/Makefile
+@@ -154,7 +154,8 @@ $(objpfx)tst-gettext5.out: $(objpfx)tst-gettext.out
+ $(objpfx)tst-gettext6.out: $(objpfx)tst-gettext.out
+ 
+ CPPFLAGS += -D'LOCALEDIR="$(localedir)"' \
+-	    -D'LOCALE_ALIAS_PATH="$(localedir)"'
++	    -D'LOCALE_ALIAS_PATH="$(localedir)"' \
++	    -Wno-unused-but-set-variable
+ BISONFLAGS = --yacc --no-lines --name-prefix=__gettext --output
+ 
+ $(inst_localedir)/locale.alias: locale.alias $(+force)
+-- 
+2.37.2
+

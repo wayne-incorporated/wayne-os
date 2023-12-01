@@ -1,0 +1,370 @@
+commit bb7d3af1139c36270bc9948605e06f40e4c51541
+Author: Roman Lebedev <lebedev.ri@gmail.com>
+Date:   Mon Sep 7 23:54:06 2020 +0300
+
+    Reland [SimplifyCFG][LoopRotate] SimplifyCFG: disable common instruction hoisting by default, enable late in pipeline
+    
+    This was reverted in 503deec2183d466dad64b763bab4e15fd8804239
+    because it caused gigantic increase (3x) in branch mispredictions
+    in certain benchmarks on certain CPU's,
+    see https://reviews.llvm.org/D84108#2227365.
+    
+    It has since been investigated and here are the results:
+    https://lists.llvm.org/pipermail/llvm-commits/Week-of-Mon-20200907/827578.html
+    > It's an amazingly severe regression, but it's also all due to branch
+    > mispredicts (about 3x without this). The code layout looks ok so there's
+    > probably something else to deal with. I'm not sure there's anything we can
+    > reasonably do so we'll just have to take the hit for now and wait for
+    > another code reorganization to make the branch predictor a bit more happy :)
+    >
+    > Thanks for giving us some time to investigate and feel free to recommit
+    > whenever you'd like.
+    >
+    > -eric
+    
+    So let's just reland this.
+    Original commit message:
+    
+    
+    I've been looking at missed vectorizations in one codebase.
+    One particular thing that stands out is that some of the loops
+    reach vectorizer in a rather mangled form, with weird PHI's,
+    and some of the loops aren't even in a rotated form.
+    
+    After taking a more detailed look, that happened because
+    the loop's headers were too big by then. It is evident that
+    SimplifyCFG's common code hoisting transform is at fault there,
+    because the pattern it handles is precisely the unrotated
+    loop basic block structure.
+    
+    Surprizingly, `SimplifyCFGOpt::HoistThenElseCodeToIf()` is enabled
+    by default, and is always run, unlike it's friend, common code sinking
+    transform, `SinkCommonCodeFromPredecessors()`, which is not enabled
+    by default and is only run once very late in the pipeline.
+    
+    I'm proposing to harmonize this, and disable common code hoisting
+    until //late// in pipeline. Definition of //late// may vary,
+    here currently i've picked the same one as for code sinking,
+    but i suppose we could enable it as soon as right after
+    loop rotation happens.
+    
+    Experimentation shows that this does indeed unsurprizingly help,
+    more loops got rotated, although other issues remain elsewhere.
+    
+    Now, this undoubtedly seriously shakes phase ordering.
+    This will undoubtedly be a mixed bag in terms of both compile- and
+    run- time performance, codesize. Since we no longer aggressively
+    hoist+deduplicate common code, we don't pay the price of said hoisting
+    (which wasn't big). That may allow more loops to be rotated,
+    so we pay that price. That, in turn, that may enable all the transforms
+    that require canonical (rotated) loop form, including but not limited to
+    vectorization, so we pay that too. And in general, no deduplication means
+    more [duplicate] instructions going through the optimizations. But there's still
+    late hoisting, some of them will be caught late.
+    
+    As per benchmarks i've run {F12360204}, this is mostly within the noise,
+    there are some small improvements, some small regressions.
+    One big regression i saw i fixed in rG8d487668d09fb0e4e54f36207f07c1480ffabbfd, but i'm sure
+    this will expose many more pre-existing missed optimizations, as usual :S
+    
+    llvm-compile-time-tracker.com thoughts on this:
+    http://llvm-compile-time-tracker.com/compare.php?from=e40315d2b4ed1e38962a8f33ff151693ed4ada63&to=c8289c0ecbf235da9fb0e3bc052e3c0d6bff5cf9&stat=instructions
+    * this does regress compile-time by +0.5% geomean (unsurprizingly)
+    * size impact varies; for ThinLTO it's actually an improvement
+    
+    The largest fallout appears to be in GVN's load partial redundancy
+    elimination, it spends *much* more time in
+    `MemoryDependenceResults::getNonLocalPointerDependency()`.
+    Non-local `MemoryDependenceResults` is widely-known to be, uh, costly.
+    There does not appear to be a proper solution to this issue,
+    other than silencing the compile-time performance regression
+    by tuning cut-off thresholds in `MemoryDependenceResults`,
+    at the cost of potentially regressing run-time performance.
+    D84609 attempts to move in that direction, but the path is unclear
+    and is going to take some time.
+    
+    If we look at stats before/after diffs, some excerpts:
+    * RawSpeed (the target) {F12360200}
+      * -14 (-73.68%) loops not rotated due to the header size (yay)
+      * -272 (-0.67%) `"Number of live out of a loop variables"` - good for vectorizer
+      * -3937 (-64.19%) common instructions hoisted
+      * +561 (+0.06%) x86 asm instructions
+      * -2 basic blocks
+      * +2418 (+0.11%) IR instructions
+    * vanilla test-suite + RawSpeed + darktable  {F12360201}
+      * -36396 (-65.29%) common instructions hoisted
+      * +1676 (+0.02%) x86 asm instructions
+      * +662 (+0.06%) basic blocks
+      * +4395 (+0.04%) IR instructions
+    
+    It is likely to be sub-optimal for when optimizing for code size,
+    so one might want to change tune pipeline by enabling sinking/hoisting
+    when optimizing for size.
+    
+    Reviewed By: mkazantsev
+    
+    Differential Revision: https://reviews.llvm.org/D84108
+    
+    This reverts commit 503deec2183d466dad64b763bab4e15fd8804239.
+
+diff --git a/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h b/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h
+index 46f6ca0462f..fb3a7490346 100644
+--- a/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h
++++ b/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h
+@@ -25,7 +25,7 @@ struct SimplifyCFGOptions {
+   bool ForwardSwitchCondToPhi = false;
+   bool ConvertSwitchToLookupTable = false;
+   bool NeedCanonicalLoop = true;
+-  bool HoistCommonInsts = true;
++  bool HoistCommonInsts = false;
+   bool SinkCommonInsts = false;
+   bool SimplifyCondBranch = true;
+   bool FoldTwoEntryPHINode = true;
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index 9df6a985789..9a2e895d7b7 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -1160,11 +1160,14 @@ ModulePassManager PassBuilder::buildModuleOptimizationPipeline(
+   // convert to more optimized IR using more aggressive simplify CFG options.
+   // The extra sinking transform can create larger basic blocks, so do this
+   // before SLP vectorization.
+-  OptimizePM.addPass(SimplifyCFGPass(SimplifyCFGOptions().
+-                                     forwardSwitchCondToPhi(true).
+-                                     convertSwitchToLookupTable(true).
+-                                     needCanonicalLoops(false).
+-                                     sinkCommonInsts(true)));
++  // FIXME: study whether hoisting and/or sinking of common instructions should
++  //        be delayed until after SLP vectorizer.
++  OptimizePM.addPass(SimplifyCFGPass(SimplifyCFGOptions()
++                                         .forwardSwitchCondToPhi(true)
++                                         .convertSwitchToLookupTable(true)
++                                         .needCanonicalLoops(false)
++                                         .hoistCommonInsts(true)
++                                         .sinkCommonInsts(true)));
+ 
+   // Optimize parallel scalar instruction chains into SIMD instructions.
+   if (PTO.SLPVectorization)
+diff --git a/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp b/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp
+index 8b15898c1c1..d7a14a3dc77 100644
+--- a/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp
++++ b/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp
+@@ -455,6 +455,7 @@ void AArch64PassConfig::addIRPasses() {
+                                             .forwardSwitchCondToPhi(true)
+                                             .convertSwitchToLookupTable(true)
+                                             .needCanonicalLoops(false)
++                                            .hoistCommonInsts(true)
+                                             .sinkCommonInsts(true)));
+ 
+   // Run LoopDataPrefetch
+diff --git a/llvm/lib/Target/ARM/ARMTargetMachine.cpp b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+index 55ac332e2c6..5068f9b5a0f 100644
+--- a/llvm/lib/Target/ARM/ARMTargetMachine.cpp
++++ b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+@@ -407,7 +407,8 @@ void ARMPassConfig::addIRPasses() {
+   // ldrex/strex loops to simplify this, but it needs tidying up.
+   if (TM->getOptLevel() != CodeGenOpt::None && EnableAtomicTidy)
+     addPass(createCFGSimplificationPass(
+-        SimplifyCFGOptions().sinkCommonInsts(true), [this](const Function &F) {
++        SimplifyCFGOptions().hoistCommonInsts(true).sinkCommonInsts(true),
++        [this](const Function &F) {
+           const auto &ST = this->TM->getSubtarget<ARMSubtarget>(F);
+           return ST.hasAnyDataBarrier() && !ST.isThumb1Only();
+         }));
+diff --git a/llvm/lib/Target/Hexagon/HexagonTargetMachine.cpp b/llvm/lib/Target/Hexagon/HexagonTargetMachine.cpp
+index 6728306db3d..37cf391c998 100644
+--- a/llvm/lib/Target/Hexagon/HexagonTargetMachine.cpp
++++ b/llvm/lib/Target/Hexagon/HexagonTargetMachine.cpp
+@@ -327,6 +327,7 @@ void HexagonPassConfig::addIRPasses() {
+                                               .forwardSwitchCondToPhi(true)
+                                               .convertSwitchToLookupTable(true)
+                                               .needCanonicalLoops(false)
++                                              .hoistCommonInsts(true)
+                                               .sinkCommonInsts(true)));
+     if (EnableLoopPrefetch)
+       addPass(createLoopDataPrefetchPass());
+diff --git a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+index 326d1ab28b6..caa9a98ecb0 100644
+--- a/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
++++ b/llvm/lib/Transforms/IPO/PassManagerBuilder.cpp
+@@ -784,10 +784,13 @@ void PassManagerBuilder::populateModulePassManager(
+   // convert to more optimized IR using more aggressive simplify CFG options.
+   // The extra sinking transform can create larger basic blocks, so do this
+   // before SLP vectorization.
++  // FIXME: study whether hoisting and/or sinking of common instructions should
++  //        be delayed until after SLP vectorizer.
+   MPM.add(createCFGSimplificationPass(SimplifyCFGOptions()
+                                           .forwardSwitchCondToPhi(true)
+                                           .convertSwitchToLookupTable(true)
+                                           .needCanonicalLoops(false)
++                                          .hoistCommonInsts(true)
+                                           .sinkCommonInsts(true)));
+ 
+   if (SLPVectorize) {
+diff --git a/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp b/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp
+index db5211df397..b0435bf6e4e 100644
+--- a/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp
++++ b/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp
+@@ -63,8 +63,8 @@ static cl::opt<bool> UserForwardSwitchCond(
+     cl::desc("Forward switch condition to phi ops (default = false)"));
+ 
+ static cl::opt<bool> UserHoistCommonInsts(
+-    "hoist-common-insts", cl::Hidden, cl::init(true),
+-    cl::desc("hoist common instructions (default = true)"));
++    "hoist-common-insts", cl::Hidden, cl::init(false),
++    cl::desc("hoist common instructions (default = false)"));
+ 
+ static cl::opt<bool> UserSinkCommonInsts(
+     "sink-common-insts", cl::Hidden, cl::init(false),
+diff --git a/llvm/test/Transforms/PGOProfile/chr.ll b/llvm/test/Transforms/PGOProfile/chr.ll
+index c2e1ae4f53a..1a22d7f0b84 100644
+--- a/llvm/test/Transforms/PGOProfile/chr.ll
++++ b/llvm/test/Transforms/PGOProfile/chr.ll
+@@ -2006,9 +2006,16 @@ define i64 @test_chr_22(i1 %i, i64* %j, i64 %v0) !prof !14 {
+ ; CHECK-NEXT:  bb0:
+ ; CHECK-NEXT:    [[REASS_ADD:%.*]] = shl i64 [[V0:%.*]], 1
+ ; CHECK-NEXT:    [[V2:%.*]] = add i64 [[REASS_ADD]], 3
++; CHECK-NEXT:    [[C1:%.*]] = icmp slt i64 [[V2]], 100
++; CHECK-NEXT:    br i1 [[C1]], label [[BB0_SPLIT:%.*]], label [[BB0_SPLIT_NONCHR:%.*]], !prof !15
++; CHECK:       bb0.split:
+ ; CHECK-NEXT:    [[V299:%.*]] = mul i64 [[V2]], 7860086430977039991
+ ; CHECK-NEXT:    store i64 [[V299]], i64* [[J:%.*]], align 4
+ ; CHECK-NEXT:    ret i64 99
++; CHECK:       bb0.split.nonchr:
++; CHECK-NEXT:    [[V299_NONCHR:%.*]] = mul i64 [[V2]], 7860086430977039991
++; CHECK-NEXT:    store i64 [[V299_NONCHR]], i64* [[J]], align 4
++; CHECK-NEXT:    ret i64 99
+ ;
+ bb0:
+   %v1 = add i64 %v0, 3
+diff --git a/llvm/test/Transforms/PhaseOrdering/loop-rotation-vs-common-code-hoisting.ll b/llvm/test/Transforms/PhaseOrdering/loop-rotation-vs-common-code-hoisting.ll
+index 1d8cce6879e..314af1c1414 100644
+--- a/llvm/test/Transforms/PhaseOrdering/loop-rotation-vs-common-code-hoisting.ll
++++ b/llvm/test/Transforms/PhaseOrdering/loop-rotation-vs-common-code-hoisting.ll
+@@ -5,14 +5,11 @@
+ ; RUN: opt -O3 -rotation-max-header-size=1 -S < %s                    | FileCheck %s --check-prefixes=HOIST,THR1,FALLBACK2
+ ; RUN: opt -passes='default<O3>' -rotation-max-header-size=1 -S < %s  | FileCheck %s --check-prefixes=HOIST,THR1,FALLBACK3
+ 
+-; RUN: opt -O3 -rotation-max-header-size=2 -S < %s                    | FileCheck %s --check-prefixes=HOIST,THR2,FALLBACK4
+-; RUN: opt -passes='default<O3>' -rotation-max-header-size=2 -S < %s  | FileCheck %s --check-prefixes=HOIST,THR2,FALLBACK5
++; RUN: opt -O3 -rotation-max-header-size=2 -S < %s                    | FileCheck %s --check-prefixes=ROTATED_LATER,ROTATED_LATER_OLDPM,FALLBACK4
++; RUN: opt -passes='default<O3>' -rotation-max-header-size=2 -S < %s  | FileCheck %s --check-prefixes=ROTATED_LATER,ROTATED_LATER_NEWPM,FALLBACK5
+ 
+-; RUN: opt -O3 -rotation-max-header-size=3 -S < %s                    | FileCheck %s --check-prefixes=ROTATED_LATER,ROTATED_LATER_OLDPM,FALLBACK6
+-; RUN: opt -passes='default<O3>' -rotation-max-header-size=3 -S < %s  | FileCheck %s --check-prefixes=ROTATED_LATER,ROTATED_LATER_NEWPM,FALLBACK7
+-
+-; RUN: opt -O3 -rotation-max-header-size=4 -S < %s                    | FileCheck %s --check-prefixes=ROTATE,ROTATE_OLDPM,FALLBACK8
+-; RUN: opt -passes='default<O3>' -rotation-max-header-size=4 -S < %s  | FileCheck %s --check-prefixes=ROTATE,ROTATE_NEWPM,FALLBACK9
++; RUN: opt -O3 -rotation-max-header-size=3 -S < %s                    | FileCheck %s --check-prefixes=ROTATE,ROTATE_OLDPM,FALLBACK6
++; RUN: opt -passes='default<O3>' -rotation-max-header-size=3 -S < %s  | FileCheck %s --check-prefixes=ROTATE,ROTATE_NEWPM,FALLBACK7
+ 
+ ; This example is produced from a very basic C code:
+ ;
+@@ -61,8 +58,8 @@ define void @_Z4loopi(i32 %width) {
+ ; HOIST-NEXT:    br label [[FOR_COND:%.*]]
+ ; HOIST:       for.cond:
+ ; HOIST-NEXT:    [[I_0:%.*]] = phi i32 [ [[INC:%.*]], [[FOR_BODY:%.*]] ], [ 0, [[FOR_COND_PREHEADER]] ]
+-; HOIST-NEXT:    tail call void @f0()
+ ; HOIST-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[I_0]], [[TMP0]]
++; HOIST-NEXT:    tail call void @f0()
+ ; HOIST-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_COND_CLEANUP:%.*]], label [[FOR_BODY]]
+ ; HOIST:       for.cond.cleanup:
+ ; HOIST-NEXT:    tail call void @f2()
+@@ -80,17 +77,17 @@ define void @_Z4loopi(i32 %width) {
+ ; ROTATED_LATER_OLDPM-NEXT:    br i1 [[CMP]], label [[RETURN:%.*]], label [[FOR_COND_PREHEADER:%.*]]
+ ; ROTATED_LATER_OLDPM:       for.cond.preheader:
+ ; ROTATED_LATER_OLDPM-NEXT:    [[TMP0:%.*]] = add nsw i32 [[WIDTH]], -1
+-; ROTATED_LATER_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATED_LATER_OLDPM-NEXT:    [[EXITCOND_NOT3:%.*]] = icmp eq i32 [[TMP0]], 0
+ ; ROTATED_LATER_OLDPM-NEXT:    br i1 [[EXITCOND_NOT3]], label [[FOR_COND_CLEANUP:%.*]], label [[FOR_BODY:%.*]]
+ ; ROTATED_LATER_OLDPM:       for.cond.cleanup:
++; ROTATED_LATER_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATED_LATER_OLDPM-NEXT:    tail call void @f2()
+ ; ROTATED_LATER_OLDPM-NEXT:    br label [[RETURN]]
+ ; ROTATED_LATER_OLDPM:       for.body:
+ ; ROTATED_LATER_OLDPM-NEXT:    [[I_04:%.*]] = phi i32 [ [[INC:%.*]], [[FOR_BODY]] ], [ 0, [[FOR_COND_PREHEADER]] ]
++; ROTATED_LATER_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATED_LATER_OLDPM-NEXT:    tail call void @f1()
+ ; ROTATED_LATER_OLDPM-NEXT:    [[INC]] = add nuw i32 [[I_04]], 1
+-; ROTATED_LATER_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATED_LATER_OLDPM-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[INC]], [[TMP0]]
+ ; ROTATED_LATER_OLDPM-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_COND_CLEANUP]], label [[FOR_BODY]]
+ ; ROTATED_LATER_OLDPM:       return:
+@@ -102,19 +99,19 @@ define void @_Z4loopi(i32 %width) {
+ ; ROTATED_LATER_NEWPM-NEXT:    br i1 [[CMP]], label [[RETURN:%.*]], label [[FOR_COND_PREHEADER:%.*]]
+ ; ROTATED_LATER_NEWPM:       for.cond.preheader:
+ ; ROTATED_LATER_NEWPM-NEXT:    [[TMP0:%.*]] = add nsw i32 [[WIDTH]], -1
+-; ROTATED_LATER_NEWPM-NEXT:    tail call void @f0()
+ ; ROTATED_LATER_NEWPM-NEXT:    [[EXITCOND_NOT3:%.*]] = icmp eq i32 [[TMP0]], 0
+ ; ROTATED_LATER_NEWPM-NEXT:    br i1 [[EXITCOND_NOT3]], label [[FOR_COND_CLEANUP:%.*]], label [[FOR_COND_PREHEADER_FOR_BODY_CRIT_EDGE:%.*]]
+ ; ROTATED_LATER_NEWPM:       for.cond.preheader.for.body_crit_edge:
+ ; ROTATED_LATER_NEWPM-NEXT:    [[INC_1:%.*]] = add nuw i32 0, 1
+ ; ROTATED_LATER_NEWPM-NEXT:    br label [[FOR_BODY:%.*]]
+ ; ROTATED_LATER_NEWPM:       for.cond.cleanup:
++; ROTATED_LATER_NEWPM-NEXT:    tail call void @f0()
+ ; ROTATED_LATER_NEWPM-NEXT:    tail call void @f2()
+ ; ROTATED_LATER_NEWPM-NEXT:    br label [[RETURN]]
+ ; ROTATED_LATER_NEWPM:       for.body:
+ ; ROTATED_LATER_NEWPM-NEXT:    [[INC_PHI:%.*]] = phi i32 [ [[INC_0:%.*]], [[FOR_BODY_FOR_BODY_CRIT_EDGE:%.*]] ], [ [[INC_1]], [[FOR_COND_PREHEADER_FOR_BODY_CRIT_EDGE]] ]
+-; ROTATED_LATER_NEWPM-NEXT:    tail call void @f1()
+ ; ROTATED_LATER_NEWPM-NEXT:    tail call void @f0()
++; ROTATED_LATER_NEWPM-NEXT:    tail call void @f1()
+ ; ROTATED_LATER_NEWPM-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[INC_PHI]], [[TMP0]]
+ ; ROTATED_LATER_NEWPM-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_COND_CLEANUP]], label [[FOR_BODY_FOR_BODY_CRIT_EDGE]]
+ ; ROTATED_LATER_NEWPM:       for.body.for.body_crit_edge:
+@@ -129,19 +126,19 @@ define void @_Z4loopi(i32 %width) {
+ ; ROTATE_OLDPM-NEXT:    br i1 [[CMP]], label [[RETURN:%.*]], label [[FOR_COND_PREHEADER:%.*]]
+ ; ROTATE_OLDPM:       for.cond.preheader:
+ ; ROTATE_OLDPM-NEXT:    [[CMP13_NOT:%.*]] = icmp eq i32 [[WIDTH]], 1
+-; ROTATE_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATE_OLDPM-NEXT:    br i1 [[CMP13_NOT]], label [[FOR_COND_CLEANUP:%.*]], label [[FOR_BODY_PREHEADER:%.*]]
+ ; ROTATE_OLDPM:       for.body.preheader:
+ ; ROTATE_OLDPM-NEXT:    [[TMP0:%.*]] = add nsw i32 [[WIDTH]], -1
+ ; ROTATE_OLDPM-NEXT:    br label [[FOR_BODY:%.*]]
+ ; ROTATE_OLDPM:       for.cond.cleanup:
++; ROTATE_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATE_OLDPM-NEXT:    tail call void @f2()
+ ; ROTATE_OLDPM-NEXT:    br label [[RETURN]]
+ ; ROTATE_OLDPM:       for.body:
+ ; ROTATE_OLDPM-NEXT:    [[I_04:%.*]] = phi i32 [ [[INC:%.*]], [[FOR_BODY]] ], [ 0, [[FOR_BODY_PREHEADER]] ]
++; ROTATE_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATE_OLDPM-NEXT:    tail call void @f1()
+ ; ROTATE_OLDPM-NEXT:    [[INC]] = add nuw nsw i32 [[I_04]], 1
+-; ROTATE_OLDPM-NEXT:    tail call void @f0()
+ ; ROTATE_OLDPM-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[INC]], [[TMP0]]
+ ; ROTATE_OLDPM-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_COND_CLEANUP]], label [[FOR_BODY]]
+ ; ROTATE_OLDPM:       return:
+@@ -153,19 +150,19 @@ define void @_Z4loopi(i32 %width) {
+ ; ROTATE_NEWPM-NEXT:    br i1 [[CMP]], label [[RETURN:%.*]], label [[FOR_COND_PREHEADER:%.*]]
+ ; ROTATE_NEWPM:       for.cond.preheader:
+ ; ROTATE_NEWPM-NEXT:    [[CMP13_NOT:%.*]] = icmp eq i32 [[WIDTH]], 1
+-; ROTATE_NEWPM-NEXT:    tail call void @f0()
+ ; ROTATE_NEWPM-NEXT:    br i1 [[CMP13_NOT]], label [[FOR_COND_CLEANUP:%.*]], label [[FOR_BODY_PREHEADER:%.*]]
+ ; ROTATE_NEWPM:       for.body.preheader:
+ ; ROTATE_NEWPM-NEXT:    [[TMP0:%.*]] = add nsw i32 [[WIDTH]], -1
+ ; ROTATE_NEWPM-NEXT:    [[INC_1:%.*]] = add nuw nsw i32 0, 1
+ ; ROTATE_NEWPM-NEXT:    br label [[FOR_BODY:%.*]]
+ ; ROTATE_NEWPM:       for.cond.cleanup:
++; ROTATE_NEWPM-NEXT:    tail call void @f0()
+ ; ROTATE_NEWPM-NEXT:    tail call void @f2()
+ ; ROTATE_NEWPM-NEXT:    br label [[RETURN]]
+ ; ROTATE_NEWPM:       for.body:
+ ; ROTATE_NEWPM-NEXT:    [[INC_PHI:%.*]] = phi i32 [ [[INC_0:%.*]], [[FOR_BODY_FOR_BODY_CRIT_EDGE:%.*]] ], [ [[INC_1]], [[FOR_BODY_PREHEADER]] ]
+-; ROTATE_NEWPM-NEXT:    tail call void @f1()
+ ; ROTATE_NEWPM-NEXT:    tail call void @f0()
++; ROTATE_NEWPM-NEXT:    tail call void @f1()
+ ; ROTATE_NEWPM-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[INC_PHI]], [[TMP0]]
+ ; ROTATE_NEWPM-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_COND_CLEANUP]], label [[FOR_BODY_FOR_BODY_CRIT_EDGE]]
+ ; ROTATE_NEWPM:       for.body.for.body_crit_edge:
+diff --git a/llvm/test/Transforms/SimplifyCFG/common-code-hoisting.ll b/llvm/test/Transforms/SimplifyCFG/common-code-hoisting.ll
+index b58017ba7ef..37cbc4640e4 100644
+--- a/llvm/test/Transforms/SimplifyCFG/common-code-hoisting.ll
++++ b/llvm/test/Transforms/SimplifyCFG/common-code-hoisting.ll
+@@ -1,7 +1,7 @@
+ ; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+ ; RUN: opt -simplifycfg -hoist-common-insts=1 -S < %s                    | FileCheck %s --check-prefixes=HOIST
+ ; RUN: opt -simplifycfg -hoist-common-insts=0 -S < %s                    | FileCheck %s --check-prefixes=NOHOIST
+-; RUN: opt -simplifycfg                       -S < %s                    | FileCheck %s --check-prefixes=HOIST,DEFAULT
++; RUN: opt -simplifycfg                       -S < %s                    | FileCheck %s --check-prefixes=NOHOIST,DEFAULT
+ 
+ ; This example is produced from a very basic C code:
+ ;

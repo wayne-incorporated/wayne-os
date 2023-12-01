@@ -1,0 +1,48 @@
+From df1c7dc16d59bdc4c61f8ee3ab33755c7e7f654f Mon Sep 17 00:00:00 2001
+From: Gwendal Grignou <gwendal@chromium.org>
+Date: Tue, 31 May 2022 12:31:53 -0700
+Subject: [PATCH] Fix test to reflect changes in outputs
+
+Fixes 34caaa3690db ("* nih/main.c (nih_main_version): Use nih_str_screen_wrap to output...")
+
+|nih_str_screen_wrap| does not add a `\n` before warranty, as line is
+less than 80 characters.
+
+Signed-off-by: Gwendal Grignou <gwendal@chromium.org>
+---
+ nih/tests/test_option.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/nih/tests/test_option.c b/nih/tests/test_option.c
+index fa366cf..aa5dfbe 100644
+--- a/nih/tests/test_option.c
++++ b/nih/tests/test_option.c
+@@ -1578,7 +1578,7 @@ test_version (void)
+ 
+ 				args = nih_option_parser (NULL, argc, argv,
+ 							  options, FALSE);
+-				exit (1);
++				assert (! "not reached");
+ 			}
+ 		}
+ 
+@@ -1592,7 +1592,6 @@ test_version (void)
+ 		TEST_FILE_EQ (output, "Copyright Message\n");
+ 		TEST_FILE_EQ (output, "\n");
+ 		TEST_FILE_EQ_N (output, "This is free software;");
+-		TEST_FILE_EQ_N (output, "warranty; not even for");
+ 		TEST_FILE_END (output);
+ 
+ 		fclose (output);
+@@ -1656,7 +1655,7 @@ test_help (void)
+ 
+ 				args = nih_option_parser (NULL, argc, argv,
+ 							  options, FALSE);
+-				exit (1);
++				assert (! "not reached");
+ 			}
+ 		}
+ 
+-- 
+2.31.0
+

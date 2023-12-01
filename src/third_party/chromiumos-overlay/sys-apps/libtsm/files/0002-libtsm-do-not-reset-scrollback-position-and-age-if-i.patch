@@ -1,0 +1,31 @@
+From 5720ff5d96185cbc3b83860e81d09a2159b343c9 Mon Sep 17 00:00:00 2001
+From: Dominik Behr <dbehr@chromium.org>
+Date: Fri, 28 Oct 2016 15:43:15 -0700
+Subject: [PATCH] libtsm: do not reset scrollback position and age if it has
+ been already reset.
+
+This should prevent whole screen redrawing when pressing any key.
+
+Signed-off-by: Dominik Behr <dbehr@chromium.org>
+---
+ src/tsm_screen.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/tsm_screen.c b/src/tsm_screen.c
+index fd61d37..6426154 100644
+--- a/src/tsm_screen.c
++++ b/src/tsm_screen.c
+@@ -984,6 +984,10 @@ void tsm_screen_sb_reset(struct tsm_screen *con)
+ 	if (!con)
+ 		return;
+ 
++	/* Scrollback is already in reset state. */
++	if (!con->sb_pos)
++		return;
++
+ 	inc_age(con);
+ 	/* TODO: more sophisticated ageing */
+ 	con->age = con->age_cnt;
+-- 
+2.8.0.rc3.226.g39d4020
+

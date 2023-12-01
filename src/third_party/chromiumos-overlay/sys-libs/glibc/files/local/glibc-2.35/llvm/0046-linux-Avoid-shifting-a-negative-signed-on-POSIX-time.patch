@@ -1,0 +1,125 @@
+From 7e725a711970ed4c750fb1472263c6c8336a7978 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 9 Mar 2022 17:12:03 -0300
+Subject: [PATCH 046/163] linux: Avoid shifting a negative signed on POSIX
+ timer interface
+
+The current macros uses pid as signed value, which triggers a compiler
+warning for process and thread timers.  Replace MAKE_PROCESS_CPUCLOCK
+with static inline function that expects the pid as unsigned.  These
+are similar to what Linux does internally.
+
+Checked on x86_64-linux-gnu.
+---
+ nptl/pthread_getcpuclockid.c                  |  2 +-
+ sysdeps/unix/sysv/linux/clock_getcpuclockid.c |  2 +-
+ sysdeps/unix/sysv/linux/clock_nanosleep.c     |  2 +-
+ .../unix/sysv/linux/kernel-posix-cpu-timers.h | 30 +++++++++++++++----
+ sysdeps/unix/sysv/linux/timer_create.c        |  4 +--
+ 5 files changed, 29 insertions(+), 11 deletions(-)
+
+diff --git a/nptl/pthread_getcpuclockid.c b/nptl/pthread_getcpuclockid.c
+index 344bd6560e..b8bf09f550 100644
+--- a/nptl/pthread_getcpuclockid.c
++++ b/nptl/pthread_getcpuclockid.c
+@@ -35,7 +35,7 @@ __pthread_getcpuclockid (pthread_t threadid, clockid_t *clockid)
+ 
+   /* The clockid_t value is a simple computation from the TID.  */
+ 
+-  const clockid_t tidclock = MAKE_THREAD_CPUCLOCK (pd->tid, CPUCLOCK_SCHED);
++  const clockid_t tidclock = make_thread_cpuclock (pd->tid, CPUCLOCK_SCHED);
+ 
+   *clockid = tidclock;
+   return 0;
+diff --git a/sysdeps/unix/sysv/linux/clock_getcpuclockid.c b/sysdeps/unix/sysv/linux/clock_getcpuclockid.c
+index 5534127ed7..355d3c86af 100644
+--- a/sysdeps/unix/sysv/linux/clock_getcpuclockid.c
++++ b/sysdeps/unix/sysv/linux/clock_getcpuclockid.c
+@@ -29,7 +29,7 @@ __clock_getcpuclockid (pid_t pid, clockid_t *clock_id)
+   /* The clockid_t value is a simple computation from the PID.
+      But we do a clock_getres call to validate it.  */
+ 
+-  const clockid_t pidclock = MAKE_PROCESS_CPUCLOCK (pid, CPUCLOCK_SCHED);
++  const clockid_t pidclock = make_process_cpuclock (pid, CPUCLOCK_SCHED);
+ 
+ #ifndef __NR_clock_getres_time64
+ # define __NR_clock_getres_time64 __NR_clock_getres
+diff --git a/sysdeps/unix/sysv/linux/clock_nanosleep.c b/sysdeps/unix/sysv/linux/clock_nanosleep.c
+index befe6ecb8c..e610fd4e8d 100644
+--- a/sysdeps/unix/sysv/linux/clock_nanosleep.c
++++ b/sysdeps/unix/sysv/linux/clock_nanosleep.c
+@@ -34,7 +34,7 @@ __clock_nanosleep_time64 (clockid_t clock_id, int flags,
+   if (clock_id == CLOCK_THREAD_CPUTIME_ID)
+     return EINVAL;
+   if (clock_id == CLOCK_PROCESS_CPUTIME_ID)
+-    clock_id = MAKE_PROCESS_CPUCLOCK (0, CPUCLOCK_SCHED);
++    clock_id = PROCESS_CLOCK;
+ 
+   /* If the call is interrupted by a signal handler or encounters an error,
+      it returns a positive value similar to errno.  */
+diff --git a/sysdeps/unix/sysv/linux/kernel-posix-cpu-timers.h b/sysdeps/unix/sysv/linux/kernel-posix-cpu-timers.h
+index 164a90ddeb..9c74bb1cf5 100644
+--- a/sysdeps/unix/sysv/linux/kernel-posix-cpu-timers.h
++++ b/sysdeps/unix/sysv/linux/kernel-posix-cpu-timers.h
+@@ -1,4 +1,12 @@
+-/* Parameters for the Linux kernel ABI for CPU clocks.  */
++/*
++  Parameters for the Linux kernel ABI for CPU clocks, the bit fields within
++  a clockid:
++
++  - The most significant 29 bits hold either a pid or a file descriptor.
++  - Bit 2 indicates whether a cpu clock refers to a thread or a process.
++  - Bits 1 and 0 give the type: PROF=0, VIRT=1, SCHED=2, or FD=3.
++  - A clockid is invalid if bits 2, 1, and 0 are all set.
++ */
+ 
+ #define CPUCLOCK_PID(clock)		((pid_t) ~((clock) >> 3))
+ #define CPUCLOCK_PERTHREAD(clock) \
+@@ -6,13 +14,23 @@
+ #define CPUCLOCK_PID_MASK	7
+ #define CPUCLOCK_PERTHREAD_MASK	4
+ #define CPUCLOCK_WHICH(clock)	((clock) & (clockid_t) CPUCLOCK_CLOCK_MASK)
+-#define CPUCLOCK_CLOCK_MASK	3
++#define CPUCLOCK_CLOCK_MASK	3KE_PROCESS_CPUCLOCK
+ #define CPUCLOCK_PROF		0
+ #define CPUCLOCK_VIRT		1
+ #define CPUCLOCK_SCHED		2
+ #define CPUCLOCK_MAX		3
+ 
+-#define MAKE_PROCESS_CPUCLOCK(pid, clock) \
+-	((~(clockid_t) (pid) << 3) | (clockid_t) (clock))
+-#define MAKE_THREAD_CPUCLOCK(tid, clock) \
+-	MAKE_PROCESS_CPUCLOCK((tid), (clock) | CPUCLOCK_PERTHREAD_MASK)
++static inline clockid_t
++make_process_cpuclock (unsigned int pid, clockid_t clock)
++{
++  return ((~pid) << 3) | clock;
++}
++
++static inline clockid_t
++make_thread_cpuclock (unsigned int tid, clockid_t clock)
++{
++  return make_process_cpuclock (tid, clock | CPUCLOCK_PERTHREAD_MASK);
++}
++
++#define PROCESS_CLOCK  make_process_cpuclock (0, CPUCLOCK_SCHED)
++#define THREAD_CLOCK   make_thread_cpuclock (0, CPUCLOCK_SCHED)
+diff --git a/sysdeps/unix/sysv/linux/timer_create.c b/sysdeps/unix/sysv/linux/timer_create.c
+index a8b2a41d9e..290324a7ea 100644
+--- a/sysdeps/unix/sysv/linux/timer_create.c
++++ b/sysdeps/unix/sysv/linux/timer_create.c
+@@ -33,9 +33,9 @@ ___timer_create (clockid_t clock_id, struct sigevent *evp, timer_t *timerid)
+ {
+   {
+     clockid_t syscall_clockid = (clock_id == CLOCK_PROCESS_CPUTIME_ID
+-				 ? MAKE_PROCESS_CPUCLOCK (0, CPUCLOCK_SCHED)
++				 ? PROCESS_CLOCK
+ 				 : clock_id == CLOCK_THREAD_CPUTIME_ID
+-				 ? MAKE_THREAD_CPUCLOCK (0, CPUCLOCK_SCHED)
++				 ? THREAD_CLOCK
+ 				 : clock_id);
+ 
+     /* If the user wants notification via a thread we need to handle
+-- 
+2.37.2
+

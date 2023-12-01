@@ -1,0 +1,1 @@
+speex-1.2_rc1.ebuild

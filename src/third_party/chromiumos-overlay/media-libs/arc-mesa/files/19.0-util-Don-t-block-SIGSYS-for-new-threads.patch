@@ -1,0 +1,32 @@
+From 1fd79b4b6d46c95892efb10f2571d36b110224f9 Mon Sep 17 00:00:00 2001
+From: Drew Davenport <ddavenport@chromium.org>
+Date: Sat, 23 Feb 2019 00:04:52 -0700
+Subject: [PATCH] util: Don't block SIGSYS for new threads
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SIGSYS is needed for programs using seccomp for sandboxing.
+
+Reviewed-by: Marek Olšák <marek.olsak@amd.com>
+---
+ src/util/u_thread.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/util/u_thread.h b/src/util/u_thread.h
+index 7538d7d634b..a46c18d3db2 100644
+--- a/src/util/u_thread.h
++++ b/src/util/u_thread.h
+@@ -44,7 +44,8 @@ static inline thrd_t u_thread_create(int (*routine)(void *), void *param)
+    int ret;
+ 
+    sigfillset(&new_set);
+-   pthread_sigmask(SIG_SETMASK, &new_set, &saved_set);
++   sigdelset(&new_set, SIGSYS);
++   pthread_sigmask(SIG_BLOCK, &new_set, &saved_set);
+    ret = thrd_create( &thread, routine, param );
+    pthread_sigmask(SIG_SETMASK, &saved_set, NULL);
+ #else
+-- 
+2.20.1
+

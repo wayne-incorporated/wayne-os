@@ -1,0 +1,64 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+group("all") {
+  deps = [
+    ":hdrnet_processor_benchmark",
+    ":hdrnet_processor_impl_test",
+    ":hdrnet_stream_manipulator_test",
+  ]
+}
+
+pkg_config("target_defaults") {
+  configs = [
+    "//camera/build:cros_camera_common",
+    "//common-mk:test",
+  ]
+  pkg_deps = [
+    "benchmark",
+    "libbrillo",
+    "libchrome-test",
+    "libcros_camera",
+    "libcros_camera_android_deps",
+    "libdrm",
+  ]
+}
+
+source_set("hdrnet_processor_test_fixture") {
+  sources =
+      [ "//camera/features/hdrnet/tests/hdrnet_processor_test_fixture.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//camera/features/hdrnet",
+    "//camera/gpu:gpu_test_support",
+  ]
+}
+
+executable("hdrnet_processor_benchmark") {
+  sources = [ "//camera/features/hdrnet/tests/hdrnet_processor_benchmark.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":hdrnet_processor_test_fixture" ]
+}
+
+executable("hdrnet_processor_impl_test") {
+  sources = [ "//camera/features/hdrnet/tests/hdrnet_processor_impl_test.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [
+    ":hdrnet_processor_test_fixture",
+    "//camera/features/hdrnet",
+  ]
+}
+
+executable("hdrnet_stream_manipulator_test") {
+  sources =
+      [ "//camera/features/hdrnet/tests/hdrnet_stream_manipulator_test.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [
+    "//camera/common/test_support",
+    "//camera/features/hdrnet",
+  ]
+}

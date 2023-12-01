@@ -1,0 +1,51 @@
+This patch  is under review at https://reviews.llvm.org/D44788
+It makes clang accept the option -glto-dwo-dir and pass
+it to llvm to enable thinlto with debug fission.
+
+--- a/tools/clang/docs/ClangCommandLineReference.rst
++++ b/tools/clang/docs/ClangCommandLineReference.rst
+@@ -2587,6 +2587,8 @@ Debug information flags
+ 
+ .. option:: -gstrict-dwarf, -gno-strict-dwarf
+ 
++.. option:: -glto-dwo-dir=<arg>
++
+ .. option:: -gz
+ 
+ DWARF debug sections compression type
+diff --git a/include/clang/Driver/Options.td b/include/clang/Driver/Options.td
+index 6925157d2e..83a4f5bc86 100644
+--- a/tools/clang/include/clang/Driver/Options.td
++++ b/tools/clang/include/clang/Driver/Options.td
+@@ -1700,6 +1700,7 @@ def gno_strict_dwarf : Flag<["-"], "gno-strict-dwarf">, Group<g_flags_Group>;
+ def gcolumn_info : Flag<["-"], "gcolumn-info">, Group<g_flags_Group>, Flags<[CoreOption]>;
+ def gno_column_info : Flag<["-"], "gno-column-info">, Group<g_flags_Group>, Flags<[CoreOption]>;
+ def gsplit_dwarf : Flag<["-"], "gsplit-dwarf">, Group<g_flags_Group>;
++def glto_dwo_dir_EQ : Joined<["-"], "glto-dwo-dir=">, Group<g_flags_Group>;
+ def ggnu_pubnames : Flag<["-"], "ggnu-pubnames">, Group<g_flags_Group>, Flags<[CC1Option]>;
+ def gdwarf_aranges : Flag<["-"], "gdwarf-aranges">, Group<g_flags_Group>;
+ def gmodules : Flag <["-"], "gmodules">, Group<gN_Group>,
+diff --git a/lib/Driver/ToolChains/CommonArgs.cpp b/lib/Driver/ToolChains/CommonArgs.cpp
+index 17ab82e97c..67992a655e 100644
+--- a/tools/clang/lib/Driver/ToolChains/CommonArgs.cpp
++++ b/tools/clang/lib/Driver/ToolChains/CommonArgs.cpp
+@@ -417,6 +417,19 @@
+   if (IsThinLTO)
+     CmdArgs.push_back("-plugin-opt=thinlto");
+ 
++  if (Arg *A = Args.getLastArg(options::OPT_glto_dwo_dir_EQ)) {
++    const char *Objcopy =
++        Args.MakeArgString(ToolChain.GetProgramPath(CLANG_DEFAULT_OBJCOPY));
++    CmdArgs.push_back(
++        Args.MakeArgString(Twine("-plugin-opt=objcopy=") + Objcopy));
++    StringRef Dwo_Dir = A->getValue();
++     SmallString<1024> DwoDir;
++     llvm::sys::path::native(Dwo_Dir, DwoDir);
++     llvm::sys::path::append(DwoDir, Twine(Output.getFilename()) + "_dwo");
++    CmdArgs.push_back(
++        Args.MakeArgString(Twine("-plugin-opt=dwo_dir=") + DwoDir));
++  }
++
+   if (unsigned Parallelism = getLTOParallelism(Args, ToolChain.getDriver()))
+     CmdArgs.push_back(
+         Args.MakeArgString("-plugin-opt=jobs=" + Twine(Parallelism)));

@@ -1,0 +1,44 @@
+commit 2497d5aa7716a664c4f73df1980b026c906c7522
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Tue Oct 25 12:29:03 2022 -0700
+
+    Define _GNU_SOURCE for arm baremetal in C++ mode.
+    
+    This matches other C++ drivers e.g. Linux that define
+    _GNU_SOURCE. This lets clang compiler more code by default
+    without explicitly passing _GNU_SOURCE on command line.
+    
+    Reviewed By: MaskRay
+    
+    Differential Revision: https://reviews.llvm.org/D136712
+
+diff --git a/clang/lib/Basic/Targets/ARM.cpp b/clang/lib/Basic/Targets/ARM.cpp
+index f2db186aac4c..c38849058e13 100644
+--- a/clang/lib/Basic/Targets/ARM.cpp
++++ b/clang/lib/Basic/Targets/ARM.cpp
+@@ -705,8 +705,11 @@ void ARMTargetInfo::getTargetDefines(const LangOptions &Opts,
+   // For bare-metal none-eabi.
+   if (getTriple().getOS() == llvm::Triple::UnknownOS &&
+       (getTriple().getEnvironment() == llvm::Triple::EABI ||
+-       getTriple().getEnvironment() == llvm::Triple::EABIHF))
++       getTriple().getEnvironment() == llvm::Triple::EABIHF)) {
+     Builder.defineMacro("__ELF__");
++    if (Opts.CPlusPlus)
++      Builder.defineMacro("_GNU_SOURCE");
++  }
+ 
+   // Target properties.
+   Builder.defineMacro("__REGISTER_PREFIX__", "");
+diff --git a/clang/test/Preprocessor/init-arm.c b/clang/test/Preprocessor/init-arm.c
+index e317ffa67393..a55d0d63a79b 100644
+--- a/clang/test/Preprocessor/init-arm.c
++++ b/clang/test/Preprocessor/init-arm.c
+@@ -1450,3 +1450,8 @@
+ 
+ // THUMB-MINGW:#define __ARM_DWARF_EH__ 1
+ 
++// RUN: %clang_cc1 -E -dM -ffreestanding -triple=thumbv6m-none-unknown-eabi < /dev/null | FileCheck -match-full-lines -check-prefix Thumbv6m-elf %s
++// Thumbv6m-elf: #define __ELF__ 1
++
++// RUN: %clang_cc1 -x c++ -E -dM -ffreestanding -triple=thumbv6m-none-unknown-eabi < /dev/null | FileCheck -match-full-lines -check-prefix Thumbv6m-cxx %s
++// Thumbv6m-cxx: #define _GNU_SOURCE 1

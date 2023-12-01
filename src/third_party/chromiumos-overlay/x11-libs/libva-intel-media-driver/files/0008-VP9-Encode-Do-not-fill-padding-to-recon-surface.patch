@@ -1,0 +1,39 @@
+From 4ecd5b3a150ee36ce0b24b4dc4cc5dc1e36b5a5f Mon Sep 17 00:00:00 2001
+From: Jianhui Dai <jianhui.j.dai@intel.com>
+Date: Thu, 4 May 2023 18:20:30 +0800
+Subject: [PATCH] [VP9][Encode] Do not fill padding to recon surface
+
+Recon surface does not need fill padding. Remove this CPU padding to
+improve power and performance.
+---
+ .../agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.cpp         | 1 -
+ media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.h  | 2 +-
+ 2 files changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.cpp b/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.cpp
+index 44b4de221..2bfbfa5f2 100644
+--- a/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.cpp
++++ b/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.cpp
+@@ -3960,7 +3960,6 @@ MOS_STATUS CodechalVdencVp9StateG12::ExecutePictureLevel()
+         uint32_t aligned_height = MOS_ALIGN_CEIL(real_height, CODEC_VP9_MIN_BLOCK_HEIGHT);
+ 
+         fill_pad_with_value(m_rawSurfaceToPak, real_height, aligned_height);
+-        fill_pad_with_value(&m_reconSurface, real_height, aligned_height);
+     }
+ 
+     if (m_pictureCodingType != I_TYPE)
+diff --git a/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.h b/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.h
+index 6922aeb5e..bed53e493 100644
+--- a/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.h
++++ b/media_driver/agnostic/gen12/codec/hal/codechal_vdenc_vp9_g12.h
+@@ -1314,6 +1314,6 @@ public:
+         PMOS_COMMAND_BUFFER cmdBuffer,
+         uint32_t            currPass);
+ 
+-    void fill_pad_with_value(PMOS_SURFACE psSurface, uint32_t real_height, uint32_t alogned_height);
++    void fill_pad_with_value(PMOS_SURFACE psSurface, uint32_t real_height, uint32_t aligned_height);
+ };
+ #endif  // __CODECHAL_VDENC_VP9_G12_H__
+-- 
+2.25.1
+

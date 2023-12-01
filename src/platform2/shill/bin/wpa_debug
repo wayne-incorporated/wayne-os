@@ -1,0 +1,86 @@
+#!/bin/sh
+
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Script that turns on useful logging for wpa_supplicant
+
+
+WPA_LEVEL_LIST="excessive msgdump debug info warning error"
+
+usage() {
+  echo "
+Usage: wpa_debug [level]|[--reset]|[--help][--list_valid_levels]
+
+  wpa_debug sets the debug level of wpa_supplicant.
+  Current debug level is displayed if no parameters are provided
+
+  level: The level is the level we want to set the debugging level to. The valid
+         levels can be viewed by using the --list_valid_levels flag
+
+         eg: wpa_debug msgdump
+           Sets the wpa_supplicant logging level to msgdump
+
+  --reset : Resets the level to 'info'
+
+  --help : Displays this output
+
+  --list_valid_levels: Displays the valid levels wpa_supplicant can be set to
+"
+}
+
+CMD_FLAG="<<cmd>>"
+
+WPA_CMD="dbus-send --system --dest=fi.w1.wpa_supplicant1 --print-reply /fi/w1/wpa_supplicant1 org.freedesktop.DBus.Properties.${CMD_FLAG} string:fi.w1.wpa_supplicant1 string:DebugLevel"
+
+# Returns whether or not $2 exists in $1 where $1 is a space
+# separated list of tags
+is_valid_tag() {
+  expr " $1 " : ".* $2 .*"> /dev/null
+}
+
+get_wpa_logging() {
+  set_cmd="$(echo "${WPA_CMD}" | sed "s/${CMD_FLAG}/Get/")"
+  ${set_cmd} | sed -e '/string/!d; s/[[:space:]]\+/ /g' | cut -d "\"" -f 2
+}
+
+set_wpa_logging() {
+  if ! is_valid_tag "${WPA_LEVEL_LIST}" "$1"; then
+    return 1
+  fi
+
+  if [ "$1" = "$(get_wpa_logging)" ]; then
+    return 1
+  fi
+
+  set_cmd="$(echo "${WPA_CMD}" | sed "s/${CMD_FLAG}/Set/") variant:string:$1"
+  ${set_cmd}
+}
+
+
+if [ $# -gt 0 ]; then
+  for param in "$@"; do
+    case $param in
+    --reset)
+      set_wpa_logging "info"
+      ;;
+    --list*)
+      echo "Valid levels are: $(echo "${WPA_LEVEL_LIST}" | sed 's/ /, /g')"
+      exit 0
+      ;;
+    --help|--*)
+      usage
+      exit 0
+      ;;
+    *)
+      old_level="$(get_wpa_logging)"
+      set_wpa_logging "$param"
+      echo "Old wpa level: ${old_level}"
+      ;;
+    esac
+  done
+fi
+
+echo "Current wpa level: $(get_wpa_logging)"
+

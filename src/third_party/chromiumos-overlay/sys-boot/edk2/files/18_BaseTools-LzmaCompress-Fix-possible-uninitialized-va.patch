@@ -1,0 +1,29 @@
+From 9cdda7baa0819d544987d8fc909abdac549b27aa Mon Sep 17 00:00:00 2001
+From: Hao Wu <hao.a.wu@intel.com>
+Date: Thu, 30 Nov 2017 15:22:48 +0800
+Subject: [PATCH] BaseTools/LzmaCompress: Fix possible uninitialized variable
+
+Cc: Yonghong Zhu <yonghong.zhu@intel.com>
+Contributed-under: TianoCore Contribution Agreement 1.1
+Signed-off-by: Hao Wu <hao.a.wu@intel.com>
+Reviewed-by: Liming Gao <liming.gao@intel.com>
+---
+ BaseTools/Source/C/LzmaCompress/Sdk/C/7zFile.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/BaseTools/Source/C/LzmaCompress/Sdk/C/7zFile.c b/BaseTools/Source/C/LzmaCompress/Sdk/C/7zFile.c
+index 98fe7164f5..b2fed368a4 100644
+--- a/BaseTools/Source/C/LzmaCompress/Sdk/C/7zFile.c
++++ b/BaseTools/Source/C/LzmaCompress/Sdk/C/7zFile.c
+@@ -213,7 +213,7 @@ WRes File_GetLength(CSzFile *p, UInt64 *length)
+ {
+   #ifdef USE_WINDOWS_FILE
+   
+-  DWORD sizeHigh;
++  DWORD sizeHigh = 0;
+   DWORD sizeLow = GetFileSize(p->handle, &sizeHigh);
+   if (sizeLow == 0xFFFFFFFF)
+   {
+-- 
+2.34.1.307.g9b7440fafd-goog
+

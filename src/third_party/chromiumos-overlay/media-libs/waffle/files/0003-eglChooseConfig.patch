@@ -1,0 +1,32 @@
+From 1c7886170481ee7368504107a68c5e0991b24bb6 Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Thu, 7 Jul 2016 14:54:11 -0700
+Subject: [PATCH] Pass correct parameters to eglChooseConfig
+
+Mesa on ChromeOS doesn't support the EGL_WINDOW_BIT anymore.
+This causes the error described here:
+
+https://github.com/waffle-gl/waffle/issues/40
+
+To correct this for our use case, set the surface bit to be
+the EGL_PBUFFER_BIT.
+---
+ src/waffle/egl/wegl_config.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/waffle/egl/wegl_config.c b/src/waffle/egl/wegl_config.c
+index 270fe78..d00bdba 100644
+--- a/src/waffle/egl/wegl_config.c
++++ b/src/waffle/egl/wegl_config.c
+@@ -170,7 +170,7 @@ choose_real_config(struct wegl_display *dpy,
+         // According to the EGL 1.4 spec Table 3.4, the default value of
+         // EGL_SURFACE_BIT is EGL_WINDOW_BIT.  Explicitly set the default here for
+         // the sake of self-documentation.
+-        EGL_SURFACE_TYPE,           EGL_WINDOW_BIT,
++        EGL_SURFACE_TYPE,           EGL_PBUFFER_BIT,
+         EGL_NONE,
+     };
+ 
+-- 
+2.1.2
+

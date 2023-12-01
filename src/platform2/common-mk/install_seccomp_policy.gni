@@ -1,0 +1,45 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Install seccomp policy files by `install_config` and have a static check in
+# the compile stage.
+
+# Args:
+#   sources: A list of files to be installed and checked.
+#   install_path: An install destination path.
+
+template("install_seccomp_policy") {
+  _check_seccomp_target = "_${target_name}-check_seccomp"
+  install_config(target_name) {
+    forward_variables_from(invoker,
+                           [
+                             "install_path",
+                             "outputs",
+                             "sources",
+                           ])
+    deps = [ ":${_check_seccomp_target}" ]
+  }
+
+  action_foreach(_check_seccomp_target) {
+    forward_variables_from(invoker, [ "sources" ])
+    script = "/usr/bin/compile_seccomp_policy"
+
+    # Since data is required under `/build/${BOARD}`, this compiler will be
+    # invoked in the compile stage instead of the pre-submit stage.
+
+    inputs = [ getenv("SYSROOT") + "/build/share/constants.json" ]
+
+    # We need the architecture-specific `constants.json` file that contains the
+    # mapping of syscall names to numbers.
+    # Ref: https://github.com/google/minijail/blob/HEAD/tools/README.md#compile_seccomp_policypy
+
+    outputs = [ "${target_gen_dir}/seccomp/{{source_name_part}}.bpf" ]
+    args = [
+      "--arch-json",
+      inputs[0],
+      "{{source}}",
+      outputs[0],
+    ]
+  }
+}

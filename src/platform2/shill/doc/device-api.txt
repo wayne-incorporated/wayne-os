@@ -1,0 +1,759 @@
+Device hierarchy
+================
+
+Service		org.chromium.flimflam
+Interface	org.chromium.flimflam.Device
+Object path	[variable prefix]/{device0,device1,...}
+
+Methods		dict GetProperties()
+
+			Returns properties for the device object. See
+			the properties section for available properties.
+
+		void SetProperty(string name, variant value)
+
+			Changes the value of the specified property. Only
+			properties that are listed as read-write are
+			changeable. On success a PropertyChanged signal
+			will be emitted.
+
+			Possible Errors: [service].Error.InvalidArguments
+					 [service].Error.InvalidProperty
+
+		void ClearProperty(string name)
+
+			Reset the specified parameter to its "factory"
+			value and remove any previously set value from
+			the profile. Only properties that are listed as
+			read-write are changeable.
+
+		void Enable()
+
+			Enable the device.
+
+			Possible Errors: [service].Error.PermissionDenied
+
+		void Disable()
+
+			Disable the device.
+
+		void RequirePin(string pin, boolean require)
+
+			(Cellular only) Enable or disable PIN protection for
+			a cellular modem's SIM card. If 'require' is true,
+			then a PIN will need to be supplied (by calling
+			EnterPin) before the modem is usable. If 'require'
+			is false, a PIN will not be required.
+
+			Possible Errors: [service].Error.InvalidArguments
+					 [service].Error.NotImplemented
+					 [service].Error.PinError
+
+			In the case of PinError, the error message gives
+			more detail: [interface].PinRequired
+				     [interface].PinBlocked
+				     [interface].IncorrectPin
+
+		void EnterPin(string pin)
+
+			(Cellular only) Provide a PIN to unlock a SIM card.
+
+			Possible Errors: [service].Error.InvalidArguments
+					 [service].Error.NotImplemented
+					 [service].Error.PinError
+
+			In the case of PinError, the error message gives
+			more detail: [interface].PinRequired
+				     [interface].PinBlocked
+				     [interface].IncorrectPin
+
+		void UnblockPin(string puk, string pin)
+
+			(Cellular only) Provide a PUK code to unblock a PIN.
+			When an incorrect PIN has been entered too many times
+			(three is generally the number of tries allowed), the
+			PIN becomes "blocked", and the SIM card can only be
+			unlocked by providing a PUK code provided by the
+			carrier. At the same time, a new PIN must be specified.
+
+			Possible Errors: [service].Error.InvalidArguments
+					 [service].Error.NotImplemented
+					 [service].Error.PinError
+
+			In the case of PinError, the error message gives
+			more detail: [interface].PinRequired
+				     [interface].PinBlocked
+				     [interface].IncorrectPin
+
+		void ChangePin(string old_pin, string new_pin)
+
+			(Cellular only) Change the PIN used to unlock a SIM
+			card. The existing PIN must be provided along with
+			the new PIN.
+
+			Possible Errors: [service].Error.InvalidArguments
+					 [service].Error.NotImplemented
+					 [service].Error.PinError
+
+			In the case of PinError, the error message gives
+			more detail: [interface].PinRequired
+				     [interface].PinBlocked
+				     [interface].IncorrectPin
+
+		void Register(string network_id)
+
+			(Cellular only) Initiate registration on the network
+			specified by network_id, which is in the form MCCMNC.
+			If the network ID is the empty string, then switch
+			back to automatic registration mode before initiating
+			registration.
+
+			If registration succeeds, the network_id is remembered,
+			and is saved in the profile, so that the same network
+			will be tried again if the modem is disabled and then
+			re-enabled, or if the system is restarted or resumed.
+
+			If registration fails, the network_id is not
+			remembered, and is not saved in the profile. If it was
+			already in the profile, it is deleted. In addtion, one
+			more attempt is made to register, after switching back
+			to automatic registration mode.
+
+			Possible Errors: [service].Error.NotImplemented
+			   		 [service].Error.IllegalOperation
+
+		void Reset()
+
+			Reset the device. The implementation is device-
+			dependent. In some cases, the device and its associated
+			service(s) may be destroyed after the physical device
+			is reset. In such case, a new device is expected to be
+			created after the physical device reappears on the
+			system. Currently, device reset is only supported by
+			cellular devices managed by ModemManager.
+
+			Possible Errors: [service].Error.Failure
+					 [service].Error.NotImplemented
+
+		void SetUsbEthernetMacAddressSource(string source)
+
+			(Ethernet only) Set MAC address source for USB Ethernet
+			adapter. The |source| parameter should be one of the
+			following:
+
+				"designated_dock_mac" : Computer's designated dock MAC
+							address.
+				"builtin_adapter_mac" : Computer's built-in NIC MAC
+							address.
+				"usb_adapter_mac" : USB Ethernet adapter's built-in NIC
+						    MAC address.
+
+			Possible Errors:
+				[service].Error.IllegalOperation
+					Cannot set USB Ethernet MAC address |source| for non-USB
+					devices.
+				[service].Error.InvalidArguments
+					The |source| is unknown.
+				[service].Error.NotFound
+					Failed to find new MAC address for |source|.
+				[service].Error.NotImplemented
+					Functionality is not implemented for non-Ethernet devices
+				[service].Error.OperationFailed
+					The RTNL handler failed to set the interface MAC address.
+
+
+Signals		PropertyChanged(string name, variant value)
+
+			This signal indicates a changed value of the given
+			property.
+
+Properties	string Address [readonly]
+
+			The low-level (physical) address of the device.
+
+		string BgscanMethod [readwrite]
+
+			(WiFi only) A string identifying the background scan
+			algorithm.
+			Possible values:
+				"simple" [default]
+				"learn"
+				"none"
+
+			A change to this property takes affect on the next
+			association.
+
+		uint16 BgscanShortInterval [readwrite]
+
+			(WiFi only) Time in seconds between background scans
+			when actively searching for better APs (e.g., when
+			roaming).
+
+			A change to this property takes affect on the next
+			association.
+
+		int32 BgscanSignalThreshold [readwrite]
+
+			(WiFi only) Receive signal strength threshold (in dBm),
+			for the currently connected network, below which
+			roaming is triggered.
+
+			A change to this property takes affect on the next
+			association.
+
+		string Cellular.DeviceID [readonly]
+
+			(Cellular only) The device ID of the physical
+			underlying device, if known, using the form
+			"[bus-type]:[vendor-ID]:[device-ID]".
+
+			Valid bus types: "pci" or "usb".
+
+			Vendor and device IDs are 4-character, zero-padded
+			hexadecimal numbers (e.g., "0f0a").
+
+			Examples: "pci:0123:fedc", "usb:dead:beef"
+
+		string Cellular.EID [readonly]
+
+			(Cellular only) For GSM / LTE modems, the EUICCID
+			(Embedded Universal Integrated Circuit Card Identifier)
+			of an eSIM card installed in the device, commonly
+			abbreviated as eID. Blank otherwise.
+
+		dict Cellular.HomeProvider [readonly] [GSM only]
+
+			(Cellular only) Description of the operator that
+			issued the SIM card currently installed in the modem.
+			The dictionary may contain the following string-valued
+			properties:
+
+			"name"       The operator name
+			"country"    The two-letter country code.
+			"network_id" The MCC (Mobile Country Code)
+				     and MNC (Mobile Network Code) of the
+				     operator on whose network the device is
+				     registered. The value of the property is
+				     the simple concatenation of the MCC and
+				     the MNC, with no separator. The first
+				     three digits are always the MCC, and
+				     the following two or three digits are the
+				     MNC.
+
+		string Cellular.MEID [readonly]
+
+			(Cellular only) For CDMA modems, the Mobile
+			Equipment Identifier of the modem.
+
+		string Cellular.IMEI [readonly]
+
+			(Cellular only) The International Mobile Equipment
+			Identity of the modem.
+
+		string Cellular.ICCID [readonly]
+
+			(Cellular only) For GSM / LTE modems, the Integrated
+			Circuit Card Identifier of the SIM card installed in
+			the device. Blank otherwise.
+
+		string Cellular.IMSI [readonly]
+
+			(Cellular only) For GSM modems, the International
+			Mobile Subscriber Identity of the SIM card
+			installed in the device.
+
+		string Cellular.ESN [readonly]
+
+			(Cellular only) The Electronic Serial Number of
+			the modem.
+
+		string Cellular.MDN [readonly]
+
+			(Cellular only) The Mobile Directory Number
+			(i.e., phone number) of the device.
+
+		string Cellular.MIN [readonly]
+
+			(Cellular only) The Mobile Identification Number
+			of the device. The MIN is often the same as
+			the MDN, but may change if a user changes to a
+			different service provider.
+
+		string Cellular.ModelID [readonly]
+
+			(Cellular only) The hardware model of the modem. The
+			contents of this property are unspecified, and are
+			useful primarily as a diagnostic aid.
+
+		string Cellular.Manufacturer [readonly]
+
+			(Cellular only) The manufacturer of the modem. The
+			contents of this property are unspecified,
+			and are useful primarily as a diagnostic aid.
+
+		string Cellular.FirmwareRevision [readonly]
+
+			(Cellular only) The revision of firmware that is
+			loaded in the modem. The contents of this property
+			are unspecified, and are useful primarily as a
+			diagnostic aid.
+
+		string Cellular.HardwareRevision [readonly]
+
+			(Cellular only) The hardware revision of
+			the modem. The contents of this property are
+			unspecified, and are useful primarily as a
+			diagnostic aid.
+
+		boolean Cellular.ProviderRequiresRoaming [readonly]
+
+			(Celluar only) Indicates that the cellular
+			provider (determined based on IMSI and SPN)
+			requires roaming.  This is important to
+			certain MVNOs which have no home network and
+			wish to provide network services without
+			regard to the Cellular.AllowRoaming setting.
+
+		boolean Cellular.PolicyAllowRoaming [readwrite]
+
+			(Cellular only) Whether cellular data connections
+			are allowed when the device is roaming (i.e,
+			not registered on the home network). When this
+			property is false, data connections are not
+			allowed while roaming (regardless of the AutoConnect,
+			or roaming setting of associated services).
+
+			If a connection was established while on the home
+			network, and the device begins roaming, the data
+			connection is terminated.
+
+			If the property is true, and a data connection was
+			established while roaming, and then the property is
+			set to false, the connection is terminated.
+
+			If the Cellular.ProviderRequiresRoaming property
+			is true, that setting will override this property's
+			setting.
+
+			By default Cellular.PolicyAllowRoaming is true.
+
+		dict Cellular.SIMLockStatus [readonly]
+
+			(Cellular only) For GSM modems, a dictionary
+			containing two properties describing the state
+			of the SIM card lock. The two properties are:
+
+			string LockType
+
+				If this string is empty, the SIM card is not
+				PIN-locked. Otherwise, it specifies the type
+				of lock in effect: "sim-pin", "sim-puk" or
+				one of the modem personalization locks:
+					"network-pin", "network-puk",
+					"service-provider-pin", "service-provider-puk",
+					"dedicated-sim",
+					"corporate-pin", "corporate-puk",
+					"network-subset-pin", "network-subset-puk".
+				Active personalization lock means the SIM card is
+				incompatible with modem configuration.
+
+			int32 RetriesLeft
+
+				If LockType is empty or is "sim-pin", then
+				this property gives the number of attempts
+				remaining to supply a correct PIN before the
+				PIN becomes blocked, at which point a PUK
+				provided by the carrier would be necessary
+				to unlock the SIM (and the LockType changes to
+				"sim-puk").
+
+				If LockType is "sim-puk", then this property
+				gives the number of attempts remaining to supply
+				a correct PUK before the SIM card becomes
+				permanently locked, at which point the SIM
+				card must be replaced. This state is indicated
+				when LockType is "sim-puk" and RetriesLeft is
+				zero.
+
+				For other values of LockType, this property gives the
+				number of attempts remaining to supply a correct PIN or
+				PUK before the modem becomes blocked.
+
+			boolean LockEnabled
+
+				Indicates whether SIM locking is enabled,
+				i.e., whether, when the device is powered
+				on, a PIN or PUK will need to be entered to
+				unlock the SIM. This differs from the
+				LockType property, which indicates whether
+				the device is currently waiting for a PIN
+				to be entered. The SIM can currently be
+				unlocked (LockType is ""), but at the same
+				time locking can be enabled (LockEnabled is
+				True).
+
+		boolean Cellular.SIMPresent [readonly]
+
+			(Cellular only) For GSM or LTE modems, indicates
+			whether a SIM card is present or not.
+
+		array{dict} Cellular.SIMSlotInfo [readonly]
+
+			(Cellular only) List of available SIM slots with the
+			following properties for each dictionary entry.
+			The dictionaries are ordered by SIM slot starting at 0.
+
+			string EID
+
+				For eSIM capable SIM cards only, the EID of
+				the SIM Card. Only available when a profile is
+				active (i.e. ICCID is not empty).
+
+			string ICCID
+
+				The ICCID of the active SIM profile if any.
+
+			boolean Primary
+
+				true if the slot is primary (active).
+
+		array{dict} Cellular.FoundNetworks [readonly] [GSM only]
+
+			(Cellular only) The result of the most recent
+			scan operation. The property is an array
+			of dictionaries, with each (string, string) entry
+			from the following properties:
+
+			"status"     The availability of the network. Values
+				     are "unknown", "available", "current",
+				     and "forbidden".
+			"network_id" The network id in the form MCC/MNC
+				     (without the '/')
+			"short_name" Short-format name of the network operator
+			"long_name"  Long-format name of the network operator
+			"technology" Access technology used by the network, e.g.
+				     "GSM", "UMTS", "EDGE", "HSPA", etc.
+
+		array{dict} Cellular.APNList [readonly] [GSM only]
+
+			(Cellular only) The list of APNs associated with
+			the home provider (ref. Cellular.HomeProvider property)
+			The property is an array of dictionaries, with each
+			(string, string) entry from the following properties:
+
+			"apn"        The APN, to be used when making
+				     connections.
+			"username"   The username to be passed along with the
+				     APN when making connections. This property
+				     is present only if a username is required.
+			"password"   The password to be passed along with the
+				     APN when making connections. This property
+				     is present only if a password is required.
+			"name"       Optional description of the APN, not localized.
+			"localized_name"
+				     Optional description of the APN, localized.
+			"language"
+				     If the "localized_name" property is present, this
+				     gives the two-letter language code for the locale
+				     of the localized name. If "localized_name" exists,
+				     then this property will always exist as well.
+			"network_id" The MCCMNC of this network.
+			"authentication"
+				     Authentication method for sending the username and
+				     password. If it is non-empty, it is either "PAP" or
+				     "CHAP".
+			"attach"     Whether or not this APN is an attach APN.
+			"ip_type"    Either "ipv4", "ipv6", or "ipv4v6", which
+				     specifies which version of IP we should get
+				     addresses for when using this APN. The latter
+				     specifies dual-stack operation.
+
+		string Cellular.PrimaryMultiplexedInterface [readonly]
+
+			(Cellular only) Indicates the name of the network interface
+			connected to the default APN, where the IP config would be
+			applied. This property is unset if the cellular device is
+			disconnected.
+
+			This is a temporary property to be used until shill and
+			patchpanel interact with each other to automatically notify
+			the existing networks.
+
+		bool EapAuthenticatorDetected [readonly]
+
+			(Ethernet only) Indicates whether an EAP (802.1X)
+			authenticator has been detected on this link.
+			This may mean that EAP credentials are necessary
+			to gain full access to this network.
+
+		bool EapAuthenticationCompleted [readonly]
+
+			(Ethernet only) Indicates whether an EAP (802.1X)
+			authentication is currently valid on this interface.
+
+		bool Ethernet.LinkUp [readonly]
+
+			(Ethernet only) Indicates whether the underlying
+			device has detected the presence of a physical link.
+
+		string Ethernet.DeviceBusType [readonly]
+
+			(Ethernet only) Device bus type. Possible values are
+			"pci", "usb" and "". Equals to "" only in the error
+			case.
+
+		string Ethernet.UsbAdapterMacAddressSource [readonly]
+
+			(Ethernet only) MAC address source for USB Ethernet
+			adapter. Possible values are "designated_dock_mac",
+			"builtin_adapter_mac", "usb_adapter_mac" and "".
+			Equals to "" only if unset.
+
+		bool Inhibited [readwrite]
+
+			(Cellular only) When set to true, Shill will not switch
+			slots or attempt to connect to Cellular. Any pending
+			Cellular connect requests will be cancelled when the
+			Inhibited state changes.
+
+		string Interface [readonly]
+
+			The Device's interface name (for example "eth0").
+
+		object SelectedService [readonly]
+
+			Object path of the currently selected service path.
+			The selected service of a device is the service for
+			which it is currently receiving link events.  WiFi
+			is slightly different in that it sets the link event
+			immediately after requesting a connection so that
+			failures to connect are correctly attributed.
+
+			The device guarantees that if it is connected, the
+			connected service will appear in SelectedService.
+			However, SelectedService could be just "/", indicating
+			no selected service.  The SelectedService is also
+			not guaranteed to be online (e.g. it could be in the
+			process of being connected, or an error state).
+
+		array{object} IPConfigs [readonly]
+
+			List of IPConfig objects paths. Every object path
+			represents a Layer 3 configuration record for
+			the device.  In shill, for a connected device,
+			the IPv4 configuration is represented in the
+			first object path in this array.  This object is also
+			referenced in the the "IPConfig" property of the
+			connected Service.  If the kernel has assigned a
+			globally scoped IPv6 address to this interface, it
+			is reported as an additional object path in this
+			array.
+
+			Whenever either the IPv4 or IPv6 state changes
+			in a way that modifies the contents of either of
+			these IPConfigs, a PropertyChanged signal will be
+			emitted for the Device's IPConfig property.
+
+		dict LinkStatistics [readonly]
+
+			(WiFi only) A dictionary providing current nl80211
+			link statitistics. This can include the following
+			properties, depending on whether the system is
+			connected and the capabilities of the specific
+			WiFi device.
+
+				int8 AverageReceiveSignalDbm
+
+				Reports the running average of signal
+				strength to the connected AP.
+
+				uint32 ByteReceiveSuccesses
+
+				Total received bytes from this station
+				on driver layer
+
+				uint32 ByteTransmitSuccesses
+
+				Total transmitted bytes to this station
+				on driver layer
+
+				uint32 InactiveTimeMilliseconds
+
+				Reports the time in milliseconds since
+				the last activity by the station.
+
+				int8 LastReceiveSignalDbm
+
+				Reports the signal strength of the last
+				received packet.
+
+				uint64 PacketReceiveDrops
+
+				RX packets dropped for unspecified reasons
+				on driver layer
+
+				uint32 PacketReceiveSuccesses
+
+				Reports the number of successfully received
+				packets (MSDUs and MMPDUs).
+
+				uint32 PacketTransmitFailures
+
+				Reports the number of failed packet
+				transmission attempts.
+
+				uint32 PacketTransmitSuccesses
+
+				Reports the number of successful packet
+				(MSDUs and MMPDUs) transmission attempts.
+
+				string TransmitBitrate
+
+				Reports the transmit bitrate of the last
+				successful outbound packet in a textual format
+				which includes additional 802.11n transmit
+				parameters.
+
+				uint32 TransmitRetries
+
+				Reports the number of times the system has had
+				to retry an outgoing packet.
+
+
+		boolean MacAddressRandomization
+
+			Deprecated; see MacAddressRandomizationEnabled.
+
+		boolean MacAddressRandomizationSupported[readonly]
+
+			True if the device supports randomizing its MAC address
+			during scans when not connected to any APs already.
+
+		boolean MacAddressRandomizationEnabled
+
+			Indicates whether the device is currently configured to
+			randomize its MAC address during scans while not already
+			connected to any APs. Setting this value will configure
+			the device to act appropriately.
+
+			This was formerly named MacAddressRandomization;
+			users of shill should use this property now.
+
+			Possible errors : [service].Error.NotSupported
+
+		string Name[readonly]
+
+			Deprecated; use Interface instead.
+
+		boolean Powered [readonly]
+
+			Indicates whether the device is on or off.
+
+			This value does not influence the value of the
+			Policy property.
+
+			The value of this property can be changed by other
+			parts of the system (including the kernel). An
+			example would be modifications via the "ifconfig"
+			command line utility.
+
+		uint16 ScanInterval [readwrite]
+
+			(Defined in WiFi and Cellular)
+
+			The scan interval is the time in seconds between
+			automated scan attempts. Setting this value to
+			0 will disable the periodic scanning.
+
+			The default value is 180 and so every 3 minutes
+			a scan procedure will be triggered.
+
+			This property is not available with all types
+			of devices. Some may not support background
+			scanning at all.
+
+		boolean Scanning [readonly]
+
+			(Defined in WiFi and Cellular)
+
+			Indicates that a device is currently performing a
+			network scan.
+
+		string Type [readonly]
+
+			The device type (for example "ethernet", "wifi" etc.)
+
+		boolean WakeOnWiFiSupported [readonly]
+
+			(Defined in WiFi)
+
+			Whether wake on WiFi feature is supported in shill.
+
+		boolean WakeOnWiFiAllowed [readwrite]
+
+			(Defined in WiFi)
+
+			Whether wake on WiFi feature is allowed. When false,
+			WakeOnWiFiFeaturesEnabled cannot be modified and is
+			pinned to "none". The value is controlled by a feature
+			flag in Chrome. Should only be modified by Chrome
+			feature flag or tests.
+
+		string WakeOnWiFiFeaturesEnabled [readwrite]
+
+			(Defined in WiFi)
+
+			The wake on WiFi features that are currently enabled.
+			The value of this property is "darkconnect" if the dark
+			connect feature is enabled, and "none" if all wake on
+			WiFi features are disabled.
+
+			Possible errors: [service].Error.NotSupported (wake on WiFi not supported)
+					 [service].Error.InvalidArguments (invalid wake on WiFi feature)
+
+		string LastWakeReason [readonly]
+
+			(Defined in WiFi)
+
+			The reason of the last wake up.
+			Possible values of this property:
+				"WiFi.Disconnect": woke up by NL80211_WOWLAN_TRIG_DISCONNECT
+				"WiFi.Pattern":    woke up by NL80211_WOWLAN_TRIG_PKT_PATTERN
+				"WiFi.SSID":       woke up by NL80211_WOWLAN_TRIG_NET_DETECT_RESULTS
+				"Unknown":         woke up by other reasons e.g. timer
+
+		uint32 WakeToScanPeriodSeconds [readwrite]
+
+			(Defined in WiFi)
+
+			The length of time (in seconds) between each instance where the system
+			is woken from suspend to scan for networks in dark resume. Changes to this
+			property will take effect at the next system suspend.
+
+		uint32 NetDetectScanPeriodSeconds [readwrite]
+
+			(Defined in WiFi)
+
+			The length of time (in seconds) between each instance where the wireless
+			NIC performs Net Detect scans while the system is suspended. Changes to
+			this property will take effect at the next system suspend.
+
+		boolean ForceWakeToScanTimer [readwrite]
+
+			(Defined in WiFi)
+
+			If true, forces shill to start an RTC timer that wakes the system
+			periodically to scan for networks if the system is going into suspend
+			while disconnected. This will likely be used for testing only. Otherwise,
+			if this property is false, shill will only start this timer if it has more
+			SSIDs to allow than the NIC supports for net detect. Changes to this
+			property will take effect at the next system suspend.
+
+		boolean PasspointInterworkingSelectEnabled
+
+			(Defined in WiFi)
+
+			Indicates whether the device is allowed to match the set of Passpoint
+			credentials with compatible access points. Setting this value will enable
+			or disable the feature. The value is not persisted across reboots and will
+			be removed or flipped when Passpoint gets enabled by default.

@@ -1,0 +1,14 @@
+--- a/pam_pwdfile.c
++++ b/pam_pwdfile.c
+@@ -327,9 +327,8 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
+     D(_pam_log(LOG_ERR,"got password from user", password));
+     
+     /* now crypt password and compare to the user entry in the password file */
+-    /* first make sure password is long enough -- may I do this? */
+-    if (strlen(password)<2 || password==NULL) {
+-	_pam_log(LOG_ERR,"password too short or NULL");
++    if (password==NULL) {
++	_pam_log(LOG_ERR,"password NULL");
+ 	fclose(pwdfile);
+ 	return PAM_AUTH_ERR;
+     }

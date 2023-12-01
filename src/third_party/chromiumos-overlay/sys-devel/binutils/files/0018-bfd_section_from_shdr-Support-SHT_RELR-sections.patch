@@ -1,0 +1,50 @@
+From cf3461d0c67b2e575b8797153eabf0904a9a8428 Mon Sep 17 00:00:00 2001
+From: Fangrui Song via Binutils <binutils () sourceware ! org>
+Date: Wed, 8 Dec 2021 02:24:14 +0000
+Subject: [PATCH] bfd_section_from_shdr: Support SHT_RELR sections
+
+If a.so contains an SHT_RELR section, objcopy a.so will fail with:
+
+    a.so: unknown type [0x13] section `.relr.dyn'
+
+This change allows objcopy to work.
+
+bfd/
+    * elf.c (bfd_section_from_shdr): Support SHT_RELR.
+---
+ bfd/elf.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/bfd/elf.c b/bfd/elf.c
+index f4abaa946b5..f264c6a7f57 100644
+--- a/bfd/elf.c
++++ b/bfd/elf.c
+@@ -2345,16 +2345,22 @@ bfd_section_from_shdr (bfd *abfd, unsigned int shindex)
+ 
+     case SHT_REL:
+     case SHT_RELA:
++    case SHT_RELR:
+       /* *These* do a lot of work -- but build no sections!  */
+       {
+ 	asection *target_sect;
+ 	Elf_Internal_Shdr *hdr2, **p_hdr;
+ 	unsigned int num_sec = elf_numsections (abfd);
+ 	struct bfd_elf_section_data *esdt;
++	bfd_size_type size;
+ 
+-	if (hdr->sh_entsize
+-	    != (bfd_size_type) (hdr->sh_type == SHT_REL
+-				? bed->s->sizeof_rel : bed->s->sizeof_rela))
++	if (hdr->sh_type == SHT_REL)
++	  size = (bfd_size_type) bed->s->sizeof_rel;
++	else if (hdr->sh_type == SHT_RELA)
++	  size = (bfd_size_type) bed->s->sizeof_rela;
++	else
++	  size = (bfd_size_type) bed->s->arch_size / 8;
++	if (hdr->sh_entsize != size)
+ 	  goto fail;
+ 
+ 	/* Check for a bogus link to avoid crashing.  */
+-- 
+2.34.1
+

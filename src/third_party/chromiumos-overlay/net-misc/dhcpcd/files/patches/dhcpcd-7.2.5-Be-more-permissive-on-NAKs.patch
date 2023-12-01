@@ -1,0 +1,47 @@
+From 29a1c7892c61d863a5c444040cc24b6dc1bc812c Mon Sep 17 00:00:00 2001
+From: Mukesh Agrawal <quiche@chromium.org>
+Date: Mon, 31 May 2021 13:29:34 +0000
+Subject: [PATCH 05/19] Be more permissive on NAKs
+
+Previously, we'd reject NAKs that did not include a server ID.
+Since we'd only check that a server ID was present, but did not
+validate it against any stored state, the test is merely pedantic.
+Moreover, some DHCP servers (e.g. OpenBSD 4.6) send NAK messages
+without a server ID. [1]
+
+To improve compatibility with real-world DHCP servers, drop the
+check for the presence of a server ID.
+
+BUG=chrome-os-partner:27930
+TEST=network_DhcpNak
+
+[1] http://openbsd.7691.n7.nabble.com/dhcpd-omits-server-id-option-54-in-NAK-to-a-RENEW-request-td41044.html
+
+Reviewed-on: https://chromium-review.googlesource.com/194972
+---
+ src/dhcp.c | 9 ---------
+ 1 file changed, 9 deletions(-)
+
+diff --git a/src/dhcp.c b/src/dhcp.c
+index 1ff59a1a..4590958c 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -3266,15 +3266,6 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 	}
+ 
+ 	if (type == DHCP_NAK) {
+-		/* For NAK, only check if we require the ServerID */
+-		if (has_option_mask(ifo->requiremask, DHO_SERVERID) &&
+-		    get_option_addr(ifp->ctx, &addr,
+-		    bootp, bootp_len, DHO_SERVERID) == -1)
+-		{
+-			LOGDHCP(logwarnx, "reject NAK");
+-			return;
+-		}
+-
+ 		/* We should restart on a NAK */
+ 		LOGDHCP(logwarnx, "NAK:");
+ 		if ((msg = get_option_string(ifp->ctx,
+-- 
+2.33.0.800.g4c38ced690-goog
+

@@ -1,0 +1,106 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":container_config_parser",
+    ":run_oci",
+  ]
+  if (use.test) {
+    deps += [
+      ":container_config_parser_test",
+      ":run_oci_test",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":run_oci_utils_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  libs = [ "mount" ]
+
+  pkg_deps = [
+    "libbrillo",
+    "libcap",
+    "libchrome",
+    "libminijail",
+  ]
+}
+
+shared_library("container_config_parser") {
+  sources = [ "container_config_parser.cc" ]
+  configs += [ ":target_defaults" ]
+  configs -= [ "//common-mk:no_exceptions" ]
+}
+
+pkg_config("run_oci_config") {
+  pkg_deps = [ "libcontainer" ]
+}
+
+executable("run_oci") {
+  sources = [
+    "container_config_parser.cc",
+    "run_oci.cc",
+    "run_oci_utils.cc",
+  ]
+  configs += [
+    ":run_oci_config",
+    ":target_defaults",
+  ]
+  install_path = "bin"
+  configs -= [ "//common-mk:no_exceptions" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("container_config_parser_test") {
+    sources = [
+      "container_config_parser.cc",
+      "container_config_parser_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    configs -= [ "//common-mk:no_exceptions" ]
+    run_test = true
+    deps = [ "//common-mk/testrunner" ]
+  }
+
+  executable("run_oci_test") {
+    sources = [
+      "run_oci_test.cc",
+      "run_oci_utils.cc",
+      "run_oci_utils_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    configs -= [ "//common-mk:no_exceptions" ]
+    run_test = true
+    deps = [ "//common-mk/testrunner" ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("run_oci_utils_fuzzer") {
+    sources = [
+      "run_oci_utils.cc",
+      "run_oci_utils_fuzzer.cc",
+    ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":flex_id_tool",
+    ":libflex_id",
+  ]
+  if (use.test) {
+    deps += [ ":flex_id_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+static_library("libflex_id") {
+  sources = [ "flex_id.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("flex_id_tool") {
+  sources = [ "flex_id_tool.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libflex_id" ]
+}
+
+if (use.test) {
+  pkg_config("flex_id_test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("flex_id_test") {
+    sources = [ "flex_id_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":flex_id_test_config",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libflex_id",
+      "//common-mk/testrunner",
+    ]
+  }
+}

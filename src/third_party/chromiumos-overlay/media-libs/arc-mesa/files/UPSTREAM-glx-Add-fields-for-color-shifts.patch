@@ -1,0 +1,53 @@
+From c495cfe776cc6c9efa2724105744ad98df8de17f Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Thu, 24 Jan 2019 16:36:29 -0800
+Subject: [PATCH 06/12] UPSTREAM: glx: Add fields for color shifts
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+glx doesn't read the masks from the dri config directly, but for consistency
+add shifts to the glxconfig.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Adam Jackson <ajax@redhat.com>
+Reviewed-by: Marek Olšák <marek.olsak@amd.com>
+Reviewed-by: Emil Velikov <emil.l.velikov@gmail.com>
+(cherry picked from commit d4a9010338e191cb9b3f2d1c666e0b5f2275e84b)
+
+Change-Id: I1351895e8e9964cd2c1efe34d0567d4f4cf35162
+---
+ src/glx/dri_common.c | 4 ++++
+ src/glx/glxconfig.h  | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/src/glx/dri_common.c b/src/glx/dri_common.c
+index fb8a29f0993..8040bbe093b 100644
+--- a/src/glx/dri_common.c
++++ b/src/glx/dri_common.c
+@@ -166,6 +166,10 @@ static const struct
+       __ATTRIB(__DRI_ATTRIB_GREEN_MASK, greenMask),
+       __ATTRIB(__DRI_ATTRIB_BLUE_MASK, blueMask),
+       __ATTRIB(__DRI_ATTRIB_ALPHA_MASK, alphaMask),
++      __ATTRIB(__DRI_ATTRIB_RED_SHIFT, redShift),
++      __ATTRIB(__DRI_ATTRIB_GREEN_SHIFT, greenShift),
++      __ATTRIB(__DRI_ATTRIB_BLUE_SHIFT, blueShift),
++      __ATTRIB(__DRI_ATTRIB_ALPHA_SHIFT, alphaShift),
+ #endif
+       __ATTRIB(__DRI_ATTRIB_MAX_PBUFFER_WIDTH, maxPbufferWidth),
+       __ATTRIB(__DRI_ATTRIB_MAX_PBUFFER_HEIGHT, maxPbufferHeight),
+diff --git a/src/glx/glxconfig.h b/src/glx/glxconfig.h
+index 2f1074ca5fa..13f5a4e292c 100644
+--- a/src/glx/glxconfig.h
++++ b/src/glx/glxconfig.h
+@@ -41,6 +41,7 @@ struct glx_config {
+ 
+     GLint redBits, greenBits, blueBits, alphaBits;	/* bits per comp */
+     GLuint redMask, greenMask, blueMask, alphaMask;
++    GLuint redShift, greenShift, blueShift, alphaShift;
+     GLint rgbBits;		/* total bits for rgb */
+     GLint indexBits;		/* total bits for colorindex */
+ 
+-- 
+2.21.0
+

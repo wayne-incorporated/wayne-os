@@ -1,0 +1,39 @@
+From 8dade0a754a5ac3bbc7375f76e43abe8cde648f0 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 14:41:31 -0300
+Subject: [PATCH 088/163] math: x86: Avoid the use of __libgcc_cmp_return__ for
+ __gcc_CMPtype
+
+---
+ sysdeps/x86/fpu/sfp-machine.h | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/x86/fpu/sfp-machine.h b/sysdeps/x86/fpu/sfp-machine.h
+index bc3fe332df..89a73642b1 100644
+--- a/sysdeps/x86/fpu/sfp-machine.h
++++ b/sysdeps/x86/fpu/sfp-machine.h
+@@ -1,10 +1,19 @@
+ /* Configure soft-fp for building sqrtf128.  Based on sfp-machine.h in
+    libgcc, with soft-float and other irrelevant parts removed.  */
+ 
++#if defined __x86_64__ && defined __ILP32__
++typedef long long int __gcc_CMPtype;
++#else
++typedef long int __gcc_CMPtype;
++#endif
++#if !defined(__clang__) && defined(__GNUC__)
+ /* The type of the result of a floating point comparison.  This must
+    match `__libgcc_cmp_return__' in GCC for the target.  */
+-typedef int __gcc_CMPtype __attribute__ ((mode (__libgcc_cmp_return__)));
+-#define CMPtype __gcc_CMPtype
++typedef int __gcc_CMPtype_GCC __attribute__ ((mode (__libgcc_cmp_return__)));
++# define CMPtype __gcc_CMPtype
++_Static_assert(sizeof(__gcc_CMPtype) == sizeof(__gcc_CMPtype_GCC),
++	       "sizeof(__gcc_CMPtype) != sizeof(__gcc_CMPtype_GCC)");
++#endif
+ 
+ #ifdef __x86_64__
+ # define _FP_W_TYPE_SIZE	64
+-- 
+2.37.2
+

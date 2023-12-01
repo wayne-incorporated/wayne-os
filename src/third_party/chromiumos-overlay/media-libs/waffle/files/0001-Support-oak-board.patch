@@ -1,0 +1,81 @@
+From 05d15dda71acf75f9d5312adfa5d123a53fced73 Mon Sep 17 00:00:00 2001
+From: Frank Henigman <fjhenigman@google.com>
+Date: Fri, 19 Jun 2015 16:00:42 -0400
+Subject: [PATCH] Support 'oak' board.
+
+Try /dev/dri/cardX for X=0,1,... until one is found with modeset ability.
+Try eglGetProcAddress() in addition to linux_platform_dl_sym() to look
+up GL functions.
+---
+ src/waffle/null/wnull_context.c |  2 ++
+ src/waffle/null/wnull_display.c | 27 ++++++++++++++++++++++++++-
+ 2 files changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/src/waffle/null/wnull_context.c b/src/waffle/null/wnull_context.c
+index eee6806..bc2da6d 100644
+--- a/src/waffle/null/wnull_context.c
++++ b/src/waffle/null/wnull_context.c
+@@ -61,6 +61,8 @@ wnull_context_create(struct wcore_platform *wc_plat,
+ 
+ #define LOOKUP(type, name, args) \
+     ctx->name = linux_platform_dl_sym(plat->linux, dl, #name); \
++    if (!ctx->name) \
++        ctx->name = (void*)plat->wegl.eglGetProcAddress(#name); \
+     ok &= ctx->name != NULL;
+     GL_FUNCTIONS(LOOKUP)
+ #undef LOOKUP
+diff --git a/src/waffle/null/wnull_display.c b/src/waffle/null/wnull_display.c
+index 5ed621d..c5f7e9c 100644
+--- a/src/waffle/null/wnull_display.c
++++ b/src/waffle/null/wnull_display.c
+@@ -9,6 +9,7 @@
+ #include <dlfcn.h>
+ #include <fcntl.h>
+ #include <poll.h>
++#include <stdio.h>
+ #include <unistd.h>
+ 
+ #include <xf86drm.h>
+@@ -178,6 +179,30 @@ wnull_display_destroy(struct wcore_display *wc_self)
+     return ok;
+ }
+ 
++static int kms_device_fd()
++{
++    bool has_conn = false;
++    for (int i = 0; i < 8; ++i) {
++        char path[99];
++        sprintf(path, "/dev/dri/card%d", i);
++        prt("trying %s\n", path);
++        int fd = open(path, O_RDWR | O_CLOEXEC);
++        if (fd >= 0) {
++            drmModeResPtr mr = drmModeGetResources(fd);
++            if (mr) {
++                has_conn = mr->count_connectors > 0;
++                drmModeFreeResources(mr);
++            }
++            if (has_conn) {
++                prt("using %s\n", path);
++                return fd;
++            }
++            close(fd);
++        }
++    }
++    return -1;
++}
++
+ struct wcore_display*
+ wnull_display_connect(struct wcore_platform *wc_plat,
+                       const char *name)
+@@ -192,7 +217,7 @@ wnull_display_connect(struct wcore_platform *wc_plat,
+     if (name != NULL)
+         fd = open(name, O_RDWR | O_CLOEXEC);
+     else
+-        fd = wgbm_get_default_fd_for_pattern("card[0-9]*");
++        fd = kms_device_fd();
+ 
+     if (fd < 0) {
+         wcore_errorf(WAFFLE_ERROR_UNKNOWN, "open drm file for gbm failed");
+-- 
+2.6.0.rc0.131.gf624c3d
+

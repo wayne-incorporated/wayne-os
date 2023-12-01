@@ -1,0 +1,307 @@
+commit 425a83a5f069eb1a692145d2c92e6d3bfe564a62
+Author: Christopher Di Bella <cjdb@google.com>
+Date:   Wed Oct 28 16:16:17 2020 -0700
+
+    [Sema] adds basic -Wfree-nonheap-object functionality
+    
+    Checks to make sure that stdlib's (std::)free is being appropriately
+    used. Presently checks for the following misuses:
+    
+    - free(&stack_object)
+    - free(stack_array)
+    
+    Differential Revision: https://reviews.llvm.org/D89988
+
+diff --git a/clang/include/clang/Basic/Builtins.def b/clang/include/clang/Basic/Builtins.def
+index b2876ed6cbe..45ea7d9a355 100644
+--- a/clang/include/clang/Basic/Builtins.def
++++ b/clang/include/clang/Basic/Builtins.def
+@@ -913,6 +913,7 @@ LIBBUILTIN(exit, "vi",            "fr",    "stdlib.h", ALL_LANGUAGES)
+ LIBBUILTIN(_Exit, "vi",           "fr",    "stdlib.h", ALL_LANGUAGES)
+ LIBBUILTIN(malloc, "v*z",         "f",     "stdlib.h", ALL_LANGUAGES)
+ LIBBUILTIN(realloc, "v*v*z",      "f",     "stdlib.h", ALL_LANGUAGES)
++LIBBUILTIN(free,    "vv*",        "f",     "stdlib.h", ALL_LANGUAGES)
+ LIBBUILTIN(strtod, "dcC*c**",     "f",     "stdlib.h", ALL_LANGUAGES)
+ LIBBUILTIN(strtof, "fcC*c**",     "f",     "stdlib.h", ALL_LANGUAGES)
+ LIBBUILTIN(strtold, "LdcC*c**",   "f",     "stdlib.h", ALL_LANGUAGES)
+diff --git a/clang/include/clang/Basic/DiagnosticSemaKinds.td b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+index e1d20fbcb43..97cacbe32e5 100644
+--- a/clang/include/clang/Basic/DiagnosticSemaKinds.td
++++ b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+@@ -7539,6 +7539,11 @@ def err_incomplete_object_call : Error<
+ def warn_condition_is_assignment : Warning<"using the result of an "
+   "assignment as a condition without parentheses">,
+   InGroup<Parentheses>;
++def warn_free_nonheap_object
++  : Warning<"attempt to call %0 on non-heap object %1">,
++    InGroup<DiagGroup<"free-nonheap-object">>,
++    DefaultIgnore; // FIXME: add to -Wall after sufficient testing
++
+ // Completely identical except off by default.
+ def warn_condition_is_idiomatic_assignment : Warning<"using the result "
+   "of an assignment as a condition without parentheses">,
+diff --git a/clang/include/clang/Sema/Sema.h b/clang/include/clang/Sema/Sema.h
+index 3c3190680ac..61ee743a7ab 100644
+--- a/clang/include/clang/Sema/Sema.h
++++ b/clang/include/clang/Sema/Sema.h
+@@ -12400,6 +12400,8 @@ private:
+   void CheckStrncatArguments(const CallExpr *Call,
+                              IdentifierInfo *FnName);
+ 
++  void CheckFreeArguments(const CallExpr *E);
++
+   void CheckReturnValExpr(Expr *RetValExp, QualType lhsType,
+                           SourceLocation ReturnLoc,
+                           bool isObjCMethod = false,
+diff --git a/clang/lib/AST/Decl.cpp b/clang/lib/AST/Decl.cpp
+index 80bc22b61b7..b4f92d77dd5 100644
+--- a/clang/lib/AST/Decl.cpp
++++ b/clang/lib/AST/Decl.cpp
+@@ -3959,6 +3959,9 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
+   case Builtin::BIbzero:
+     return Builtin::BIbzero;
+ 
++  case Builtin::BIfree:
++    return Builtin::BIfree;
++
+   default:
+     if (isExternC()) {
+       if (FnInfo->isStr("memset"))
+@@ -3987,6 +3990,9 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
+         return Builtin::BIstrlen;
+       else if (FnInfo->isStr("bzero"))
+         return Builtin::BIbzero;
++    } else if (isInStdNamespace()) {
++      if (FnInfo->isStr("free"))
++        return Builtin::BIfree;
+     }
+     break;
+   }
+diff --git a/clang/lib/Sema/SemaChecking.cpp b/clang/lib/Sema/SemaChecking.cpp
+index e87adf8ff30..3d5e2d70d8c 100644
+--- a/clang/lib/Sema/SemaChecking.cpp
++++ b/clang/lib/Sema/SemaChecking.cpp
+@@ -4496,16 +4496,24 @@ bool Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall,
+     DiagnoseCStringFormatDirectiveInCFAPI(*this, FDecl, Args, NumArgs);
+ 
+   unsigned CMId = FDecl->getMemoryFunctionKind();
+-  if (CMId == 0)
+-    return false;
+ 
+   // Handle memory setting and copying functions.
+-  if (CMId == Builtin::BIstrlcpy || CMId == Builtin::BIstrlcat)
++  switch (CMId) {
++  case 0:
++    return false;
++  case Builtin::BIstrlcpy: // fallthrough
++  case Builtin::BIstrlcat:
+     CheckStrlcpycatArguments(TheCall, FnInfo);
+-  else if (CMId == Builtin::BIstrncat)
++    break;
++  case Builtin::BIstrncat:
+     CheckStrncatArguments(TheCall, FnInfo);
+-  else
++    break;
++  case Builtin::BIfree:
++    CheckFreeArguments(TheCall);
++    break;
++  default:
+     CheckMemaccessArguments(TheCall, CMId, FnInfo);
++  }
+ 
+   return false;
+ }
+@@ -10098,6 +10106,57 @@ void Sema::CheckStrncatArguments(const CallExpr *CE,
+     << FixItHint::CreateReplacement(SR, OS.str());
+ }
+ 
++namespace {
++void CheckFreeArgumentsAddressof(Sema &S, const std::string &CalleeName,
++                                 const UnaryOperator *UnaryExpr) {
++  if (UnaryExpr->getOpcode() != UnaryOperator::Opcode::UO_AddrOf)
++    return;
++
++  const auto *Lvalue = dyn_cast<DeclRefExpr>(UnaryExpr->getSubExpr());
++  if (Lvalue == nullptr)
++    return;
++
++  const auto *Var = dyn_cast<VarDecl>(Lvalue->getDecl());
++  if (Var == nullptr)
++    return;
++
++  StorageClass Class = Var->getStorageClass();
++  if (Class == StorageClass::SC_Extern ||
++      Class == StorageClass::SC_PrivateExtern ||
++      Var->getType()->isReferenceType())
++    return;
++
++  S.Diag(UnaryExpr->getBeginLoc(), diag::warn_free_nonheap_object)
++      << CalleeName << Var;
++}
++
++void CheckFreeArgumentsStackArray(Sema &S, const std::string &CalleeName,
++                                  const DeclRefExpr *Lvalue) {
++  if (!Lvalue->getType()->isArrayType())
++    return;
++
++  const auto *Var = dyn_cast<VarDecl>(Lvalue->getDecl());
++  if (Var == nullptr)
++    return;
++
++  S.Diag(Lvalue->getBeginLoc(), diag::warn_free_nonheap_object)
++      << CalleeName << Var;
++}
++} // namespace
++
++/// Alerts the user that they are attempting to free a non-malloc'd object.
++void Sema::CheckFreeArguments(const CallExpr *E) {
++  const Expr *Arg = E->getArg(0)->IgnoreParenCasts();
++  const std::string CalleeName =
++      dyn_cast<FunctionDecl>(E->getCalleeDecl())->getQualifiedNameAsString();
++
++  if (const auto *UnaryExpr = dyn_cast<UnaryOperator>(Arg))
++    return CheckFreeArgumentsAddressof(*this, CalleeName, UnaryExpr);
++
++  if (const auto *Lvalue = dyn_cast<DeclRefExpr>(Arg))
++    return CheckFreeArgumentsStackArray(*this, CalleeName, Lvalue);
++}
++
+ void
+ Sema::CheckReturnValExpr(Expr *RetValExp, QualType lhsType,
+                          SourceLocation ReturnLoc,
+diff --git a/clang/test/Sema/warn-free-nonheap-object.c b/clang/test/Sema/warn-free-nonheap-object.c
+new file mode 100644
+index 00000000000..e149e834957
+--- /dev/null
++++ b/clang/test/Sema/warn-free-nonheap-object.c
+@@ -0,0 +1,34 @@
++// RUN: %clang_cc1 -Wfree-nonheap-object -fsyntax-only -verify %s
++
++typedef __SIZE_TYPE__ size_t;
++void *malloc(size_t);
++void free(void *);
++
++int GI;
++void test() {
++  {
++    free(&GI); // expected-warning {{attempt to call free on non-heap object 'GI'}}
++  }
++  {
++    static int SI = 0;
++    free(&SI); // expected-warning {{attempt to call free on non-heap object 'SI'}}
++  }
++  {
++    int I = 0;
++    free(&I); // expected-warning {{attempt to call free on non-heap object 'I'}}
++  }
++  {
++    int I = 0;
++    int *P = &I;
++    free(P); // FIXME diagnosing this would require control flow analysis.
++  }
++  {
++    void *P = malloc(8);
++    free(P);
++  }
++  {
++    int A[] = {0, 1, 2, 3};
++    free(A);  // expected-warning {{attempt to call free on non-heap object 'A'}}
++    free(&A); // expected-warning {{attempt to call free on non-heap object 'A'}}
++  }
++}
+diff --git a/clang/test/Sema/warn-free-nonheap-object.cpp b/clang/test/Sema/warn-free-nonheap-object.cpp
+new file mode 100644
+index 00000000000..0578d9e9cd6
+--- /dev/null
++++ b/clang/test/Sema/warn-free-nonheap-object.cpp
+@@ -0,0 +1,90 @@
++// RUN: %clang_cc1 -Wfree-nonheap-object -std=c++11 -x c++ -fsyntax-only -verify %s
++
++extern "C" void free(void *) {}
++
++namespace std {
++using size_t = decltype(sizeof(0));
++void *malloc(size_t);
++void free(void *p);
++} // namespace std
++
++int GI;
++
++struct S {
++  operator char *() { return ptr; }
++
++private:
++  char *ptr = (char *)std::malloc(10);
++};
++
++void test1() {
++  {
++    free(&GI); // expected-warning {{attempt to call free on non-heap object 'GI'}}
++  }
++  {
++    static int SI = 0;
++    free(&SI); // expected-warning {{attempt to call free on non-heap object 'SI'}}
++  }
++  {
++    int I = 0;
++    free(&I); // expected-warning {{attempt to call free on non-heap object 'I'}}
++  }
++  {
++    int I = 0;
++    int *P = &I;
++    free(P);
++  }
++  {
++    void *P = std::malloc(8);
++    free(P); // FIXME diagnosing this would require control flow analysis.
++  }
++  {
++    int A[] = {0, 1, 2, 3};
++    free(A); // expected-warning {{attempt to call free on non-heap object 'A'}}
++  }
++  {
++    int A[] = {0, 1, 2, 3};
++    free(&A); // expected-warning {{attempt to call free on non-heap object 'A'}}
++  }
++  {
++    S s;
++    free(s);
++    free(&s); // expected-warning {{attempt to call free on non-heap object 's'}}
++  }
++}
++
++void test2() {
++  {
++    std::free(&GI); // expected-warning {{attempt to call std::free on non-heap object 'GI'}}
++  }
++  {
++    static int SI = 0;
++    std::free(&SI); // expected-warning {{attempt to call std::free on non-heap object 'SI'}}
++  }
++  {
++    int I = 0;
++    std::free(&I); // expected-warning {{attempt to call std::free on non-heap object 'I'}}
++  }
++  {
++    int I = 0;
++    int *P = &I;
++    std::free(P); // FIXME diagnosing this would require control flow analysis.
++  }
++  {
++    void *P = std::malloc(8);
++    std::free(P);
++  }
++  {
++    int A[] = {0, 1, 2, 3};
++    std::free(A); // expected-warning {{attempt to call std::free on non-heap object 'A'}}
++  }
++  {
++    int A[] = {0, 1, 2, 3};
++    std::free(&A); // expected-warning {{attempt to call std::free on non-heap object 'A'}}
++  }
++  {
++    S s;
++    std::free(s);
++    std::free(&s); // expected-warning {{attempt to call std::free on non-heap object 's'}}
++  }
++}

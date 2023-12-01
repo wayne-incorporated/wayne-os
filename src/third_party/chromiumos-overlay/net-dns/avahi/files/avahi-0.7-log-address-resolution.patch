@@ -1,0 +1,93 @@
+From: Pranav Batra <batrapranav@chromium.org>
+
+Add address resolution logging messages to help debug b/172217141.
+
+Both dbus (avahi-client) and socket (avahi-daemon) requests are logged.
+Programs such as CUPS use gethostbyname() for host name resolution.
+The glibc gethostbyname() function calls the nss-mdns plugin which sends
+a RESOLVE-ADDRESS request to the avahi-daemon via socket to obtain the
+ip address.
+
+TL;DR
+CUPS -> gethostbyname() -> mdns_minimal -> avahi-daemon -> avahi-core
+avahi-resolve -> avahi-client -> avahi-core
+See https://www.avahi.org/doxygen/html/ for more information.
+
+--- a/avahi-core/resolve-address.c
++++ b/avahi-core/resolve-address.c
+@@ -29,6 +29,7 @@
+ #include <avahi-common/domain.h>
+ 
+ #include "browse.h"
++#include "log.h"
+ 
+ #define TIMEOUT_MSEC 5000
+ 
+@@ -63,12 +64,17 @@ static void finish(AvahiSAddressResolver *r, AvahiResolverEvent event) {
+     }
+ 
+     switch (event) {
++        char addr[AVAHI_ADDRESS_STR_MAX];
++        avahi_address_snprint(addr, sizeof(addr), &r->address);
+         case AVAHI_RESOLVER_FAILURE:
++            avahi_log_warn("Failed to resolve address %s", addr);
+             r->callback(r, r->interface, r->protocol, event, &r->address, NULL, r->flags, r->userdata);
+             break;
+ 
+         case AVAHI_RESOLVER_FOUND:
+             assert(r->ptr_record);
++            // There are several DNS resource record types.
++            avahi_log_info("Found record for %s", addr);
+             r->callback(r, r->interface, r->protocol, event, &r->address, r->ptr_record->data.ptr.name, r->flags, r->userdata);
+             break;
+     }
+--- a/avahi-core/resolve-host-name.c
++++ b/avahi-core/resolve-host-name.c
+@@ -63,6 +63,7 @@ static void finish(AvahiSHostNameResolver *r, AvahiResolverEvent event) {
+ 
+     switch (event) {
+         case AVAHI_RESOLVER_FOUND: {
++
+             AvahiAddress a;
+ 
+             assert(r->address_record);
+@@ -81,6 +82,9 @@ static void finish(AvahiSHostNameResolver *r, AvahiResolverEvent event) {
+                 default:
+                     abort();
+             }
++            char addr[AVAHI_ADDRESS_STR_MAX];
++            avahi_address_snprint(addr, sizeof(addr), &a);
++            avahi_log_info("Resolved hostname %s: %s", r->host_name, addr);
+ 
+             r->callback(r, r->interface, r->protocol, AVAHI_RESOLVER_FOUND, r->address_record->key->name, &a, r->flags, r->userdata);
+             break;
+@@ -88,7 +92,7 @@ static void finish(AvahiSHostNameResolver *r, AvahiResolverEvent event) {
+         }
+ 
+         case AVAHI_RESOLVER_FAILURE:
+-
++            avahi_log_warn("Failed to resolve hostname %s", r->host_name);
+             r->callback(r, r->interface, r->protocol, event, r->host_name, NULL, r->flags, r->userdata);
+             break;
+     }
+--- a/avahi-core/resolve-service.c
++++ b/avahi-core/resolve-service.c
+@@ -79,7 +79,7 @@ static void finish(AvahiSServiceResolver *r, AvahiResolverEvent event) {
+ 
+     switch (event) {
+         case AVAHI_RESOLVER_FAILURE:
+-
++            avahi_log_warn("Failed to resolve service %s (type: %s, domain: %s)", r->service_name, r->service_type, r->domain_name);
+             r->callback(
+                 r,
+                 r->interface,
+@@ -119,6 +119,9 @@ static void finish(AvahiSServiceResolver *r, AvahiResolverEvent event) {
+                     default:
+                         assert(0);
+                 }
++                char addr[AVAHI_ADDRESS_STR_MAX];
++                avahi_address_snprint(addr, sizeof(addr), &a);
++                avahi_log_info("Resolved service %s (type: %s, domain: %s): %s", r->service_name, r->service_type, r->domain_name, addr);
+             }
+ 
+             r->callback(

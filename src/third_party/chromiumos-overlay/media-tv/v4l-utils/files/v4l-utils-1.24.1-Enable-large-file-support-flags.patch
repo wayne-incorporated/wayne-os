@@ -1,0 +1,308 @@
+[PATCH] Enable large file support flags
+
+Add the following CPPFLAGS to each build target in the utils directory:
+
+-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+
+The only exception is libv4l2tracer.so. The _LARGEFILE64_SOURCE macro is
+not compatible with libv4ltracer.cpp, so skip enabling the transitional
+large file support macros for that target.
+
+This patch will not be necessary on releases that use meson (1.25+).
+---
+ contrib/decode_tm6000/Makefile.am | 1 +
+ utils/cec-compliance/Makefile.am  | 1 +
+ utils/cec-ctl/Makefile.am         | 1 +
+ utils/cec-follower/Makefile.am    | 1 +
+ utils/cx18-ctl/Makefile.am        | 1 +
+ utils/dvb/Makefile.am             | 5 +++++
+ utils/ir-ctl/Makefile.am          | 1 +
+ utils/ivtv-ctl/Makefile.am        | 1 +
+ utils/keytable/Makefile.am        | 1 +
+ utils/libcecutil/Makefile.am      | 1 +
+ utils/libmedia_dev/Makefile.am    | 1 +
+ utils/libv4l2util/Makefile.am     | 1 +
+ utils/media-ctl/Makefile.am       | 3 +++
+ utils/qv4l2/Makefile.am           | 1 +
+ utils/qvidcap/Makefile.am         | 1 +
+ utils/rds-ctl/Makefile.am         | 1 +
+ utils/v4l2-compliance/Makefile.am | 1 +
+ utils/v4l2-ctl/Makefile.am        | 1 +
+ utils/v4l2-dbg/Makefile.am        | 1 +
+ utils/v4l2-sysfs-path/Makefile.am | 1 +
+ utils/v4l2-tracer/Makefile.am     | 1 +
+ 21 files changed, 27 insertions(+)
+
+diff --git a/contrib/decode_tm6000/Makefile.am b/contrib/decode_tm6000/Makefile.am
+index 863933cc..9add40fb 100644
+--- a/contrib/decode_tm6000/Makefile.am
++++ b/contrib/decode_tm6000/Makefile.am
+@@ -2,3 +2,4 @@ bin_PROGRAMS = decode_tm6000
+ decode_tm6000_SOURCES = decode_tm6000.c
+ decode_tm6000_LDADD = ../../utils/libv4l2util/libv4l2util.la
+ decode_tm6000_LDFLAGS = $(ARGP_LIBS)
++decode_tm6000_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+diff --git a/utils/cec-compliance/Makefile.am b/utils/cec-compliance/Makefile.am
+index 81a68370..8091c820 100644
+--- a/utils/cec-compliance/Makefile.am
++++ b/utils/cec-compliance/Makefile.am
+@@ -3,6 +3,7 @@ man_MANS = cec-compliance.1
+ 
+ cec_compliance_SOURCES = cec-compliance.cpp cec-compliance.h cec-test.cpp cec-test-adapter.cpp cec-test-audio.cpp cec-test-power.cpp cec-test-fuzzing.cpp cec-test-tuner-record-timer.cpp
+ cec_compliance_CPPFLAGS = -I$(top_srcdir)/utils/libcecutil $(GIT_SHA) $(GIT_COMMIT_CNT) $(GIT_COMMIT_DATE)
++cec_compliance_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ cec_compliance_LDADD = -lrt ../libcecutil/libcecutil.la
+ 
+ EXTRA_DIST = cec-compliance.1
+diff --git a/utils/cec-ctl/Makefile.am b/utils/cec-ctl/Makefile.am
+index 27e69494..c3062b2b 100644
+--- a/utils/cec-ctl/Makefile.am
++++ b/utils/cec-ctl/Makefile.am
+@@ -3,6 +3,7 @@ man_MANS = cec-ctl.1
+ 
+ cec_ctl_SOURCES = cec-ctl.cpp cec-pin.cpp cec-ctl.h
+ cec_ctl_CPPFLAGS = -I$(top_srcdir)/utils/libcecutil $(GIT_SHA) $(GIT_COMMIT_CNT) $(GIT_COMMIT_DATE)
++cec_ctl_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ cec_ctl_LDADD = -lrt -lpthread ../libcecutil/libcecutil.la
+ 
+ EXTRA_DIST = cec-ctl.1
+diff --git a/utils/cec-follower/Makefile.am b/utils/cec-follower/Makefile.am
+index 903d3715..3aa7baef 100644
+--- a/utils/cec-follower/Makefile.am
++++ b/utils/cec-follower/Makefile.am
+@@ -3,6 +3,7 @@ man_MANS = cec-follower.1
+ 
+ cec_follower_SOURCES = cec-follower.cpp cec-follower.h cec-processing.cpp cec-tuner.cpp
+ cec_follower_CPPFLAGS = -I$(top_srcdir)/utils/libcecutil $(GIT_SHA) $(GIT_COMMIT_CNT) $(GIT_COMMIT_DATE)
++cec_follower_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ cec_follower_LDADD = -lrt ../libcecutil/libcecutil.la
+ 
+ EXTRA_DIST = cec-follower.1
+diff --git a/utils/cx18-ctl/Makefile.am b/utils/cx18-ctl/Makefile.am
+index 94fce36d..f4755052 100644
+--- a/utils/cx18-ctl/Makefile.am
++++ b/utils/cx18-ctl/Makefile.am
+@@ -1,3 +1,4 @@
+ bin_PROGRAMS = cx18-ctl
+ 
+ cx18_ctl_SOURCES = cx18-ctl.c
++cx18_ctl_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+diff --git a/utils/dvb/Makefile.am b/utils/dvb/Makefile.am
+index 1895018a..1d130a06 100644
+--- a/utils/dvb/Makefile.am
++++ b/utils/dvb/Makefile.am
+@@ -11,25 +11,30 @@ dvb_fe_tool_SOURCES = dvb-fe-tool.c
+ dvb_fe_tool_LDADD = ../../lib/libdvbv5/libdvbv5.la @LIBINTL@ $(LIBUDEV_LIBS) $(XMLRPC_LDADD) $(PTHREAD_LDADD)
+ dvb_fe_tool_LDFLAGS = $(ARGP_LIBS) -lm $(LIBUDEV_CFLAGS) $(XMLRPC_LDFLAGS) $(PTHREAD_LDFLAGS)
+ dvb_fe_tool_CFLAGS =  $(XMLRPC_CFLAGS) $(LIBUDEV_CFLAGS) $(PTHREAD_CFLAGS)
++dvb_fe_tool_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ dvbv5_zap_SOURCES = dvbv5-zap.c
+ dvbv5_zap_LDADD = ../../lib/libdvbv5/libdvbv5.la @LIBINTL@ $(LIBUDEV_LIBS) $(XMLRPC_LDADD) $(PTHREAD_LDADD)
+ dvbv5_zap_LDFLAGS = $(ARGP_LIBS) -lm $(LIBUDEV_CFLAGS) $(XMLRPC_LDFLAGS) $(PTHREAD_LDFLAGS)
+ dvbv5_zap_CFLAGS =  $(XMLRPC_CFLAGS) $(LIBUDEV_CFLAGS) $(PTHREAD_CFLAGS)
++dvbv5_zap_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ dvbv5_scan_SOURCES = dvbv5-scan.c
+ dvbv5_scan_LDADD = ../../lib/libdvbv5/libdvbv5.la @LIBINTL@ $(LIBUDEV_LIBS) $(XMLRPC_LDADD) $(PTHREAD_LDADD)
+ dvbv5_scan_LDFLAGS = $(ARGP_LIBS) -lm $(LIBUDEV_CFLAGS) $(XMLRPC_LDFLAGS) $(PTHREAD_LDFLAGS)
+ dvbv5_scan_CFLAGS =  $(XMLRPC_CFLAGS) $(LIBUDEV_CFLAGS) $(PTHREAD_CFLAGS)
++dvbv5_scan_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ dvb_format_convert_SOURCES = dvb-format-convert.c
+ dvb_format_convert_LDADD = ../../lib/libdvbv5/libdvbv5.la @LIBINTL@ $(LIBUDEV_LIBS) $(XMLRPC_LDADD) $(PTHREAD_LDADD)
+ dvb_format_convert_LDFLAGS = $(ARGP_LIBS) -lm $(LIBUDEV_CFLAGS) $(XMLRPC_LDFLAGS) $(PTHREAD_LDFLAGS)
+ dvb_format_convert_CFLAGS =  $(XMLRPC_CFLAGS) $(LIBUDEV_CFLAGS) $(PTHREAD_CFLAGS)
++dvb_format_convert_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ dvbv5_daemon_SOURCES = dvbv5-daemon.c
+ dvbv5_daemon_LDADD = ../../lib/libdvbv5/libdvbv5.la @LIBINTL@ $(LIBUDEV_LIBS) $(XMLRPC_LDADD) $(PTHREAD_LDADD)
+ dvbv5_daemon_LDFLAGS = $(ARGP_LIBS) -lm $(XMLRPC_LDFLAGS) $(PTHREAD_LDFLAGS)
+ dvbv5_daemon_CFLAGS =  $(XMLRPC_CFLAGS) $(LIBUDEV_CFLAGS) $(PTHREAD_CFLAGS)
++dvbv5_daemon_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ EXTRA_DIST = README
+diff --git a/utils/ir-ctl/Makefile.am b/utils/ir-ctl/Makefile.am
+index ad90b84e..45f0c3c1 100644
+--- a/utils/ir-ctl/Makefile.am
++++ b/utils/ir-ctl/Makefile.am
+@@ -4,3 +4,4 @@ man_MANS = ir-ctl.1
+ ir_ctl_SOURCES = ir-ctl.c ir-encode.c ir-encode.h toml.c toml.h keymap.c keymap.h bpf_encoder.c bpf_encoder.h
+ ir_ctl_LDADD = @LIBINTL@
+ ir_ctl_LDFLAGS = $(ARGP_LIBS)
++ir_ctl_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+diff --git a/utils/ivtv-ctl/Makefile.am b/utils/ivtv-ctl/Makefile.am
+index c1196673..4dee7cc6 100644
+--- a/utils/ivtv-ctl/Makefile.am
++++ b/utils/ivtv-ctl/Makefile.am
+@@ -2,3 +2,4 @@ bin_PROGRAMS = ivtv-ctl
+ 
+ ivtv_ctl_SOURCES = ivtv-ctl.c
+ ivtv_ctl_LDFLAGS = -lm
++ivtv_ctl_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+diff --git a/utils/keytable/Makefile.am b/utils/keytable/Makefile.am
+index eee61f0e..bff243fa 100644
+--- a/utils/keytable/Makefile.am
++++ b/utils/keytable/Makefile.am
+@@ -19,6 +19,7 @@ endif
+ 
+ ir_keytable_LDADD = @LIBINTL@
+ ir_keytable_LDFLAGS = $(ARGP_LIBS)
++ir_keytable_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ if WITH_BPF
+ ir_keytable_LDFLAGS += $(LIBELF_LIBS) $(LIBBPF_LIBS)
+diff --git a/utils/libcecutil/Makefile.am b/utils/libcecutil/Makefile.am
+index d2c7ddcc..701b3456 100644
+--- a/utils/libcecutil/Makefile.am
++++ b/utils/libcecutil/Makefile.am
+@@ -3,6 +3,7 @@ noinst_LTLIBRARIES = libcecutil.la
+ libcecutil_la_SOURCES = cec-info.cpp cec-log.cpp cec-parse.cpp cec-info.h cec-log.h cec-parse.h \
+ 			cec-htng.h cec-htng-funcs.h
+ libcecutil_la_CPPFLAGS = -static -I$(top_srcdir)/utils/common
++libcecutil_la_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ libcecutil_la_LDFLAGS = -static
+ 
+ CEC_GEN_PREREQS = $(top_srcdir)/include/linux/cec.h $(top_srcdir)/utils/libcecutil/cec-htng.h \
+diff --git a/utils/libmedia_dev/Makefile.am b/utils/libmedia_dev/Makefile.am
+index 3796efbd..804ff991 100644
+--- a/utils/libmedia_dev/Makefile.am
++++ b/utils/libmedia_dev/Makefile.am
+@@ -2,6 +2,7 @@ noinst_LTLIBRARIES = libmedia_dev.la
+ 
+ libmedia_dev_la_SOURCES = get_media_devices.c get_media_devices.h
+ libmedia_dev_la_CPPFLAGS = -static
++libmedia_dev_la_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ libmedia_dev_la_LDFLAGS = -static
+ 
+ EXTRA_DIST = README
+diff --git a/utils/libv4l2util/Makefile.am b/utils/libv4l2util/Makefile.am
+index eb11017a..f2db833b 100644
+--- a/utils/libv4l2util/Makefile.am
++++ b/utils/libv4l2util/Makefile.am
+@@ -2,6 +2,7 @@ noinst_LTLIBRARIES = libv4l2util.la
+ 
+ libv4l2util_la_SOURCES = frequencies.c v4l2_driver.c v4l2_driver.h libv4l2util.h
+ libv4l2util_la_CPPFLAGS = -static
++libv4l2util_la_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ libv4l2util_la_LDFLAGS = -static
+ 
+ EXTRA_DIST = TODO
+diff --git a/utils/media-ctl/Makefile.am b/utils/media-ctl/Makefile.am
+index c48c8d62..ed737f55 100644
+--- a/utils/media-ctl/Makefile.am
++++ b/utils/media-ctl/Makefile.am
+@@ -2,6 +2,7 @@ noinst_LTLIBRARIES = libmediactl.la libv4l2subdev.la
+ 
+ libmediactl_la_SOURCES = libmediactl.c mediactl-priv.h
+ libmediactl_la_CFLAGS = -static $(LIBUDEV_CFLAGS)
++libmediactl_la_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ libmediactl_la_LDFLAGS = -static $(LIBUDEV_LIBS)
+ 
+ media-bus-format-names.h: ../../include/linux/media-bus-format.h
+@@ -19,6 +20,7 @@ nodist_libv4l2subdev_la_SOURCES = $(BUILT_SOURCES)
+ libv4l2subdev_la_SOURCES = libv4l2subdev.c
+ libv4l2subdev_la_LIBADD = libmediactl.la
+ libv4l2subdev_la_CFLAGS = -static
++libv4l2subdev_la_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ libv4l2subdev_la_LDFLAGS = -static
+ 
+ mediactl_includedir=$(includedir)/mediactl
+@@ -28,3 +30,4 @@ bin_PROGRAMS = media-ctl
+ media_ctl_SOURCES = media-ctl.c options.c options.h tools.h
+ media_ctl_LDADD = libmediactl.la libv4l2subdev.la
+ media_ctl_CFLAGS = $(GIT_COMMIT_CNT)
++media_ctl_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+diff --git a/utils/qv4l2/Makefile.am b/utils/qv4l2/Makefile.am
+index bef699c0..cef684f5 100644
+--- a/utils/qv4l2/Makefile.am
++++ b/utils/qv4l2/Makefile.am
+@@ -9,6 +9,7 @@ nodist_qv4l2_SOURCES = moc_qv4l2.cpp moc_general-tab.cpp moc_capture-win.cpp moc
+ qv4l2_LDADD = ../../lib/libv4l2/libv4l2.la ../../lib/libv4lconvert/libv4lconvert.la \
+   ../libv4l2util/libv4l2util.la ../libmedia_dev/libmedia_dev.la
+ qv4l2_CPPFLAGS = -I$(top_srcdir)/utils/common
++qv4l2_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ if WITH_QTGL
+ qv4l2_CPPFLAGS += $(QTGL_CFLAGS)
+diff --git a/utils/qvidcap/Makefile.am b/utils/qvidcap/Makefile.am
+index 9e873ca1..6ee1d40a 100644
+--- a/utils/qvidcap/Makefile.am
++++ b/utils/qvidcap/Makefile.am
+@@ -7,6 +7,7 @@ nodist_qvidcap_SOURCES = qrc_qvidcap.cpp moc_capture.cpp v4l2-convert.h
+ qvidcap_LDADD = ../../lib/libv4l2/libv4l2.la ../../lib/libv4lconvert/libv4lconvert.la ../libv4l2util/libv4l2util.la \
+   ../libmedia_dev/libmedia_dev.la
+ qvidcap_CPPFLAGS = -I\$(top_srcdir)/utils/common
++qvidcap_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ qvidcap_CPPFLAGS += $(QTGL_CFLAGS)
+ qvidcap_LDFLAGS = $(QTGL_LIBS)
+diff --git a/utils/rds-ctl/Makefile.am b/utils/rds-ctl/Makefile.am
+index b3da4cde..f468646d 100644
+--- a/utils/rds-ctl/Makefile.am
++++ b/utils/rds-ctl/Makefile.am
+@@ -3,4 +3,5 @@ bin_PROGRAMS = rds-ctl
+ rds_ctl_SOURCES = rds-ctl.cpp v4l2-info.cpp
+ rds_ctl_LDADD = ../../lib/libv4l2rds/libv4l2rds.la
+ rds_ctl_CPPFLAGS = -I$(top_srcdir)/utils/common
++rds_ctl_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+diff --git a/utils/v4l2-compliance/Makefile.am b/utils/v4l2-compliance/Makefile.am
+index ef3ba919..45dfeae3 100644
+--- a/utils/v4l2-compliance/Makefile.am
++++ b/utils/v4l2-compliance/Makefile.am
+@@ -15,6 +15,7 @@ v4l2_compliance_SOURCES = v4l2-compliance.cpp v4l2-compliance.h \
+ 	v4l2-test-codecs.cpp v4l2-test-subdevs.cpp v4l2-test-media.cpp v4l2-test-colors.cpp \
+ 	media-info.cpp v4l2-info.cpp v4l2-test-time32-64.cpp
+ v4l2_compliance_CPPFLAGS = -I$(top_srcdir)/utils/common $(GIT_SHA) $(GIT_COMMIT_CNT) $(GIT_COMMIT_DATE)
++v4l2_compliance_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ if WITH_V4L2_COMPLIANCE_LIBV4L
+ v4l2_compliance_LDADD = ../../lib/libv4l2/libv4l2.la ../../lib/libv4lconvert/libv4lconvert.la -lrt -lpthread
+diff --git a/utils/v4l2-ctl/Makefile.am b/utils/v4l2-ctl/Makefile.am
+index 55d234cf..e8be88f5 100644
+--- a/utils/v4l2-ctl/Makefile.am
++++ b/utils/v4l2-ctl/Makefile.am
+@@ -15,6 +15,7 @@ v4l2_ctl_SOURCES = v4l2-ctl.cpp v4l2-ctl.h v4l2-ctl-common.cpp v4l2-ctl-tuner.cp
+ 	v4l2-ctl-subdev.cpp v4l2-tpg-colors.c v4l2-tpg-core.c v4l-stream.c v4l2-ctl-meta.cpp \
+ 	media-info.cpp v4l2-info.cpp codec-fwht.c codec-v4l2-fwht.c
+ v4l2_ctl_CPPFLAGS = -I$(top_srcdir)/utils/common $(GIT_COMMIT_CNT)
++v4l2_ctl_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ media-bus-format-names.h: $(top_srcdir)/include/linux/media-bus-format.h
+ 	$(AM_V_GEN) sed -e '/#define MEDIA_BUS_FMT/ ! d; s/.*FMT_//; /FIXED/ d; s/\t.*//; s/.*/{ \"&\", MEDIA_BUS_FMT_& },/;' \
+diff --git a/utils/v4l2-dbg/Makefile.am b/utils/v4l2-dbg/Makefile.am
+index 284cf18b..f08e8132 100644
+--- a/utils/v4l2-dbg/Makefile.am
++++ b/utils/v4l2-dbg/Makefile.am
+@@ -2,5 +2,6 @@ sbin_PROGRAMS = v4l2-dbg
+ v4l2_dbg_SOURCES = v4l2-dbg.cpp v4l2-info.cpp v4l2-dbg-ac97.h v4l2-dbg-bttv.h \
+ 	v4l2-dbg-em28xx.h v4l2-dbg.h v4l2-dbg-micron.h v4l2-dbg-saa7134.h v4l2-dbg-tvp5150.h
+ v4l2_dbg_CPPFLAGS = -I$(top_srcdir)/utils/common
++v4l2_dbg_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ 
+ EXTRA_DIST = Android.mk
+diff --git a/utils/v4l2-sysfs-path/Makefile.am b/utils/v4l2-sysfs-path/Makefile.am
+index 6ef4228e..60a628a4 100644
+--- a/utils/v4l2-sysfs-path/Makefile.am
++++ b/utils/v4l2-sysfs-path/Makefile.am
+@@ -2,3 +2,4 @@ bin_PROGRAMS = v4l2-sysfs-path
+ v4l2_sysfs_path_SOURCES = v4l2-sysfs-path.c
+ v4l2_sysfs_path_LDADD = ../libmedia_dev/libmedia_dev.la
+ v4l2_sysfs_path_LDFLAGS = $(ARGP_LIBS)
++v4l2_sysfs_path_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+diff --git a/utils/v4l2-tracer/Makefile.am b/utils/v4l2-tracer/Makefile.am
+index 8ee7035e..6f91a1f4 100644
+--- a/utils/v4l2-tracer/Makefile.am
++++ b/utils/v4l2-tracer/Makefile.am
+@@ -18,6 +18,7 @@ $(top_srcdir)/utils/common/media-info.cpp
+ nodist_v4l2_tracer_SOURCES = retrace-gen.cpp
+ v4l2_tracer_CPPFLAGS = -I$(top_srcdir)/utils/common -DLIBTRACER_PATH=$(libdir) $(JSONC_CFLAGS) \
+ $(GIT_SHA) $(GIT_COMMIT_CNT) $(GIT_COMMIT_DATE)
++v4l2_tracer_CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+ v4l2_tracer_LDFLAGS = -lrt -lpthread $(JSONC_LIBS)
+ 
+ V4L2_TRACER_GEN_PREREQS = $(top_srcdir)/include/linux/v4l2-controls.h \
+-- 
+2.40.0.348.gf938b09366-goog
+

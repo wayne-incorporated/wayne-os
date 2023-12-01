@@ -1,0 +1,118 @@
+diff --git a/libexfat/exfat.h b/libexfat/exfat.h
+index 2342be4..8e9765f 100644
+--- a/libexfat/exfat.h
++++ b/libexfat/exfat.h
+@@ -228,9 +228,10 @@ int exfat_set_label(struct exfat* ef, const char* label);
+ int exfat_mount(struct exfat* ef, const char* spec, const char* options);
+ void exfat_unmount(struct exfat* ef);
+ 
+-time_t exfat_exfat2unix(le16_t date, le16_t time, uint8_t centisec);
++time_t exfat_exfat2unix(le16_t date, le16_t time, uint8_t centisec,
++		uint8_t tzoffset);
+ void exfat_unix2exfat(time_t unix_time, le16_t* date, le16_t* time,
+-		uint8_t* centisec);
++		uint8_t* centisec, uint8_t* tzoffset);
+ void exfat_tzset(void);
+ 
+ bool exfat_ask_to_fix(const struct exfat* ef);
+diff --git a/libexfat/exfatfs.h b/libexfat/exfatfs.h
+index b7b6cac..b9ea268 100644
+--- a/libexfat/exfatfs.h
++++ b/libexfat/exfatfs.h
+@@ -144,7 +144,8 @@ struct exfat_entry_meta1			/* file or directory info (part 1) */
+ 	le16_t atime, adate;			/* latest access date and time */
+ 	uint8_t crtime_cs;				/* creation time in cs (centiseconds) */
+ 	uint8_t mtime_cs;				/* latest modification time in cs */
+-	uint8_t __unknown2[10];
++	uint8_t crtime_tzo, mtime_tzo, atime_tzo;	/* timezone offset encoded */
++	uint8_t __unknown2[7];
+ }
+ PACKED;
+ STATIC_ASSERT(sizeof(struct exfat_entry_meta1) == 32);
+diff --git a/libexfat/node.c b/libexfat/node.c
+index ab1d7d6..3b78c63 100644
+--- a/libexfat/node.c
++++ b/libexfat/node.c
+@@ -135,9 +135,10 @@ static void init_node_meta1(struct exfat_node* node,
+ 	node->attrib = le16_to_cpu(meta1->attrib);
+ 	node->continuations = meta1->continuations;
+ 	node->mtime = exfat_exfat2unix(meta1->mdate, meta1->mtime,
+-			meta1->mtime_cs);
++			meta1->mtime_cs, meta1->mtime_tzo);
+ 	/* there is no centiseconds field for atime */
+-	node->atime = exfat_exfat2unix(meta1->adate, meta1->atime, 0);
++	node->atime = exfat_exfat2unix(meta1->adate, meta1->atime,
++			0, meta1->atime_tzo);
+ }
+ 
+ static void init_node_meta2(struct exfat_node* node,
+@@ -646,8 +647,9 @@ int exfat_flush_node(struct exfat* ef, struct exfat_node* node)
+ 
+ 	meta1->attrib = cpu_to_le16(node->attrib);
+ 	exfat_unix2exfat(node->mtime, &meta1->mdate, &meta1->mtime,
+-			&meta1->mtime_cs);
+-	exfat_unix2exfat(node->atime, &meta1->adate, &meta1->atime, NULL);
++			&meta1->mtime_cs, &meta1->mtime_tzo);
++	exfat_unix2exfat(node->atime, &meta1->adate, &meta1->atime,
++			NULL, &meta1->atime_tzo);
+ 	meta2->size = meta2->valid_size = cpu_to_le64(node->size);
+ 	meta2->start_cluster = cpu_to_le32(node->start_cluster);
+ 	meta2->flags = EXFAT_FLAG_ALWAYS1;
+@@ -895,10 +897,11 @@ static int commit_entry(struct exfat* ef, struct exfat_node* dir,
+ 	meta1->continuations = 1 + name_entries;
+ 	meta1->attrib = cpu_to_le16(attrib);
+ 	exfat_unix2exfat(time(NULL), &meta1->crdate, &meta1->crtime,
+-			&meta1->crtime_cs);
++			&meta1->crtime_cs, &meta1->crtime_tzo);
+ 	meta1->adate = meta1->mdate = meta1->crdate;
+ 	meta1->atime = meta1->mtime = meta1->crtime;
+ 	meta1->mtime_cs = meta1->crtime_cs; /* there is no atime_cs */
++	meta1->atime_tzo = meta1->mtime_tzo = meta1->crtime_tzo;
+ 
+ 	meta2->type = EXFAT_ENTRY_FILE_INFO;
+ 	meta2->flags = EXFAT_FLAG_ALWAYS1;
+diff --git a/libexfat/time.c b/libexfat/time.c
+index 31ae5a2..e2a3b23 100644
+--- a/libexfat/time.c
++++ b/libexfat/time.c
+@@ -53,7 +53,8 @@ static const time_t days_in_year[] =
+ 	0,   0,  31,  59,  90, 120, 151, 181, 212, 243, 273, 304, 334
+ };
+ 
+-time_t exfat_exfat2unix(le16_t date, le16_t time, uint8_t centisec)
++time_t exfat_exfat2unix(le16_t date, le16_t time, uint8_t centisec,
++		uint8_t tzoffset)
+ {
+ 	time_t unix_time = EPOCH_DIFF_SEC;
+ 	uint16_t ndate = le16_to_cpu(date);
+@@ -100,13 +101,18 @@ time_t exfat_exfat2unix(le16_t date, le16_t time, uint8_t centisec)
+ 	unix_time += centisec / 100;
+ 
+ 	/* exFAT stores timestamps in local time, so we correct it to UTC */
+-	unix_time += exfat_timezone;
++	if (tzoffset & 0x80)
++		/* lower 7 bits are signed timezone offset in 15 minute increments */
++		unix_time -= (int8_t)(tzoffset << 1) * 15 * 60 / 2;
++	else
++		/* timezone offset not present, assume our local timezone */
++		unix_time += exfat_timezone;
+ 
+ 	return unix_time;
+ }
+ 
+ void exfat_unix2exfat(time_t unix_time, le16_t* date, le16_t* time,
+-		uint8_t* centisec)
++		uint8_t* centisec, uint8_t* tzoffset)
+ {
+ 	time_t shift = EPOCH_DIFF_SEC + exfat_timezone;
+ 	uint16_t day, month, year;
+@@ -146,6 +152,9 @@ void exfat_unix2exfat(time_t unix_time, le16_t* date, le16_t* time,
+ 	*time = cpu_to_le16(twosec | (min << 5) | (hour << 11));
+ 	if (centisec)
+ 		*centisec = (unix_time % 2) * 100;
++
++	/* record our local timezone offset in exFAT (15 minute increment) format */
++	*tzoffset = (uint8_t)(-exfat_timezone / 60 / 15) | 0x80;
+ }
+ 
+ void exfat_tzset(void)

@@ -1,0 +1,94 @@
+From: Pranav Batra <batrapranav@chromium.org>
+Subject: [PATCH] Remove bbox Ghostscript device
+
+The bbox device is used to count the number of pages in a postscript
+file very inefficiently to make sure at least one page exists before
+attempting to render the file. Currently we do not build ghostscript
+with support for the bbox device hence the need for this patch.
+
+--- a/filter/foomatic-rip/postscript.c
++++ b/filter/foomatic-rip/postscript.c
+@@ -168,42 +168,10 @@ int stream_next_line(dstr_t *line, stream_t *s)
+     return cnt;
+ }
+ 
+-int ps_pages(const char *filename)
+-{
+-    char gscommand[65536];
+-    char output[31] = "";
+-    int pagecount;
+-    size_t bytes;
+-    snprintf(gscommand, 65536, "%s -q -dNOPAUSE -dBATCH -sDEVICE=bbox %s 2>&1 | grep -c HiResBoundingBox",
+-              CUPS_GHOSTSCRIPT, filename);
+-    FILE *pd = popen(gscommand, "r");
+-    bytes = fread(output, 1, 31, pd);
+-    pclose(pd);
+-
+-    if (bytes <= 0 || sscanf(output, "%d", &pagecount) < 1)
+-        pagecount = -1;
+-
+-    return pagecount;
+-}
+-
+ int print_ps(FILE *file, const char *alreadyread, size_t len, const char *filename)
+ {
+     stream_t stream;
+ 
+-    if (file != stdin)
+-    {
+-        int pagecount = ps_pages(filename);
+-        if (pagecount < 0) {
+-            _log("Unexpected page count\n");
+-            return 0;
+-        }
+-        if (pagecount == 0) {
+-            _log("No pages left, outputting empty file.\n");
+-            return 1;
+-        }
+-        _log("File contains %d pages.\n", pagecount);
+-    }
+-
+     stream.pos = 0;
+     stream.file = file;
+     stream.alreadyread = alreadyread;
+--- a/filter/gstoraster.c
++++ b/filter/gstoraster.c
+@@ -728,38 +728,6 @@ main (int argc, char **argv, char *envp[])
+       goto out;
+     }
+   }
+-  else {
+-    char gscommand[65536];
+-    char output[31] = "";
+-    int pagecount;
+-    size_t bytes;
+-    snprintf(gscommand, 65536, "%s -q -dNOPAUSE -dBATCH -sDEVICE=bbox %s 2>&1 | grep -c HiResBoundingBox",
+-	     CUPS_GHOSTSCRIPT, filename);
+-
+-    FILE *pd = popen(gscommand, "r");
+-    if (!pd) {
+-      fprintf(stderr, "Failed to execute ghostscript to determine number of input pages!\n");
+-      goto out;
+-    }
+-
+-    bytes = fread(output, 1, 31, pd);
+-    pclose(pd);
+-
+-    if (bytes <= 0 || sscanf(output, "%d", &pagecount) < 1)
+-      pagecount = -1;
+-
+-    if (pagecount == 0) {
+-      fprintf(stderr, "DEBUG: No pages left, outputting empty file.\n");
+-      status = 0;
+-      if (outformat == OUTPUT_FORMAT_RASTER)
+-        fprintf(stdout, "RaS2");
+-      goto out;
+-    }
+-    if (pagecount < 0) {
+-      fprintf(stderr, "DEBUG: Unexpected page count\n");
+-      goto out;
+-    }
+-  }
+   if (argc == 6) {
+     /* input from stdin */
+     /* remove name of temp file*/

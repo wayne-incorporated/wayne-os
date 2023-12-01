@@ -1,0 +1,261 @@
+From 634da7a1c61ee8c173e90a841eb1f4ea03caa20b Mon Sep 17 00:00:00 2001
+From: Teresa Johnson <tejohnson@google.com>
+Date: Thu, 10 Feb 2022 15:42:38 -0800
+Subject: [PATCH] [sanitizer] Check if directory exists before trying to create
+
+Add a DirExists mechanism, modeled after FileExists. Use it to guard
+creation of the report path directory.
+
+This should avoid failures running the sanitizer in a sandbox where the
+file creation attempt causes hard failures, even for an existing
+directory. Problem reported on D109794 for ChromeOS in sandbox
+(https://issuetracker.google.com/209296420).
+
+Differential Revision: https://reviews.llvm.org/D119495
+---
+ .../lib/sanitizer_common/sanitizer_file.cpp   |  8 +++--
+ .../lib/sanitizer_common/sanitizer_file.h     |  1 +
+ .../lib/sanitizer_common/sanitizer_linux.cpp  | 13 +++++++-
+ .../lib/sanitizer_common/sanitizer_mac.cpp    |  7 +++++
+ .../lib/sanitizer_common/sanitizer_win.cpp    |  5 ++++
+ .../tests/sanitizer_libc_test.cpp             | 30 +++++++++++++++++++
+ .../test/asan/TestCases/log-path_test.cpp     | 11 +++++--
+ .../test/memprof/TestCases/log_path_test.cpp  | 18 ++++++-----
+ .../Posix/sanitizer_set_report_path_test.cpp  |  6 ++++
+ 9 files changed, 86 insertions(+), 13 deletions(-)
+
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_file.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_file.cpp
+index c3e08f58c2ce..7ef499ce07b1 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_file.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_file.cpp
+@@ -84,8 +84,12 @@ static void RecursiveCreateParentDirs(char *path) {
+     if (!IsPathSeparator(path[i]))
+       continue;
+     path[i] = '\0';
+-    /* Some of these will fail, because the directory exists, ignore it. */
+-    CreateDir(path);
++    if (!DirExists(path) && !CreateDir(path)) {
++      const char *ErrorMsgPrefix = "ERROR: Can't create directory: ";
++      WriteToFile(kStderrFd, ErrorMsgPrefix, internal_strlen(ErrorMsgPrefix));
++      WriteToFile(kStderrFd, path, internal_strlen(path));
++      Die();
++    }
+     path[i] = save;
+   }
+ }
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_file.h b/compiler-rt/lib/sanitizer_common/sanitizer_file.h
+index 2f98d8281b4c..810c1e452f61 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_file.h
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_file.h
+@@ -77,6 +77,7 @@ bool SupportsColoredOutput(fd_t fd);
+ // OS
+ const char *GetPwd();
+ bool FileExists(const char *filename);
++bool DirExists(const char *path);
+ char *FindPathToBinary(const char *name);
+ bool IsPathSeparator(const char c);
+ bool IsAbsolutePath(const char *path);
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_linux.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_linux.cpp
+index 2e4d57d87f58..84a46b51e1e9 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_linux.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_linux.cpp
+@@ -499,7 +499,18 @@ bool FileExists(const char *filename) {
+   return S_ISREG(st.st_mode);
+ }
+ 
+-#if !SANITIZER_NETBSD
++bool DirExists(const char *path) {
++  struct stat st;
++#  if SANITIZER_USES_CANONICAL_LINUX_SYSCALLS
++  if (internal_syscall(SYSCALL(newfstatat), AT_FDCWD, path, &st, 0))
++#  else
++  if (internal_stat(path, &st))
++#  endif
++    return false;
++  return S_ISDIR(st.st_mode);
++}
++
++#  if !SANITIZER_NETBSD
+ tid_t GetTid() {
+ #if SANITIZER_FREEBSD
+   long Tid;
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_mac.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_mac.cpp
+index 294464ab2ed7..e7a1421d5ef6 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_mac.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_mac.cpp
+@@ -393,6 +393,13 @@ bool FileExists(const char *filename) {
+   return S_ISREG(st.st_mode);
+ }
+ 
++bool DirExists(const char *path) {
++  struct stat st;
++  if (stat(path, &st))
++    return false;
++  return S_ISDIR(st.st_mode);
++}
++
+ tid_t GetTid() {
+   tid_t tid;
+   pthread_threadid_np(nullptr, &tid);
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_win.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_win.cpp
+index d59072669715..53770331199f 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_win.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_win.cpp
+@@ -93,6 +93,11 @@ bool FileExists(const char *filename) {
+   return ::GetFileAttributesA(filename) != INVALID_FILE_ATTRIBUTES;
+ }
+ 
++bool DirExists(const char *path) {
++  auto attr = ::GetFileAttributesA(path);
++  return (attr != INVALID_FILE_ATTRIBUTES) && (attr & FILE_ATTRIBUTE_DIRECTORY);
++}
++
+ uptr internal_getpid() {
+   return GetProcessId(GetCurrentProcess());
+ }
+diff --git a/compiler-rt/lib/sanitizer_common/tests/sanitizer_libc_test.cpp b/compiler-rt/lib/sanitizer_common/tests/sanitizer_libc_test.cpp
+index 15612bb3b2cf..5bdf726cdc02 100644
+--- a/compiler-rt/lib/sanitizer_common/tests/sanitizer_libc_test.cpp
++++ b/compiler-rt/lib/sanitizer_common/tests/sanitizer_libc_test.cpp
+@@ -63,6 +63,20 @@ struct stat_and_more {
+   unsigned char z;
+ };
+ 
++static void get_temp_dir(char *buf, size_t bufsize) {
++#if SANITIZER_WINDOWS
++  buf[0] = '\0';
++  if (!::GetTempPathA(bufsize, buf))
++    return;
++#else
++  const char *tmpdir = "/tmp";
++#  if SANITIZER_ANDROID
++  tmpdir = GetEnv("TMPDIR");
++#  endif
++  internal_snprintf(buf, bufsize, "%s", tmpdir);
++#endif
++}
++
+ static void temp_file_name(char *buf, size_t bufsize, const char *prefix) {
+ #if SANITIZER_WINDOWS
+   buf[0] = '\0';
+@@ -340,3 +354,19 @@ TEST(SanitizerCommon, ReportFile) {
+   report_file.SetReportPath("stderr");
+   Unlink(tmpfile);
+ }
++
++TEST(SanitizerCommon, FileExists) {
++  char tmpfile[128];
++  temp_file_name(tmpfile, sizeof(tmpfile), "sanitizer_common.fileexists.tmp.");
++  fd_t fd = OpenFile(tmpfile, WrOnly);
++  ASSERT_NE(fd, kInvalidFd);
++  EXPECT_TRUE(FileExists(tmpfile));
++  CloseFile(fd);
++  Unlink(tmpfile);
++}
++
++TEST(SanitizerCommon, DirExists) {
++  char tmpdir[128];
++  get_temp_dir(tmpdir, sizeof(tmpdir));
++  EXPECT_TRUE(DirExists(tmpdir));
++}
+diff --git a/compiler-rt/test/asan/TestCases/log-path_test.cpp b/compiler-rt/test/asan/TestCases/log-path_test.cpp
+index fd33a31d6df9..4cf041659ef3 100644
+--- a/compiler-rt/test/asan/TestCases/log-path_test.cpp
++++ b/compiler-rt/test/asan/TestCases/log-path_test.cpp
+@@ -16,10 +16,14 @@
+ // RUN: %env_asan_opts=log_path=%t.log not %run %t 2> %t.out
+ // RUN: FileCheck %s --check-prefix=CHECK-ERROR < %t.log.*
+ 
+-// Invalid log_path.
+-// RUN: %env_asan_opts=log_path=/dev/null/INVALID not %run %t 2> %t.out
++// Invalid log_path in existing directory.
++// RUN: %env_asan_opts=log_path=/INVALID not %run %t 2> %t.out
+ // RUN: FileCheck %s --check-prefix=CHECK-INVALID < %t.out
+ 
++// Directory of log_path can't be created.
++// RUN: %env_asan_opts=log_path=/dev/null/INVALID not %run %t 2> %t.out
++// RUN: FileCheck %s --check-prefix=CHECK-BAD-DIR < %t.out
++
+ // Too long log_path.
+ // RUN: %env_asan_opts=log_path=`for((i=0;i<10000;i++)); do echo -n $i; done` \
+ // RUN:   not %run %t 2> %t.out
+@@ -44,5 +48,6 @@ int main(int argc, char **argv) {
+   return res;
+ }
+ // CHECK-ERROR: ERROR: AddressSanitizer
+-// CHECK-INVALID: ERROR: Can't open file: /dev/null/INVALID
++// CHECK-INVALID: ERROR: Can't open file: /INVALID
++// CHECK-BAD-DIR: ERROR: Can't create directory: /dev/null
+ // CHECK-LONG: ERROR: Path is too long: 01234
+diff --git a/compiler-rt/test/memprof/TestCases/log_path_test.cpp b/compiler-rt/test/memprof/TestCases/log_path_test.cpp
+index 825a6e35d470..664ab7939319 100644
+--- a/compiler-rt/test/memprof/TestCases/log_path_test.cpp
++++ b/compiler-rt/test/memprof/TestCases/log_path_test.cpp
+@@ -3,18 +3,21 @@
+ //
+ // RUN: %clangxx_memprof  %s -o %t
+ 
+-// stderr print_text=true:log_path
++// stderr log_path
+ // RUN: %env_memprof_opts=print_text=true:log_path=stderr %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-GOOD --dump-input=always
+ 
+-// Good print_text=true:log_path.
++// Good log_path.
+ // RUN: rm -f %t.log.*
+ // RUN: %env_memprof_opts=print_text=true:log_path=%t.log %run %t
+ // RUN: FileCheck %s --check-prefix=CHECK-GOOD --dump-input=always < %t.log.*
+ 
+-// Invalid print_text=true:log_path.
+-// RUN: %env_memprof_opts=print_text=true:log_path=/dev/null/INVALID not %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-INVALID --dump-input=always
++// Invalid log_path.
++// RUN: %env_memprof_opts=print_text=true:log_path=/INVALID not %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-INVALID --dump-input=always
+ 
+-// Too long print_text=true:log_path.
++// Directory of log_path can't be created.
++// RUN: %env_memprof_opts=print_text=true:log_path=/dev/null/INVALID not %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-BAD-DIR --dump-input=always
++
++// Too long log_path.
+ // RUN: %env_memprof_opts=print_text=true:log_path=`for((i=0;i<10000;i++)); do echo -n $i; done` \
+ // RUN:   not %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-LONG --dump-input=always
+ 
+@@ -24,7 +27,7 @@
+ // Using an automatically generated name via %t can cause weird issues with
+ // unexpected macro expansion if the path includes tokens that match a build
+ // system macro (e.g. "linux").
+-// RUN: %clangxx_memprof  %s -o %t -DPROFILE_NAME_VAR="/dev/null/INVALID"
++// RUN: %clangxx_memprof  %s -o %t -DPROFILE_NAME_VAR="/INVALID"
+ // RUN: not %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-INVALID --dump-input=always
+ 
+ #include <sanitizer/memprof_interface.h>
+@@ -45,5 +48,6 @@ int main(int argc, char **argv) {
+   return 0;
+ }
+ // CHECK-GOOD: Memory allocation stack id
+-// CHECK-INVALID: ERROR: Can't open file: /dev/null/INVALID
++// CHECK-INVALID: ERROR: Can't open file: /INVALID
++// CHECK-BAD-DIR: ERROR: Can't create directory: /dev/null
+ // CHECK-LONG: ERROR: Path is too long: 01234
+diff --git a/compiler-rt/test/sanitizer_common/TestCases/Posix/sanitizer_set_report_path_test.cpp b/compiler-rt/test/sanitizer_common/TestCases/Posix/sanitizer_set_report_path_test.cpp
+index 17cee722749d..d176710a43c1 100644
+--- a/compiler-rt/test/sanitizer_common/TestCases/Posix/sanitizer_set_report_path_test.cpp
++++ b/compiler-rt/test/sanitizer_common/TestCases/Posix/sanitizer_set_report_path_test.cpp
+@@ -1,6 +1,11 @@
+ // Test __sanitizer_set_report_path and __sanitizer_get_report_path:
++// RUN: rm -rf %t.report_path
+ // RUN: %clangxx -O2 %s -o %t
+ // RUN: %run %t | FileCheck %s
++// Try again with a directory without write access.
++// RUN: rm -rf %t.report_path && mkdir -p %t.report_path
++// RUN: chmod u-w %t.report_path || true
++// RUN: not %run %t 2>&1 | FileCheck %s --check-prefix=FAIL
+ 
+ #include <assert.h>
+ #include <sanitizer/common_interface_defs.h>
+@@ -18,3 +23,4 @@ int main(int argc, char **argv) {
+ }
+ 
+ // CHECK: Path {{.*}}Posix/Output/sanitizer_set_report_path_test.cpp.tmp.report_path/report.
++// FAIL: ERROR: Can't open file: {{.*}}Posix/Output/sanitizer_set_report_path_test.cpp.tmp.report_path/report.
+-- 
+2.35.1.265.g69c8d7142f-goog
+

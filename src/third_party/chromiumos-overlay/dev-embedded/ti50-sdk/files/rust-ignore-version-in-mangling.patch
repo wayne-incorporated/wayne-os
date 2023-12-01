@@ -1,0 +1,19 @@
+Rust's mangling ordinarily incorporates the compiler's version. If we want name
+stability across compiler upgrades (e.g., for AFDO), this is undesirable.
+
+diff --git a/compiler/rustc_span/src/def_id.rs b/compiler/rustc_span/src/def_id.rs
+index bbeabdb55a7..e581fffb377 100644
+--- a/compiler/rustc_span/src/def_id.rs
++++ b/compiler/rustc_span/src/def_id.rs
+@@ -180,6 +180,11 @@ pub fn new(crate_name: &str, is_exe: bool, mut metadata: Vec<String>) -> StableC
+         // during testing.
+         if let Some(val) = std::env::var_os("RUSTC_FORCE_RUSTC_VERSION") {
+             hasher.write(val.to_string_lossy().into_owned().as_bytes())
++        } else if std::env::var_os("CROS_RUSTC_IGNORE_VERSION_IN_MANGLING")
++            .filter(|x| !x.is_empty())
++            .is_some()
++        {
++            hasher.write(b"cros-rust");
+         } else {
+             hasher.write(option_env!("CFG_VERSION").unwrap_or("unknown version").as_bytes());
+         }

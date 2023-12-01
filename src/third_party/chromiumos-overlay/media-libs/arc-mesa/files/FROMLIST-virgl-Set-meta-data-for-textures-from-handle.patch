@@ -1,0 +1,29 @@
+From 9eb57a1a08a98b04f3f99eca4cf84f2ebd7c0ec1 Mon Sep 17 00:00:00 2001
+From: Lepton Wu <lepton@chromium.org>
+Date: Wed, 17 Jul 2019 09:48:50 -0700
+Subject: [PATCH] virgl: Set meta data for textures from handle.
+
+The set of meta data was removed by commit 8083464. It broke lots of
+dEQP tests when running with pbuffer surface type.
+
+Fixes: 80834640137 ("virgl: remove dead code")
+Signed-off-by: Lepton Wu <lepton@chromium.org>
+---
+ src/gallium/drivers/virgl/virgl_resource.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/gallium/drivers/virgl/virgl_resource.c b/src/gallium/drivers/virgl/virgl_resource.c
+index c22a78a4731..909deb774c7 100644
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -515,6 +515,7 @@ static struct pipe_resource *virgl_resource_from_handle(struct pipe_screen *scre
+    res->u.b = *templ;
+    res->u.b.screen = &vs->base;
+    pipe_reference_init(&res->u.b.reference, 1);
++   virgl_resource_layout(&res->u.b, &res->metadata);
+ 
+    res->hw_res = vs->vws->resource_create_from_handle(vs->vws, whandle);
+    if (!res->hw_res) {
+-- 
+2.22.0.510.g264f2c817a-goog
+

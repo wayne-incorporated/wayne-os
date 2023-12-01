@@ -1,0 +1,59 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+# Make sure PROT_WRITE (bit 1) and PROT_EXEC (bit 2) are not both set.
+mmap: arg2 in ~PROT_WRITE || arg2 in ~PROT_EXEC
+newfstatat: 1
+# Make sure PROT_WRITE (bit 1) and PROT_EXEC (bit 2) are not both set.
+mprotect: arg2 in ~PROT_WRITE || arg2 in ~PROT_EXEC
+openat: 1
+close: 1
+munmap: 1
+read: 1
+pread64: 1
+fstatfs: 1
+fcntl: 1
+pwrite64: 1
+fdatasync: 1
+getdents64: 1
+gettid: 1
+brk: 1
+getpid: 1
+rt_sigprocmask: 1
+faccessat: 1
+fchmod: 1
+fchown: 1
+ftruncate: 1
+geteuid: 1
+rt_sigaction: 1
+sendto: 1
+unlinkat: 1
+write: 1
+connect: 1
+execve: 1
+exit_group: 1
+getrandom: 1
+# Used by libbrillo to know whether stderr is a TTY.
+ioctl: arg1 == TCGETS
+lseek: 1
+prlimit64: arg2 == 0 && arg3 != 0
+set_robust_list: 1
+set_tid_address: 1
+socket: arg0 == AF_UNIX
+
+# syscalls below were not seen on Nov 11, 2022, but they may still be used.
+fstat: 1
+gettimeofday: 1
+futex: 1
+restart_syscall: 1
+exit: 1
+rt_sigreturn: 1
+uname: 1
+getrlimit: 1
+faccessat2: 1
+clock_gettime: 1
+dup: 1

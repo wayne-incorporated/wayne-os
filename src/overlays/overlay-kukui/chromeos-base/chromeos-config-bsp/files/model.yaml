@@ -1,0 +1,265 @@
+#
+# Copyright 2019 The ChromiumOS Authors
+#
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+audio_config: &audio_config
+  main:
+    cras-config-dir: "{{$device-name}}"
+    ucm-suffix: "{{$device-name}}"
+    files:
+      - source: "{{$cras-source}}/{{$card}}"
+        destination: "{{$cras-dest}}/{{$card}}"
+      - source: "{{$cras-source}}/board.ini"
+        destination: "{{$cras-dest}}/board.ini"
+      - source: "{{$cras-source}}/dsp.ini"
+        destination: "{{$cras-dest}}/dsp.ini"
+      - source: "{{$ucm-source}}/HiFi.conf"
+        destination: "{{$ucm-dest}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card}}.conf"
+        destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}.conf"
+
+krane_audio_config: &krane_audio_config
+  main:
+    cras-config-dir: "{{$device-name}}"
+    ucm-suffix: "{{$device-name}}"
+    files:
+      - source: "{{$cras-source}}/{{$card}}"
+        destination: "{{$cras-dest}}/{{$card}}"
+      - source: "{{$cras-source}}/board.ini"
+        destination: "{{$cras-dest}}/board.ini"
+      - source: "{{$cras-source}}/dsp.ini"
+        destination: "{{$cras-dest}}/dsp.ini"
+      - source: "{{$ucm-source}}/HiFi.conf"
+        destination: "{{$ucm-dest}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card}}.conf"
+        destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}.conf"
+      - source: "{{$ucm-source}}/Lenovo USB-C TO 3.5mm Adapter/HiFi.conf"
+        destination: "{{$ucm_root}}/Lenovo USB-C TO 3.5mm Adapter/HiFi.conf"
+      - source: "{{$ucm-source}}/Lenovo USB-C TO 3.5mm Adapter/Lenovo USB-C TO 3.5mm Adapter.conf"
+        destination: "{{$ucm_root}}/Lenovo USB-C TO 3.5mm Adapter/Lenovo USB-C TO 3.5mm Adapter.conf"
+      - source: "{{$cras-source}}/Lenovo USB-C TO 3.5mm Adapter"
+        destination: "{{$cras-dest}}/Lenovo USB-C TO 3.5mm Adapter"
+
+kakadu_audio_config: &kakadu_audio_config
+  $card1: "mt8183_da7219_rt1015"
+  $card2: "mt8183_da7219_rt1015p"
+  $card3: "mt8183_mt6358_ts3a227_rt1015p"
+  $ucm-dest1: "{{$ucm_root}}/{{$card1}}.{{ucm-suffix}}"
+  $ucm-dest2: "{{$ucm_root}}/{{$card2}}.{{ucm-suffix}}"
+  $ucm-dest3: "{{$ucm_root}}/{{$card3}}.{{ucm-suffix}}"
+  main:
+    cras-config-dir: "{{$device-name}}"
+    ucm-suffix: "{{$device-name}}"
+    files:
+      - source: "{{$cras-source}}/{{$card1}}"
+        destination: "{{$cras-dest}}/{{$card1}}"
+      - source: "{{$cras-source}}/board.ini"
+        destination: "{{$cras-dest}}/board.ini"
+      - source: "{{$cras-source}}/dsp.ini"
+        destination: "{{$cras-dest}}/dsp.ini"
+      - source: "{{$ucm-source}}/HiFi_rt1015.conf"
+        destination: "{{$ucm-dest1}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card1}}.conf"
+        destination: "{{$ucm-dest1}}/{{$card1}}.{{ucm-suffix}}.conf"
+      - source: "{{$cras-source}}/{{$card2}}"
+        destination: "{{$cras-dest}}/{{$card2}}"
+      - source: "{{$ucm-source}}/HiFi_rt1015p.conf"
+        destination: "{{$ucm-dest2}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card2}}.conf"
+        destination: "{{$ucm-dest2}}/{{$card2}}.{{ucm-suffix}}.conf"
+      - source: "{{$cras-source}}/{{$card3}}"
+        destination: "{{$cras-dest}}/{{$card3}}"
+      - source: "{{$ucm-source}}/HiFi_mt6358.conf"
+        destination: "{{$ucm-dest3}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card3}}.conf"
+        destination: "{{$ucm-dest3}}/{{$card3}}.{{ucm-suffix}}.conf"
+
+katsu_audio_config: &katsu_audio_config
+  $card1: "mt8183_da7219_rt1015p"
+  $card2: "mt8183_mt6358_ts3a227_rt1015p"
+  $ucm-dest1: "{{$ucm_root}}/{{$card1}}.{{ucm-suffix}}"
+  $ucm-dest2: "{{$ucm_root}}/{{$card2}}.{{ucm-suffix}}"
+  main:
+    cras-config-dir: "{{$device-name}}"
+    ucm-suffix: "{{$device-name}}"
+    files:
+      - source: "{{$cras-source}}/{{$card1}}"
+        destination: "{{$cras-dest}}/{{$card1}}"
+      - source: "{{$cras-source}}/board.ini"
+        destination: "{{$cras-dest}}/board.ini"
+      - source: "{{$cras-source}}/dsp.ini"
+        destination: "{{$cras-dest}}/dsp.ini"
+      - source: "{{$ucm-source}}/HiFi_rt1015p.conf"
+        destination: "{{$ucm-dest1}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card1}}.conf"
+        destination: "{{$ucm-dest1}}/{{$card1}}.{{ucm-suffix}}.conf"
+      - source: "{{$cras-source}}/{{$card2}}"
+        destination: "{{$cras-dest}}/{{$card2}}"
+      - source: "{{$ucm-source}}/HiFi_mt6358.conf"
+        destination: "{{$ucm-dest2}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card2}}.conf"
+        destination: "{{$ucm-dest2}}/{{$card2}}.{{ucm-suffix}}.conf"
+
+bluetooth-flags: &bluetooth_flags
+  enable-suspend-management: true
+  stop-on-suspend: true
+
+common_config: &common_config
+  $cras_root: "/etc/cras"
+  $ucm_root: "/usr/share/alsa/ucm"
+  $card: "mt8183_mt6358_ts3a227_max98357"
+  $ucm-source-suffix: ""
+  $cras-source: "{{cras-config-dir}}/audio/cras-config"
+  $cras-dest: "{{$cras_root}}/{{cras-config-dir}}"
+  $ucm-source: "{{cras-config-dir}}/audio/ucm-config{{$ucm-source-suffix}}"
+  $ucm-dest: "{{$ucm_root}}/{{$card}}.{{ucm-suffix}}"
+  name: "{{$device-name}}"
+  identity: &identity
+    platform-name: "Kukui"
+    frid: "{{$fw-name}}"
+  firmware:
+    build-targets:
+      bmpblk: "kukui"
+      coreboot: "{{$fw-build-name}}"
+      ec: "{{$fw-build-name}}"
+      ec-extras: [ "kukui_scp" ]
+      depthcharge: "kukui"
+      libpayload: "kukui"
+    no-firmware: true
+  firmware-signing:
+    key-id: "{{$key-id}}"
+    signature-id: "{{$device-name}}"
+  test-label: "{{$device-name}}"
+  power: &power_common
+    low-battery-shutdown-percent: "4.0"
+    usb-min-ac-watts: "10"
+    disable-dark-resume: "0"
+    $has-ambient-light-sensor: "0"
+    has-ambient-light-sensor: "{{$has-ambient-light-sensor}}"
+    $als-smoothing-constant: "1"
+    als-smoothing-constant: "{{$als-smoothing-constant}}"
+  bluetooth:
+    flags: *bluetooth_flags
+  camera:
+    config-file:
+      system-path: "/etc/camera/camera_config_{{$device-name}}.json"
+      build-path: "camera_config_{{$device-name}}.json"
+  hardware-properties:
+    form-factor: CHROMEBOOK
+  scheduler-tune:
+    boost-urgent: 40
+    boost-arcvm: 0.4
+
+kukui-config: &kukui_config
+  <<: *common_config
+  $fw-name: "Google_Kukui"
+  $fw-build-name: "kukui"
+  $key-id: "DEFAULT"
+  identity:
+    <<: *identity
+    sku-id: 0
+  power:
+    <<: *power_common
+    charging-ports: |
+      CROS_USBPD_CHARGER0 LEFT
+  audio: *audio_config
+
+krane-config: &krane_config
+  <<: *common_config
+  $fw-name: "Google_Krane"
+  $fw-build-name: "krane"
+  $key-id: "KRANE"
+  demo-mode:
+    screensaver-extension-id: "fafhbhdboeiciklpkminlncemohljlkj"
+  power:
+    <<: *power_common
+    $has-ambient-light-sensor: "1"
+    charging-ports: |
+      CROS_USBPD_CHARGER0 RIGHT
+    min-visible-backlight-level: "12"
+    internal-backlight-als-steps: |-
+      18.75 -1 15
+      40.88 8 110
+      65.88 70 630
+      79.52 550 1200
+      92.92 880 3000
+      100.0 2000 -1
+    internal-backlight-no-als-battery-brightness: "70.62"
+    $als-smoothing-constant: "0.6"
+  ui:
+    power-button:
+      edge: right
+      position: "0.32"
+    side-volume-button:
+      region: screen
+      side: right
+  audio: *krane_audio_config
+
+kodama-config: &kodama_config
+  <<: *common_config
+  $fw-name: "Google_Kodama"
+  $fw-build-name: "kodama"
+  $key-id: "KRANE"
+  audio: *audio_config
+  power:
+    <<: *power_common
+  ui:
+    power-button:
+      edge: right
+      position: "0.1"
+    # Kodama has side volume buttons, but side-volume-button has been
+    # left unpopulated as they are physically labelled with '+' and
+    # '-', and it would be confusing if the behavior adjusted based on
+    # screen orientation.
+
+kakadu-config: &kakadu_config
+  <<: *common_config
+  $fw-name: "Google_Kakadu"
+  $fw-build-name: "kakadu"
+  $key-id: "KUKUIB"
+  audio: *kakadu_audio_config
+  power:
+    <<: *power_common
+  ui:
+    power-button:
+      edge: right
+      position: "0.1"
+    side-volume-button:
+      region: screen
+      side: top
+
+katsu-config: &katsu_config
+  <<: *common_config
+  $fw-name: "Google_Katsu"
+  $fw-build-name: "katsu"
+  $key-id: "KUKUIA"
+  audio: *katsu_audio_config
+  power:
+    <<: *power_common
+  ui:
+    power-button:
+      edge: right
+      position: "0.1"
+    side-volume-button:
+      region: screen
+      side: top
+
+chromeos:
+  devices:
+    - $device-name: "kukui"
+      skus:
+        - config: *kukui_config
+    - $device-name: "krane"
+      skus:
+        - config: *krane_config
+    - $device-name: "kodama"
+      skus:
+        - config: *kodama_config
+    - $device-name: "kakadu"
+      skus:
+        - config: *kakadu_config
+    - $device-name: "katsu"
+      skus:
+        - config: *katsu_config

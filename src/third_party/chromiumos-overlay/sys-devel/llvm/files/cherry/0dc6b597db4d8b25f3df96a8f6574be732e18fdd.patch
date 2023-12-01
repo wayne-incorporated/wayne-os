@@ -1,0 +1,28 @@
+commit 0dc6b597db4d8b25f3df96a8f6574be732e18fdd
+Author: Roman Lebedev <lebedev.ri@gmail.com>
+Date:   Fri Aug 13 17:38:36 2021 +0300
+
+    Revert "[SCEV] Remove premature assert. PR46786"
+    
+    Since then, the SCEV pointer handling as been improved,
+    so the assertion should now hold.
+    
+    This reverts commit b96114c1e1fc4448ea966bce013706359aee3fa9,
+    relanding the assertion from commit 141e845da5dda6743a09f858b4aec0133a931453.
+
+diff --git a/llvm/lib/Analysis/ScalarEvolution.cpp b/llvm/lib/Analysis/ScalarEvolution.cpp
+index f22d834b5e57..e6fdcc1ea4f1 100644
+--- a/llvm/lib/Analysis/ScalarEvolution.cpp
++++ b/llvm/lib/Analysis/ScalarEvolution.cpp
+@@ -3647,7 +3647,10 @@ ScalarEvolution::getGEPExpr(GEPOperator *GEP,
+   // non-negative, we can use nuw.
+   SCEV::NoWrapFlags BaseWrap = GEP->isInBounds() && isKnownNonNegative(Offset)
+                                    ? SCEV::FlagNUW : SCEV::FlagAnyWrap;
+-  return getAddExpr(BaseExpr, Offset, BaseWrap);
++  auto *GEPExpr = getAddExpr(BaseExpr, Offset, BaseWrap);
++  assert(BaseExpr->getType() == GEPExpr->getType() &&
++         "GEP should not change type mid-flight.");
++  return GEPExpr;
+ }
+ 
+ std::tuple<SCEV *, FoldingSetNodeID, void *>

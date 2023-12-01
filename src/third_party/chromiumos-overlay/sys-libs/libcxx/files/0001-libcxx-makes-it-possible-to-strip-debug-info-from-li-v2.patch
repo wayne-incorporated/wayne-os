@@ -1,0 +1,446 @@
+From 7e85c350791a56fcc76378e4da33c8ee11179fb1 Mon Sep 17 00:00:00 2001
+From: Christopher Di Bella <cjdb@google.com>
+Date: Wed, 26 Oct 2022 00:30:23 +0000
+Subject: [PATCH] [libcxx] makes it possible to strip debug info from libc++
+
+ChromeOS has reached the 4GB ceiling when compiling Chrome in debug mode
+on 32-bit systems. After some investigation, we learnt that we can
+remove 1.5GB of debug info by disabling debug info from libc++ symbols.
+
+Since this comes at the cost of developer experience, it's opt-in, and
+is only recommended if there are no other solutions to achieving a
+smaller debug build. Future work on this should look into removing debug
+info from content that genuinely doesn't need debug info.
+---
+ libcxx/include/__config                        | 8 ++++++++
+ libcxx/include/__debug                         | 3 +++
+ libcxx/include/__hash_table                    | 3 ++-
+ libcxx/include/__tree                          | 3 ++-
+ libcxx/include/__tuple                         | 3 ++-
+ libcxx/include/__utility/as_const.h            | 2 ++
+ libcxx/include/__utility/cmp.h                 | 2 ++
+ libcxx/include/__utility/declval.h             | 2 ++
+ libcxx/include/__utility/exchange.h            | 2 ++
+ libcxx/include/__utility/forward.h             | 2 ++
+ libcxx/include/__utility/in_place.h            | 2 ++
+ libcxx/include/__utility/integer_sequence.h    | 2 ++
+ libcxx/include/__utility/move.h                | 2 ++
+ libcxx/include/__utility/pair.h                | 2 ++
+ libcxx/include/__utility/piecewise_construct.h | 2 ++
+ libcxx/include/__utility/priority_tag.h        | 2 ++
+ libcxx/include/__utility/rel_ops.h             | 2 ++
+ libcxx/include/__utility/swap.h                | 2 ++
+ libcxx/include/__utility/to_underlying.h       | 2 ++
+ libcxx/include/__utility/transaction.h         | 2 ++
+ libcxx/include/regex                           | 2 ++
+ 21 files changed, 49 insertions(+), 3 deletions(-)
+
+diff --git a/libcxx/include/__config b/libcxx/include/__config
+index bb20b2c956ea..1327a025d889 100644
+--- a/libcxx/include/__config
++++ b/libcxx/include/__config
+@@ -1134,6 +1134,14 @@ _LIBCPP_BEGIN_NAMESPACE_STD _LIBCPP_END_NAMESPACE_STD
+ #  define _LIBCPP_PUSH_MACROS _Pragma("push_macro(\"min\")") _Pragma("push_macro(\"max\")")
+ #  define _LIBCPP_POP_MACROS _Pragma("pop_macro(\"min\")") _Pragma("pop_macro(\"max\")")
+ 
++#if defined(_LIBCPP_NO_DEBUG_INFO)
++  #  define _LIBCPP_DISABLE_DEBUG_INFO _Pragma("clang attribute push([[gnu::nodebug]], apply_to = any(type_alias, hasType(functionType)))")
++  #  define _LIBCPP_ENABLE_DEBUG_INFO _Pragma("clang attribute pop")
++#else
++  #  define _LIBCPP_DISABLE_DEBUG_INFO
++  #  define _LIBCPP_ENABLE_DEBUG_INFO
++#endif
++
+ #  ifndef _LIBCPP_NO_AUTO_LINK
+ #    if defined(_LIBCPP_ABI_MICROSOFT) && !defined(_LIBCPP_BUILDING_LIBRARY)
+ #      if !defined(_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS)
+diff --git a/libcxx/include/__debug b/libcxx/include/__debug
+index 403710600b0d..7b7dd310b666 100644
+--- a/libcxx/include/__debug
++++ b/libcxx/include/__debug
+@@ -18,6 +18,8 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
++
+ // Catch invalid uses of the legacy _LIBCPP_DEBUG toggle.
+ #if defined(_LIBCPP_DEBUG) && _LIBCPP_DEBUG != 0 && !defined(_LIBCPP_ENABLE_DEBUG_MODE)
+ #   error "Enabling the debug mode now requires having configured the library with support for the debug mode"
+@@ -282,5 +284,6 @@ _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_AFTER_CXX11 inline void __debug_db_inval
+ }
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___DEBUG
+diff --git a/libcxx/include/__hash_table b/libcxx/include/__hash_table
+index 20223014432f..f5d62ad8796b 100644
+--- a/libcxx/include/__hash_table
++++ b/libcxx/include/__hash_table
+@@ -31,7 +31,7 @@
+ _LIBCPP_PUSH_MACROS
+ #include <__undef_macros>
+ 
+-
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ template <class _Key, class _Tp>
+@@ -2696,6 +2696,7 @@ __hash_table<_Tp, _Hash, _Equal, _Alloc>::__subscriptable(const const_iterator*,
+ #endif // _LIBCPP_ENABLE_DEBUG_MODE
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ _LIBCPP_POP_MACROS
+ 
+diff --git a/libcxx/include/__tree b/libcxx/include/__tree
+index e5dd1f4d45ea..9a0ff6710411 100644
+--- a/libcxx/include/__tree
++++ b/libcxx/include/__tree
+@@ -30,7 +30,7 @@
+ _LIBCPP_PUSH_MACROS
+ #include <__undef_macros>
+ 
+-
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ template <class, class, class, class> class _LIBCPP_TEMPLATE_VIS map;
+@@ -2750,6 +2750,7 @@ swap(__tree<_Tp, _Compare, _Allocator>& __x,
+ }
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ _LIBCPP_POP_MACROS
+ 
+diff --git a/libcxx/include/__tuple b/libcxx/include/__tuple
+index 6d13bb24c579..3bcd84861456 100644
+--- a/libcxx/include/__tuple
++++ b/libcxx/include/__tuple
+@@ -18,7 +18,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
+-
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS tuple_size;
+@@ -546,5 +546,6 @@ struct __sfinae_assign_base<false, true> {
+ #endif // _LIBCPP_STD_VER > 14
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___TUPLE
+diff --git a/libcxx/include/__utility/as_const.h b/libcxx/include/__utility/as_const.h
+index be7dd8c7cf23..5d0da1367406 100644
+--- a/libcxx/include/__utility/as_const.h
++++ b/libcxx/include/__utility/as_const.h
+@@ -18,6 +18,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #if _LIBCPP_STD_VER > 14
+@@ -29,5 +30,6 @@ void as_const(const _Tp&&) = delete;
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_AS_CONST_H
+diff --git a/libcxx/include/__utility/cmp.h b/libcxx/include/__utility/cmp.h
+index 3cfd98106705..72fc43332a9b 100644
+--- a/libcxx/include/__utility/cmp.h
++++ b/libcxx/include/__utility/cmp.h
+@@ -22,6 +22,7 @@
+ _LIBCPP_PUSH_MACROS
+ #include <__undef_macros>
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #if _LIBCPP_STD_VER > 17
+@@ -101,6 +102,7 @@ bool in_range(_Up __u) noexcept
+ #endif // _LIBCPP_STD_VER > 17
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ _LIBCPP_POP_MACROS
+ 
+diff --git a/libcxx/include/__utility/declval.h b/libcxx/include/__utility/declval.h
+index 97fd1eba91c6..b9d8d1ff7624 100644
+--- a/libcxx/include/__utility/declval.h
++++ b/libcxx/include/__utility/declval.h
+@@ -15,6 +15,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ // Suppress deprecation notice for volatile-qualified return type resulting
+@@ -30,5 +31,6 @@ template <class _Tp>
+ decltype(__declval<_Tp>(0)) declval() _NOEXCEPT;
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_DECLVAL_H
+diff --git a/libcxx/include/__utility/exchange.h b/libcxx/include/__utility/exchange.h
+index d9b3c151755f..d02a87273537 100644
+--- a/libcxx/include/__utility/exchange.h
++++ b/libcxx/include/__utility/exchange.h
+@@ -18,6 +18,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #if _LIBCPP_STD_VER > 11
+@@ -33,5 +34,6 @@ _T1 exchange(_T1& __obj, _T2&& __new_value)
+ #endif // _LIBCPP_STD_VER > 11
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_EXCHANGE_H
+diff --git a/libcxx/include/__utility/forward.h b/libcxx/include/__utility/forward.h
+index 03ca16d9f955..5198282cfbb0 100644
+--- a/libcxx/include/__utility/forward.h
++++ b/libcxx/include/__utility/forward.h
+@@ -18,6 +18,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ template <class _Tp>
+@@ -34,5 +35,6 @@ forward(typename remove_reference<_Tp>::type&& __t) _NOEXCEPT {
+ }
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_FORWARD_H
+diff --git a/libcxx/include/__utility/in_place.h b/libcxx/include/__utility/in_place.h
+index 7a4973fa0407..b74e446063e4 100644
+--- a/libcxx/include/__utility/in_place.h
++++ b/libcxx/include/__utility/in_place.h
+@@ -16,6 +16,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #if _LIBCPP_STD_VER > 14
+@@ -54,5 +55,6 @@ using __is_inplace_index = __is_inplace_index_imp<__uncvref_t<_Tp>>;
+ #endif // _LIBCPP_STD_VER > 14
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_IN_PLACE_H
+diff --git a/libcxx/include/__utility/integer_sequence.h b/libcxx/include/__utility/integer_sequence.h
+index 633f1333e247..31856929d666 100644
+--- a/libcxx/include/__utility/integer_sequence.h
++++ b/libcxx/include/__utility/integer_sequence.h
+@@ -16,6 +16,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #if _LIBCPP_STD_VER > 11
+@@ -74,5 +75,6 @@ template<class... _Tp>
+ #endif // _LIBCPP_STD_VER > 11
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_INTEGER_SEQUENCE_H
+diff --git a/libcxx/include/__utility/move.h b/libcxx/include/__utility/move.h
+index da0d986093d6..99b458a32e09 100644
+--- a/libcxx/include/__utility/move.h
++++ b/libcxx/include/__utility/move.h
+@@ -17,6 +17,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ template <class _Tp>
+@@ -38,5 +39,6 @@ move_if_noexcept(_Tp& __x) _NOEXCEPT {
+ }
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_MOVE_H
+diff --git a/libcxx/include/__utility/pair.h b/libcxx/include/__utility/pair.h
+index 97635c2e61b5..5f3e4a40c637 100644
+--- a/libcxx/include/__utility/pair.h
++++ b/libcxx/include/__utility/pair.h
+@@ -24,6 +24,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #if defined(_LIBCPP_DEPRECATED_ABI_DISABLE_PAIR_TRIVIAL_COPY_CTOR)
+@@ -621,5 +622,6 @@ constexpr _T1 const && get(pair<_T2, _T1> const&& __p) _NOEXCEPT
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_PAIR_H
+diff --git a/libcxx/include/__utility/piecewise_construct.h b/libcxx/include/__utility/piecewise_construct.h
+index 3cc86fef2a0f..592419aa8a3a 100644
+--- a/libcxx/include/__utility/piecewise_construct.h
++++ b/libcxx/include/__utility/piecewise_construct.h
+@@ -15,6 +15,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ struct _LIBCPP_TEMPLATE_VIS piecewise_construct_t { explicit piecewise_construct_t() = default; };
+@@ -25,5 +26,6 @@ extern _LIBCPP_EXPORTED_FROM_ABI const piecewise_construct_t piecewise_construct
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_PIECEWISE_CONSTRUCT_H
+diff --git a/libcxx/include/__utility/priority_tag.h b/libcxx/include/__utility/priority_tag.h
+index e51ba6bfcc05..f33feef1c735 100644
+--- a/libcxx/include/__utility/priority_tag.h
++++ b/libcxx/include/__utility/priority_tag.h
+@@ -16,11 +16,13 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ template<size_t _Ip> struct __priority_tag : __priority_tag<_Ip - 1> {};
+ template<> struct __priority_tag<0> {};
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_PRIORITY_TAG_H
+diff --git a/libcxx/include/__utility/rel_ops.h b/libcxx/include/__utility/rel_ops.h
+index 2577e94e91f6..0821c4fc414c 100644
+--- a/libcxx/include/__utility/rel_ops.h
++++ b/libcxx/include/__utility/rel_ops.h
+@@ -18,6 +18,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ namespace rel_ops
+@@ -58,5 +59,6 @@ operator>=(const _Tp& __x, const _Tp& __y)
+ } // namespace rel_ops
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_REL_OPS_H
+diff --git a/libcxx/include/__utility/swap.h b/libcxx/include/__utility/swap.h
+index f9e7f36678ba..57ca828f9737 100644
+--- a/libcxx/include/__utility/swap.h
++++ b/libcxx/include/__utility/swap.h
+@@ -19,6 +19,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #ifndef _LIBCPP_CXX03_LANG
+@@ -46,5 +47,6 @@ swap(_Tp (&__a)[_Np], _Tp (&__b)[_Np]) _NOEXCEPT_(__is_nothrow_swappable<_Tp>::v
+ }
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_SWAP_H
+diff --git a/libcxx/include/__utility/to_underlying.h b/libcxx/include/__utility/to_underlying.h
+index 3428406e8d3a..a224376e7da4 100644
+--- a/libcxx/include/__utility/to_underlying.h
++++ b/libcxx/include/__utility/to_underlying.h
+@@ -17,6 +17,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ #ifndef _LIBCPP_CXX03_LANG
+@@ -36,5 +37,6 @@ to_underlying(_Tp __val) noexcept {
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_TO_UNDERLYING_H
+diff --git a/libcxx/include/__utility/transaction.h b/libcxx/include/__utility/transaction.h
+index 87e51c0b198e..0dc3ae29e272 100644
+--- a/libcxx/include/__utility/transaction.h
++++ b/libcxx/include/__utility/transaction.h
+@@ -18,6 +18,7 @@
+ #  pragma GCC system_header
+ #endif
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ // __transaction is a helper class for writing code with the strong exception guarantee.
+@@ -87,5 +88,6 @@ private:
+ };
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ #endif // _LIBCPP___UTILITY_TRANSACTION_H
+diff --git a/libcxx/include/regex b/libcxx/include/regex
+index a0a6561ef030..11b1e298ac43 100644
+--- a/libcxx/include/regex
++++ b/libcxx/include/regex
+@@ -801,6 +801,7 @@ _LIBCPP_PUSH_MACROS
+ 
+ #define _LIBCPP_REGEX_COMPLEXITY_FACTOR 4096
+ 
++_LIBCPP_DISABLE_DEBUG_INFO
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+ namespace regex_constants
+@@ -6841,6 +6842,7 @@ regex_replace(const _CharT* __s,
+ }
+ 
+ _LIBCPP_END_NAMESPACE_STD
++_LIBCPP_ENABLE_DEBUG_INFO
+ 
+ _LIBCPP_POP_MACROS
+ 
+-- 
+2.38.1.273.g43a17bfeac-goog
+

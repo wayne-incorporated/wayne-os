@@ -1,0 +1,234 @@
+From cb109b6b67dc2cebe688cc2a3e228743a99f6438 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 7 Apr 2022 17:15:56 -0300
+Subject: [PATCH 012/163] stdio: Remove the usage of $(fno-unit-at-a-time) for
+ siglist.c
+
+The siglist.c is built with -fno-toplevel-reorder to avoid compiler
+to reorder the compat assembly directives due an assembler
+issue [1] (fixed on 2.39).
+
+This patch removes the compiler flags by split the compat symbol
+generation in two phases.  First the __sys_siglist and __sys_sigabbrev
+without any compat symbol directive is preprocessed to generate an
+assembly source code.  This generate assembly is then used as input
+on a platform agnostic siglist.S which then creates the compat
+definitions.  This prevents compiler to move any compat directive
+prior the _sys_errlist definition itself.
+
+Checked on a make check run-built-tests=no on all affected ABIs.
+
+Reviewed-by: Fangrui Song <maskray@google.com>
+(cherry picked from commit 6fad891dfd5236002a2e64e26279c1d6dfa79565)
+---
+ include/signal.h                              |  6 ++---
+ stdio-common/Makefile                         | 14 +++++++++-
+ stdio-common/{siglist.c => siglist-gen.c}     |  4 ---
+ stdio-common/siglist.S                        |  7 +++++
+ ...{siglist-compat.h => siglist-compat-def.h} | 27 ++++++++++---------
+ sysdeps/generic/siglist-compat.c              |  1 -
+ .../{siglist-compat.c => siglist-compat.h}    |  7 +++--
+ .../{siglist-compat.c => siglist-compat.h}    |  7 +++--
+ 8 files changed, 47 insertions(+), 26 deletions(-)
+ rename stdio-common/{siglist.c => siglist-gen.c} (92%)
+ create mode 100644 stdio-common/siglist.S
+ rename sysdeps/generic/{siglist-compat.h => siglist-compat-def.h} (69%)
+ delete mode 100644 sysdeps/generic/siglist-compat.c
+ rename sysdeps/mach/hurd/{siglist-compat.c => siglist-compat.h} (86%)
+ rename sysdeps/unix/sysv/linux/{siglist-compat.c => siglist-compat.h} (87%)
+
+diff --git a/include/signal.h b/include/signal.h
+index 2a278697c1..73f18dddd7 100644
+--- a/include/signal.h
++++ b/include/signal.h
+@@ -14,10 +14,8 @@ libc_hidden_proto (__sigpause)
+ libc_hidden_proto (raise)
+ libc_hidden_proto (__libc_current_sigrtmin)
+ libc_hidden_proto (__libc_current_sigrtmax)
+-extern const char * const __sys_siglist[_NSIG];
+-libc_hidden_proto (__sys_siglist)
+-extern const char * const __sys_sigabbrev[_NSIG];
+-libc_hidden_proto (__sys_sigabbrev)
++extern const char * const __sys_siglist[_NSIG] attribute_hidden;
++extern const char * const __sys_sigabbrev[_NSIG] attribute_hidden;
+ 
+ /* Now define the internal interfaces.  */
+ extern __sighandler_t __bsd_signal (int __sig, __sighandler_t __handler);
+diff --git a/stdio-common/Makefile b/stdio-common/Makefile
+index b20a0f00a4..ee0544d9f6 100644
+--- a/stdio-common/Makefile
++++ b/stdio-common/Makefile
+@@ -78,6 +78,8 @@ tests := tstscanf test_rdwr test-popen tstgetln test-fseek \
+ generated += \
+   errlist-data-aux-shared.S \
+   errlist-data-aux.S \
++  siglist-aux-shared.S \
++  siglist-aux.S \
+   # generated
+ 
+ test-srcs = tst-unbputc tst-printf tst-printfsz-islongdouble
+@@ -117,6 +119,17 @@ $(objpfx)errlist-data-aux.S: errlist-data-gen.c
+ $(objpfx)errlist-data.os: $(objpfx)errlist-data-aux-shared.S
+ $(objpfx)errlist-data.o: $(objpfx)errlist-data-aux.S
+ 
++$(objpfx)siglist-aux-shared.S: siglist-gen.c
++	$(make-target-directory)
++	$(compile-command.c) $(pic-cppflags) $(pic-ccflag) $(no-stack-protector) -S
++
++$(objpfx)siglist-aux.S: siglist-gen.c
++	$(make-target-directory)
++	$(compile-command.c) $(pie-default) $(no-stack-protector) -S
++
++$(objpfx)siglist.os: $(objpfx)siglist-aux-shared.S
++$(objpfx)siglist.o: $(objpfx)siglist-aux.S
++
+ ifeq ($(run-built-tests),yes)
+ LOCALES := de_DE.ISO-8859-1 de_DE.UTF-8 en_US.ISO-8859-1 ja_JP.EUC-JP
+ include ../gen-locales.mk
+@@ -199,7 +212,6 @@ CFLAGS-isoc99_vfscanf.c += -fexceptions
+ CFLAGS-isoc99_vscanf.c += -fexceptions
+ CFLAGS-isoc99_fscanf.c += -fexceptions
+ CFLAGS-isoc99_scanf.c += -fexceptions
+-CFLAGS-siglist.c += $(fno-unit-at-a-time)
+ 
+ # scanf14a.c and scanf16a.c test a deprecated extension which is no
+ # longer visible under most conformance levels; see the source files
+diff --git a/stdio-common/siglist.c b/stdio-common/siglist-gen.c
+similarity index 92%
+rename from stdio-common/siglist.c
+rename to stdio-common/siglist-gen.c
+index bb88d5300f..95441b707d 100644
+--- a/stdio-common/siglist.c
++++ b/stdio-common/siglist-gen.c
+@@ -26,7 +26,6 @@ const char *const __sys_siglist[NSIG] =
+ #include <siglist.h>
+ #undef init_sig
+ };
+-libc_hidden_def (__sys_siglist)
+ 
+ const char *const __sys_sigabbrev[NSIG] =
+ {
+@@ -34,6 +33,3 @@ const char *const __sys_sigabbrev[NSIG] =
+ #include <siglist.h>
+ #undef init_sig
+ };
+-libc_hidden_def (__sys_sigabbrev)
+-
+-#include <siglist-compat.c>
+diff --git a/stdio-common/siglist.S b/stdio-common/siglist.S
+new file mode 100644
+index 0000000000..f84cdac976
+--- /dev/null
++++ b/stdio-common/siglist.S
+@@ -0,0 +1,7 @@
++#ifdef SHARED
++# include "siglist-aux-shared.S"
++#else
++# include "siglist-aux.S"
++#endif
++
++#include <siglist-compat.h>
+diff --git a/sysdeps/generic/siglist-compat.h b/sysdeps/generic/siglist-compat-def.h
+similarity index 69%
+rename from sysdeps/generic/siglist-compat.h
+rename to sysdeps/generic/siglist-compat-def.h
+index 05a0d63855..f5a1840dc3 100644
+--- a/sysdeps/generic/siglist-compat.h
++++ b/sysdeps/generic/siglist-compat-def.h
+@@ -28,20 +28,23 @@
+    sys_sigabbrev alias to __sys_sigabbrev.  Both target alias are
+    define in siglist.c.  */
+ #define DEFINE_COMPAT_SIGLIST(NUMBERSIG, VERSION) 			     \
+-  declare_symbol_alias (__ ## VERSION ## _sys_siglist,			     \
+-			__sys_siglist,					     \
+-			object,	NUMBERSIG * (ULONG_WIDTH / UCHAR_WIDTH));    \
+-  declare_symbol_alias (__ ## VERSION ## sys_siglist,			     \
+-			__sys_siglist,					     \
+-			object,	NUMBERSIG * (ULONG_WIDTH / UCHAR_WIDTH));    \
+-  declare_symbol_alias (__ ## VERSION ## _sys_sigabbrev,		     \
+-			__sys_sigabbrev,				     \
+-			object, NUMBERSIG * (ULONG_WIDTH / UCHAR_WIDTH));    \
++  declare_object_symbol_alias (__ ## VERSION ## _sys_siglist,		     \
++			       __sys_siglist,				     \
++			       NUMBERSIG * (ULONG_WIDTH / UCHAR_WIDTH))      \
++			       ASM_LINE_SEP				     \
++  declare_object_symbol_alias (__ ## VERSION ## sys_siglist,		     \
++			       __sys_siglist,				     \
++			       NUMBERSIG * (ULONG_WIDTH / UCHAR_WIDTH))      \
++			       ASM_LINE_SEP				     \
++  declare_object_symbol_alias (__ ## VERSION ## _sys_sigabbrev,		     \
++			       __sys_sigabbrev,				     \
++			       NUMBERSIG * (ULONG_WIDTH / UCHAR_WIDTH))      \
++			       ASM_LINE_SEP				     \
+   compat_symbol (libc, __## VERSION ## _sys_siglist,   _sys_siglist,	     \
+-		 VERSION);						     \
++		 VERSION) ASM_LINE_SEP					     \
+   compat_symbol (libc, __## VERSION ## sys_siglist,    sys_siglist,	     \
+-		 VERSION);						     \
++		 VERSION) ASM_LINE_SEP					     \
+   compat_symbol (libc, __## VERSION ## _sys_sigabbrev, sys_sigabbrev,	     \
+-		 VERSION);						     \
++		 VERSION)
+ 
+ #endif
+diff --git a/sysdeps/generic/siglist-compat.c b/sysdeps/generic/siglist-compat.c
+deleted file mode 100644
+index 6e25b021ab..0000000000
+--- a/sysdeps/generic/siglist-compat.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Empty.  */
+diff --git a/sysdeps/mach/hurd/siglist-compat.c b/sysdeps/mach/hurd/siglist-compat.h
+similarity index 86%
+rename from sysdeps/mach/hurd/siglist-compat.c
+rename to sysdeps/mach/hurd/siglist-compat.h
+index 5334b0885b..17bb0401aa 100644
+--- a/sysdeps/mach/hurd/siglist-compat.c
++++ b/sysdeps/mach/hurd/siglist-compat.h
+@@ -16,12 +16,15 @@
+    License along with the GNU C Library; if not, see
+    <https://www.gnu.org/licenses/>.  */
+ 
+-#include <siglist-compat.h>
++#include <siglist-compat-def.h>
++/* To get _NSIG definition.  */
++#define _SIGNAL_H
++#include <bits/signum-generic.h>
+ 
+ #if SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_1)
+ DEFINE_COMPAT_SIGLIST (33, GLIBC_2_0)
+ #endif
+ 
+ #if SHLIB_COMPAT (libc, GLIBC_2_1, GLIBC_2_32)
+-DEFINE_COMPAT_SIGLIST (NSIG, GLIBC_2_1)
++DEFINE_COMPAT_SIGLIST (_NSIG, GLIBC_2_1)
+ #endif
+diff --git a/sysdeps/unix/sysv/linux/siglist-compat.c b/sysdeps/unix/sysv/linux/siglist-compat.h
+similarity index 87%
+rename from sysdeps/unix/sysv/linux/siglist-compat.c
+rename to sysdeps/unix/sysv/linux/siglist-compat.h
+index cbc77289c0..2a9801276d 100644
+--- a/sysdeps/unix/sysv/linux/siglist-compat.c
++++ b/sysdeps/unix/sysv/linux/siglist-compat.h
+@@ -16,7 +16,10 @@
+    License along with the GNU C Library; if not, see
+    <https://www.gnu.org/licenses/>.  */
+ 
+-#include <siglist-compat.h>
++#include <siglist-compat-def.h>
++/* To get _NSIG definition.  */
++#define _SIGNAL_H
++#include <bits/signum-generic.h>
+ 
+ #if SHLIB_COMPAT (libc, GLIBC_2_0, GLIBC_2_1)
+ DEFINE_COMPAT_SIGLIST (32, GLIBC_2_0)
+@@ -27,5 +30,5 @@ DEFINE_COMPAT_SIGLIST (64, GLIBC_2_1)
+ #endif
+ 
+ #if SHLIB_COMPAT (libc, GLIBC_2_3_3, GLIBC_2_32)
+-DEFINE_COMPAT_SIGLIST (NSIG, GLIBC_2_3_3)
++DEFINE_COMPAT_SIGLIST (_NSIG, GLIBC_2_3_3)
+ #endif
+-- 
+2.37.2
+

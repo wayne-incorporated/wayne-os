@@ -1,0 +1,14 @@
+This is a temporary mitigation to b/276372121.
+
+diff --git a/perf_recorder.cc b/perf_recorder.cc
+index 3369f77..f901e26 100644
+--- a/perf_recorder.cc
++++ b/perf_recorder.cc
+@@ -122,6 +122,7 @@ std::vector<std::string> PerfRecorder::FullPerfCommand(
+     full_perf_args.insert(full_perf_args.end(),
+                           {"--", "sleep", time_string.str()});
+   } else {
++    full_perf_args.insert(full_perf_args.begin(), {"timeout", "3"});
+     // We use sudo for all commands and perf inject may complain about the input
+     // file is not owned by current user or root.
+     full_perf_args.emplace_back("-f");

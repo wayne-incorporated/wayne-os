@@ -1,0 +1,23 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":feature_explorer" ]
+}
+
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libsegmentation",
+  ]
+}
+
+executable("feature_explorer") {
+  sources = [ "feature_explorer.cc" ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  deps = [ "//libsegmentation:feature-protos" ]
+  install_path = "sbin"
+}

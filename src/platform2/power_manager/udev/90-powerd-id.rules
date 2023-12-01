@@ -1,0 +1,25 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Identify internal input devices.
+SUBSYSTEM=="input", ENV{ID_INPUT_KEYBOARD}=="1",    DRIVERS=="atkbd",        ENV{POWERD_ROLE}="internal_keyboard"
+SUBSYSTEM=="input", ENV{ID_INPUT_KEYBOARD}=="1",    DRIVERS=="cros-ec-keyb", ENV{POWERD_ROLE}="internal_keyboard"
+SUBSYSTEM=="input", ENV{ID_INPUT_TOUCHPAD}=="1",    SUBSYSTEMS=="i2c",       ENV{POWERD_ROLE}="internal_touchpad"
+SUBSYSTEM=="input", ENV{ID_INPUT_TOUCHPAD}=="1",    SUBSYSTEMS=="serio",     ENV{POWERD_ROLE}="internal_touchpad"
+SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1",       DRIVERS=="psmouse",      ENV{POWERD_ROLE}="internal_touchpad"
+SUBSYSTEM=="input", ENV{ID_INPUT_TOUCHSCREEN}=="1", SUBSYSTEMS=="i2c",       ENV{POWERD_ROLE}="internal_touchscreen"
+SUBSYSTEM=="input", ATTRS{name}=="cros_fp_input",                            ENV{POWERD_ROLE}="cros_fingerprint"
+# Product is BUSTYPE/VENDOR/PRODUCT/VERSION. Bus type 0x5 is Bluetooth
+SUBSYSTEM=="input", ENV{PRODUCT}=="5/*",                                     ENV{POWERD_ROLE}="cros_bluetooth"
+
+# Udev does not make distinction between regular tablets and stylus devices
+# complementing touchscreens, but if we see a "tablet" on an internal bus,
+# it must be such stylus.
+SUBSYSTEM=="input", ENV{ID_INPUT_TABLET}=="1",      SUBSYSTEMS=="i2c",       ENV{POWERD_ROLE}="internal_stylus"
+
+SUBSYSTEM=="input", SUBSYSTEMS=="usb", DRIVERS=="usbhid", ENV{ID_MODEL}!="*[aA]udio*", ENV{POWERD_ROLE}="external_input"
+
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", \
+  ATTR{idVendor}=="18d1", ATTR{idProduct}=="5022", \
+  ENV{POWERD_ROLE}="usb_rgb_backlight"

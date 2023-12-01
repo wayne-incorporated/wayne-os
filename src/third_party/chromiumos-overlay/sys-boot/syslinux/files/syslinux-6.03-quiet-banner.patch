@@ -1,0 +1,46 @@
+commit 71c17ac5f94c31c730e0d0c755aa9aaf1a4853fd
+Author: Jeffery Miller <jmiller@neverware.com>
+Date:   Fri Mar 31 21:53:37 2017 -0400
+
+    Quiet the diskstart banner messages.
+
+diff --git a/core/diskstart.inc b/core/diskstart.inc
+index 875b409..8b35db1 100644
+--- a/core/diskstart.inc
++++ b/core/diskstart.inc
+@@ -111,8 +111,8 @@ ldlinux_ent:
+ ;
+ ; Tell the user we got this far
+ ;
+-		mov si,early_banner
+-		call writestr_early
++		;mov si,early_banner
++		;call writestr_early
+ 
+ ;
+ ; Checksum data thus far
+@@ -139,7 +139,7 @@ print_bios:
+ 		mov byte [getlinsec.jmp+1],(getlinsec_ebios-(getlinsec.jmp+2))
+ .cbios:
+ 		mov [BIOSName],si
+-		call writestr_early
++		;call writestr_early
+ 
+ 		section .earlybss
+ 		global BIOSName
+@@ -466,11 +466,11 @@ all_read:
+ ; Let the user (and programmer!) know we got this far.  This used to be
+ ; in Sector 1, but makes a lot more sense here.
+ ;
+-		mov si,late_banner
+-		call writestr_early
++		;mov si,late_banner
++		;call writestr_early
+ 
+-		mov si,copyright_str
+-		call writestr_early
++		;mov si,copyright_str
++		;call writestr_early
+ 
+ 
+ ;

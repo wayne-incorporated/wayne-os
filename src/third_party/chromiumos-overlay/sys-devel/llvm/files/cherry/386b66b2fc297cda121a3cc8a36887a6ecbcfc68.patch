@@ -1,0 +1,960 @@
+commit 386b66b2fc297cda121a3cc8a36887a6ecbcfc68
+Author: Hans Wennborg <hans@chromium.org>
+Date:   Tue Jun 8 14:42:11 2021 +0200
+
+    Revert "3rd Reapply "[DebugInfo] Use variadic debug values to salvage BinOps and GEP instrs with non-const operands""
+    
+    > This reapplies c0f3dfb9, which was reverted following the discovery of
+    > crashes on linux kernel and chromium builds - these issues have since
+    > been fixed, allowing this patch to re-land.
+    
+    This reverts commit 36ec97f76ac0d8be76fb16ac521f55126766267d.
+    
+    The change caused non-determinism in the compiler, see comments on the code
+    review at https://reviews.llvm.org/D91722.
+    
+    Reverting to unbreak people's builds until that can be addressed.
+    
+    This also reverts the follow-up "[DebugInfo] Limit the number of values
+    that may be referenced by a dbg.value" in
+    a0bd6105d80698c53ceaa64bbe6e3b7e7bbf99ee.
+
+diff --git a/llvm/include/llvm/IR/DebugInfoMetadata.h b/llvm/include/llvm/IR/DebugInfoMetadata.h
+index 031f5c3a3914..e5d4c29ad228 100644
+--- a/llvm/include/llvm/IR/DebugInfoMetadata.h
++++ b/llvm/include/llvm/IR/DebugInfoMetadata.h
+@@ -2589,16 +2589,6 @@ public:
+   // return it's sign information.
+   llvm::Optional<SignedOrUnsignedConstant> isConstant() const;
+ 
+-  /// Return the number of unique location operands referred to (via
+-  /// DW_OP_LLVM_arg) in this expression; this is not necessarily the number of
+-  /// instances of DW_OP_LLVM_arg within the expression.
+-  /// For example, for the expression:
+-  ///   (DW_OP_LLVM_arg 0, DW_OP_LLVM_arg 1, DW_OP_plus,
+-  ///    DW_OP_LLVM_arg 0, DW_OP_mul)
+-  /// This function would return 2, as there are two unique location operands
+-  /// (0 and 1).
+-  uint64_t getNumLocationOperands() const;
+-
+   using element_iterator = ArrayRef<uint64_t>::iterator;
+ 
+   element_iterator elements_begin() const { return getElements().begin(); }
+@@ -2746,10 +2736,6 @@ public:
+   /// return true with an offset of zero.
+   bool extractIfOffset(int64_t &Offset) const;
+ 
+-  /// Returns true iff this DIExpression contains at least one instance of
+-  /// `DW_OP_LLVM_arg, n` for all n in [0, N).
+-  bool hasAllLocationOps(unsigned N) const;
+-
+   /// Checks if the last 4 elements of the expression are DW_OP_constu <DWARF
+   /// Address Space> DW_OP_swap DW_OP_xderef and extracts the <DWARF Address
+   /// Space>.
+diff --git a/llvm/include/llvm/IR/Instructions.h b/llvm/include/llvm/IR/Instructions.h
+index a008bb7cbb3c..a133267ffe9c 100644
+--- a/llvm/include/llvm/IR/Instructions.h
++++ b/llvm/include/llvm/IR/Instructions.h
+@@ -1148,9 +1148,7 @@ public:
+   /// must be at least as wide as the IntPtr type for the address space of
+   /// the base GEP pointer.
+   bool accumulateConstantOffset(const DataLayout &DL, APInt &Offset) const;
+-  bool collectOffset(const DataLayout &DL, unsigned BitWidth,
+-                     SmallDenseMap<Value *, APInt, 8> &VariableOffsets,
+-                     APInt &ConstantOffset) const;
++
+   // Methods for support type inquiry through isa, cast, and dyn_cast:
+   static bool classof(const Instruction *I) {
+     return (I->getOpcode() == Instruction::GetElementPtr);
+diff --git a/llvm/include/llvm/IR/IntrinsicInst.h b/llvm/include/llvm/IR/IntrinsicInst.h
+index 606c2b570c1b..e28544b6c097 100644
+--- a/llvm/include/llvm/IR/IntrinsicInst.h
++++ b/llvm/include/llvm/IR/IntrinsicInst.h
+@@ -204,11 +204,6 @@ public:
+ 
+   void replaceVariableLocationOp(Value *OldValue, Value *NewValue);
+   void replaceVariableLocationOp(unsigned OpIdx, Value *NewValue);
+-  /// Adding a new location operand will always result in this intrinsic using
+-  /// an ArgList, and must always be accompanied by a new expression that uses
+-  /// the new operand.
+-  void addVariableLocationOps(ArrayRef<Value *> NewValues,
+-                              DIExpression *NewExpr);
+ 
+   void setVariable(DILocalVariable *NewVar) {
+     setArgOperand(1, MetadataAsValue::get(NewVar->getContext(), NewVar));
+diff --git a/llvm/include/llvm/IR/Operator.h b/llvm/include/llvm/IR/Operator.h
+index 303539fd0bfc..03bcea3d91f6 100644
+--- a/llvm/include/llvm/IR/Operator.h
++++ b/llvm/include/llvm/IR/Operator.h
+@@ -576,12 +576,6 @@ public:
+       Type *SourceType, ArrayRef<const Value *> Index, const DataLayout &DL,
+       APInt &Offset,
+       function_ref<bool(Value &, APInt &)> ExternalAnalysis = nullptr);
+-
+-  /// Collect the offset of this GEP as a map of Values to their associated
+-  /// APInt multipliers, as well as a total Constant Offset.
+-  bool collectOffset(const DataLayout &DL, unsigned BitWidth,
+-                     SmallDenseMap<Value *, APInt, 8> &VariableOffsets,
+-                     APInt &ConstantOffset) const;
+ };
+ 
+ class PtrToIntOperator
+diff --git a/llvm/include/llvm/Transforms/Utils/Local.h b/llvm/include/llvm/Transforms/Utils/Local.h
+index 56dac033990c..9208ae8f2ad5 100644
+--- a/llvm/include/llvm/Transforms/Utils/Local.h
++++ b/llvm/include/llvm/Transforms/Utils/Local.h
+@@ -298,8 +298,7 @@ void salvageDebugInfoForDbgValues(Instruction &I,
+ /// appended to the expression. \p LocNo: the index of the location operand to
+ /// which \p I applies, should be 0 for debug info without a DIArgList.
+ DIExpression *salvageDebugInfoImpl(Instruction &I, DIExpression *DIExpr,
+-                                   bool StackVal, unsigned LocNo,
+-                                   SmallVectorImpl<Value *> &AdditionalValues);
++                                   bool StackVal, unsigned LocNo);
+ 
+ /// Point debug users of \p From to \p To or salvage them. Use this function
+ /// only when replacing all uses of \p From with \p To, with a guarantee that
+diff --git a/llvm/lib/CodeGen/AsmPrinter/DebugLocEntry.h b/llvm/lib/CodeGen/AsmPrinter/DebugLocEntry.h
+index 62ebadaf3cbe..525b839d67a0 100644
+--- a/llvm/lib/CodeGen/AsmPrinter/DebugLocEntry.h
++++ b/llvm/lib/CodeGen/AsmPrinter/DebugLocEntry.h
+@@ -121,6 +121,11 @@ public:
+     // Currently, DBG_VALUE_VAR expressions must use stack_value.
+     assert(Expr && Expr->isValid() &&
+            is_contained(Locs, dwarf::DW_OP_stack_value));
++    for (DbgValueLocEntry &Entry : ValueLocEntries) {
++      assert(!Entry.isConstantFP() && !Entry.isConstantInt() &&
++             "Constant values should only be present in non-variadic "
++             "DBG_VALUEs.");
++    }
+ #endif
+   }
+ 
+@@ -137,6 +142,11 @@ public:
+       // Currently, DBG_VALUE_VAR expressions must use stack_value.
+       assert(Expr && Expr->isValid() &&
+              is_contained(Expr->getElements(), dwarf::DW_OP_stack_value));
++      for (DbgValueLocEntry &Entry : ValueLocEntries) {
++        assert(!Entry.isConstantFP() && !Entry.isConstantInt() &&
++               "Constant values should only be present in non-variadic "
++               "DBG_VALUEs.");
++      }
+     }
+ #endif
+   }
+diff --git a/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp b/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
+index 01b06279c0f4..696a28a76e76 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
+@@ -1248,10 +1248,6 @@ void SelectionDAGBuilder::resolveDanglingDebugInfo(const Value *V,
+ }
+ 
+ void SelectionDAGBuilder::salvageUnresolvedDbgValue(DanglingDebugInfo &DDI) {
+-  // TODO: For the variadic implementation, instead of only checking the fail
+-  // state of `handleDebugValue`, we need know specifically which values were
+-  // invalid, so that we attempt to salvage only those values when processing
+-  // a DIArgList.
+   assert(!DDI.getDI()->hasArgList() &&
+          "Not implemented for variadic dbg_values");
+   Value *V = DDI.getDI()->getValue(0);
+@@ -1275,21 +1271,16 @@ void SelectionDAGBuilder::salvageUnresolvedDbgValue(DanglingDebugInfo &DDI) {
+   while (isa<Instruction>(V)) {
+     Instruction &VAsInst = *cast<Instruction>(V);
+     // Temporary "0", awaiting real implementation.
+-    SmallVector<Value *, 4> AdditionalValues;
+-    DIExpression *SalvagedExpr =
+-        salvageDebugInfoImpl(VAsInst, Expr, StackValue, 0, AdditionalValues);
++    DIExpression *NewExpr = salvageDebugInfoImpl(VAsInst, Expr, StackValue, 0);
+ 
+     // If we cannot salvage any further, and haven't yet found a suitable debug
+     // expression, bail out.
+-    // TODO: If AdditionalValues isn't empty, then the salvage can only be
+-    // represented with a DBG_VALUE_LIST, so we give up. When we have support
+-    // here for variadic dbg_values, remove that condition.
+-    if (!SalvagedExpr || !AdditionalValues.empty())
++    if (!NewExpr)
+       break;
+ 
+     // New value and expr now represent this debuginfo.
+     V = VAsInst.getOperand(0);
+-    Expr = SalvagedExpr;
++    Expr = NewExpr;
+ 
+     // Some kind of simplification occurred: check whether the operand of the
+     // salvaged debug expression can be encoded in this DAG.
+diff --git a/llvm/lib/IR/DebugInfoMetadata.cpp b/llvm/lib/IR/DebugInfoMetadata.cpp
+index 7b0dab799e1a..5e8eaacfbdc7 100644
+--- a/llvm/lib/IR/DebugInfoMetadata.cpp
++++ b/llvm/lib/IR/DebugInfoMetadata.cpp
+@@ -1251,17 +1251,6 @@ bool DIExpression::extractIfOffset(int64_t &Offset) const {
+   return false;
+ }
+ 
+-bool DIExpression::hasAllLocationOps(unsigned N) const {
+-  SmallDenseSet<uint64_t, 4> SeenOps;
+-  for (auto ExprOp : expr_ops())
+-    if (ExprOp.getOp() == dwarf::DW_OP_LLVM_arg)
+-      SeenOps.insert(ExprOp.getArg(0));
+-  for (uint64_t Idx = 0; Idx < N; ++Idx)
+-    if (!is_contained(SeenOps, Idx))
+-      return false;
+-  return true;
+-}
+-
+ const DIExpression *DIExpression::extractAddressClass(const DIExpression *Expr,
+                                                       unsigned &AddrClass) {
+   // FIXME: This seems fragile. Nothing that verifies that these elements
+@@ -1476,16 +1465,6 @@ Optional<DIExpression *> DIExpression::createFragmentExpression(
+   return DIExpression::get(Expr->getContext(), Ops);
+ }
+ 
+-uint64_t DIExpression::getNumLocationOperands() const {
+-  uint64_t Result = 0;
+-  for (auto ExprOp : expr_ops())
+-    if (ExprOp.getOp() == dwarf::DW_OP_LLVM_arg)
+-      Result = std::max(Result, ExprOp.getArg(0) + 1);
+-  assert(hasAllLocationOps(Result) &&
+-         "Expression is missing one or more location operands.");
+-  return Result;
+-}
+-
+ llvm::Optional<DIExpression::SignedOrUnsignedConstant>
+ DIExpression::isConstant() const {
+ 
+diff --git a/llvm/lib/IR/Instructions.cpp b/llvm/lib/IR/Instructions.cpp
+index f1df5001c134..f2316b609193 100644
+--- a/llvm/lib/IR/Instructions.cpp
++++ b/llvm/lib/IR/Instructions.cpp
+@@ -1798,15 +1798,6 @@ bool GetElementPtrInst::accumulateConstantOffset(const DataLayout &DL,
+   return cast<GEPOperator>(this)->accumulateConstantOffset(DL, Offset);
+ }
+ 
+-bool GetElementPtrInst::collectOffset(
+-    const DataLayout &DL, unsigned BitWidth,
+-    SmallDenseMap<Value *, APInt, 8> &VariableOffsets,
+-    APInt &ConstantOffset) const {
+-  // Delegate to the generic GEPOperator implementation.
+-  return cast<GEPOperator>(this)->collectOffset(DL, BitWidth, VariableOffsets,
+-                                                ConstantOffset);
+-}
+-
+ //===----------------------------------------------------------------------===//
+ //                           ExtractElementInst Implementation
+ //===----------------------------------------------------------------------===//
+diff --git a/llvm/lib/IR/IntrinsicInst.cpp b/llvm/lib/IR/IntrinsicInst.cpp
+index 30c7ceb3c3f0..eab250adb738 100644
+--- a/llvm/lib/IR/IntrinsicInst.cpp
++++ b/llvm/lib/IR/IntrinsicInst.cpp
+@@ -118,23 +118,6 @@ void DbgVariableIntrinsic::replaceVariableLocationOp(unsigned OpIdx,
+       0, MetadataAsValue::get(getContext(), DIArgList::get(getContext(), MDs)));
+ }
+ 
+-void DbgVariableIntrinsic::addVariableLocationOps(ArrayRef<Value *> NewValues,
+-                                                  DIExpression *NewExpr) {
+-  assert(NewExpr->hasAllLocationOps(getNumVariableLocationOps() +
+-                                    NewValues.size()) &&
+-         "NewExpr for debug variable intrinsic does not reference every "
+-         "location operand.");
+-  assert(!is_contained(NewValues, nullptr) && "New values must be non-null");
+-  setArgOperand(2, MetadataAsValue::get(getContext(), NewExpr));
+-  SmallVector<ValueAsMetadata *, 4> MDs;
+-  for (auto *VMD : location_ops())
+-    MDs.push_back(getAsMetadata(VMD));
+-  for (auto *VMD : NewValues)
+-    MDs.push_back(getAsMetadata(VMD));
+-  setArgOperand(
+-      0, MetadataAsValue::get(getContext(), DIArgList::get(getContext(), MDs)));
+-}
+-
+ Optional<uint64_t> DbgVariableIntrinsic::getFragmentSizeInBits() const {
+   if (auto Fragment = getExpression()->getFragmentInfo())
+     return Fragment->SizeInBits;
+diff --git a/llvm/lib/IR/Operator.cpp b/llvm/lib/IR/Operator.cpp
+index e030cb552275..69181f35827b 100644
+--- a/llvm/lib/IR/Operator.cpp
++++ b/llvm/lib/IR/Operator.cpp
+@@ -142,61 +142,4 @@ bool GEPOperator::accumulateConstantOffset(
+   }
+   return true;
+ }
+-
+-bool GEPOperator::collectOffset(
+-    const DataLayout &DL, unsigned BitWidth,
+-    SmallDenseMap<Value *, APInt, 8> &VariableOffsets,
+-    APInt &ConstantOffset) const {
+-  assert(BitWidth == DL.getIndexSizeInBits(getPointerAddressSpace()) &&
+-         "The offset bit width does not match DL specification.");
+-
+-  auto CollectConstantOffset = [&](APInt Index, uint64_t Size) {
+-    Index = Index.sextOrTrunc(BitWidth);
+-    APInt IndexedSize = APInt(BitWidth, Size);
+-    ConstantOffset += Index * IndexedSize;
+-  };
+-
+-  for (gep_type_iterator GTI = gep_type_begin(this), GTE = gep_type_end(this);
+-       GTI != GTE; ++GTI) {
+-    // Scalable vectors are multiplied by a runtime constant.
+-    bool ScalableType = isa<ScalableVectorType>(GTI.getIndexedType());
+-
+-    Value *V = GTI.getOperand();
+-    StructType *STy = GTI.getStructTypeOrNull();
+-    // Handle ConstantInt if possible.
+-    if (auto ConstOffset = dyn_cast<ConstantInt>(V)) {
+-      if (ConstOffset->isZero())
+-        continue;
+-      // If the type is scalable and the constant is not zero (vscale * n * 0 =
+-      // 0) bailout.
+-      // TODO: If the runtime value is accessible at any point before DWARF
+-      // emission, then we could potentially keep a forward reference to it
+-      // in the debug value to be filled in later.
+-      if (ScalableType)
+-        return false;
+-      // Handle a struct index, which adds its field offset to the pointer.
+-      if (STy) {
+-        unsigned ElementIdx = ConstOffset->getZExtValue();
+-        const StructLayout *SL = DL.getStructLayout(STy);
+-        // Element offset is in bytes.
+-        CollectConstantOffset(APInt(BitWidth, SL->getElementOffset(ElementIdx)),
+-                              1);
+-        continue;
+-      }
+-      CollectConstantOffset(ConstOffset->getValue(),
+-                            DL.getTypeAllocSize(GTI.getIndexedType()));
+-      continue;
+-    }
+-
+-    if (STy || ScalableType)
+-      return false;
+-    // Insert an initial offset of 0 for V iff none exists already, then
+-    // increment the offset by IndexedSize.
+-    VariableOffsets.try_emplace(V, BitWidth, 0);
+-    APInt IndexedSize =
+-        APInt(BitWidth, DL.getTypeAllocSize(GTI.getIndexedType()));
+-    VariableOffsets[V] += IndexedSize;
+-  }
+-  return true;
+-}
+ } // namespace llvm
+diff --git a/llvm/lib/Transforms/Coroutines/CoroFrame.cpp b/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
+index 18f8e5e61a40..51cf5b22021c 100644
+--- a/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
++++ b/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
+@@ -2467,15 +2467,10 @@ void coro::salvageDebugInfo(
+     } else if (auto *StInst = dyn_cast<StoreInst>(Storage)) {
+       Storage = StInst->getOperand(0);
+     } else if (auto *GEPInst = dyn_cast<GetElementPtrInst>(Storage)) {
+-      SmallVector<Value *> AdditionalValues;
+-      DIExpression *SalvagedExpr = llvm::salvageDebugInfoImpl(
+-          *GEPInst, Expr,
+-          /*WithStackValue=*/false, 0, AdditionalValues);
+-      // Debug declares cannot currently handle additional location
+-      // operands.
+-      if (!SalvagedExpr || !AdditionalValues.empty())
+-        break;
+-      Expr = SalvagedExpr;
++      Expr = llvm::salvageDebugInfoImpl(*GEPInst, Expr,
++                                        /*WithStackValue=*/false, 0);
++      if (!Expr)
++        return;
+       Storage = GEPInst->getOperand(0);
+     } else if (auto *BCInst = dyn_cast<llvm::BitCastInst>(Storage))
+       Storage = BCInst->getOperand(0);
+diff --git a/llvm/lib/Transforms/Utils/Local.cpp b/llvm/lib/Transforms/Utils/Local.cpp
+index eeaf43a4a55d..13a2f30442cc 100644
+--- a/llvm/lib/Transforms/Utils/Local.cpp
++++ b/llvm/lib/Transforms/Utils/Local.cpp
+@@ -1724,9 +1724,6 @@ void llvm::salvageDebugInfo(Instruction &I) {
+ 
+ void llvm::salvageDebugInfoForDbgValues(
+     Instruction &I, ArrayRef<DbgVariableIntrinsic *> DbgUsers) {
+-  // This is an arbitrary chosen limit on the maximum number of values we can
+-  // salvage up to in a DIArgList, used for performance reasons.
+-  const unsigned MaxDebugArgs = 16;
+   bool Salvaged = false;
+ 
+   for (auto *DII : DbgUsers) {
+@@ -1739,30 +1736,17 @@ void llvm::salvageDebugInfoForDbgValues(
+         is_contained(DIILocation, &I) &&
+         "DbgVariableIntrinsic must use salvaged instruction as its location");
+     unsigned LocNo = std::distance(DIILocation.begin(), find(DIILocation, &I));
+-    SmallVector<Value *, 4> AdditionalValues;
+-    DIExpression *SalvagedExpr = salvageDebugInfoImpl(
+-        I, DII->getExpression(), StackValue, LocNo, AdditionalValues);
++
++    DIExpression *DIExpr =
++        salvageDebugInfoImpl(I, DII->getExpression(), StackValue, LocNo);
+ 
+     // salvageDebugInfoImpl should fail on examining the first element of
+     // DbgUsers, or none of them.
+-    if (!SalvagedExpr)
++    if (!DIExpr)
+       break;
+ 
+     DII->replaceVariableLocationOp(&I, I.getOperand(0));
+-    if (AdditionalValues.empty()) {
+-      DII->setExpression(SalvagedExpr);
+-    } else if (isa<DbgValueInst>(DII) &&
+-               DII->getNumVariableLocationOps() + AdditionalValues.size() <=
+-                   MaxDebugArgs) {
+-      DII->addVariableLocationOps(AdditionalValues, SalvagedExpr);
+-    } else {
+-      // Do not salvage using DIArgList for dbg.addr/dbg.declare, as it is
+-      // currently only valid for stack value expressions.
+-      // Also do not salvage if the resulting DIArgList would contain an
+-      // unreasonably large number of values.
+-      Value *Undef = UndefValue::get(I.getOperand(0)->getType());
+-      DII->replaceVariableLocationOp(I.getOperand(0), Undef);
+-    }
++    DII->setExpression(DIExpr);
+     LLVM_DEBUG(dbgs() << "SALVAGE: " << *DII << '\n');
+     Salvaged = true;
+   }
+@@ -1777,27 +1761,12 @@ void llvm::salvageDebugInfoForDbgValues(
+ }
+ 
+ bool getSalvageOpsForGEP(GetElementPtrInst *GEP, const DataLayout &DL,
+-                         uint64_t CurrentLocOps,
+-                         SmallVectorImpl<uint64_t> &Opcodes,
+-                         SmallVectorImpl<Value *> &AdditionalValues) {
++                         SmallVectorImpl<uint64_t> &Opcodes) {
+   unsigned BitWidth = DL.getIndexSizeInBits(GEP->getPointerAddressSpace());
+-  // Rewrite a GEP into a DIExpression.
+-  SmallDenseMap<Value *, APInt, 8> VariableOffsets;
++  // Rewrite a constant GEP into a DIExpression.
+   APInt ConstantOffset(BitWidth, 0);
+-  if (!GEP->collectOffset(DL, BitWidth, VariableOffsets, ConstantOffset))
++  if (!GEP->accumulateConstantOffset(DL, ConstantOffset))
+     return false;
+-  if (!VariableOffsets.empty() && !CurrentLocOps) {
+-    Opcodes.insert(Opcodes.begin(), {dwarf::DW_OP_LLVM_arg, 0});
+-    CurrentLocOps = 1;
+-  }
+-  for (auto Offset : VariableOffsets) {
+-    AdditionalValues.push_back(Offset.first);
+-    assert(Offset.second.isStrictlyPositive() &&
+-           "Expected strictly positive multiplier for offset.");
+-    Opcodes.append({dwarf::DW_OP_LLVM_arg, CurrentLocOps++, dwarf::DW_OP_constu,
+-                    Offset.second.getZExtValue(), dwarf::DW_OP_mul,
+-                    dwarf::DW_OP_plus});
+-  }
+   DIExpression::appendOffset(Opcodes, ConstantOffset.getSExtValue());
+   return true;
+ }
+@@ -1832,35 +1801,23 @@ uint64_t getDwarfOpForBinOp(Instruction::BinaryOps Opcode) {
+   }
+ }
+ 
+-bool getSalvageOpsForBinOp(BinaryOperator *BI, uint64_t CurrentLocOps,
+-                           SmallVectorImpl<uint64_t> &Opcodes,
+-                           SmallVectorImpl<Value *> &AdditionalValues) {
+-  // Handle binary operations with constant integer operands as a special case.
++bool getSalvageOpsForBinOp(BinaryOperator *BI,
++                           SmallVectorImpl<uint64_t> &Opcodes) {
++  // Rewrite binary operations with constant integer operands.
+   auto *ConstInt = dyn_cast<ConstantInt>(BI->getOperand(1));
+-  // Values wider than 64 bits cannot be represented within a DIExpression.
+-  if (ConstInt && ConstInt->getBitWidth() > 64)
++  if (!ConstInt || ConstInt->getBitWidth() > 64)
+     return false;
+-
++  uint64_t Val = ConstInt->getSExtValue();
+   Instruction::BinaryOps BinOpcode = BI->getOpcode();
+-  // Push any Constant Int operand onto the expression stack.
+-  if (ConstInt) {
+-    uint64_t Val = ConstInt->getSExtValue();
+-    // Add or Sub Instructions with a constant operand can potentially be
+-    // simplified.
+-    if (BinOpcode == Instruction::Add || BinOpcode == Instruction::Sub) {
+-      uint64_t Offset = BinOpcode == Instruction::Add ? Val : -int64_t(Val);
+-      DIExpression::appendOffset(Opcodes, Offset);
+-      return true;
+-    }
+-    Opcodes.append({dwarf::DW_OP_constu, Val});
+-  } else {
+-    if (!CurrentLocOps) {
+-      Opcodes.append({dwarf::DW_OP_LLVM_arg, 0});
+-      CurrentLocOps = 1;
+-    }
+-    Opcodes.append({dwarf::DW_OP_LLVM_arg, CurrentLocOps});
+-    AdditionalValues.push_back(BI->getOperand(1));
++  // Add or Sub Instructions with a constant operand can potentially be
++  // simplified.
++  if (BinOpcode == Instruction::Add || BinOpcode == Instruction::Sub) {
++    uint64_t Offset = BinOpcode == Instruction::Add ? Val : -int64_t(Val);
++    DIExpression::appendOffset(Opcodes, Offset);
++    return true;
+   }
++  // Add constant int operand to expression stack.
++  Opcodes.append({dwarf::DW_OP_constu, Val});
+ 
+   // Add salvaged binary operator to expression stack, if it has a valid
+   // representation in a DIExpression.
+@@ -1872,11 +1829,9 @@ bool getSalvageOpsForBinOp(BinaryOperator *BI, uint64_t CurrentLocOps,
+   return true;
+ }
+ 
+-DIExpression *
+-llvm::salvageDebugInfoImpl(Instruction &I, DIExpression *SrcDIExpr,
+-                           bool WithStackValue, unsigned LocNo,
+-                           SmallVectorImpl<Value *> &AdditionalValues) {
+-  uint64_t CurrentLocOps = SrcDIExpr->getNumLocationOperands();
++DIExpression *llvm::salvageDebugInfoImpl(Instruction &I,
++                                         DIExpression *SrcDIExpr,
++                                         bool WithStackValue, unsigned LocNo) {
+   auto &M = *I.getModule();
+   auto &DL = M.getDataLayout();
+ 
+@@ -1890,7 +1845,7 @@ llvm::salvageDebugInfoImpl(Instruction &I, DIExpression *SrcDIExpr,
+   };
+ 
+   // initializer-list helper for applying operators to the source DIExpression.
+-  auto applyOps = [&](ArrayRef<uint64_t> Opcodes) {
++  auto applyOps = [&](ArrayRef<uint64_t> Opcodes) -> DIExpression * {
+     SmallVector<uint64_t, 8> Ops(Opcodes.begin(), Opcodes.end());
+     return doSalvage(Ops);
+   };
+@@ -1916,15 +1871,15 @@ llvm::salvageDebugInfoImpl(Instruction &I, DIExpression *SrcDIExpr,
+ 
+   SmallVector<uint64_t, 8> Ops;
+   if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+-    if (getSalvageOpsForGEP(GEP, DL, CurrentLocOps, Ops, AdditionalValues))
++    if (getSalvageOpsForGEP(GEP, DL, Ops))
+       return doSalvage(Ops);
+   } else if (auto *BI = dyn_cast<BinaryOperator>(&I)) {
+-    if (getSalvageOpsForBinOp(BI, CurrentLocOps, Ops, AdditionalValues))
++    if (getSalvageOpsForBinOp(BI, Ops))
+       return doSalvage(Ops);
+   }
+-  // *Not* to do: we should not attempt to salvage load instructions,
+-  // because the validity and lifetime of a dbg.value containing
+-  // DW_OP_deref becomes difficult to analyze. See PR40628 for examples.
++    // *Not* to do: we should not attempt to salvage load instructions,
++    // because the validity and lifetime of a dbg.value containing
++    // DW_OP_deref becomes difficult to analyze. See PR40628 for examples.
+   return nullptr;
+ }
+ 
+diff --git a/llvm/test/DebugInfo/NVPTX/debug-info.ll b/llvm/test/DebugInfo/NVPTX/debug-info.ll
+index 15ea41e8ebdd..08a7e037ec49 100644
+--- a/llvm/test/DebugInfo/NVPTX/debug-info.ll
++++ b/llvm/test/DebugInfo/NVPTX/debug-info.ll
+@@ -702,12 +702,12 @@ if.end:                                           ; preds = %if.then, %entry
+ ; CHECK-NEXT:	}
+ ; CHECK-NEXT:	.section	.debug_info
+ ; CHECK-NEXT:	{
+-; CHECK-NEXT:.b32 10034                              // Length of Unit
++; CHECK-NEXT:.b32 10029                              // Length of Unit
+ ; CHECK-NEXT:.b8 2                                   // DWARF version number
+ ; CHECK-NEXT:.b8 0
+ ; CHECK-NEXT:.b32 .debug_abbrev                      // Offset Into Abbrev. Section
+ ; CHECK-NEXT:.b8 8                                   // Address Size (in bytes)
+-; CHECK-NEXT:.b8 1                                   // Abbrev [1] 0xb:0x272b DW_TAG_compile_unit
++; CHECK-NEXT:.b8 1                                   // Abbrev [1] 0xb:0x2726 DW_TAG_compile_unit
+ ; CHECK-NEXT:.b8 0                                   // DW_AT_producer
+ ; CHECK-NEXT:.b8 4                                   // DW_AT_language
+ ; CHECK-NEXT:.b8 0
+@@ -8306,7 +8306,7 @@ if.end:                                           ; preds = %if.then, %entry
+ ; CHECK-NEXT:.b8 3                                   // DW_AT_decl_line
+ ; CHECK-NEXT:.b32 3345                               // DW_AT_type
+ ; CHECK-NEXT:.b8 0                                   // End Of Children Mark
+-; CHECK-NEXT:.b8 40                                  // Abbrev [40] 0x2671:0xc4 DW_TAG_subprogram
++; CHECK-NEXT:.b8 40                                  // Abbrev [40] 0x2671:0xbf DW_TAG_subprogram
+ ; CHECK-NEXT:.b64 Lfunc_begin0                       // DW_AT_low_pc
+ ; CHECK-NEXT:.b64 Lfunc_end0                         // DW_AT_high_pc
+ ; CHECK-NEXT:.b8 1                                   // DW_AT_frame_base
+@@ -8386,7 +8386,7 @@ if.end:                                           ; preds = %if.then, %entry
+ ; CHECK-NEXT:.b8 12                                  // DW_AT_call_file
+ ; CHECK-NEXT:.b8 6                                   // DW_AT_call_line
+ ; CHECK-NEXT:.b8 37                                  // DW_AT_call_column
+-; CHECK-NEXT:.b8 43                                  // Abbrev [43] 0x2711:0x23 DW_TAG_inlined_subroutine
++; CHECK-NEXT:.b8 43                                  // Abbrev [43] 0x2711:0x1e DW_TAG_inlined_subroutine
+ ; CHECK-NEXT:.b32 9791                               // DW_AT_abstract_origin
+ ; CHECK-NEXT:.b64 Ltmp9                              // DW_AT_low_pc
+ ; CHECK-NEXT:.b64 Ltmp10                             // DW_AT_high_pc
+@@ -8395,8 +8395,6 @@ if.end:                                           ; preds = %if.then, %entry
+ ; CHECK-NEXT:.b8 5                                   // DW_AT_call_column
+ ; CHECK-NEXT:.b8 44                                  // Abbrev [44] 0x2729:0x5 DW_TAG_formal_parameter
+ ; CHECK-NEXT:.b32 9820                               // DW_AT_abstract_origin
+-; CHECK-NEXT:.b8 44                                  // Abbrev [44] 0x272e:0x5 DW_TAG_formal_parameter
+-; CHECK-NEXT:.b32 9829                               // DW_AT_abstract_origin
+ ; CHECK-NEXT:.b8 0                                   // End Of Children Mark
+ ; CHECK-NEXT:.b8 0                                   // End Of Children Mark
+ ; CHECK-NEXT:.b8 0                                   // End Of Children Mark
+diff --git a/llvm/test/DebugInfo/limit-arglist-size.ll b/llvm/test/DebugInfo/limit-arglist-size.ll
+deleted file mode 100644
+index 951cc0e1c3cc..000000000000
+--- a/llvm/test/DebugInfo/limit-arglist-size.ll
++++ /dev/null
+@@ -1,63 +0,0 @@
+-; RUN: opt -S -instcombine %s -o - | FileCheck %s
+-
+-; For performance reasons, we currently limit the number of values that can be
+-; referenced by a dbg.value to 16. This test checks that we do not exceed this
+-; limit during salvaging.
+-
+-; CHECK: DIArgList(i32 undef
+-; CHECK-NOT: DW_OP_LLVM_arg, 16
+-
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-unknown-linux-gnu"
+-
+-define i32 @_Z3foov() local_unnamed_addr !dbg !9 {
+-entry:
+-  %call = call i32 @_Z3barv(), !dbg !14
+-  %call1 = call i32 @_Z3barv(), !dbg !14
+-  %add = add nsw i32 %call, %call1, !dbg !14
+-  %call2 = call i32 @_Z3barv(), !dbg !14
+-  %call4 = call i32 @_Z3barv(), !dbg !14
+-  %call6 = call i32 @_Z3barv(), !dbg !14
+-  %call8 = call i32 @_Z3barv(), !dbg !14
+-  %call10 = call i32 @_Z3barv(), !dbg !14
+-  %call12 = call i32 @_Z3barv(), !dbg !14
+-  %call14 = call i32 @_Z3barv(), !dbg !14
+-  %call16 = call i32 @_Z3barv(), !dbg !14
+-  %call18 = call i32 @_Z3barv(), !dbg !14
+-  %call20 = call i32 @_Z3barv(), !dbg !14
+-  %call22 = call i32 @_Z3barv(), !dbg !14
+-  %call24 = call i32 @_Z3barv(), !dbg !14
+-  %call26 = call i32 @_Z3barv(), !dbg !14
+-  %call28 = call i32 @_Z3barv(), !dbg !14
+-  %call30 = call i32 @_Z3barv(), !dbg !14
+-  call void @llvm.dbg.value(metadata !DIArgList(i32 %add, i32 %call30, i32 %call28, i32 %call26, i32 %call24, i32 %call22, i32 %call20, i32 %call18, i32 %call16, i32 %call14, i32 %call12, i32 %call10, i32 %call8, i32 %call6, i32 %call4, i32 %call2), metadata !15, metadata !DIExpression(DW_OP_LLVM_arg, 0, DW_OP_LLVM_arg, 15, DW_OP_plus, DW_OP_LLVM_arg, 14, DW_OP_plus, DW_OP_LLVM_arg, 13, DW_OP_plus, DW_OP_LLVM_arg, 12, DW_OP_plus, DW_OP_LLVM_arg, 11, DW_OP_plus, DW_OP_LLVM_arg, 10, DW_OP_plus, DW_OP_LLVM_arg, 9, DW_OP_plus, DW_OP_LLVM_arg, 8, DW_OP_plus, DW_OP_LLVM_arg, 7, DW_OP_plus, DW_OP_LLVM_arg, 6, DW_OP_plus, DW_OP_LLVM_arg, 5, DW_OP_plus, DW_OP_LLVM_arg, 4, DW_OP_plus, DW_OP_LLVM_arg, 3, DW_OP_plus, DW_OP_LLVM_arg, 2, DW_OP_plus, DW_OP_LLVM_arg, 1, DW_OP_plus, DW_OP_stack_value)), !dbg !16
+-  %call32 = call i32 @_Z3barv(), !dbg !17
+-  ret i32 %call32, !dbg !17
+-}
+-
+-declare dso_local i32 @_Z3barv() local_unnamed_addr
+-
+-declare void @llvm.dbg.value(metadata, metadata, metadata)
+-
+-!llvm.dbg.cu = !{!0}
+-!llvm.module.flags = !{!3, !4, !5, !6, !7}
+-!llvm.ident = !{!8}
+-
+-!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, file: !1, producer: "clang version 13.0.0", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, splitDebugInlining: false, nameTableKind: None)
+-!1 = !DIFile(filename: "limit-arglist-size.cpp", directory: "/")
+-!2 = !{}
+-!3 = !{i32 7, !"Dwarf Version", i32 4}
+-!4 = !{i32 2, !"Debug Info Version", i32 3}
+-!5 = !{i32 1, !"wchar_size", i32 4}
+-!6 = !{i32 7, !"uwtable", i32 1}
+-!7 = !{i32 7, !"frame-pointer", i32 2}
+-!8 = !{!"clang version 13.0.0"}
+-!9 = distinct !DISubprogram(name: "foo", linkageName: "_Z3foov", scope: !10, file: !10, line: 3, type: !11, scopeLine: 3, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !2)
+-!10 = !DIFile(filename: "./limit-arglist-size.cpp", directory: "/")
+-!11 = !DISubroutineType(types: !12)
+-!12 = !{!13}
+-!13 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+-!14 = !DILocation(line: 4, scope: !9)
+-!15 = !DILocalVariable(name: "v16", scope: !9, file: !10, line: 4, type: !13)
+-!16 = !DILocation(line: 0, scope: !9)
+-!17 = !DILocation(line: 5, scope: !9)
+diff --git a/llvm/test/DebugInfo/salvage-gep.ll b/llvm/test/DebugInfo/salvage-gep.ll
+deleted file mode 100644
+index 6c31b0ff61de..000000000000
+--- a/llvm/test/DebugInfo/salvage-gep.ll
++++ /dev/null
+@@ -1,56 +0,0 @@
+-; RUN: opt %s -dce -S | FileCheck %s
+-
+-; Tests the salvaging of GEP instructions, specifically struct indexing and
+-; non-constant array indexing.
+-
+-%struct.S = type { i32, i32 }
+-
+-; CHECK: call void @llvm.dbg.value(metadata !DIArgList(%struct.S* %ptr, i64 %offset),
+-; CHECK-SAME: ![[VAR_OFFSET_PTR:[0-9]+]],
+-; CHECK-SAME: !DIExpression(DW_OP_LLVM_arg, 0, DW_OP_LLVM_arg, 1, DW_OP_constu, 8, DW_OP_mul, DW_OP_plus, DW_OP_plus_uconst, 4, DW_OP_stack_value))
+-
+-; CHECK: ![[VAR_OFFSET_PTR]] = !DILocalVariable(name: "offset_ptr"
+-
+-define void @"?foo@@YAXPEAUS@@_J@Z"(%struct.S* %ptr, i64 %offset) !dbg !8 {
+-entry:
+-  call void @llvm.dbg.value(metadata i64 %offset, metadata !20, metadata !DIExpression()), !dbg !24
+-  call void @llvm.dbg.value(metadata %struct.S* %ptr, metadata !21, metadata !DIExpression()), !dbg !24
+-  %arrayidx = getelementptr inbounds %struct.S, %struct.S* %ptr, i64 %offset, !dbg !25
+-  %b = getelementptr inbounds %struct.S, %struct.S* %arrayidx, i32 0, i32 1, !dbg !25
+-  call void @llvm.dbg.value(metadata i32* %b, metadata !22, metadata !DIExpression()), !dbg !24
+-  ret void, !dbg !26
+-}
+-
+-declare void @llvm.dbg.value(metadata, metadata, metadata)
+-
+-!llvm.dbg.cu = !{!0}
+-!llvm.module.flags = !{!3, !4, !5, !6}
+-!llvm.ident = !{!7}
+-
+-!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 11.0.0", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, nameTableKind: None)
+-!1 = !DIFile(filename: "salvage-gep.cpp", directory: "/")
+-!2 = !{}
+-!3 = !{i32 2, !"CodeView", i32 1}
+-!4 = !{i32 2, !"Debug Info Version", i32 3}
+-!5 = !{i32 1, !"wchar_size", i32 2}
+-!6 = !{i32 7, !"PIC Level", i32 2}
+-!7 = !{!"clang version 11.0.0"}
+-!8 = distinct !DISubprogram(name: "foo", linkageName: "?foo@@YAXPEAUS@@_J@Z", scope: !9, file: !9, line: 7, type: !10, scopeLine: 7, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !19)
+-!9 = !DIFile(filename: ".\\salvage-gep.cpp", directory: "/")
+-!10 = !DISubroutineType(types: !11)
+-!11 = !{null, !12, !18}
+-!12 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !13, size: 64)
+-!13 = distinct !DICompositeType(tag: DW_TAG_structure_type, name: "S", file: !9, line: 2, size: 64, flags: DIFlagTypePassByValue, elements: !14, identifier: ".?AUS@@")
+-!14 = !{!15, !17}
+-!15 = !DIDerivedType(tag: DW_TAG_member, name: "a", scope: !13, file: !9, line: 3, baseType: !16, size: 32)
+-!16 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+-!17 = !DIDerivedType(tag: DW_TAG_member, name: "b", scope: !13, file: !9, line: 4, baseType: !16, size: 32, offset: 32)
+-!18 = !DIBasicType(name: "long long int", size: 64, encoding: DW_ATE_signed)
+-!19 = !{!20, !21, !22}
+-!20 = !DILocalVariable(name: "offset", arg: 2, scope: !8, file: !9, line: 7, type: !18)
+-!21 = !DILocalVariable(name: "ptr", arg: 1, scope: !8, file: !9, line: 7, type: !12)
+-!22 = !DILocalVariable(name: "offset_ptr", scope: !8, file: !9, line: 8, type: !23)
+-!23 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !16, size: 64)
+-!24 = !DILocation(line: 0, scope: !8)
+-!25 = !DILocation(line: 8, scope: !8)
+-!26 = !DILocation(line: 9, scope: !8)
+diff --git a/llvm/test/DebugInfo/salvage-nonconst-binop.ll b/llvm/test/DebugInfo/salvage-nonconst-binop.ll
+deleted file mode 100644
+index b470bc1ad2a9..000000000000
+--- a/llvm/test/DebugInfo/salvage-nonconst-binop.ll
++++ /dev/null
+@@ -1,45 +0,0 @@
+-; RUN: opt %s -dce -S | FileCheck %s
+-
+-; Tests the salvaging of binary operators that use more than one non-constant
+-; SSA value.
+-
+-; CHECK: call void @llvm.dbg.value(metadata !DIArgList(i32 %a, i32 %b),
+-; CHECK-SAME: ![[VAR_C:[0-9]+]],
+-; CHECK-SAME: !DIExpression(DW_OP_LLVM_arg, 0, DW_OP_LLVM_arg, 1, DW_OP_plus, DW_OP_stack_value))
+-
+-; CHECK: ![[VAR_C]] = !DILocalVariable(name: "c"
+-
+-define i32 @"?multiply@@YAHHH@Z"(i32 %a, i32 %b) !dbg !8 {
+-entry:
+-  call void @llvm.dbg.value(metadata i32 %b, metadata !12, metadata !DIExpression()), !dbg !13
+-  call void @llvm.dbg.value(metadata i32 %a, metadata !14, metadata !DIExpression()), !dbg !13
+-  %add = add nsw i32 %a, %b, !dbg !15
+-  call void @llvm.dbg.value(metadata i32 %add, metadata !16, metadata !DIExpression()), !dbg !13
+-  %mul = mul nsw i32 %a, %b, !dbg !17
+-  ret i32 %mul, !dbg !17
+-}
+-
+-declare void @llvm.dbg.value(metadata, metadata, metadata)
+-
+-!llvm.dbg.cu = !{!0}
+-!llvm.module.flags = !{!3, !4, !5, !6}
+-!llvm.ident = !{!7}
+-
+-!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 11.0.0", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, nameTableKind: None)
+-!1 = !DIFile(filename: "test.cpp", directory: "/")
+-!2 = !{}
+-!3 = !{i32 2, !"CodeView", i32 1}
+-!4 = !{i32 2, !"Debug Info Version", i32 3}
+-!5 = !{i32 1, !"wchar_size", i32 2}
+-!6 = !{i32 7, !"PIC Level", i32 2}
+-!7 = !{!"clang version 11.0.0"}
+-!8 = distinct !DISubprogram(name: "multiply", linkageName: "?multiply@@YAHHH@Z", scope: !1, file: !1, line: 1, type: !9, scopeLine: 1, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !2)
+-!9 = !DISubroutineType(types: !10)
+-!10 = !{!11, !11, !11}
+-!11 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+-!12 = !DILocalVariable(name: "b", arg: 2, scope: !8, file: !1, line: 1, type: !11)
+-!13 = !DILocation(line: 0, scope: !8)
+-!14 = !DILocalVariable(name: "a", arg: 1, scope: !8, file: !1, line: 1, type: !11)
+-!15 = !DILocation(line: 2, scope: !8)
+-!16 = !DILocalVariable(name: "c", scope: !8, file: !1, line: 2, type: !11)
+-!17 = !DILocation(line: 3, scope: !8)
+diff --git a/llvm/test/Transforms/InstCombine/debuginfo-sink.ll b/llvm/test/Transforms/InstCombine/debuginfo-sink.ll
+index 3fb27637022a..5a8cc78b08c2 100644
+--- a/llvm/test/Transforms/InstCombine/debuginfo-sink.ll
++++ b/llvm/test/Transforms/InstCombine/debuginfo-sink.ll
+@@ -33,25 +33,23 @@ sink1:
+ ; value range.
+ 
+ ; CHECK-LABEL: define i32 @bar(
+-; CHECK:       call void @llvm.dbg.value(metadata <vscale x 4 x i32>* undef,
++; CHECK:       call void @llvm.dbg.value(metadata i32* undef,
+ ; CHECK-NEXT:  br label %sink2
+ 
+-define i32 @bar(<vscale x 4 x i32>* %a, i32 %b) !dbg !70 {
++define i32 @bar(i32 *%a, i32 %b) !dbg !70 {
+ entry:
+-  %gep = getelementptr <vscale x 4 x i32>, <vscale x 4 x i32>* %a, i32 %b
+-  call void @llvm.dbg.value(metadata <vscale x 4 x i32>* %gep, metadata !73, metadata !12), !dbg !74
++  %gep = getelementptr i32, i32 *%a, i32 %b
++  call void @llvm.dbg.value(metadata i32* %gep, metadata !73, metadata !12), !dbg !74
+   br label %sink2
+ 
+ sink2:
+ ; CHECK-LABEL: sink2:
+-; CHECK:       call void @llvm.dbg.value(metadata <vscale x 4 x i32>* %gep,
++; CHECK:       call void @llvm.dbg.value(metadata i32* %gep,
+ ; CHECK-SAME:                    metadata !{{[0-9]+}}, metadata !DIExpression())
+ ; CHECK-NEXT:  load
+-; CHECK-NEXT:  extractelement
+ ; CHECK-NEXT:  ret
+-  %0 = load <vscale x 4 x i32>, <vscale x 4 x i32>* %gep
+-  %extract = extractelement <vscale x 4 x i32> %0, i32 1
+-  ret i32 %extract
++  %0 = load i32, i32* %gep
++  ret i32 %0
+ }
+ 
+ ; This GEP is sunk, and has multiple debug uses in the same block. Check that
+diff --git a/llvm/test/Transforms/Reassociate/undef_intrinsics_when_deleting_instructions.ll b/llvm/test/Transforms/Reassociate/undef_intrinsics_when_deleting_instructions.ll
+index 349da85cc80f..98c51c5cf8bb 100644
+--- a/llvm/test/Transforms/Reassociate/undef_intrinsics_when_deleting_instructions.ll
++++ b/llvm/test/Transforms/Reassociate/undef_intrinsics_when_deleting_instructions.ll
+@@ -1,73 +1,95 @@
+-; RUN: opt < %s -reassociate -S | FileCheck %s
+-
+-; Check that reassociate pass now undefs debug intrinsics that reference a value
+-; that gets dropped and cannot be salvaged.
+-
+-; CHECK-NOT: %add = fadd fast float %a, %b
+-; CHECK: call void @llvm.dbg.value(metadata float undef, metadata [[VAR_X:![0-9]+]], metadata !DIExpression())
+-
+-; CHECK-LABEL: if.then:
+-; CHECK-NOT: %add1 = fadd fast float %add, %c
+-; CHECK: call void @llvm.dbg.value(metadata float undef, metadata [[VAR_Y:![0-9]+]], metadata !DIExpression())
+-; CHECK-LABEL: !0 =
+-; CHECK-DAG: [[VAR_Y]] = !DILocalVariable(name: "y"
+-; CHECK-DAG: [[VAR_X]] = !DILocalVariable(name: "x"
+-
+-define float @"?foo@@YAMMMMM@Z"(float %a, float %b, float %c, float %d) !dbg !8 {
+-entry:
+-  call void @llvm.dbg.value(metadata float %d, metadata !12, metadata !DIExpression()), !dbg !13
+-  call void @llvm.dbg.value(metadata float %c, metadata !14, metadata !DIExpression()), !dbg !13
+-  call void @llvm.dbg.value(metadata float %b, metadata !15, metadata !DIExpression()), !dbg !13
+-  call void @llvm.dbg.value(metadata float %a, metadata !16, metadata !DIExpression()), !dbg !13
+-  %add = fadd fast float %a, %b, !dbg !17
+-  call void @llvm.dbg.value(metadata float %add, metadata !18, metadata !DIExpression()), !dbg !13
+-  %cmp = fcmp fast oeq float %d, 4.000000e+00, !dbg !19
+-  br i1 %cmp, label %if.then, label %return, !dbg !19
++; RUN: opt < %s -reassociate -S | FileCheck %s
+ 
+-if.then:                                          ; preds = %entry
+-  %add1 = fadd fast float %add, %c, !dbg !20
+-  call void @llvm.dbg.value(metadata float %add1, metadata !23, metadata !DIExpression()), !dbg !24
+-  %sub = fsub fast float %add, 1.200000e+01, !dbg !25
+-  %sub2 = fsub fast float %add1, %sub, !dbg !25
+-  %mul = fmul fast float %sub2, 2.000000e+01, !dbg !25
+-  %div = fdiv fast float %mul, 3.000000e+00, !dbg !25
+-  br label %return, !dbg !25
++; Check that reassociate pass now undefs debug intrinsics that reference a value
++; that gets dropped and cannot be salvaged.
+ 
+-return:                                           ; preds = %entry, %if.then
+-  %retval.0 = phi float [ %div, %if.then ], [ 0.000000e+00, %entry ], !dbg !13
+-  ret float %retval.0, !dbg !26
++define hidden i32 @main() local_unnamed_addr {
++entry:
++  %foo = alloca i32, align 4, !dbg !20
++  %foo.0.foo.0..sroa_cast = bitcast i32* %foo to i8*, !dbg !20
++  call void @llvm.lifetime.start.p0i8(i64 4, i8* nonnull %foo.0.foo.0..sroa_cast), !dbg !20
++  store volatile i32 4, i32* %foo, align 4, !dbg !20, !tbaa !21
++  %foo.0.foo.0. = load volatile i32, i32* %foo, align 4, !dbg !25, !tbaa !21
++  %foo.0.foo.0.15 = load volatile i32, i32* %foo, align 4, !dbg !27, !tbaa !21
++  %foo.0.foo.0.16 = load volatile i32, i32* %foo, align 4, !dbg !28, !tbaa !21
++  ; CHECK-NOT: %add = add nsw i32 %foo.0.foo.0., %foo.0.foo.0.15
++  %add = add nsw i32 %foo.0.foo.0., %foo.0.foo.0.15, !dbg !29
++  ; CHECK: call void @llvm.dbg.value(metadata i32 undef, metadata [[VAR_A:![0-9]+]], metadata !DIExpression())
++  call void @llvm.dbg.value(metadata i32 %add, metadata !19, metadata !DIExpression()), !dbg !26
++  %foo.0.foo.0.17 = load volatile i32, i32* %foo, align 4, !dbg !30, !tbaa !21
++  %cmp = icmp eq i32 %foo.0.foo.0.17, 4, !dbg !30
++  br i1 %cmp, label %if.then, label %if.end, !dbg !32
++
++  ; CHECK-LABEL: if.then:
++if.then:
++  ; CHECK-NOT: %add1 = add nsw i32 %add, %foo.0.foo.0.16
++  %add1 = add nsw i32 %add, %foo.0.foo.0.16, !dbg !33
++  ; CHECK: call void @llvm.dbg.value(metadata i32 undef, metadata [[VAR_A]], metadata !DIExpression())
++  call void @llvm.dbg.value(metadata i32 %add1, metadata !19, metadata !DIExpression()), !dbg !26
++  ; CHECK: call void @llvm.dbg.value(metadata i32 undef, metadata [[VAR_CHEESE:![0-9]+]], metadata !DIExpression())
++  call void @llvm.dbg.value(metadata i32 %add, metadata !18, metadata !DIExpression()), !dbg !26
++  %sub = add nsw i32 %add, -12, !dbg !34
++  %sub3 = sub nsw i32 %add1, %sub, !dbg !34
++  %mul = mul nsw i32 %sub3, 20, !dbg !36
++  %div = sdiv i32 %mul, 3, !dbg !37
++  br label %if.end, !dbg !38
++
++if.end:
++  %a.0 = phi i32 [ %div, %if.then ], [ 0, %entry ], !dbg !39
++  call void @llvm.lifetime.end.p0i8(i64 4, i8* nonnull %foo.0.foo.0..sroa_cast), !dbg !40
++  ret i32 %a.0, !dbg !41
+ }
+ 
+-declare void @llvm.dbg.value(metadata, metadata, metadata)
++declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture) #1
++declare void @llvm.dbg.declare(metadata, metadata, metadata) #2
++declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture) #1
++declare void @llvm.dbg.value(metadata, metadata, metadata) #2
+ 
+ !llvm.dbg.cu = !{!0}
+ !llvm.module.flags = !{!3, !4, !5, !6}
+ !llvm.ident = !{!7}
+ 
+-!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 11.0.0", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, nameTableKind: None)
+-!1 = !DIFile(filename: "undef_intrinsics_when_deleting_instructions.cpp", directory: "/")
++!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus_14, file: !1, producer: "clang version 10.0.0", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, enums: !2, debugInfoForProfiling: true, nameTableKind: None)
++!1 = !DIFile(filename: "test.cpp", directory: "F:\")
+ !2 = !{}
+-!3 = !{i32 2, !"CodeView", i32 1}
++!3 = !{i32 2, !"Dwarf Version", i32 4}
+ !4 = !{i32 2, !"Debug Info Version", i32 3}
+ !5 = !{i32 1, !"wchar_size", i32 2}
+ !6 = !{i32 7, !"PIC Level", i32 2}
+-!7 = !{!"clang version 11.0.0"}
+-!8 = distinct !DISubprogram(name: "foo", linkageName: "?foo@@YAMMMMM@Z", scope: !1, file: !1, line: 1, type: !9, scopeLine: 1, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !2)
+-!9 = !DISubroutineType(types: !10)
+-!10 = !{!11, !11, !11, !11, !11}
+-!11 = !DIBasicType(name: "float", size: 32, encoding: DW_ATE_float)
+-!12 = !DILocalVariable(name: "d", arg: 4, scope: !8, file: !1, line: 1, type: !11)
+-!13 = !DILocation(line: 0, scope: !8)
+-!14 = !DILocalVariable(name: "c", arg: 3, scope: !8, file: !1, line: 1, type: !11)
+-!15 = !DILocalVariable(name: "b", arg: 2, scope: !8, file: !1, line: 1, type: !11)
+-!16 = !DILocalVariable(name: "a", arg: 1, scope: !8, file: !1, line: 1, type: !11)
+-!17 = !DILocation(line: 2, scope: !8)
+-!18 = !DILocalVariable(name: "x", scope: !8, file: !1, line: 2, type: !11)
+-!19 = !DILocation(line: 3, scope: !8)
+-!20 = !DILocation(line: 4, scope: !21)
+-!21 = distinct !DILexicalBlock(scope: !22, file: !1, line: 3)
+-!22 = distinct !DILexicalBlock(scope: !8, file: !1, line: 3)
+-!23 = !DILocalVariable(name: "y", scope: !21, file: !1, line: 4, type: !11)
+-!24 = !DILocation(line: 0, scope: !21)
+-!25 = !DILocation(line: 5, scope: !21)
+-!26 = !DILocation(line: 8, scope: !8)
++!7 = !{!"clang version 10.0.0"}
++!8 = distinct !DISubprogram(name: "main", scope: !9, file: !9, line: 1, type: !10, scopeLine: 1, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !13)
++!9 = !DIFile(filename: "./test.cpp", directory: "F:\")
++!10 = !DISubroutineType(types: !11)
++!11 = !{!12}
++!12 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
++!13 = !{!14, !16, !17, !18, !19}
++!14 = !DILocalVariable(name: "foo", scope: !8, file: !9, line: 2, type: !15)
++!15 = !DIDerivedType(tag: DW_TAG_volatile_type, baseType: !12)
++!16 = !DILocalVariable(name: "read1", scope: !8, file: !9, line: 3, type: !12)
++!17 = !DILocalVariable(name: "read2", scope: !8, file: !9, line: 4, type: !12)
++; CHECK: [[VAR_CHEESE]] = !DILocalVariable(name: "cheese"
++!18 = !DILocalVariable(name: "cheese", scope: !8, file: !9, line: 6, type: !12)
++; CHECK: [[VAR_A]] = !DILocalVariable(name: "a"
++!19 = !DILocalVariable(name: "a", scope: !8, file: !9, line: 7, type: !12)
++!20 = !DILocation(line: 2, scope: !8)
++!21 = !{!22, !22, i64 0}
++!22 = !{!"int", !23, i64 0}
++!23 = !{!"omnipotent char", !24, i64 0}
++!24 = !{!"Simple C++ TBAA"}
++!25 = !DILocation(line: 3, scope: !8)
++!26 = !DILocation(line: 0, scope: !8)
++!27 = !DILocation(line: 4, scope: !8)
++!28 = !DILocation(line: 6, scope: !8)
++!29 = !DILocation(line: 7, scope: !8)
++!30 = !DILocation(line: 10, scope: !31)
++!31 = distinct !DILexicalBlock(scope: !8, file: !9, line: 10)
++!32 = !DILocation(line: 10, scope: !8)
++!33 = !DILocation(line: 8, scope: !8)
++!34 = !DILocation(line: 12, scope: !35)
++!35 = distinct !DILexicalBlock(scope: !31, file: !9, line: 10)
++!36 = !DILocation(line: 13, scope: !35)
++!37 = !DILocation(line: 14, scope: !35)
++!38 = !DILocation(line: 15, scope: !35)
++!39 = !DILocation(line: 0, scope: !31)
++!40 = !DILocation(line: 20, scope: !8)
++!41 = !DILocation(line: 19, scope: !8)

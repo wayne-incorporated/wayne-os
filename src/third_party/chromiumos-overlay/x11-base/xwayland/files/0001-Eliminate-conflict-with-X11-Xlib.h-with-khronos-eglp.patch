@@ -1,0 +1,84 @@
+From 8a50425ed9157ea384e0e3a514d8983aff0af43e Mon Sep 17 00:00:00 2001
+From: David Riley <davidriley@chromium.org>
+Date: Fri, 28 Sep 2018 10:57:50 -0700
+Subject: [PATCH] Eliminate conflict with X11/Xlib.h with khronos eglplatform.h
+
+---
+ glamor/glamor_egl.h                     | 3 +++
+ glamor/glamor_priv.h                    | 1 +
+ hw/xwayland/xwayland-glamor-eglstream.c | 3 +++
+ hw/xwayland/xwayland-glamor-gbm.c       | 3 +++
+ hw/xwayland/xwayland-glamor.c           | 3 +++
+ 5 files changed, 13 insertions(+)
+
+diff --git a/glamor/glamor_egl.h b/glamor/glamor_egl.h
+index 8f6ed7840..e4a394024 100644
+--- a/glamor/glamor_egl.h
++++ b/glamor/glamor_egl.h
+@@ -29,6 +29,9 @@
+ 
+ #define MESA_EGL_NO_X11_HEADERS
+ #define EGL_NO_X11
++#ifdef GLAMOR_HAS_GBM
++#define __GBM__
++#endif
+ #include <epoxy/gl.h>
+ #include <epoxy/egl.h>
+ #include <glamor_egl_ext.h>
+diff --git a/glamor/glamor_priv.h b/glamor/glamor_priv.h
+index 4353a99f1..0e4d6a6f7 100644
+--- a/glamor/glamor_priv.h
++++ b/glamor/glamor_priv.h
+@@ -41,6 +41,7 @@
+ #ifdef GLAMOR_HAS_GBM
+ #define MESA_EGL_NO_X11_HEADERS
+ #define EGL_NO_X11
++#define __GBM__
+ #include <epoxy/egl.h>
+ #endif
+ 
+diff --git a/hw/xwayland/xwayland-glamor-eglstream.c b/hw/xwayland/xwayland-glamor-eglstream.c
+index 36b749aaf..f3d404fdd 100644
+--- a/hw/xwayland/xwayland-glamor-eglstream.c
++++ b/hw/xwayland/xwayland-glamor-eglstream.c
+@@ -34,6 +34,9 @@
+ 
+ #define MESA_EGL_NO_X11_HEADERS
+ #define EGL_NO_X11
++#ifdef GLAMOR_HAS_GBM
++#define __GBM__
++#endif
+ #include <glamor_egl.h>
+ #include <glamor.h>
+ #include <glamor_transform.h>
+diff --git a/hw/xwayland/xwayland-glamor-gbm.c b/hw/xwayland/xwayland-glamor-gbm.c
+index dce782fc3..30cc09aa0 100644
+--- a/hw/xwayland/xwayland-glamor-gbm.c
++++ b/hw/xwayland/xwayland-glamor-gbm.c
+@@ -37,6 +37,9 @@
+ 
+ #define MESA_EGL_NO_X11_HEADERS
+ #define EGL_NO_X11
++#ifdef GLAMOR_HAS_GBM
++#define __GBM__
++#endif
+ #include <gbm.h>
+ #include <glamor_egl.h>
+ 
+diff --git a/hw/xwayland/xwayland-glamor.c b/hw/xwayland/xwayland-glamor.c
+index 48e330a0f..1e3fe396c 100644
+--- a/hw/xwayland/xwayland-glamor.c
++++ b/hw/xwayland/xwayland-glamor.c
+@@ -27,6 +27,9 @@
+ 
+ #define MESA_EGL_NO_X11_HEADERS
+ #define EGL_NO_X11
++#ifdef GLAMOR_HAS_GBM
++#define __GBM__
++#endif
+ #include <glamor_egl.h>
+ 
+ #include <glamor.h>
+-- 
+2.26.2.645.ge9eca65c58-goog
+

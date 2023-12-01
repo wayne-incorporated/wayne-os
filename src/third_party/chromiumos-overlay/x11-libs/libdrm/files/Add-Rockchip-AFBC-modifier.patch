@@ -1,0 +1,65 @@
+From 2766139a1deac0b0b9b505314e017f207a145da5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?St=C3=A9phane=20Marchesin?= <marcheu@chromium.org>
+Date: Mon, 15 Jul 2019 20:54:12 -0700
+Subject: [PATCH] CHROMIUM: drm_fourcc.h: Add Rockchip AFBC modifier
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Old-BUG=chrome-os-partner:56407
+Old-TEST=drm-tests null_platform_test with AFBC support
+
+Reviewed-on: https://chromium-review.googlesource.com/387205
+Commit-Ready: Kristian H. Kristensen <hoegsberg@chromium.org>
+Tested-by: Kristian H. Kristensen <hoegsberg@chromium.org>
+Reviewed-by: Stéphane Marchesin <marcheu@chromium.org>
+Reviewed-by: Anders Pedersen <anders.pedersen@arm.com>
+(rebased from chromeos-2.4.87)
+
+BUG=b:112720782
+Signed-off-by: Kristian H. Kristensen <hoegsberg@chromium.org>
+Signed-off-by: Stéphane Marchesin <marcheu@chromium.org>
+
+Change-Id: Id0d35736047e1fede88c1ce844d834262c7db2ef
+---
+ include/drm/drm_fourcc.h | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/include/drm/drm_fourcc.h b/include/drm/drm_fourcc.h
+index 957c7be2..649273d3 100644
+--- a/include/drm/drm_fourcc.h
++++ b/include/drm/drm_fourcc.h
+@@ -373,6 +373,9 @@ extern "C" {
+ 
+ #define DRM_FORMAT_RESERVED	      ((1ULL << 56) - 1)
+ 
++/* Vendor ID for downstream, interim ChromeOS specific modifiers. */
++#define DRM_FORMAT_MOD_VENDOR_CHROMEOS 0xf0
++
+ #define fourcc_mod_code(vendor, val) \
+ 	((((__u64)DRM_FORMAT_MOD_VENDOR_## vendor) << 56) | ((val) & 0x00ffffffffffffffULL))
+ 
+@@ -1358,6 +1361,20 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
+ #define AMD_FMT_MOD_CLEAR(field) \
+ 	(~((uint64_t)AMD_FMT_MOD_##field##_MASK << AMD_FMT_MOD_##field##_SHIFT))
+ 
++/*
++ * Rockchip ARM Framebuffer Compression (AFBC)
++ *
++ * This modifier identifies the specific variant of AFBC supported by the
++ * Rockchip display hardware. It's technically a two-plane format: first a
++ * header with 16 bytes per block, followed by the block data aligned to 1024
++ * bytes. Each block is 16x16 pixels.
++ *
++ * Eventually ARM should define modifiers for the various AFBC types, but
++ * we'll use this in the meantime. We use the CHROMEOS vendor ID to make sure
++ * we don't clash with future vendor modifiers.
++ */
++#define DRM_FORMAT_MOD_CHROMEOS_ROCKCHIP_AFBC	fourcc_mod_code(CHROMEOS, 1)
++
+ #if defined(__cplusplus)
+ }
+ #endif
+-- 
+2.31.0
+

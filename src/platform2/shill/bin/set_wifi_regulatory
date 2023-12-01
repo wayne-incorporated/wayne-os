@@ -1,0 +1,34 @@
+#!/bin/sh
+
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# UDEV event helper script that sets the system's WiFi regulatory domain
+# from VPD data.
+
+set -e
+
+# TODO(quiche): When fixing crbug.com/474657, we may need to remove tr.
+country_code="$(vpd_get_value region | tr "[:lower:]" "[:upper:]")"
+
+# Reject country code with invalid characters.
+if [ -n "$(echo "${country_code}" | LC_ALL=C sed 's/[A-Z0-9_\.-]//g')" ]; then
+  country_code=""
+fi
+
+# TODO(quiche): Replace this code using the regions database and jq.
+# crbug.com/474657.
+country_code="${country_code%%.*}"
+case "${country_code}" in
+  "LATAM-ES-419")
+    country_code="MX"
+    ;;
+  "NORDIC")
+    country_code="SE"
+    ;;
+esac
+
+if [ -n "${country_code}" ]; then
+  iw reg set "${country_code}"
+fi

@@ -1,0 +1,142 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/mojom_bindings_generator.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":dbus_bindings",
+    ":mojo_bindings_lib",
+    ":smbfs",
+  ]
+  if (use.test) {
+    deps += [ ":smbfs_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  # NOSORT
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmojo",
+    "libpasswordprovider",
+    "fuse",
+    "smbclient",
+
+    # system_api depends on protobuf (or protobuf-lite). It must
+    # appear before protobuf or the linker flags won"t be in the right
+    # order.
+    "system_api",
+    "protobuf-lite",
+  ]
+  defines = [ "FUSE_USE_VERSION=26" ]
+}
+
+static_library("libsmbfs") {
+  sources = [
+    "authpolicy_client.cc",
+    "authpolicy_client.h",
+    "filesystem.cc",
+    "filesystem.h",
+    "fuse_session.cc",
+    "fuse_session.h",
+    "inode_map.cc",
+    "inode_map.h",
+    "kerberos_artifact_client_interface.h",
+    "kerberos_artifact_synchronizer.cc",
+    "kerberos_artifact_synchronizer.h",
+    "kerberos_client.cc",
+    "kerberos_client.h",
+    "mojo_session.cc",
+    "mojo_session.h",
+    "recursive_delete_operation.cc",
+    "recursive_delete_operation.h",
+    "request.cc",
+    "request.h",
+    "samba_interface.h",
+    "samba_interface_impl.cc",
+    "samba_interface_impl.h",
+    "smb_filesystem.cc",
+    "smb_filesystem.h",
+    "smbfs.h",
+    "smbfs_bootstrap_impl.cc",
+    "smbfs_bootstrap_impl.h",
+    "smbfs_daemon.cc",
+    "smbfs_daemon.h",
+    "smbfs_impl.cc",
+    "smbfs_impl.h",
+    "test_filesystem.cc",
+    "test_filesystem.h",
+    "util.cc",
+    "util.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":dbus_bindings",
+    ":mojo_bindings_lib",
+  ]
+}
+
+generate_dbus_proxies("dbus_bindings") {
+  sources = [ "dbus_bindings/org.chromium.SmbFs.xml" ]
+  proxy_output_file = "include/smbfs/dbus-proxies.h"
+  mock_output_file = "include/smbfs/dbus-proxy-mocks.h"
+}
+
+generate_mojom_bindings("mojo_bindings") {
+  mojo_root = "${platform2_root}"
+  sources = [
+    "mojom/file_path.mojom",
+    "mojom/ip_address.mojom",
+    "mojom/smbfs.mojom",
+  ]
+  mojo_extra_args = [
+    "--typemap",
+    rebase_path("mojom/type_mappings.json"),
+  ]
+  configs = [ ":target_defaults" ]
+}
+
+source_set("mojo_bindings_lib") {
+  sources = [
+    "mojom/file_path_mojom_traits.h",
+    "mojom/password_mojom_traits.h",
+  ]
+  public_deps = [ ":mojo_bindings" ]
+}
+
+executable("smbfs") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libsmbfs" ]
+}
+
+if (use.test) {
+  pkg_config("smbfs_test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+  executable("smbfs_test") {
+    sources = [
+      "fake_kerberos_artifact_client.cc",
+      "fake_kerberos_artifact_client.h",
+      "inode_map_test.cc",
+      "kerberos_artifact_synchronizer_test.cc",
+      "recursive_delete_operation_test.cc",
+      "samba_interface_impl_test.cc",
+      "smb_filesystem_test.cc",
+      "smbfs_bootstrap_impl_test.cc",
+      "testrunner.cc",
+      "util_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":smbfs_test_config",
+    ]
+    deps = [ ":libsmbfs" ]
+  }
+}

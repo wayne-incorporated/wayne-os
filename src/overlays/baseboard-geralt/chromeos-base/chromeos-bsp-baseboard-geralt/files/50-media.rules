@@ -1,0 +1,17 @@
+ACTION!="add", GOTO="media_end"
+
+SUBSYSTEM!="video4linux", GOTO="v4l_end"
+
+ATTR{name}=="mtk-vcodec-dec", SYMLINK+="video-dec0"
+ATTR{name}=="mtk-vcodec-enc", SYMLINK+="video-enc0"
+ATTR{name}=="mtk-mdp3:m2m", SYMLINK+="image-proc0"
+ATTR{name}=="mtk-jpeg-enc", SYMLINK+="jpeg-enc0"
+ATTR{name}=="mtk-jpeg-dec", SYMLINK+="jpeg-dec0"
+
+LABEL="v4l_end"
+
+SUBSYSTEM!="media", GOTO="media_end"
+
+ATTR{model}=="mtk-vcodec-dec", SYMLINK+="media-dec0", ENV{MEDIA_DEVICE_TYPE}="decoder"
+
+LABEL="media_end"

@@ -1,0 +1,71 @@
+From 6ff2483f91d7c0c03f080c30a9da84d88512165e Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 13:53:13 -0300
+Subject: [PATCH 085/163] math: Suppress clang warning on
+ math_check_force_underflow
+
+Clang warns:
+
+  ../sysdeps/x86/fpu/powl_helper.c:233:3: error: absolute value function
+  '__builtin_fabsf' given an argument of type 'typeof (res)' (aka 'long
+  double') but has parameter of type 'float' which may cause truncation of
+  value [-Werror,-Wabsolute-value]
+    math_check_force_underflow (res);
+    ^
+  ./math-underflow.h:45:11: note: expanded from macro
+  'math_check_force_underflow'
+        if (fabs_tg (force_underflow_tmp)                         \
+            ^
+  ./math-underflow.h:27:20: note: expanded from macro 'fabs_tg'
+  #define fabs_tg(x) __MATH_TG ((x), (__typeof (x)) __builtin_fabs, (x))
+                     ^
+  ../math/math.h:899:16: note: expanded from macro '__MATH_TG'
+                 float: FUNC ## f ARGS,           \
+                        ^
+  <scratch space>:73:1: note: expanded from here
+  __builtin_fabsf
+  ^
+---
+ math/math-underflow.h | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/math/math-underflow.h b/math/math-underflow.h
+index c9d363ddd1..4bec3d349e 100644
+--- a/math/math-underflow.h
++++ b/math/math-underflow.h
+@@ -23,6 +23,7 @@
+ #include <math.h>
+ 
+ #include <math-barriers.h>
++#include <libc-diag.h>
+ 
+ #define fabs_tg(x) __MATH_TG ((x), (__typeof (x)) __builtin_fabs, (x))
+ 
+@@ -37,10 +38,15 @@
+ #define min_of_type(x) __MATH_TG ((x), (__typeof (x)) min_of_type_, ())
+ 
+ /* If X (which is not a NaN) is subnormal, force an underflow
+-   exception.  */
++   exception.
++
++   clang issues a warning where _Generic is using a non expected
++   builtin which may cause truncation of value.  */
+ #define math_check_force_underflow(x)				\
+   do								\
+     {								\
++      DIAG_PUSH_NEEDS_COMMENT_CLANG;				\
++      DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wabsolute-value"); \
+       __typeof (x) force_underflow_tmp = (x);			\
+       if (fabs_tg (force_underflow_tmp)				\
+ 	  < min_of_type (force_underflow_tmp))			\
+@@ -49,6 +55,7 @@
+ 	    = force_underflow_tmp * force_underflow_tmp;	\
+ 	  math_force_eval (force_underflow_tmp2);		\
+ 	}							\
++      DIAG_POP_NEEDS_COMMENT_CLANG;				\
+     }								\
+   while (0)
+ /* Likewise, but X is also known to be nonnegative.  */
+-- 
+2.37.2
+

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,12 @@
 #include <unistd.h>
 
 #include <memory>
+#include <optional>
 
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
 #include <base/memory/ref_counted.h>
-#include <base/optional.h>
 #include <base/time/time.h>
 #include <brillo/cryptohome.h>
 #include <gtest/gtest.h>
@@ -84,7 +84,7 @@ TEST_F(KeyGeneratorTest, KeygenEndToEndTest) {
   keygen.InjectJobFactory(std::unique_ptr<GeneratorJobFactoryInterface>(
       new FakeGeneratorJob::Factory(kFakePid, "gen", fake_key_contents)));
 
-  ASSERT_TRUE(keygen.Start(fake_ownername, base::nullopt));
+  ASSERT_TRUE(keygen.Start(fake_ownername, std::nullopt));
   keygen.HandleExit(fake_info);
 
   EXPECT_EQ(fake_ownername, handler.key_username());

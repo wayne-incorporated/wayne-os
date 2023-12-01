@@ -1,0 +1,96 @@
+#!/bin/sh
+
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# UDEV event helper script that sets the system's WiFi regulatory domain
+# from VPD data.
+
+# Assertion helpers.
+assert_equal() {
+  local actual="$1"
+  local expected="$2"
+
+  if [ "${actual}" != "${expected}" ]; then
+    echo "FAIL: expected |${expected}|, got |${actual}|"
+    exit 1
+  fi
+}
+
+assert_regdomain_is() {
+  local expected_code="$1"
+  g_vpd_data="$(cat)"
+  g_country_code=""
+
+  . "$(dirname "$0")"/set_wifi_regulatory
+  assert_equal "${g_country_code}" "${expected_code}"
+}
+
+# Fake out the commands that are called by set_wifi_regulatory.
+vpd_get_value() {
+  assert_equal "$1" "region"
+  echo "${g_vpd_data}"
+}
+
+iw() {
+  assert_equal "$1" "reg"
+  assert_equal "$2" "set"
+  g_country_code="$3"
+}
+
+# Simplest input.
+assert_regdomain_is US <<-"EOF"
+US
+EOF
+
+# Properly handle lower-case region.
+assert_regdomain_is US <<-"EOF"
+us
+EOF
+
+# If region exists multiple times, take the first one.
+assert_regdomain_is JP <<-"EOF"
+JP
+EOF
+
+# Other fields can come before.
+assert_regdomain_is US <<-"EOF"
+us
+EOF
+
+# Other fields can come after.
+assert_regdomain_is US <<-"EOF"
+us
+EOF
+
+# Region may include additional data after country code (1/2).
+assert_regdomain_is CA <<-"EOF"
+ca.hybrid
+EOF
+
+# Region may include additional data after country code (2/2).
+assert_regdomain_is BR <<-"EOF"
+br.abnt
+EOF
+
+# Virtual regions work correctly (1/2).
+assert_regdomain_is SE <<-"EOF"
+nordic
+EOF
+
+# Virtual regions work correctly (2/2).
+assert_regdomain_is "MX" <<-"EOF"
+latam-es-419
+EOF
+
+# Must match "region" exactly.
+assert_regdomain_is "" <<-"EOF"
+EOF
+
+# Random shell meta-characters are not allowed.
+assert_regdomain_is "" <<-"EOF"
+ca>>/var/log/junk
+EOF
+
+echo "PASS"

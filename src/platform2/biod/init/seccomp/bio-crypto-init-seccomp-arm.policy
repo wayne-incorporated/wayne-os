@@ -1,0 +1,70 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Use the run_bio_crypto_init_strace.sh script to generate an initial list
+# of syscalls.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+wait4: 1
+nanosleep: 1
+clock_nanosleep: 1
+clock_nanosleep_time64: 1
+# mmap2: Don't allow execute and write at the same time.
+mmap2: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+mprotect: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+openat: 1
+fstat64: 1
+fstatat64: 1
+statx: 1
+close: 1
+read: 1
+getpid: 1
+write: 1
+gettid: 1
+rt_sigaction: 1
+rt_sigprocmask: 1
+# ioctl: Manually evaluate CROS_EC_DEV_IOCXCMD to its value 0xc014ec00.
+ioctl: arg1 == 0xc014ec00
+brk: 1
+munmap: 1
+_llseek: 1
+unlink: 1
+madvise: 1
+set_robust_list: 1
+lstat64: 1
+execve: 1
+access: 1
+faccessat: 1
+faccessat2: 1
+# ARM_set_tls: Manually changed set_tls to ARM_set_tls.
+ARM_set_tls: 1
+set_tid_address: 1
+ugetrlimit: 1
+stat64: 1
+rename: 1
+readlink: 1
+readlinkat: 1
+symlink: 1
+# clone: bio_crypto_init forks a child process.
+clone: 1
+futex: 1
+futex_time64: 1
+# kill: Used to kill hanging child process (Process.Terminate).
+kill: 1
+exit_group: 1
+mlock: 1
+munlock: 1
+restart_syscall: 1
+exit: 1
+rt_sigreturn: 1
+# gettimeofday: See https://crbug.com/1002791 and https://crrev.com/c/1797048.
+gettimeofday: 1
+# clock_gettime: See https://crbug.com/1068277 and https://crrev.com/c/2141246.
+clock_gettime: 1
+clock_gettime64: 1
+fstatfs64: 1
+fstatfs: 1
+statfs64: 1

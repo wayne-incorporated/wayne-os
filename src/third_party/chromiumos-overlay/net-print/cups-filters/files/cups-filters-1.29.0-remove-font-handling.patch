@@ -1,0 +1,29 @@
+From 4b76f99de79f23bf514215d7185afe74acc4af65 Mon Sep 17 00:00:00 2001
+From: Sean Kau <skau@chromium.org>
+Date: Thu, 5 Aug 2021 14:53:44 -0700
+Subject: [PATCH] Remove font handling
+
+---
+ filter/gstoraster.c | 6 ------
+ 1 file changed, 6 deletions(-)
+
+diff --git a/filter/gstoraster.c b/filter/gstoraster.c
+index 2a3a5a286..27c361894 100644
+--- a/filter/gstoraster.c
++++ b/filter/gstoraster.c
+@@ -918,12 +918,6 @@ main (int argc, char **argv, char *envp[])
+   /* get all the data from the header and pass it to ghostscript */
+   add_pdf_header_options (&h, gs_args, outformat, pxlcolor);
+ 
+-  /* CUPS font path */
+-  if ((t = getenv("CUPS_FONTPATH")) == NULL)
+-    t = CUPS_FONTPATH;
+-  snprintf(tmpstr, sizeof(tmpstr), "-I%s", t);
+-  cupsArrayAdd(gs_args, strdup(tmpstr));
+-
+   /* set the device output ICC profile */
+   if(icc_profile != NULL && icc_profile[0] != '\0') {
+     snprintf(tmpstr, sizeof(tmpstr), "-sOutputICCProfile=%s", icc_profile);
+-- 
+2.32.0.605.g8dce9f2422-goog
+

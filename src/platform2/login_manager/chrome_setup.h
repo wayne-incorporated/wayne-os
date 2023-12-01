@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include <base/callback.h>
+#include <base/functional/callback.h>
 
 namespace base {
 class FilePath;
@@ -26,6 +26,10 @@ namespace ui {
 class ChromiumCommandBuilder;
 }  // namespace ui
 }  // namespace chromeos
+
+namespace segmentation {
+class FeatureManagement;
+}  // namespace segmentation
 
 namespace login_manager {
 
@@ -74,6 +78,9 @@ extern const char kOzoneNNPalmPropertiesPath[];
 // Property for compatibility with NNPalm in Ozone.
 extern const char kOzoneNNPalmCompatibleProperty[];
 
+// Property for model version in NNPalm for Ozone.
+extern const char kOzoneNNPalmModelVersionProperty[];
+
 // Property for radius polynomial in NNPalm for Ozone.
 extern const char kOzoneNNPalmRadiusProperty[];
 
@@ -95,7 +102,10 @@ extern const char kBoostUrgentProperty[];
 //
 // |cros_config| (if non-null) provides the device model configuration (used to
 // look up the default wallpaper filename).
+// |feature_management| provides interface to list the features enabled for
+// the device.
 void PerformChromeSetup(brillo::CrosConfigInterface* cros_config,
+                        segmentation::FeatureManagement* feature_management,
                         bool* is_developer_end_user_out,
                         std::map<std::string, std::string>* env_vars_out,
                         std::vector<std::string>* args_out,
@@ -114,13 +124,18 @@ void AddSerializedAshSwitches(chromeos::ui::ChromiumCommandBuilder* builder,
 // Add flags to specify the wallpaper to use. This is called by
 // PerformChromeSetup and only present in the header for testing.
 // Flags are added to |builder|, and |path_exists| is called to test whether a
-// given file exists (e.g. use base::Bind(base::PathExists)).
+// given file exists (e.g. use base::BindRepeating(base::PathExists)).
 // |cros_config| (if non-null) provides the device model configuration (used to
 // look up the default wallpaper filename).
 void SetUpWallpaperFlags(
     chromeos::ui::ChromiumCommandBuilder* builder,
     brillo::CrosConfigInterface* cros_config,
-    base::Callback<bool(const base::FilePath&)> path_exists);
+    const base::RepeatingCallback<bool(const base::FilePath&)>& path_exists);
+
+// Add "--device-help-content-id" switch to specify the help content
+// to be displayed in the Showoff app.
+void SetUpHelpContentSwitch(chromeos::ui::ChromiumCommandBuilder* builder,
+                            brillo::CrosConfigInterface* cros_config);
 
 // Add "--regulatory-label-dir" flag to specify the regulatory label directory
 // containing per-region sub-directories, if the model-specific
@@ -169,6 +184,17 @@ void SetUpOzoneNNPalmPropertiesFlag(
 void SetUpAllowAmbientEQFlag(chromeos::ui::ChromiumCommandBuilder* builder,
                              brillo::CrosConfigInterface* cros_config);
 
+// Gets a powerd pref from |cros_config|, falling back on searching the
+// file-based powerd preferences if not found.
+bool GetPowerdPref(const char* pref_name,
+                   brillo::CrosConfigInterface* cros_config,
+                   std::string* val_out);
+
+// Add "Hibernate" feature flag if the disable-hibernate powerd pref is set to
+// 0 in |cros_config| or the powerd file-based prefs.
+void SetUpHibernateFlag(chromeos::ui::ChromiumCommandBuilder* builder,
+                        brillo::CrosConfigInterface* cros_config);
+
 // Disable instant tethering flag with value read from |cros_config| or USE
 // flags.
 void SetUpInstantTetheringFlag(chromeos::ui::ChromiumCommandBuilder* builder,
@@ -179,6 +205,14 @@ void SetUpInstantTetheringFlag(chromeos::ui::ChromiumCommandBuilder* builder,
 // appropriate.
 void AddCrashHandlerFlag(chromeos::ui::ChromiumCommandBuilder* builder);
 
+// Add appropriate patterns to the --vmodule argument.
+void AddVmodulePatterns(chromeos::ui::ChromiumCommandBuilder* builder);
+
+// Adds flags related to feature management that must be enabled for this
+// device.
+void AddFeatureManagementFlags(
+    chromeos::ui::ChromiumCommandBuilder* builder,
+    segmentation::FeatureManagement* FeatureManagement);
 }  // namespace login_manager
 
 #endif  // LOGIN_MANAGER_CHROME_SETUP_H_

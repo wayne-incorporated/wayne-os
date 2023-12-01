@@ -1,0 +1,25 @@
+commit 7339fca25facb566e969b6ce01f23ac96499d574
+Author: Aaron Ballman <aaron@aaronballman.com>
+Date:   Tue Mar 24 16:05:42 2020 -0400
+
+    Revert "Convert a reachable llvm_unreachable into an assert."
+    
+    This reverts commit 4a0267e3ad8c4d47f267d7d960f127e099fb4818.
+
+diff --git a/clang/lib/StaticAnalyzer/Core/AnalyzerOptions.cpp b/clang/lib/StaticAnalyzer/Core/AnalyzerOptions.cpp
+index 99e16752b51..01ac2bc83bb 100644
+--- a/clang/lib/StaticAnalyzer/Core/AnalyzerOptions.cpp
++++ b/clang/lib/StaticAnalyzer/Core/AnalyzerOptions.cpp
+@@ -134,9 +134,9 @@ StringRef AnalyzerOptions::getCheckerStringOption(StringRef CheckerName,
+     CheckerName = CheckerName.substr(0, Pos);
+   } while (!CheckerName.empty() && SearchInParents);
+ 
+-  assert(false && "Unknown checker option! Did you call getChecker*Option "
+-                  "with incorrect parameters? User input must've been "
+-                  "verified by CheckerRegistry.");
++  llvm_unreachable("Unknown checker option! Did you call getChecker*Option "
++                   "with incorrect parameters? User input must've been "
++                   "verified by CheckerRegistry.");
+ 
+   return "";
+ }

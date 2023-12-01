@@ -1,0 +1,43 @@
+# Copyright 2020 The ChromiumOS Authors
+# Distributed under the terms of the GNU General Public License v2
+
+group("all") {
+  deps = [
+    ":marisa",
+  ]
+}
+
+static_library("marisa") {
+  sources = [
+    "lib/marisa/agent.cc",
+    "lib/marisa/grimoire/io/mapper.cc",
+    "lib/marisa/grimoire/io/reader.cc",
+    "lib/marisa/grimoire/io/writer.cc",
+    "lib/marisa/grimoire/trie/louds-trie.cc",
+    "lib/marisa/grimoire/trie/tail.cc",
+    "lib/marisa/grimoire/vector/bit-vector.cc",
+    "lib/marisa/keyset.cc",
+    "lib/marisa/trie.cc",
+    "tools/cmdopt.cc",
+    "tools/marisa-benchmark.cc",
+    "tools/marisa-build.cc",
+    "tools/marisa-common-prefix-search.cc",
+    "tools/marisa-dump.cc",
+    "tools/marisa-lookup.cc",
+    "tools/marisa-predictive-search.cc",
+    "tools/marisa-reverse-lookup.cc",
+  ]
+
+  cflags_cc = [ "-Wno-implicit-fallthrough" ]
+
+  include_dirs = [
+    "//marisa-trie/lib",
+    "//marisa-trie/include",
+  ]
+
+  configs -= [ "//common-mk:no_exceptions" ]
+
+  # We want marisa to be a standalone library.
+  configs += [ "//common-mk:nouse_thin_archive" ]
+  configs -= [ "//common-mk:use_thin_archive" ]
+}

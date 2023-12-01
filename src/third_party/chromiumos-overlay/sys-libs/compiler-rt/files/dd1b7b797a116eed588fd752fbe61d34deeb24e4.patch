@@ -1,0 +1,300 @@
+commit dd1b7b797a116eed588fd752fbe61d34deeb24e4
+Author: Advenam Tacet <advenam.tacet@trailofbits.com>
+Date:   Thu Oct 27 22:14:14 2022 -0700
+
+    [1b/3][ASan][compiler-rt] API for annotating objects memory
+    
+    This revision is a part of a series of patches extending AddressSanitizer C++ container overflow detection capabilities by adding annotations, similar to those existing in std::vector, to std::string and std::deque collections. These changes allow ASan to detect cases when the instrumented program accesses memory which is internally allocated by the collection but is still not in-use (accesses before or after the stored elements for std::deque, or between the size and capacity bounds for std::string).
+    
+    The motivation for the research and those changes was a bug, found by Trail of Bits, in a real code where an out-of-bounds read could happen as two strings were compared via a std::equals function that took iter1_begin, iter1_end, iter2_begin iterators (with a custom comparison function). When object iter1 was longer than iter2, read out-of-bounds on iter2 could happen. Container sanitization would detect it.
+    
+    This revision extends a compiler-rt ASan sanitization API function sanitizer_annotate_contiguous_container used to sanitize/annotate containers like std::vector to support different allocators and situations when granules are shared between objects. Those changes are necessary to support annotating objects' self memory (in contrast to annotating memory allocated by an object) like short std::basic_string (with short string optimization). That also allows use of non-standard memory allocators, as alignment requirement is no longer necessary.
+    
+    This also updates an API function to verify if a double ended contiguous container is correctly annotated (__sanitizer_verify_contiguous_container).
+    
+    If you have any questions, please email:
+    advenam.tacet@trailofbits.com
+    disconnect3d@trailofbits.com
+    
+    Reviewed By: #sanitizers, vitalybuka
+    
+    Differential Revision: https://reviews.llvm.org/D132522
+
+diff --git a/compiler-rt/lib/asan/asan_poisoning.cpp b/compiler-rt/lib/asan/asan_poisoning.cpp
+index 99ec0ee44c21..e47025634631 100644
+--- a/compiler-rt/lib/asan/asan_poisoning.cpp
++++ b/compiler-rt/lib/asan/asan_poisoning.cpp
+@@ -382,8 +382,7 @@ void __sanitizer_annotate_contiguous_container(const void *beg_p,
+   uptr old_mid = reinterpret_cast<uptr>(old_mid_p);
+   uptr new_mid = reinterpret_cast<uptr>(new_mid_p);
+   uptr granularity = ASAN_SHADOW_GRANULARITY;
+-  if (!(beg <= old_mid && beg <= new_mid && old_mid <= end && new_mid <= end &&
+-        IsAligned(beg, granularity))) {
++  if (!(beg <= old_mid && beg <= new_mid && old_mid <= end && new_mid <= end)) {
+     GET_STACK_TRACE_FATAL_HERE;
+     ReportBadParamsToAnnotateContiguousContainer(beg, end, old_mid, new_mid,
+                                                  &stack);
+@@ -391,6 +390,56 @@ void __sanitizer_annotate_contiguous_container(const void *beg_p,
+   CHECK_LE(end - beg,
+            FIRST_32_SECOND_64(1UL << 30, 1ULL << 40)); // Sanity check.
+ 
++  if (old_mid == new_mid)
++    return;  // Nothing to do here.
++
++  // Handle misaligned end and cut it off.
++  if (UNLIKELY(!AddrIsAlignedByGranularity(end))) {
++    uptr end_down = RoundDownTo(end, granularity);
++    // Either new or old mid must be in the granule to affect it.
++    if (new_mid > end_down) {
++      if (AddressIsPoisoned(end)) {
++        *(u8 *)MemToShadow(end_down) = static_cast<u8>(new_mid - end_down);
++      } else {
++        // Something after the container - don't touch.
++      }
++    } else if (old_mid > end_down) {
++      if (AddressIsPoisoned(end)) {
++        *(u8 *)MemToShadow(end_down) = kAsanContiguousContainerOOBMagic;
++      } else {
++        // Something after the container - don't touch.
++      }
++    }
++
++    if (beg >= end_down)
++      return;  // Same granule.
++
++    old_mid = Min(end_down, old_mid);
++    new_mid = Min(end_down, new_mid);
++  }
++
++  // Handle misaligned begin and cut it off.
++  if (UNLIKELY(!AddrIsAlignedByGranularity(beg))) {
++    uptr beg_up = RoundUpTo(beg, granularity);
++    uptr beg_down = RoundDownTo(beg, granularity);
++    // As soon as we add first byte into container we will not be able to
++    // determine the state of the byte before the container. So we assume it's
++    // always unpoison.
++
++    // Either new or old mid must be in the granule to affect it.
++    if (new_mid < beg_up) {
++      *(u8 *)MemToShadow(beg_down) = static_cast<u8>(new_mid - beg_down);
++    } else if (old_mid < beg_up) {
++      *(u8 *)MemToShadow(beg_down) = 0;
++    }
++
++    old_mid = Max(beg_up, old_mid);
++    new_mid = Max(beg_up, new_mid);
++  }
++
++  if (old_mid == new_mid)
++    return;
++
+   uptr a = RoundDownTo(Min(old_mid, new_mid), granularity);
+   uptr c = RoundUpTo(Max(old_mid, new_mid), granularity);
+   uptr d1 = RoundDownTo(old_mid, granularity);
+@@ -425,8 +474,13 @@ const void *__sanitizer_contiguous_container_find_bad_address(
+     const void *beg_p, const void *mid_p, const void *end_p) {
+   if (!flags()->detect_container_overflow)
+     return nullptr;
++  uptr granularity = ASAN_SHADOW_GRANULARITY;
+   uptr beg = reinterpret_cast<uptr>(beg_p);
+   uptr end = reinterpret_cast<uptr>(end_p);
++  uptr annotations_end =
++      (!AddrIsAlignedByGranularity(end) && !AddressIsPoisoned(end))
++          ? RoundDownTo(end, granularity)
++          : end;
+   uptr mid = reinterpret_cast<uptr>(mid_p);
+   CHECK_LE(beg, mid);
+   CHECK_LE(mid, end);
+@@ -436,9 +490,9 @@ const void *__sanitizer_contiguous_container_find_bad_address(
+   uptr r1_beg = beg;
+   uptr r1_end = Min(beg + kMaxRangeToCheck, mid);
+   uptr r2_beg = Max(beg, mid - kMaxRangeToCheck);
+-  uptr r2_end = Min(end, mid + kMaxRangeToCheck);
+-  uptr r3_beg = Max(end - kMaxRangeToCheck, mid);
+-  uptr r3_end = end;
++  uptr r2_end = Min(annotations_end, mid + kMaxRangeToCheck);
++  uptr r3_beg = Max(annotations_end - kMaxRangeToCheck, mid);
++  uptr r3_end = annotations_end;
+   for (uptr i = r1_beg; i < r1_end; i++)
+     if (AddressIsPoisoned(i))
+       return reinterpret_cast<const void *>(i);
+diff --git a/compiler-rt/test/asan/TestCases/contiguous_container.cpp b/compiler-rt/test/asan/TestCases/contiguous_container.cpp
+index a813424d36ce..f54c4d337776 100644
+--- a/compiler-rt/test/asan/TestCases/contiguous_container.cpp
++++ b/compiler-rt/test/asan/TestCases/contiguous_container.cpp
+@@ -8,43 +8,83 @@
+ #include <assert.h>
+ #include <sanitizer/asan_interface.h>
+ 
+-void TestContainer(size_t capacity) {
+-  char *beg = new char[capacity];
++static constexpr size_t kGranularity = 8;
++
++static constexpr bool AddrIsAlignedByGranularity(uintptr_t a) {
++  return (a & (kGranularity - 1)) == 0;
++}
++
++static constexpr uintptr_t RoundDown(uintptr_t x) {
++  return x & ~(kGranularity - 1);
++}
++
++void TestContainer(size_t capacity, size_t off_begin, size_t off_end,
++                   bool off_poisoned) {
++  char *buffer = new char[capacity + off_begin + off_end];
++  char *buffer_end = buffer + capacity + off_begin + off_end;
++  if (off_poisoned)
++    __sanitizer_annotate_contiguous_container(buffer, buffer_end, buffer_end,
++                                              buffer);
++  char *beg = buffer + off_begin;
+   char *end = beg + capacity;
+-  char *mid = beg + capacity;
++  char *mid = off_poisoned ? beg : beg + capacity;
+   char *old_mid = 0;
++  // If after the container, there is another object, last granule
++  // cannot be poisoned.
++  char *cannot_poison =
++      (off_end == 0) ? end : (char *)RoundDown((uintptr_t)end);
+ 
+-  for (int i = 0; i < 10000; i++) {
++  for (int i = 0; i < 1000; i++) {
+     size_t size = rand() % (capacity + 1);
+     assert(size <= capacity);
+     old_mid = mid;
+     mid = beg + size;
+     __sanitizer_annotate_contiguous_container(beg, end, old_mid, mid);
+ 
++    // If off buffer before the container was poisoned and we had to
++    // unpoison it, we won't poison it again as we don't have information,
++    // if it was poisoned.
++    for (size_t idx = 0; idx < off_begin && !off_poisoned; idx++)
++      assert(!__asan_address_is_poisoned(buffer + idx));
+     for (size_t idx = 0; idx < size; idx++)
+-        assert(!__asan_address_is_poisoned(beg + idx));
+-    for (size_t idx = size; idx < capacity; idx++)
+-        assert(__asan_address_is_poisoned(beg + idx));
++      assert(!__asan_address_is_poisoned(beg + idx));
++    for (size_t idx = size; beg + idx < cannot_poison; idx++)
++      assert(__asan_address_is_poisoned(beg + idx));
++    for (size_t idx = 0; idx < off_end; idx++) {
++      if (!off_poisoned)
++        assert(!__asan_address_is_poisoned(end + idx));
++      else // off part after the buffer should be always poisoned
++        assert(__asan_address_is_poisoned(end + idx));
++    }
++
+     assert(__sanitizer_verify_contiguous_container(beg, mid, end));
+     assert(NULL ==
+            __sanitizer_contiguous_container_find_bad_address(beg, mid, end));
+-    if (mid != beg) {
+-      assert(!__sanitizer_verify_contiguous_container(beg, mid - 1, end));
+-      assert(mid - 1 == __sanitizer_contiguous_container_find_bad_address(
+-                            beg, mid - 1, end));
++    size_t distance = (off_end > 0) ? kGranularity + 1 : 1;
++    if (mid >= beg + distance) {
++      assert(
++          !__sanitizer_verify_contiguous_container(beg, mid - distance, end));
++      assert(mid - distance ==
++             __sanitizer_contiguous_container_find_bad_address(
++                 beg, mid - distance, end));
+     }
+-    if (mid != end) {
+-      assert(!__sanitizer_verify_contiguous_container(beg, mid + 1, end));
++
++    if (mid + distance <= end) {
++      assert(
++          !__sanitizer_verify_contiguous_container(beg, mid + distance, end));
+       assert(mid == __sanitizer_contiguous_container_find_bad_address(
+-                        beg, mid + 1, end));
++                        beg, mid + distance, end));
+     }
+   }
+ 
+   // Don't forget to unpoison the whole thing before destroying/reallocating.
+-  __sanitizer_annotate_contiguous_container(beg, end, mid, end);
+-  for (size_t idx = 0; idx < capacity; idx++)
+-    assert(!__asan_address_is_poisoned(beg + idx));
+-  delete[] beg;
++  if (capacity == 0 && off_poisoned)
++    mid = buffer;
++  __sanitizer_annotate_contiguous_container(buffer, buffer_end, mid,
++                                            buffer_end);
++  for (size_t idx = 0; idx < capacity + off_begin + off_end; idx++)
++    assert(!__asan_address_is_poisoned(buffer + idx));
++  delete[] buffer;
+ }
+ 
+ __attribute__((noinline))
+@@ -54,7 +94,7 @@ __attribute__((noinline))
+ void ThrowAndCatch() {
+   try {
+     Throw();
+-  } catch(...) {
++  } catch (...) {
+   }
+ }
+ 
+@@ -72,8 +112,11 @@ void TestThrow() {
+ }
+ 
+ int main(int argc, char **argv) {
+-  int n = argc == 1 ? 128 : atoi(argv[1]);
++  int n = argc == 1 ? 64 : atoi(argv[1]);
+   for (int i = 0; i <= n; i++)
+-    TestContainer(i);
++    for (int j = 0; j < 8; j++)
++      for (int k = 0; k < 8; k++)
++        for (int off = 0; off < 2; ++off)
++          TestContainer(i, j, k, off);
+   TestThrow();
+ }
+diff --git a/compiler-rt/test/asan/TestCases/contiguous_container_crash.cpp b/compiler-rt/test/asan/TestCases/contiguous_container_crash.cpp
+index 2b555f9019eb..41fb2d61a3de 100644
+--- a/compiler-rt/test/asan/TestCases/contiguous_container_crash.cpp
++++ b/compiler-rt/test/asan/TestCases/contiguous_container_crash.cpp
+@@ -1,7 +1,8 @@
+ // RUN: %clangxx_asan -O %s -o %t
+ // RUN: not %run %t crash 2>&1 | FileCheck --check-prefix=CHECK-CRASH %s
+ // RUN: not %run %t bad-bounds 2>&1 | FileCheck --check-prefix=CHECK-BAD-BOUNDS %s
+-// RUN: not %run %t bad-alignment 2>&1 | FileCheck --check-prefix=CHECK-BAD-ALIGNMENT %s
++// RUN: not %run %t odd-alignment 2>&1 | FileCheck --check-prefix=CHECK-CRASH %s
++// RUN: not %run %t odd-alignment-end 2>&1 | FileCheck --check-prefix=CHECK-CRASH %s
+ // RUN: %env_asan_opts=detect_container_overflow=0 %run %t crash
+ //
+ // Test crash due to __sanitizer_annotate_contiguous_container.
+@@ -34,12 +35,20 @@ void BadBounds() {
+                                             &t[0] + 50);
+ }
+ 
+-void BadAlignment() {
++int OddAlignment() {
+   int t[100];
+-// CHECK-BAD-ALIGNMENT: ERROR: AddressSanitizer: bad parameters to __sanitizer_annotate_contiguous_container
+-// CHECK-BAD-ALIGNMENT: ERROR: beg is not aligned by {{[0-9]+}}
+-  __sanitizer_annotate_contiguous_container(&t[1], &t[0] + 100, &t[1] + 10,
++  t[60] = 0;
++  __sanitizer_annotate_contiguous_container(&t[1], &t[0] + 100, &t[0] + 100,
++                                            &t[1] + 50);
++  return (int)t[60 * one]; // Touches the poisoned memory.
++}
++
++int OddAlignmentEnd() {
++  int t[99];
++  t[60] = 0;
++  __sanitizer_annotate_contiguous_container(&t[0], &t[0] + 98, &t[0] + 98,
+                                             &t[0] + 50);
++  return (int)t[60 * one]; // Touches the poisoned memory.
+ }
+ 
+ int main(int argc, char **argv) {
+@@ -48,6 +57,9 @@ int main(int argc, char **argv) {
+     return TestCrash();
+   else if (!strcmp(argv[1], "bad-bounds"))
+     BadBounds();
+-  else if (!strcmp(argv[1], "bad-alignment"))
+-    BadAlignment();
++  else if (!strcmp(argv[1], "odd-alignment"))
++    return OddAlignment();
++  else if (!strcmp(argv[1], "odd-alignment-end"))
++    return OddAlignmentEnd();
++  return 0;
+ }

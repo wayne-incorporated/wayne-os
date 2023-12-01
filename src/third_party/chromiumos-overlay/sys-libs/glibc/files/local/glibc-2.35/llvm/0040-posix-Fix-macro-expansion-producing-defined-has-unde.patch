@@ -1,0 +1,54 @@
+From ff86a76ff4fc22cdd4c40e6a652e191c435a792b Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 9 Mar 2022 18:22:46 -0300
+Subject: [PATCH 040/163] posix: Fix macro expansion producing 'defined' has
+ undefined behavior
+
+The NEED_CHECK_SPEC is defined as:
+
+  #define NEED_CHECK_SPEC \
+    (!defined _XBS5_ILP32_OFF32 || !defined _XBS5_ILP32_OFFBIG \
+     || !defined _XBS5_LP64_OFF64 || !defined _XBS5_LPBIG_OFFBIG \
+     || !defined _POSIX_V6_ILP32_OFF32 || !defined _POSIX_V6_ILP32_OFFBIG \
+     || !defined _POSIX_V6_LP64_OFF64 || !defined _POSIX_V6_LPBIG_OFFBIG \
+     || !defined _POSIX_V7_ILP32_OFF32 || !defined _POSIX_V7_ILP32_OFFBIG \
+     || !defined _POSIX_V7_LP64_OFF64 || !defined _POSIX_V7_LPBIG_OFFBIG)
+
+Which is undefined behavior accordingly to C Standard (Preprocessing
+directives, p4).
+
+Checked on x86_64-linux-gnu.
+
+(cherry picked from commit ddcf5a9170a0db5055259118f3090debab248126)
+---
+ sysdeps/posix/sysconf.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/sysdeps/posix/sysconf.c b/sysdeps/posix/sysconf.c
+index f760bf4e2b..c29b70ad80 100644
+--- a/sysdeps/posix/sysconf.c
++++ b/sysdeps/posix/sysconf.c
+@@ -37,13 +37,17 @@
+ #define NEED_SPEC_ARRAY 0
+ #include <posix-conf-vars.h>
+ 
+-#define NEED_CHECK_SPEC \
+-  (!defined _XBS5_ILP32_OFF32 || !defined _XBS5_ILP32_OFFBIG \
++#if !defined _XBS5_ILP32_OFF32 || !defined _XBS5_ILP32_OFFBIG \
+    || !defined _XBS5_LP64_OFF64 || !defined _XBS5_LPBIG_OFFBIG \
+    || !defined _POSIX_V6_ILP32_OFF32 || !defined _POSIX_V6_ILP32_OFFBIG \
+    || !defined _POSIX_V6_LP64_OFF64 || !defined _POSIX_V6_LPBIG_OFFBIG \
+    || !defined _POSIX_V7_ILP32_OFF32 || !defined _POSIX_V7_ILP32_OFFBIG \
+-   || !defined _POSIX_V7_LP64_OFF64 || !defined _POSIX_V7_LPBIG_OFFBIG)
++   || !defined _POSIX_V7_LP64_OFF64 || !defined _POSIX_V7_LPBIG_OFFBIG
++# define NEED_CHECK_SPEC 1
++#else
++# define NEED_CHECK_SPEC 0
++#endif
++
+ #if NEED_CHECK_SPEC
+ static long int __sysconf_check_spec (const char *spec);
+ #endif
+-- 
+2.37.2
+

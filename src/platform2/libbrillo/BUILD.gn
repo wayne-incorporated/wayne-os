@@ -1,0 +1,744 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/deps.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":libbrillo",
+    ":libbrillo-test",
+    ":libinstallattributes",
+    ":libpolicy",
+  ]
+  if (use.test) {
+    deps += [
+      ":libbrillo-grpc_tests",
+      ":libbrillo_tests",
+      ":libinstallattributes_tests",
+      ":libpolicy_tests",
+      ":secure_blob_test_runner",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":libbrillo_cryptohome_fuzzer",
+      ":libbrillo_data_encoding_fuzzer",
+      ":libbrillo_dbus_data_serialization_fuzzer",
+      ":libbrillo_http_form_data_fuzzer",
+      ":libbrillo_url_utils_fuzzer",
+    ]
+  }
+}
+
+default_pkg_deps = [ "libchrome" ]
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = default_pkg_deps
+  defines = [ "USE_ENTERPRISE_ROLLBACK_REVEN=${use.enterprise_rollback_reven}" ]
+}
+
+config("target_defaults") {
+  configs = [ ":target_defaults_pkg_deps" ]
+  include_dirs = [ "../libbrillo" ]
+  defines = [
+    "USE_DBUS=${use.dbus}",
+    "USE_RTTI_FOR_TYPE_TAGS=1",
+  ]
+}
+
+config("libbrillo_configs") {
+  include_dirs = [ "../libbrillo" ]
+}
+
+# Properties of shared libraries which libbrillo consists of.
+# Stored to variables once before actually declaring the targets, so that
+# another target can collect information for making the .pc and .so files.
+libbrillo_sublibs = [
+  {
+    # |library_name| is library file name without "lib" prefix. This is needed
+    # for composing -l*** flags in libbrillo-${libbasever}.so.
+    # (Current version of GN deployed to ChromeOS doesn't have string_replace.)
+    library_name = "brillo-core"
+    all_dependent_pkg_deps = [ "openssl" ]
+    if (use.dbus) {
+      all_dependent_pkg_deps += [ "dbus-1" ]
+    }
+    libs = [ "modp_b64" ]
+    sources = [
+      "brillo/asynchronous_signal_handler.cc",
+      "brillo/backoff_entry.cc",
+      "brillo/daemons/daemon.cc",
+      "brillo/data_encoding.cc",
+      "brillo/errors/error.cc",
+      "brillo/errors/error_codes.cc",
+      "brillo/file_utils.cc",
+      "brillo/files/file_util.cc",
+      "brillo/files/safe_fd.cc",
+      "brillo/flag_helper.cc",
+      "brillo/hash/MurmurHash3.cc",
+      "brillo/key_value_store.cc",
+      "brillo/message_loops/base_message_loop.cc",
+      "brillo/message_loops/message_loop.cc",
+      "brillo/message_loops/message_loop_utils.cc",
+      "brillo/mime_utils.cc",
+      "brillo/osrelease_reader.cc",
+      "brillo/process/process.cc",
+      "brillo/process/process_reaper.cc",
+      "brillo/scoped_umask.cc",
+      "brillo/secure_blob.cc",
+      "brillo/secure_string.cc",
+      "brillo/strings/string_utils.cc",
+      "brillo/syslog_logging.cc",
+      "brillo/timers/alarm_timer.cc",
+      "brillo/timezone/tzif_parser.cc",
+      "brillo/type_name_undecorate.cc",
+      "brillo/url_utils.cc",
+      "brillo/userdb_utils.cc",
+    ]
+    if (use.dbus) {
+      sources += [
+        "brillo/any.cc",
+        "brillo/daemons/dbus_daemon.cc",
+        "brillo/dbus/async_event_sequencer.cc",
+        "brillo/dbus/data_serialization.cc",
+        "brillo/dbus/dbus_connection.cc",
+        "brillo/dbus/dbus_method_invoker.cc",
+        "brillo/dbus/dbus_method_response.cc",
+        "brillo/dbus/dbus_object.cc",
+        "brillo/dbus/dbus_proxy_util.cc",
+        "brillo/dbus/dbus_service_watcher.cc",
+        "brillo/dbus/dbus_signal.cc",
+        "brillo/dbus/exported_object_manager.cc",
+        "brillo/dbus/exported_property_set.cc",
+        "brillo/dbus/utils.cc",
+      ]
+    }
+  },
+
+  {
+    library_name = "brillo-storage"
+    deps = [ ":libbrillo-core" ]
+    sources = [
+      "brillo/blkdev_utils/disk_iostat.cc",
+      "brillo/blkdev_utils/emmc.cc",
+      "brillo/blkdev_utils/loop_device.cc",
+      "brillo/blkdev_utils/storage_device.cc",
+      "brillo/blkdev_utils/storage_utils.cc",
+      "brillo/blkdev_utils/ufs.cc",
+    ]
+    libs = [ "rootdev" ]
+    if (use.udev) {
+      sources += [ "brillo/blkdev_utils/get_backing_block_device.cc" ]
+      deps += [ ":libbrillo-udev" ]
+    }
+    if (use.device_mapper) {
+      libs += [ "lvm2cmd" ]
+      pkg_deps = [ "devmapper" ]
+      sources += [
+        "brillo/blkdev_utils/device_mapper.cc",
+        "brillo/blkdev_utils/device_mapper_task.cc",
+        "brillo/blkdev_utils/lvm.cc",
+        "brillo/blkdev_utils/lvm_device.cc",
+      ]
+    }
+    sources += [ "brillo/storage_balloon.cc" ]
+  },
+
+  {
+    library_name = "brillo-http"
+    deps = [
+      ":libbrillo-core",
+      ":libbrillo-streams",
+    ]
+    all_dependent_pkg_deps = [ "libcurl" ]
+    sources = [
+      "brillo/http/curl_api.cc",
+      "brillo/http/http_connection_curl.cc",
+      "brillo/http/http_form_data.cc",
+      "brillo/http/http_request.cc",
+      "brillo/http/http_transport.cc",
+      "brillo/http/http_transport_curl.cc",
+      "brillo/http/http_utils.cc",
+    ]
+    if (use.dbus) {
+      sources += [ "brillo/http/http_proxy.cc" ]
+    }
+  },
+
+  {
+    library_name = "brillo-streams"
+    deps = [ ":libbrillo-core" ]
+    sources = [
+      "brillo/streams/file_stream.cc",
+      "brillo/streams/input_stream_set.cc",
+      "brillo/streams/memory_containers.cc",
+      "brillo/streams/memory_stream.cc",
+      "brillo/streams/stream.cc",
+      "brillo/streams/stream_errors.cc",
+      "brillo/streams/stream_utils.cc",
+    ]
+  },
+
+  {
+    library_name = "brillo-cryptohome"
+    all_dependent_pkg_deps = [ "openssl" ]
+    deps = [ ":libbrillo-core" ]
+    sources = [ "brillo/cryptohome.cc" ]
+  },
+
+  {
+    library_name = "brillo-namespaces"
+    deps = [ ":libbrillo-core" ]
+    sources = [
+      "brillo/namespaces/mount_namespace.cc",
+      "brillo/namespaces/platform.cc",
+      "brillo/scoped_mount_namespace.cc",
+    ]
+  },
+
+  {
+    library_name = "brillo-minijail"
+    all_dependent_pkg_deps = [ "libminijail" ]
+    sources = [ "brillo/minijail/minijail.cc" ]
+  },
+
+  {
+    library_name = "brillo-protobuf"
+    all_dependent_pkg_deps = [ "protobuf" ]
+    sources = [ "brillo/proto_file_io.cc" ]
+  },
+
+  {
+    library_name = "brillo-grpc"
+    public_pkg_deps = [ "grpc" ]
+    all_dependent_pkg_deps = [
+      "gpr",
+      "grpc++",
+      "protobuf",
+    ]
+    sources = [
+      "brillo/grpc/async_grpc_client.cc",
+      "brillo/grpc/async_grpc_constants.cc",
+      "brillo/grpc/async_grpc_server.cc",
+      "brillo/grpc/grpc_completion_queue_dispatcher.cc",
+      "brillo/grpc/rpc_state.cc",
+      "brillo/grpc/time_util.cc",
+    ]
+  },
+]
+
+if (use.udev) {
+  libbrillo_sublibs += [
+    {
+      library_name = "brillo-udev"
+      all_dependent_pkg_deps = [ "libudev" ]
+      sources = [
+        "brillo/udev/udev.cc",
+        "brillo/udev/udev_device.cc",
+        "brillo/udev/udev_enumerate.cc",
+        "brillo/udev/udev_list_entry.cc",
+        "brillo/udev/udev_monitor.cc",
+      ]
+    },
+  ]
+}
+
+if (use.usb && use.udev) {
+  libbrillo_sublibs += [
+    {
+      library_name = "brillo-usb"
+
+      deps = [ ":libbrillo-udev" ]
+      all_dependent_pkg_deps = [ "libusb-1.0" ]
+      sources = [
+        "brillo/usb/usb_bulk_transfer.cc",
+        "brillo/usb/usb_config_descriptor.cc",
+        "brillo/usb/usb_constants.cc",
+        "brillo/usb/usb_device.cc",
+        "brillo/usb/usb_device_descriptor.cc",
+        "brillo/usb/usb_device_event_notifier.cc",
+        "brillo/usb/usb_endpoint_descriptor.cc",
+        "brillo/usb/usb_error.cc",
+        "brillo/usb/usb_interface.cc",
+        "brillo/usb/usb_interface_descriptor.cc",
+        "brillo/usb/usb_manager.cc",
+        "brillo/usb/usb_transfer.cc",
+      ]
+    },
+  ]
+}
+
+# Generate shared libraries.
+foreach(attr, libbrillo_sublibs) {
+  shared_library("lib" + attr.library_name) {
+    sources = attr.sources
+    if (defined(attr.deps)) {
+      deps = attr.deps
+    }
+    if (defined(attr.libs)) {
+      libs = attr.libs
+    }
+    if (defined(attr.pkg_deps)) {
+      pkg_deps = attr.pkg_deps
+    }
+    if (defined(attr.public_pkg_deps)) {
+      public_pkg_deps = attr.public_pkg_deps
+    }
+    if (defined(attr.all_dependent_pkg_deps)) {
+      all_dependent_pkg_deps = attr.all_dependent_pkg_deps
+    }
+    if (defined(attr.cflags)) {
+      cflags = attr.cflags
+    }
+    if (defined(attr.configs)) {
+      configs += attr.configs
+    }
+    configs += [ ":target_defaults" ]
+  }
+}
+
+generate_pkg_config("libbrillo_pc") {
+  name = "libbrillo"
+  output_name = "libbrillo"
+  description = "brillo base library"
+  version = libbase_ver
+  requires = []
+  requires_private = default_pkg_deps
+  foreach(sublib, libbrillo_sublibs) {
+    if (defined(sublib.pkg_deps)) {
+      requires_private += sublib.pkg_deps
+    }
+    if (defined(sublib.public_pkg_deps)) {
+      requires += sublib.public_pkg_deps
+    }
+    if (defined(sublib.all_dependent_pkg_deps)) {
+      requires_private += sublib.all_dependent_pkg_deps
+    }
+  }
+  defines = [ "USE_RTTI_FOR_TYPE_TAGS=1" ]
+  libs = [ "-lbrillo" ]
+}
+
+action("libbrillo") {
+  deps = [ ":libbrillo_pc" ]
+  foreach(sublib, libbrillo_sublibs) {
+    deps += [ ":lib" + sublib.library_name ]
+  }
+  script = "//common-mk/write_args.py"
+  outputs = [ "${root_out_dir}/lib/libbrillo.so" ]
+  args = [ "--output" ] + outputs + [ "--" ] + [
+           "GROUP",
+           "(",
+           "AS_NEEDED",
+           "(",
+         ]
+  foreach(sublib, libbrillo_sublibs) {
+    args += [ "-l" + sublib.library_name ]
+  }
+  args += [
+    ")",
+    ")",
+  ]
+}
+
+libbrillo_test_deps = [ "libbrillo-http" ]
+
+generate_pkg_config("libbrillo-test_pc") {
+  name = "libbrillo-test"
+  output_name = "libbrillo-test"
+  description = "brillo test library"
+  version = libbase_ver
+
+  # Because libbrillo-test is static, we have to depend directly on everything.
+  requires = [ "libbrillo" ] + default_pkg_deps
+  foreach(name, libbrillo_test_deps) {
+    foreach(t, libbrillo_sublibs) {
+      if ("lib" + t.library_name == name) {
+        if (defined(t.pkg_deps)) {
+          requires += t.pkg_deps
+        }
+        if (defined(t.public_pkg_deps)) {
+          requires += t.public_pkg_deps
+        }
+        if (defined(t.all_dependent_pkg_deps)) {
+          requires += t.all_dependent_pkg_deps
+        }
+      }
+    }
+  }
+  libs = [ "-lbrillo-test" ]
+}
+
+static_library("libbrillo-test") {
+  sources = [
+    "brillo/blkdev_utils/loop_device_fake.cc",
+    "brillo/fake_cryptohome.cc",
+    "brillo/http/http_connection_fake.cc",
+    "brillo/http/http_transport_fake.cc",
+    "brillo/message_loops/fake_message_loop.cc",
+    "brillo/streams/fake_stream.cc",
+    "brillo/unittest_utils.cc",
+  ]
+  if (use.device_mapper) {
+    sources += [ "brillo/blkdev_utils/device_mapper_fake.cc" ]
+  }
+  if (use.udev) {
+    sources += [ "brillo/udev/fake_udev_list.cc" ]
+  }
+  configs -= [ "//common-mk:use_thin_archive" ]
+  configs += [
+    "//common-mk:nouse_thin_archive",
+    ":target_defaults",
+  ]
+  deps = [
+    ":libbrillo-http",
+    ":libbrillo-test_pc",
+  ]
+  foreach(name, libbrillo_test_deps) {
+    deps += [ ":" + name ]
+  }
+}
+
+proto_library("install_attributes_proto") {
+  proto_in_dir = "${sysroot}/usr/include/proto"
+  proto_out_dir = "include/brillo/proto_bindings"
+  sources = [ "${proto_in_dir}/install_attributes.proto" ]
+
+  # the library is used by a shared_libary, hence PIC is needed.
+  configs = [ "//common-mk:pic" ]
+  standalone = true
+}
+
+shared_library("libinstallattributes") {
+  sources = [ "install_attributes/libinstallattributes.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":install_attributes_proto",
+    ":libinstallattributes-includes",
+  ]
+  if (use.fuzzer) {
+    all_dependent_pkg_deps = [ "protobuf" ]
+  } else {
+    all_dependent_pkg_deps = [ "protobuf-lite" ]
+  }
+}
+
+shared_library("libpolicy") {
+  sources = [
+    "policy/device_local_account_policy_util.cc",
+    "policy/device_policy.cc",
+    "policy/device_policy_impl.cc",
+    "policy/libpolicy.cc",
+    "policy/policy_util.cc",
+    "policy/resilient_policy_util.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  ldflags = [ "-Wl,--version-script,${platform2_root}/libbrillo/libpolicy.ver" ]
+  deps = [
+    ":libinstallattributes",
+    ":libpolicy-includes",
+    "../common-mk/external_dependencies:policy-protos",
+  ]
+  all_dependent_pkg_deps = [
+    "openssl",
+    "protobuf-lite",
+  ]
+}
+
+if (use.test) {
+  static_library("libbrillo_static") {
+    configs += [ ":target_defaults" ]
+    public_configs = [ ":libbrillo_configs" ]
+    deps = [
+      ":libbrillo_pc",
+      ":libinstallattributes",
+      ":libpolicy",
+    ]
+    foreach(sublib, libbrillo_sublibs) {
+      deps += [ ":lib" + sublib.library_name ]
+    }
+  }
+  proto_library("libbrillo_tests_proto") {
+    proto_in_dir = "brillo/dbus"
+    proto_out_dir = "include/brillo/dbus"
+    sources = [ "${proto_in_dir}/test.proto" ]
+  }
+  proto_library("grpc_test_rpcs_protolib") {
+    proto_in_dir = "brillo/grpc"
+    proto_out_dir = "include"
+    sources = [ "${proto_in_dir}/test_rpcs.proto" ]
+    gen_grpc = true
+  }
+  executable("libbrillo_tests") {
+    sources = [
+      "brillo/asynchronous_signal_handler_test.cc",
+      "brillo/backoff_entry_test.cc",
+      "brillo/blkdev_utils/disk_iostat_test.cc",
+      "brillo/blkdev_utils/loop_device_test.cc",
+      "brillo/blkdev_utils/storage_utils_test.cc",
+      "brillo/cryptohome_test.cc",
+      "brillo/data_encoding_test.cc",
+      "brillo/enum_flags_test.cc",
+      "brillo/errors/error_codes_test.cc",
+      "brillo/errors/error_test.cc",
+      "brillo/file_utils_test.cc",
+      "brillo/files/file_util_test.cc",
+      "brillo/files/safe_fd_test.cc",
+      "brillo/flag_helper_test.cc",
+      "brillo/hash/murmurhash_test.cc",
+      "brillo/http/http_connection_curl_test.cc",
+      "brillo/http/http_form_data_test.cc",
+      "brillo/http/http_request_test.cc",
+      "brillo/http/http_transport_curl_test.cc",
+      "brillo/http/http_utils_test.cc",
+      "brillo/key_value_store_test.cc",
+      "brillo/map_utils_test.cc",
+      "brillo/message_loops/base_message_loop_test.cc",
+      "brillo/message_loops/fake_message_loop_test.cc",
+      "brillo/message_loops/message_loop_test.cc",
+      "brillo/mime_utils_test.cc",
+      "brillo/namespaces/mount_namespace_test.cc",
+      "brillo/osrelease_reader_test.cc",
+      "brillo/process/process_reaper_test.cc",
+      "brillo/process/process_test.cc",
+      "brillo/scoped_umask_test.cc",
+      "brillo/secure_blob_test.cc",
+      "brillo/secure_string_test.cc",
+      "brillo/storage_balloon_test.cc",
+      "brillo/streams/fake_stream_test.cc",
+      "brillo/streams/file_stream_test.cc",
+      "brillo/streams/input_stream_set_test.cc",
+      "brillo/streams/memory_containers_test.cc",
+      "brillo/streams/memory_stream_test.cc",
+      "brillo/streams/stream_test.cc",
+      "brillo/streams/stream_utils_test.cc",
+      "brillo/strings/string_utils_test.cc",
+      "brillo/timers/alarm_timer_test.cc",
+      "brillo/timezone/tzif_parser_test.cc",
+      "brillo/unittest_utils.cc",
+      "brillo/url_utils_test.cc",
+      "brillo/vcsid_set_test.cc",
+      "brillo/vcsid_unset_test.cc",
+      "testrunner.cc",
+    ]
+    if (use.dbus) {
+      sources += [
+        "brillo/any_internal_impl_test.cc",
+        "brillo/any_test.cc",
+        "brillo/dbus/async_event_sequencer_test.cc",
+        "brillo/dbus/data_serialization_test.cc",
+        "brillo/dbus/dbus_method_invoker_test.cc",
+        "brillo/dbus/dbus_object_test.cc",
+        "brillo/dbus/dbus_param_reader_test.cc",
+        "brillo/dbus/dbus_param_writer_test.cc",
+        "brillo/dbus/dbus_signal_handler_test.cc",
+        "brillo/dbus/exported_object_manager_test.cc",
+        "brillo/dbus/exported_property_set_test.cc",
+        "brillo/http/http_proxy_test.cc",
+        "brillo/type_name_undecorate_test.cc",
+        "brillo/variant_dictionary_test.cc",
+      ]
+    }
+    if (use.device_mapper) {
+      sources += [
+        "brillo/blkdev_utils/device_mapper_test.cc",
+        "brillo/blkdev_utils/lvm_device_test.cc",
+        "brillo/blkdev_utils/lvm_test.cc",
+      ]
+    }
+    if (use.udev) {
+      sources += [ "brillo/blkdev_utils/get_backing_block_device_test.cc" ]
+    }
+    if (use.usb && use.udev) {
+      sources += [
+        "brillo/usb/usb_config_descriptor_test.cc",
+        "brillo/usb/usb_constants_test.cc",
+        "brillo/usb/usb_device_descriptor_test.cc",
+        "brillo/usb/usb_device_event_notifier_test.cc",
+        "brillo/usb/usb_endpoint_descriptor_test.cc",
+        "brillo/usb/usb_error_test.cc",
+        "brillo/usb/usb_interface_descriptor_test.cc",
+        "brillo/usb/usb_manager_test.cc",
+        "brillo/usb/usb_transfer_test.cc",
+      ]
+    }
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    cflags = [ "-Wno-format-zero-length" ]
+    pkg_deps = [ "libchrome-test" ]
+    deps = [
+      ":libbrillo-test",
+      ":libbrillo_static",
+      ":libbrillo_tests_proto",
+    ]
+
+    if (is_debug) {
+      cflags += [
+        "-fprofile-arcs",
+        "-ftest-coverage",
+        "-fno-inline",
+      ]
+      libs = [ "gcov" ]
+    }
+  }
+
+  executable("libinstallattributes_tests") {
+    sources = [ "install_attributes/tests/libinstallattributes_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libinstallattributes",
+      "../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("libpolicy_tests") {
+    sources = [
+      "install_attributes/mock_install_attributes_reader.cc",
+      "policy/tests/device_local_account_policy_util_test.cc",
+      "policy/tests/device_policy_impl_test.cc",
+      "policy/tests/libpolicy_test.cc",
+      "policy/tests/policy_util_test.cc",
+      "policy/tests/resilient_policy_util_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libinstallattributes",
+      ":libpolicy",
+      "../common-mk/external_dependencies:policy-protos",
+      "../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("libbrillo-grpc_tests") {
+    sources = [
+      "brillo/grpc/async_grpc_client_server_test.cc",
+      "brillo/grpc/async_grpc_server_test.cc",
+      "brillo/grpc/grpc_completion_queue_dispatcher_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":grpc_test_rpcs_protolib",
+      ":libbrillo-grpc",
+      "../common-mk/testrunner:testrunner",
+    ]
+  }
+
+  executable("secure_blob_test_helper") {
+    sources = [ "brillo/secure_blob_test_helper.cc" ]
+    configs += [ ":target_defaults" ]
+    cflags = [ "-Wno-format-zero-length" ]
+    deps = [ ":libbrillo_static" ]
+
+    if (is_debug) {
+      cflags += [
+        "-fprofile-arcs",
+        "-ftest-coverage",
+        "-fno-inline",
+      ]
+      libs = [ "gcov" ]
+    }
+  }
+
+  executable("secure_blob_test_runner") {
+    sources = [ "brillo/secure_blob_test_runner.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    cflags = [ "-Wno-format-zero-length" ]
+    deps = [
+      ":libbrillo_static",
+      ":secure_blob_test_helper",
+    ]
+
+    if (is_debug) {
+      cflags += [
+        "-fprofile-arcs",
+        "-ftest-coverage",
+        "-fno-inline",
+      ]
+      libs = [ "gcov" ]
+    }
+  }
+}
+
+if (use.fuzzer) {
+  executable("libbrillo_data_encoding_fuzzer") {
+    sources = [ "brillo/data_encoding_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome" ]
+    include_dirs = [ "../libbrillo" ]
+    deps = [ ":libbrillo-core" ]
+  }
+
+  executable("libbrillo_dbus_data_serialization_fuzzer") {
+    sources = [ "brillo/dbus/data_serialization_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome" ]
+    include_dirs = [ "../libbrillo" ]
+    deps = [ ":libbrillo-core" ]
+  }
+
+  executable("libbrillo_http_form_data_fuzzer") {
+    sources = [ "brillo/http/http_form_data_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome" ]
+    include_dirs = [ "../libbrillo" ]
+    deps = [
+      ":libbrillo-http",
+      ":libbrillo-streams",
+    ]
+  }
+
+  executable("libbrillo_url_utils_fuzzer") {
+    sources = [ "brillo/url_utils_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome" ]
+    include_dirs = [ "../libbrillo" ]
+    deps = [ ":libbrillo-core" ]
+  }
+
+  executable("libbrillo_cryptohome_fuzzer") {
+    sources = [ "brillo/cryptohome_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    pkg_deps = [ "libchrome" ]
+    include_dirs = [ "../libbrillo" ]
+    deps = [
+      ":libbrillo-core",
+      ":libbrillo-cryptohome",
+    ]
+  }
+}
+
+copy("libinstallattributes-includes") {
+  sources = [ "install_attributes/libinstallattributes.h" ]
+  outputs =
+      [ "${root_gen_dir}/include/install_attributes/{{source_file_part}}" ]
+}
+
+copy("libpolicy-includes") {
+  sources = [
+    "policy/device_local_account_policy_util.h",
+    "policy/device_policy.h",
+    "policy/device_policy_impl.h",
+    "policy/libpolicy.h",
+    "policy/mock_device_policy.h",
+    "policy/mock_libpolicy.h",
+    "policy/policy_util.h",
+    "policy/resilient_policy_util.h",
+  ]
+  outputs = [ "${root_gen_dir}/include/policy/{{source_file_part}}" ]
+}

@@ -1,0 +1,34 @@
+From 4307f6559086b12fc1797a312e519ce951ac26ad Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 26 Aug 2022 09:24:25 -0300
+Subject: [PATCH 161/163] elf: Disable unload4 test on clang
+
+It triggers and infintie loop.
+---
+ elf/unload4.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/elf/unload4.c b/elf/unload4.c
+index 6e171a22e0..97ab6dafcc 100644
+--- a/elf/unload4.c
++++ b/elf/unload4.c
+@@ -5,6 +5,10 @@
+ int
+ main (void)
+ {
++#ifdef __clang__
++  /* It triggers an infinite loop on clang.  */
++  return 77;
++#else
+ #ifdef M_PERTURB
+   mallopt (M_PERTURB, 0xaa);
+ #endif
+@@ -45,4 +49,5 @@ main (void)
+     }
+   dlclose (h);
+   return 0;
++#endif
+ }
+-- 
+2.37.2
+

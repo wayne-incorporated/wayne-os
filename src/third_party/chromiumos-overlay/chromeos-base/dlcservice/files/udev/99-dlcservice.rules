@@ -1,0 +1,15 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+ACTION!="add|change", GOTO="dm_end"
+ENV{DM_UDEV_RULES_VSN}!="?*", GOTO="dm_end"
+
+IMPORT{program}="/sbin/dmsetup splitname --nameprefixes --noheadings --rows \"$env{DM_NAME}\""
+
+ENV{DM_LV_NAME}!="dlc_?*", GOTO="dm_end"
+
+RUN+="/bin/chmod 0660 \"/dev/mapper/$env{DM_NAME}\""
+RUN+="/bin/chown root:disk-dlc \"/dev/mapper/$env{DM_NAME}\""
+
+LABEL="dm_end"

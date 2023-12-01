@@ -1,0 +1,108 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":glib_bridge",
+    ":glib_bridge-static",
+    ":libglib_bridge",
+  ]
+  if (use.test) {
+    deps += [
+      ":glib_bridge_test_runner",
+      ":glib_structured_logger_test_runner",
+      ":glib_unstructured_logger_test_runner",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  # NOSORT
+  pkg_deps = [
+    "glib-2.0",
+    "gthread-2.0",
+    "libchrome",
+  ]
+}
+
+static_library("glib_bridge-static") {
+  sources = [
+    "glib_bridge.cc",
+    "glib_logger.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+shared_library("glib_bridge") {
+  sources = [
+    "glib_bridge.cc",
+    "glib_logger.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+generate_pkg_config("libglib_bridge") {
+  version = getenv("PV")
+  description = "glib-bridge shared library"
+  cflags = [ "-I/usr/include/glib-bridge" ]
+  libs = [ "-lglib_bridge" ]
+}
+
+if (use.test) {
+  executable("glib_bridge_test_runner") {
+    sources = [ "glib_bridge_test.cc" ]
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":glib_bridge-static",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [
+      "gio-2.0",
+      "gio-unix-2.0",
+    ]
+  }
+
+  executable("glib_structured_logger_test_runner") {
+    sources = [ "glib_structured_logger_test.cc" ]
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":glib_bridge-static",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [
+      "gio-2.0",
+      "gio-unix-2.0",
+    ]
+  }
+
+  executable("glib_unstructured_logger_test_runner") {
+    sources = [ "glib_unstructured_logger_test.cc" ]
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":glib_bridge-static",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [
+      "gio-2.0",
+      "gio-unix-2.0",
+    ]
+  }
+}

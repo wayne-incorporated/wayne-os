@@ -1,0 +1,19 @@
+Unfortunately the module doesn't support strings & bytes simultaneously,
+it's only selected at build time by this constant.  The only usage of this
+module we have in CrOS is for bytes, so disable string support when building
+for Python 3 (since the Python 2 code only supports bytes).  If people want
+to compare strings, they can convert to bytes first, but it's impossible to
+convert all binary data into strings for comparing.
+
+https://github.com/WojciechMula/pyahocorasick/issues/65
+
+--- a/setup.py
++++ b/setup.py
+@@ -33,7 +33,6 @@
+ if python_version.major == 3:
+     macros = [
+         # when defined unicode strings are supported
+-        ('AHOCORASICK_UNICODE', ''),
+     ]
+ else:
+     # On Python 2, unicode strings are not supported (yet).

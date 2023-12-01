@@ -1,0 +1,131 @@
+From 20dfcf189d224e637377970318a021c81d2fbde0 Mon Sep 17 00:00:00 2001
+From: George Burgess IV <george.burgess.iv@gmail.com>
+Date: Mon, 9 Mar 2020 15:25:41 -0700
+Subject: [PATCH] [cmake] By default do not build compiler-rt with PGO
+
+Patch by Zhizhou Yang!
+
+In his own words:
+
+"""
+Currently compiler-rt doesn't officially support either PGO
+instrumentation or use PGO profdata to build it.
+
+PGO related flags are passed into compiler-rt since rL372209, and
+causing bugs: 45022, crbug:1018840
+
+This patch adds several checks in compiler-rt to disable PGO related
+flags and provides a flag to turn on PGO for compiler-rt if needed.
+"""
+
+Differential Revision: https://reviews.llvm.org/D75499
+---
+ compiler-rt/CMakeLists.txt                    | 12 ++++++++++++
+ compiler-rt/cmake/Modules/AddCompilerRT.cmake | 17 +++++++++++++++--
+ compiler-rt/cmake/config-ix.cmake             |  3 +++
+ compiler-rt/lib/crt/CMakeLists.txt            | 10 ++++++++++
+ 4 files changed, 40 insertions(+), 2 deletions(-)
+
+diff --git a/compiler-rt/CMakeLists.txt b/compiler-rt/CMakeLists.txt
+index db64d031c9a..bf4d2801b49 100644
+--- a/compiler-rt/CMakeLists.txt
++++ b/compiler-rt/CMakeLists.txt
+@@ -281,6 +281,18 @@ if(NOT COMPILER_RT_HAS_FVISIBILITY_HIDDEN_FLAG)
+ endif()
+ append_list_if(COMPILER_RT_HAS_FNO_LTO_FLAG -fno-lto SANITIZER_COMMON_CFLAGS)
+ 
++# By default do not instrument or use profdata for compiler-rt.
++if(NOT COMPILER_RT_ENABLE_PGO)
++  if(LLVM_PROFDATA_FILE AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_USE_FLAG)
++    list(APPEND SANITIZER_COMMON_CFLAGS "-fno-profile-instr-use")
++  endif()
++  if(LLVM_BUILD_INSTRUMENTED MATCHES IR AND COMPILER_RT_HAS_FNO_PROFILE_GENERATE_FLAG)
++    list(APPEND SANITIZER_COMMON_CFLAGS "-fno-profile-generate")
++  elseif(LLVM_BUILD_INSTRUMENTED AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_GENERATE_FLAG)
++    list(APPEND SANITIZER_COMMON_CFLAGS "-fno-profile-instr-generate")
++  endif()
++endif()
++
+ # The following is a workaround for powerpc64le. This is the only architecture
+ # that requires -fno-function-sections to work properly. If lacking, the ASan
+ # Linux test function-sections-are-bad.cpp fails with the following error:
+diff --git a/compiler-rt/cmake/Modules/AddCompilerRT.cmake b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+index 35a48c6af29..f0c8893c42b 100644
+--- a/compiler-rt/cmake/Modules/AddCompilerRT.cmake
++++ b/compiler-rt/cmake/Modules/AddCompilerRT.cmake
+@@ -162,6 +162,19 @@ function(add_compiler_rt_runtime name type)
+     set(NO_LTO_FLAGS "")
+   endif()
+ 
++  # By default do not instrument or use profdata for compiler-rt.
++  set(NO_PGO_FLAGS "")
++  if(NOT COMPILER_RT_ENABLE_PGO)
++    if(LLVM_PROFDATA_FILE AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_USE_FLAG)
++      list(APPEND NO_PGO_FLAGS "-fno-profile-instr-use")
++    endif()
++    if(LLVM_BUILD_INSTRUMENTED MATCHES IR AND COMPILER_RT_HAS_FNO_PROFILE_GENERATE_FLAG)
++      list(APPEND NO_PGO_FLAGS "-fno-profile-generate")
++    elseif(LLVM_BUILD_INSTRUMENTED AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_GENERATE_FLAG)
++      list(APPEND NO_PGO_FLAGS "-fno-profile-instr-generate")
++    endif()
++  endif()
++
+   list(LENGTH LIB_SOURCES LIB_SOURCES_LENGTH)
+   if (${LIB_SOURCES_LENGTH} GREATER 0)
+     # Add headers to LIB_SOURCES for IDEs. It doesn't make sense to
+@@ -190,7 +203,7 @@ function(add_compiler_rt_runtime name type)
+       list_intersect(LIB_ARCHS_${libname} DARWIN_${os}_ARCHS LIB_ARCHS)
+       if(LIB_ARCHS_${libname})
+         list(APPEND libnames ${libname})
+-        set(extra_cflags_${libname} ${DARWIN_${os}_CFLAGS} ${NO_LTO_FLAGS} ${LIB_CFLAGS})
++        set(extra_cflags_${libname} ${DARWIN_${os}_CFLAGS} ${NO_LTO_FLAGS} ${NO_PGO_FLAGS} ${LIB_CFLAGS})
+         set(output_name_${libname} ${libname}${COMPILER_RT_OS_SUFFIX})
+         set(sources_${libname} ${LIB_SOURCES})
+         format_object_libs(sources_${libname} ${os} ${LIB_OBJECT_LIBS})
+@@ -223,7 +236,7 @@ function(add_compiler_rt_runtime name type)
+       set(sources_${libname} ${LIB_SOURCES})
+       format_object_libs(sources_${libname} ${arch} ${LIB_OBJECT_LIBS})
+       set(libnames ${libnames} ${libname})
+-      set(extra_cflags_${libname} ${TARGET_${arch}_CFLAGS} ${NO_LTO_FLAGS} ${LIB_CFLAGS})
++      set(extra_cflags_${libname} ${TARGET_${arch}_CFLAGS} ${NO_LTO_FLAGS} ${NO_PGO_FLAGS} ${LIB_CFLAGS})
+       get_compiler_rt_output_dir(${arch} output_dir_${libname})
+       get_compiler_rt_install_dir(${arch} install_dir_${libname})
+     endforeach()
+diff --git a/compiler-rt/cmake/config-ix.cmake b/compiler-rt/cmake/config-ix.cmake
+index 21af345dc6b..0157011d1ea 100644
+--- a/compiler-rt/cmake/config-ix.cmake
++++ b/compiler-rt/cmake/config-ix.cmake
+@@ -71,6 +71,9 @@ check_cxx_compiler_flag("-Werror -fno-function-sections" COMPILER_RT_HAS_FNO_FUN
+ check_cxx_compiler_flag(-std=c++14           COMPILER_RT_HAS_STD_CXX14_FLAG)
+ check_cxx_compiler_flag(-ftls-model=initial-exec COMPILER_RT_HAS_FTLS_MODEL_INITIAL_EXEC)
+ check_cxx_compiler_flag(-fno-lto             COMPILER_RT_HAS_FNO_LTO_FLAG)
++check_cxx_compiler_flag(-fno-profile-generate COMPILER_RT_HAS_FNO_PROFILE_GENERATE_FLAG)
++check_cxx_compiler_flag(-fno-profile-instr-generate COMPILER_RT_HAS_FNO_PROFILE_INSTR_GENERATE_FLAG)
++check_cxx_compiler_flag(-fno-profile-instr-use COMPILER_RT_HAS_FNO_PROFILE_INSTR_USE_FLAG)
+ check_cxx_compiler_flag("-Werror -msse3" COMPILER_RT_HAS_MSSE3_FLAG)
+ check_cxx_compiler_flag("-Werror -msse4.2"   COMPILER_RT_HAS_MSSE4_2_FLAG)
+ check_cxx_compiler_flag(--sysroot=.          COMPILER_RT_HAS_SYSROOT_FLAG)
+diff --git a/compiler-rt/lib/crt/CMakeLists.txt b/compiler-rt/lib/crt/CMakeLists.txt
+index 1ed04827925..38be9caf059 100644
+--- a/compiler-rt/lib/crt/CMakeLists.txt
++++ b/compiler-rt/lib/crt/CMakeLists.txt
+@@ -20,6 +20,16 @@ function(check_cxx_section_exists section output)
+     list(APPEND try_compile_flags "-target ${CMAKE_C_COMPILER_TARGET}")
+   endif()
+   append_list_if(COMPILER_RT_HAS_FNO_LTO_FLAG -fno-lto try_compile_flags)
++  if(NOT COMPILER_RT_ENABLE_PGO)
++    if(LLVM_PROFDATA_FILE AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_USE_FLAG)
++      list(APPEND try_compile_flags "-fno-profile-instr-use")
++    endif()
++    if(LLVM_BUILD_INSTRUMENTED MATCHES IR AND COMPILER_RT_HAS_FNO_PROFILE_GENERATE_FLAG)
++      list(APPEND try_compile_flags "-fno-profile-generate")
++    elseif(LLVM_BUILD_INSTRUMENTED AND COMPILER_RT_HAS_FNO_PROFILE_INSTR_GENERATE_FLAG)
++      list(APPEND try_compile_flags "-fno-profile-instr-generate")
++    endif()
++  endif()
+ 
+   string(REPLACE ";" " " extra_flags "${try_compile_flags}")
+ 
+-- 
+2.25.1.481.gfbce0eb801-goog
+

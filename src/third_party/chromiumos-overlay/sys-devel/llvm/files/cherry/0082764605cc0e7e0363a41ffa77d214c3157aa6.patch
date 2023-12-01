@@ -1,0 +1,37 @@
+commit 0082764605cc0e7e0363a41ffa77d214c3157aa6
+Author: Christopher Di Bella <cjdb@google.com>
+Date:   Wed Jul 21 21:29:24 2021 +0000
+
+    Revert "Add workaround for false positive in -Wfree-nonheap-object"
+    
+    This reverts commit 499571ea835daf786626a0db1e12f890b6cd8f8d.
+
+diff --git a/mlir/lib/IR/OperationSupport.cpp b/mlir/lib/IR/OperationSupport.cpp
+index 60910f7f35de..b1feab3a60a8 100644
+--- a/mlir/lib/IR/OperationSupport.cpp
++++ b/mlir/lib/IR/OperationSupport.cpp
+@@ -237,9 +237,7 @@ detail::OperandStorage::~OperandStorage() {
+   if (isDynamicStorage()) {
+     TrailingOperandStorage &storage = getDynamicStorage();
+     storage.~TrailingOperandStorage();
+-    // Workaround false positive in -Wfree-nonheap-object
+-    auto *mem = &storage;
+-    free(mem);
++    free(&storage);
+   } else {
+     getInlineStorage().~TrailingOperandStorage();
+   }
+@@ -373,11 +371,8 @@ MutableArrayRef<OpOperand> detail::OperandStorage::resize(Operation *owner,
+     new (&newOperands[numOperands]) OpOperand(owner);
+ 
+   // If the current storage is also dynamic, free it.
+-  if (isDynamicStorage()) {
+-    // Workaround false positive in -Wfree-nonheap-object
+-    auto *mem = &storage;
+-    free(mem);
+-  }
++  if (isDynamicStorage())
++    free(&storage);
+ 
+   // Update the storage representation to use the new dynamic storage.
+   dynamicStorage.setPointerAndInt(newStorage, true);

@@ -1,0 +1,152 @@
+Change setup.py to respect the SYSROOT environment variable.
+This is needed to build the installed standard modules (e.g. readline & zlib).
+
+--- a/setup.py
++++ b/setup.py
+@@ -455,12 +455,16 @@
+ 
+     def detect_modules(self):
+         global disable_ssl
++
++        # We must respect the user specified sysroot!
++        sysroot = os.getenv('SYSROOT', '')
++
+         # Ensure that /usr/local is always used, but the local build
+         # directories (i.e. '.' and 'Include') must be first.  See issue
+         # 10520.
+         if not cross_compiling:
+-            add_dir_to_list(self.compiler.library_dirs, '/usr/local/@@GENTOO_LIBDIR@@')
+-            add_dir_to_list(self.compiler.include_dirs, '/usr/local/include')
++            add_dir_to_list(self.compiler.library_dirs, sysroot + '/usr/local/@@GENTOO_LIBDIR@@')
++            add_dir_to_list(self.compiler.include_dirs, sysroot + '/usr/local/include')
+         # only change this for cross builds for 3.3, issues on Mageia
+         if cross_compiling:
+             self.add_gcc_paths()
+@@ -504,9 +508,15 @@
+             # building a framework with different architectures than
+             # the one that is currently installed (issue #7473)
+             add_dir_to_list(self.compiler.library_dirs,
+-                            sysconfig.get_config_var("LIBDIR"))
++                            sysroot + sysconfig.get_config_var("LIBDIR"))
+             add_dir_to_list(self.compiler.include_dirs,
+-                            sysconfig.get_config_var("INCLUDEDIR"))
++                            sysroot + sysconfig.get_config_var("INCLUDEDIR"))
++
++        # We should always look into sysroot/usr/include and consider
++        # also the lib dirs there for searching for files
++        add_dir_to_list(self.compiler.include_dirs, sysroot + '/usr/include')
++        add_dir_to_list(self.compiler.library_dirs, sysroot + '/@@GENTOO_LIBDIR@@')
++        add_dir_to_list(self.compiler.library_dirs, sysroot + '/usr/@@GENTOO_LIBDIR@@')
+ 
+         try:
+             have_unicode = unicode
+@@ -527,6 +537,9 @@
+             inc_dirs = (self.compiler.include_dirs +
+                         sysroot_paths(('CPPFLAGS', 'CFLAGS', 'CC'),
+                                       system_include_dirs))
++        # Ignore previous settings.
++        lib_dirs = self.compiler.library_dirs
++        inc_dirs = self.compiler.include_dirs
+         exts = []
+         missing = []
+ 
+@@ -778,11 +791,11 @@
+             elif curses_library:
+                 readline_libs.append(curses_library)
+             elif self.compiler.find_library_file(lib_dirs +
+-                                                     ['/usr/@@GENTOO_LIBDIR@@/termcap'],
++                                                     [sysroot + '/usr/@@GENTOO_LIBDIR@@/termcap'],
+                                                      'termcap'):
+                 readline_libs.append('termcap')
+             exts.append( Extension('readline', ['readline.c'],
+-                                   library_dirs=['/usr/@@GENTOO_LIBDIR@@/termcap'],
++                                   library_dirs=[sysroot + '/usr/@@GENTOO_LIBDIR@@/termcap'],
+                                    extra_link_args=readline_extra_link_args,
+                                    libraries=readline_libs) )
+         else:
+@@ -805,20 +818,20 @@
+                                libraries=math_libs) )
+         # Detect SSL support for the socket module (via _ssl)
+         search_for_ssl_incs_in = [
+-                              '/usr/local/ssl/include',
+-                              '/usr/contrib/ssl/include/'
++                              sysroot + '/usr/local/ssl/include',
++                              sysroot + '/usr/contrib/ssl/include/'
+                              ]
+         ssl_incs = find_file('openssl/ssl.h', inc_dirs,
+                              search_for_ssl_incs_in
+                              )
+         if ssl_incs is not None and not disable_ssl:
+             krb5_h = find_file('krb5.h', inc_dirs,
+-                               ['/usr/kerberos/include'])
++                               [sysroot + '/usr/kerberos/include'])
+             if krb5_h:
+                 ssl_incs += krb5_h
+         ssl_libs = find_library_file(self.compiler, 'ssl',lib_dirs,
+-                                     ['/usr/local/ssl/lib',
+-                                      '/usr/contrib/ssl/lib/'
++                                     [sysroot + '/usr/local/ssl/lib',
++                                      sysroot + '/usr/contrib/ssl/lib/'
+                                      ] )
+ 
+         if (ssl_incs is not None and
+@@ -968,6 +981,7 @@
+             db_inc_paths.append('/usr/local/include/db3%d' % x)
+             db_inc_paths.append('/pkg/db-3.%d/include' % x)
+             db_inc_paths.append('/opt/db-3.%d/include' % x)
++        db_inc_paths = [sysroot + x for x in db_inc_paths]
+ 
+         if cross_compiling:
+             db_inc_paths = []
+@@ -1121,6 +1135,7 @@
+                            ]
+         if cross_compiling:
+             sqlite_inc_paths = []
++        sqlite_inc_paths = [sysroot + x for x in sqlite_inc_paths]
+         MIN_SQLITE_VERSION_NUMBER = (3, 0, 8)
+         MIN_SQLITE_VERSION = ".".join([str(x)
+                                     for x in MIN_SQLITE_VERSION_NUMBER])
+@@ -1835,7 +1850,7 @@
+         # For 8.4a2, the X11 headers are not included. Rather than include a
+         # complicated search, this is a hard-coded path. It could bail out
+         # if X11 libs are not found...
+-        include_dirs.append('/usr/X11R6/include')
++        include_dirs.append(sysroot + '/usr/X11R6/include')
+         frameworks = ['-framework', 'Tcl', '-framework', 'Tk']
+ 
+         # All existing framework builds of Tcl/Tk don't support 64-bit
+@@ -1879,6 +1894,9 @@
+         if self.detect_tkinter_explicitly():
+             return
+ 
++        # We must respect the user specified sysroot!
++        sysroot = os.getenv('SYSROOT', '')
++
+         # Rather than complicate the code below, detecting and building
+         # AquaTk is a separate method. Only one Tkinter will be built on
+         # Darwin - either AquaTk, if it is found, or X11 based Tk.
+@@ -1934,16 +1952,16 @@
+         if host_platform == 'sunos5':
+             include_dirs.append('/usr/openwin/include')
+             added_lib_dirs.append('/usr/openwin/lib')
+-        elif os.path.exists('/usr/X11R6/include'):
+-            include_dirs.append('/usr/X11R6/include')
+-            added_lib_dirs.append('/usr/X11R6/@@GENTOO_LIBDIR@@')
+-        elif os.path.exists('/usr/X11R5/include'):
+-            include_dirs.append('/usr/X11R5/include')
+-            added_lib_dirs.append('/usr/X11R5/@@GENTOO_LIBDIR@@')
++        elif os.path.exists(sysroot + '/usr/X11R6/include'):
++            include_dirs.append(sysroot + '/usr/X11R6/include')
++            added_lib_dirs.append(sysroot + '/usr/X11R6/@@GENTOO_LIBDIR@@')
++        elif os.path.exists(sysroot + '/usr/X11R5/include'):
++            include_dirs.append(sysroot + '/usr/X11R5/include')
++            added_lib_dirs.append(sysroot + '/usr/X11R5/@@GENTOO_LIBDIR@@')
+         else:
+             # Assume default location for X11
+-            include_dirs.append('/usr/X11/include')
+-            added_lib_dirs.append('/usr/X11/@@GENTOO_LIBDIR@@')
++            include_dirs.append(sysroot + '/usr/X11/include')
++            added_lib_dirs.append(sysroot + '/usr/X11/@@GENTOO_LIBDIR@@')
+ 
+         # If Cygwin, then verify that X is installed before proceeding
+         if host_platform == 'cygwin':

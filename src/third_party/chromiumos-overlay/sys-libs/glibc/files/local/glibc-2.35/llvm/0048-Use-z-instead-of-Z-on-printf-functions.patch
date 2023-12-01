@@ -1,0 +1,938 @@
+From 5b538fdf7407d05f3d72ad278621e37a3498f4cc Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 08:43:59 -0300
+Subject: [PATCH 048/163] Use '%z' instead of '%Z' on printf functions
+
+---
+ catgets/gencat.c                       |   6 +-
+ elf/dl-load.c                          |   2 +-
+ elf/dl-lookup.c                        |   4 +-
+ elf/dl-printf.c                        |   2 +-
+ elf/dl-tunables.c                      |   2 +-
+ elf/rtld.c                             |  10 +--
+ elf/sprof.c                            |  12 +--
+ elf/tst-tls-dlinfo.c                   |   2 +-
+ gmon/tst-sprofil.c                     |   2 +-
+ iconv/iconv_charmap.c                  |   2 +-
+ libio/tst-ext.c                        |   8 +-
+ libio/tst-widetext.c                   |  10 +--
+ libio/tst_swprintf.c                   |  10 +--
+ libio/tst_swscanf.c                    |   4 +-
+ locale/programs/ld-collate.c           |   8 +-
+ locale/programs/ld-ctype.c             |   4 +-
+ localedata/bug-iconv-trans.c           |   4 +-
+ localedata/tst-iconv-math-trans.c      |   4 +-
+ nptl/tst-rwlock6.c                     |  12 +--
+ nptl/tst-rwlock7.c                     |  16 ++--
+ posix/runptests.c                      |   2 +-
+ posix/wordexp-test.c                   |   4 +-
+ rt/tst-aio.c                           |   2 +-
+ rt/tst-aio64.c                         |   2 +-
+ stdio-common/bug1.c                    |   4 +-
+ stdio-common/bug5.c                    |   2 +-
+ stdio-common/test_rdwr.c               |  10 +--
+ stdio-common/tst-fphex.c               |   4 +-
+ stdio-common/tst-vfprintf-width-i18n.c | 103 +++++++++++++++++++++++++
+ stdio-common/tstgetln.c                |   2 +-
+ string/tester.c                        |   2 +-
+ time/tst-strftime.c                    |   6 +-
+ wcsmbs/wcsmbs-tst1.c                   |   2 +-
+ 33 files changed, 186 insertions(+), 83 deletions(-)
+ create mode 100644 stdio-common/tst-vfprintf-width-i18n.c
+
+diff --git a/catgets/gencat.c b/catgets/gencat.c
+index cebf1fd435..dec4d936a7 100644
+--- a/catgets/gencat.c
++++ b/catgets/gencat.c
+@@ -1033,7 +1033,7 @@ write_out (struct catalog *catalog, const char *output_name,
+ 	  /* If the current message set has a symbolic name write this
+ 	     out first.  */
+ 	  if (set_run->symbol != NULL)
+-	    fprintf (fp, "%s#define %sSet %#x\t/* %s:%Zu */\n",
++	    fprintf (fp, "%s#define %sSet %#x\t/* %s:%zu */\n",
+ 		     first ? "" : "\n", set_run->symbol, set_run->number - 1,
+ 		     set_run->fname, set_run->line);
+ 	  first = 0;
+@@ -1047,12 +1047,12 @@ write_out (struct catalog *catalog, const char *output_name,
+ 	      if (message_run->symbol != NULL)
+ 		{
+ 		  if (set_run->symbol == NULL)
+-		    fprintf (fp, "#define AutomaticSet%d%s %#x\t/* %s:%Zu */\n",
++		    fprintf (fp, "#define AutomaticSet%d%s %#x\t/* %s:%zu */\n",
+ 			     set_run->number, message_run->symbol,
+ 			     message_run->number, message_run->fname,
+ 			     message_run->line);
+ 		  else
+-		    fprintf (fp, "#define %s%s %#x\t/* %s:%Zu */\n",
++		    fprintf (fp, "#define %s%s %#x\t/* %s:%zu */\n",
+ 			     set_run->symbol, message_run->symbol,
+ 			     message_run->number, message_run->fname,
+ 			     message_run->line);
+diff --git a/elf/dl-load.c b/elf/dl-load.c
+index 6bae9e96c9..69f1d67b11 100644
+--- a/elf/dl-load.c
++++ b/elf/dl-load.c
+@@ -1428,7 +1428,7 @@ cannot enable executable stack as shared object requires");
+ 
+   if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_FILES))
+     _dl_debug_printf ("\
+-  dynamic: 0x%0*lx  base: 0x%0*lx   size: 0x%0*Zx\n\
++  dynamic: 0x%0*lx  base: 0x%0*lx   size: 0x%0*zx\n\
+     entry: 0x%0*lx  phdr: 0x%0*lx  phnum:   %*u\n\n",
+ 			   (int) sizeof (void *) * 2,
+ 			   (unsigned long int) l->l_ld,
+diff --git a/elf/dl-lookup.c b/elf/dl-lookup.c
+index 2dc7452135..82957ea07b 100644
+--- a/elf/dl-lookup.c
++++ b/elf/dl-lookup.c
+@@ -1062,7 +1062,7 @@ _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
+ 	  || GLRO(dl_trace_prelink_map) == NULL
+ 	  || type_class >= 4)
+ 	{
+-	  _dl_printf ("%s 0x%0*Zx 0x%0*Zx -> 0x%0*Zx 0x%0*Zx ",
++	  _dl_printf ("%s 0x%0*zx 0x%0*zx -> 0x%0*zx 0x%0*zx ",
+ 		      conflict ? "conflict" : "lookup",
+ 		      (int) sizeof (ElfW(Addr)) * 2,
+ 		      (size_t) undef_map->l_map_start,
+@@ -1074,7 +1074,7 @@ _dl_debug_bindings (const char *undef_name, struct link_map *undef_map,
+ 		      (size_t) (value->s ? value->s->st_value : 0));
+ 
+ 	  if (conflict)
+-	    _dl_printf ("x 0x%0*Zx 0x%0*Zx ",
++	    _dl_printf ("x 0x%0*zx 0x%0*zx ",
+ 			(int) sizeof (ElfW(Addr)) * 2,
+ 			(size_t) (val.s ? val.m->l_map_start : 0),
+ 			(int) sizeof (ElfW(Addr)) * 2,
+diff --git a/elf/dl-printf.c b/elf/dl-printf.c
+index d3264ba96c..429d2e80c2 100644
+--- a/elf/dl-printf.c
++++ b/elf/dl-printf.c
+@@ -113,7 +113,7 @@ _dl_debug_vdprintf (int fd, int tag_p, const char *fmt, va_list arg)
+ 	  /* Recognize the l modifier.  It is only important on some
+ 	     platforms where long and int have a different size.  We
+ 	     can use the same code for size_t.  */
+-	  if (*fmt == 'l' || *fmt == 'Z')
++	  if (*fmt == 'l' || *fmt == 'z')
+ 	    {
+ #if LONG_MAX != INT_MAX
+ 	      long_mod = 1;
+diff --git a/elf/dl-tunables.c b/elf/dl-tunables.c
+index 8e7ee9df10..a3e399fda2 100644
+--- a/elf/dl-tunables.c
++++ b/elf/dl-tunables.c
+@@ -380,7 +380,7 @@ __tunables_print (void)
+ 			  (long int) cur->type.max);
+ 	      break;
+ 	    case TUNABLE_TYPE_SIZE_T:
+-	      _dl_printf ("0x%Zx (min: 0x%Zx, max: 0x%Zx)\n",
++	      _dl_printf ("0x%zx (min: 0x%zx, max: 0x%zx)\n",
+ 			  (size_t) cur->val.numval,
+ 			  (size_t) cur->type.min,
+ 			  (size_t) cur->type.max);
+diff --git a/elf/rtld.c b/elf/rtld.c
+index c6100aa365..5c8e881e66 100644
+--- a/elf/rtld.c
++++ b/elf/rtld.c
+@@ -2111,7 +2111,7 @@ dl_main (const ElfW(Phdr) *phdr,
+ 		}
+ 	      if (_dl_name_match_p (GLRO(dl_trace_prelink), l))
+ 		GLRO(dl_trace_prelink_map) = l;
+-	      _dl_printf ("\t%s => %s (0x%0*Zx, 0x%0*Zx)",
++	      _dl_printf ("\t%s => %s (0x%0*zx, 0x%0*zx)",
+ 			  DSO_FILENAME (l->l_libname->name),
+ 			  DSO_FILENAME (l->l_name),
+ 			  (int) sizeof l->l_map_start * 2,
+@@ -2120,7 +2120,7 @@ dl_main (const ElfW(Phdr) *phdr,
+ 			  (size_t) l->l_addr);
+ 
+ 	      if (l->l_tls_modid)
+-		_dl_printf (" TLS(0x%Zx, 0x%0*Zx)\n", l->l_tls_modid,
++		_dl_printf (" TLS(0x%zx, 0x%0*zx)\n", l->l_tls_modid,
+ 			    (int) sizeof l->l_tls_offset * 2,
+ 			    (size_t) l->l_tls_offset);
+ 	      else
+@@ -2182,11 +2182,11 @@ dl_main (const ElfW(Phdr) *phdr,
+ 	      /* The library was not found.  */
+ 	      _dl_printf ("\t%s => not found\n", l->l_libname->name);
+ 	    else if (strcmp (l->l_libname->name, l->l_name) == 0)
+-	      _dl_printf ("\t%s (0x%0*Zx)\n", l->l_libname->name,
++	      _dl_printf ("\t%s (0x%0*zx)\n", l->l_libname->name,
+ 			  (int) sizeof l->l_map_start * 2,
+ 			  (size_t) l->l_map_start);
+ 	    else
+-	      _dl_printf ("\t%s => %s (0x%0*Zx)\n", l->l_libname->name,
++	      _dl_printf ("\t%s => %s (0x%0*zx)\n", l->l_libname->name,
+ 			  l->l_name, (int) sizeof l->l_map_start * 2,
+ 			  (size_t) l->l_map_start);
+ 	}
+@@ -2205,7 +2205,7 @@ dl_main (const ElfW(Phdr) *phdr,
+ 
+ 	    loadbase = LOOKUP_VALUE_ADDRESS (result, false);
+ 
+-	    _dl_printf ("%s found at 0x%0*Zd in object at 0x%0*Zd\n",
++	    _dl_printf ("%s found at 0x%0*zd in object at 0x%0*zd\n",
+ 			_dl_argv[i],
+ 			(int) sizeof ref->st_value * 2,
+ 			(size_t) ref->st_value,
+diff --git a/elf/sprof.c b/elf/sprof.c
+index 405fbcbf38..da7d817b09 100644
+--- a/elf/sprof.c
++++ b/elf/sprof.c
+@@ -476,7 +476,7 @@ load_shobj (const char *name)
+   result->kcountsize = textsize / HISTFRACTION;
+   result->hashfraction = HASHFRACTION;
+   if (do_test)
+-    printf ("hashfraction = %d\ndivider = %Zu\n",
++    printf ("hashfraction = %d\ndivider = %zu\n",
+ 	    result->hashfraction,
+ 	    result->hashfraction * sizeof (struct here_fromstruct));
+   result->tossize = textsize / HASHFRACTION;
+@@ -495,7 +495,7 @@ load_shobj (const char *name)
+ 			      * sizeof (struct here_cg_arc_record)));
+ 
+   if (do_test)
+-    printf ("expected size: %Zd\n", result->expected_size);
++    printf ("expected size: %zd\n", result->expected_size);
+ 
+ #define SCALE_1_TO_1	0x10000L
+ 
+@@ -1357,15 +1357,15 @@ generate_call_graph (struct profdata *profdata)
+ 		     ? sortsym[runp->idx]->name : "<UNKNOWN>"));
+ 
+ 	    if (runp->idx != (size_t) -1l)
+-	      printf (" [%Zd]", runp->idx);
++	      printf (" [%zd]", runp->idx);
+ 	    putchar_unlocked ('\n');
+ 
+ 	    runp = runp->next;
+ 	  }
+ 
+ 	/* Info about the function itself.  */
+-	n = printf ("[%Zu]", cnt);
+-	printf ("%*s%5.1f%8.2f%8.2f%9" PRIdMAX "         %s [%Zd]\n",
++	n = printf ("[%zu]", cnt);
++	printf ("%*s%5.1f%8.2f%8.2f%9" PRIdMAX "         %s [%zd]\n",
+ 		(int) (7 - n), " ",
+ 		total_ticks ? (100.0 * sortsym[cnt]->ticks) / total_ticks : 0,
+ 		sortsym[cnt]->ticks * tick_unit,
+@@ -1384,7 +1384,7 @@ generate_call_graph (struct profdata *profdata)
+ 		    runp->count);
+ 
+ 	    if (runp->idx != (size_t) -1l)
+-	      printf ("%-9" PRIdMAX "   %s [%Zd]\n",
++	      printf ("%-9" PRIdMAX "   %s [%zd]\n",
+ 		      sortsym[runp->idx]->calls,
+ 		      sortsym[runp->idx]->name,
+ 		      runp->idx);
+diff --git a/elf/tst-tls-dlinfo.c b/elf/tst-tls-dlinfo.c
+index 7d2b42e2ab..6d032bdc53 100644
+--- a/elf/tst-tls-dlinfo.c
++++ b/elf/tst-tls-dlinfo.c
+@@ -33,7 +33,7 @@ do_test (void)
+       result = 1;
+     }
+   else
+-    printf ("dlinfo says TLS module ID %Zu\n", modid);
++    printf ("dlinfo says TLS module ID %zu\n", modid);
+ 
+   void *block;
+   if (dlinfo (h, RTLD_DI_TLS_DATA, &block))
+diff --git a/gmon/tst-sprofil.c b/gmon/tst-sprofil.c
+index a927e737b2..de5a4e5198 100644
+--- a/gmon/tst-sprofil.c
++++ b/gmon/tst-sprofil.c
+@@ -161,7 +161,7 @@ main (int argc, char **argv)
+   for (i = 0; i < NELEMS (taddr); ++i)
+     for (j = 0; j < 0x10000 / sizeof (int); ++j)
+       if (buf[i][j] != 0)
+-	printf ("%0*Zx\t%u\t(buffer %d)\n",
++	printf ("%0*zx\t%u\t(buffer %d)\n",
+ 		(int) (sizeof (size_t) * 2),
+ 		(taddr[i] + ((char *) &buf[i][j] - (char *) &buf[i][0])),
+ 		buf[i][j], i);
+diff --git a/iconv/iconv_charmap.c b/iconv/iconv_charmap.c
+index 1992937d6e..98c7649870 100644
+--- a/iconv/iconv_charmap.c
++++ b/iconv/iconv_charmap.c
+@@ -440,7 +440,7 @@ process_block (struct convtable *tbl, char *addr, size_t len, FILE *output)
+ 	       ignoring errors.  Otherwise punt.  */
+ 	    if (! omit_invalid)
+ 	      {
+-		error (0, 0, _("illegal input sequence at position %Zd"), n);
++		error (0, 0, _("illegal input sequence at position %zd"), n);
+ 		return -1;
+ 	      }
+ 
+diff --git a/libio/tst-ext.c b/libio/tst-ext.c
+index f69fbe6f21..c987b1bafc 100644
+--- a/libio/tst-ext.c
++++ b/libio/tst-ext.c
+@@ -25,8 +25,8 @@ main (void)
+   /* Get the buffer size.  */
+   if (__fbufsize (fp) != sizeof buf)
+     {
+-      printf ("__fbusize() reported a buffer size of %Zd bytes;"
+-	      " we installed a buffer with %Zd bytes\n",
++      printf ("__fbusize() reported a buffer size of %zd bytes;"
++	      " we installed a buffer with %zd bytes\n",
+ 	      __fbufsize (fp), sizeof buf);
+       result = 1;
+     }
+@@ -91,7 +91,7 @@ main (void)
+   /* The string we wrote above should still be in the buffer.  */
+   if (__fpending (fp) != strlen (teststring))
+     {
+-      printf ("__fpending() returned %Zd; expected %Zd\n",
++      printf ("__fpending() returned %zd; expected %zd\n",
+ 	      __fpending (fp), strlen (teststring));
+       result = 1;
+     }
+@@ -100,7 +100,7 @@ main (void)
+   /* And check again.  */
+   if (__fpending (fp) != 0)
+     {
+-      printf ("__fpending() returned %Zd; expected 0\n",
++      printf ("__fpending() returned %zd; expected 0\n",
+ 	      __fpending (fp));
+       result = 1;
+     }
+diff --git a/libio/tst-widetext.c b/libio/tst-widetext.c
+index f1616bfb28..df9e965029 100644
+--- a/libio/tst-widetext.c
++++ b/libio/tst-widetext.c
+@@ -59,7 +59,7 @@ do_test (void)
+       exit (1);
+     }
+ 
+-   printf ("INFO: input file has %Zd bytes\n", mbsize);
++   printf ("INFO: input file has %zd bytes\n", mbsize);
+ 
+   /* First convert the text to wide characters.  We use iconv here.  */
+   {
+@@ -82,7 +82,7 @@ do_test (void)
+     nonr = iconv (cd, &inbuf, &inleft, &outbuf, &outleft);
+     if (nonr != 0 && nonr != (size_t) -1)
+       {
+-	printf ("%u: iconv performed %Zd nonreversible conversions\n",
++	printf ("%u: iconv performed %zd nonreversible conversions\n",
+ 		__LINE__, nonr);
+ 	exit (1);
+       }
+@@ -90,7 +90,7 @@ do_test (void)
+     if  (nonr == (size_t) -1)
+       {
+ 	printf ("\
+-%u: iconv returned with %Zd and errno = %m (inleft: %Zd, outleft: %Zd)\n",
++%u: iconv returned with %zd and errno = %m (inleft: %zd, outleft: %zd)\n",
+ 		__LINE__, nonr, inleft, outleft);
+ 	exit (1);
+       }
+@@ -163,7 +163,7 @@ do_test (void)
+       wint_t wch = fgetwc (fp);
+       if (wch == WEOF)
+ 	{
+-	  printf ("%u: fgetwc failed (idx %Zd): %m\n", __LINE__, n);
++	  printf ("%u: fgetwc failed (idx %zd): %m\n", __LINE__, n);
+ 	  exit (1);
+ 	}
+       wc2buf[n] = wch;
+@@ -290,7 +290,7 @@ do_test (void)
+     {
+       if (fgetws (wcp, &wc2buf[wcsize] - wcp + 1, fp) == NULL)
+ 	{
+-	  printf ("%u: short read using fgetws (only %td of %Zd)\n",
++	  printf ("%u: short read using fgetws (only %td of %zd)\n",
+ 		  __LINE__, wcp - wc2buf, wcsize);
+ 	  status = 1;
+ 	  break;
+diff --git a/libio/tst_swprintf.c b/libio/tst_swprintf.c
+index e4bd7f022a..9452df79a6 100644
+--- a/libio/tst_swprintf.c
++++ b/libio/tst_swprintf.c
+@@ -57,25 +57,25 @@ main (int argc, char *argv[])
+ 
+       if (tests[n].exp < 0 && res >= 0)
+ 	{
+-	  printf ("swprintf (buf, %Zu, L\"%%s\", \"%s\") expected to fail\n",
++	  printf ("swprintf (buf, %zu, L\"%%s\", \"%s\") expected to fail\n",
+ 		  tests[n].n, tests[n].str);
+ 	  result = 1;
+ 	}
+       else if (tests[n].exp >= 0 && tests[n].exp != res)
+ 	{
+-	  printf ("swprintf (buf, %Zu, L\"%%s\", \"%s\") expected to return %Zd, but got %Zd\n",
++	  printf ("swprintf (buf, %zu, L\"%%s\", \"%s\") expected to return %zd, but got %zd\n",
+ 		  tests[n].n, tests[n].str, tests[n].exp, res);
+ 	  result = 1;
+ 	}
+       else
+-	printf ("swprintf (buf, %Zu, L\"%%s\", \"%s\") OK\n",
++	printf ("swprintf (buf, %zu, L\"%%s\", \"%s\") OK\n",
+ 		tests[n].n, tests[n].str);
+     }
+ 
+   if (swprintf (buf, nbuf, L"%.0s", "foo") != 0
+       || wcslen (buf) != 0)
+     {
+-      printf ("swprintf (buf, %Zu, L\"%%.0s\", \"foo\") create some output\n",
++      printf ("swprintf (buf, %zu, L\"%%.0s\", \"foo\") create some output\n",
+ 	      nbuf);
+       result = 1;
+     }
+@@ -83,7 +83,7 @@ main (int argc, char *argv[])
+   if (swprintf (buf, nbuf, L"%.0ls", L"foo") != 0
+       || wcslen (buf) != 0)
+     {
+-      printf ("swprintf (buf, %Zu, L\"%%.0ls\", L\"foo\") create some output\n",
++      printf ("swprintf (buf, %zu, L\"%%.0ls\", L\"foo\") create some output\n",
+ 	      nbuf);
+       result = 1;
+     }
+diff --git a/libio/tst_swscanf.c b/libio/tst_swscanf.c
+index 372f0fc7d3..5d3582efd1 100644
+--- a/libio/tst_swscanf.c
++++ b/libio/tst_swscanf.c
+@@ -20,7 +20,7 @@ main (int argc, char *argv[])
+   n = swscanf (in, L"%d + %d is %d", &a, &b, &c);
+   if (n != 3 || a + b != c || c != 42)
+     {
+-      printf ("*** FAILED, n = %Zu, a = %d, b = %d, c = %d\n", n, a, b, c);
++      printf ("*** FAILED, n = %zu, a = %d, b = %d, c = %d\n", n, a, b, c);
+       result = 1;
+     }
+ 
+@@ -30,7 +30,7 @@ main (int argc, char *argv[])
+   if (n != 5 || strcmp (buf1, "one") != 0 || wcscmp (wbuf2, L"two") != 0
+       || strcmp (buf3, "three") != 0 || c4 != '!' || wc5 != L'!')
+     {
+-      printf ("*** FAILED, n = %Zu, buf1 = \"%s\", wbuf2 = L\"%S\", buf3 = \"%s\", c4 = '%c', wc5 = L'%C'\n",
++      printf ("*** FAILED, n = %zu, buf1 = \"%s\", wbuf2 = L\"%S\", buf3 = \"%s\", c4 = '%c', wc5 = L'%C'\n",
+ 	      n, buf1, wbuf2, buf3, c4, (wint_t) wc5);
+       result = 1;
+     }
+diff --git a/locale/programs/ld-collate.c b/locale/programs/ld-collate.c
+index 992814491d..c790623cbc 100644
+--- a/locale/programs/ld-collate.c
++++ b/locale/programs/ld-collate.c
+@@ -1059,7 +1059,7 @@ insert_value (struct linereader *ldfile, const char *symstr, size_t symlen,
+   /* Test whether this element is not already in the list.  */
+   if (elem->next != NULL || elem == collate->cursor)
+     {
+-      lr_error (ldfile, _("order for `%.*s' already defined at %s:%Zu"),
++      lr_error (ldfile, _("order for `%.*s' already defined at %s:%zu"),
+ 		(int) symlen, symstr, elem->file, elem->line);
+       lr_ignore_rest (ldfile, 0);
+       return 1;
+@@ -1235,7 +1235,7 @@ range is not lower than that of the last character"), "LC_COLLATE");
+ 					     && elem->next == collate->cursor))
+ 		    {
+ 		      lr_error (ldfile, _("\
+-order for `%.*s' already defined at %s:%Zu"),
++order for `%.*s' already defined at %s:%zu"),
+ 				(int) namelen, seq->name,
+ 				elem->file, elem->line);
+ 		      goto increment;
+@@ -1378,7 +1378,7 @@ order for `%.*s' already defined at %s:%Zu"),
+ 					     && elem->next == collate->cursor))
+ 		    {
+ 		      lr_error (ldfile, _("\
+-%s: order for `%.*s' already defined at %s:%Zu"),
++%s: order for `%.*s' already defined at %s:%zu"),
+ 				"LC_COLLATE", (int) lenfrom, buf,
+ 				elem->file, elem->line);
+ 		      continue;
+@@ -3728,7 +3728,7 @@ error while adding equivalent collating symbol"));
+ 	      || &collate->undefined == collate->cursor)
+ 	    {
+ 	      lr_error (ldfile,
+-			_("%s: order for `%.*s' already defined at %s:%Zu"),
++			_("%s: order for `%.*s' already defined at %s:%zu"),
+ 			"LC_COLLATE", 9, "UNDEFINED",
+ 			collate->undefined.file,
+ 			collate->undefined.line);
+diff --git a/locale/programs/ld-ctype.c b/locale/programs/ld-ctype.c
+index c6749dbd82..e85820d335 100644
+--- a/locale/programs/ld-ctype.c
++++ b/locale/programs/ld-ctype.c
+@@ -526,7 +526,7 @@ internal error in %s, line %u"), __FUNCTION__, __LINE__);
+ 			  {
+ 			    char buf[17];
+ 
+-			    snprintf (buf, sizeof buf, "\\%Zo", cnt);
++			    snprintf (buf, sizeof buf, "\\%zo", cnt);
+ 
+ 			    record_error (0, 0, _("\
+ character '%s' in class `%s' must be in class `%s'"),
+@@ -541,7 +541,7 @@ character '%s' in class `%s' must be in class `%s'"),
+ 			  {
+ 			    char buf[17];
+ 
+-			    snprintf (buf, sizeof buf, "\\%Zo", cnt);
++			    snprintf (buf, sizeof buf, "\\%zo", cnt);
+ 
+ 			    record_error (0, 0, _("\
+ character '%s' in class `%s' must not be in class `%s'"),
+diff --git a/localedata/bug-iconv-trans.c b/localedata/bug-iconv-trans.c
+index 3886247c38..f1a0416547 100644
+--- a/localedata/bug-iconv-trans.c
++++ b/localedata/bug-iconv-trans.c
+@@ -36,7 +36,7 @@ main (void)
+       if (n == (size_t) -1)
+ 	printf ("iconv() returned error: %m\n");
+       else
+-	printf ("iconv() returned %Zd, expected 7\n", n);
++	printf ("iconv() returned %zd, expected 7\n", n);
+       result = 1;
+     }
+   if (inlen != 0)
+@@ -57,7 +57,7 @@ main (void)
+     }
+   else if (outlen != sizeof (outbuf) - sizeof (expected))
+     {
+-      printf ("outlen wrong: %Zd, expected %Zd\n", outlen,
++      printf ("outlen wrong: %zd, expected %zd\n", outlen,
+ 	      sizeof (outbuf) - 15);
+       result = 1;
+     }
+diff --git a/localedata/tst-iconv-math-trans.c b/localedata/tst-iconv-math-trans.c
+index a2d01a7e34..34c62eb772 100644
+--- a/localedata/tst-iconv-math-trans.c
++++ b/localedata/tst-iconv-math-trans.c
+@@ -70,7 +70,7 @@ do_test (void)
+       if (n == (size_t) -1)
+         printf ("iconv() returned error: %m\n");
+       else
+-        printf ("iconv() returned %Zd, expected 24\n", n);
++        printf ("iconv() returned %zd, expected 24\n", n);
+       result = 1;
+     }
+   if (inlen != 0)
+@@ -91,7 +91,7 @@ do_test (void)
+     }
+   else if (outlen != sizeof (outbuf) - sizeof (expected))
+     {
+-      printf ("outlen wrong: %Zd, expected %Zd\n", outlen,
++      printf ("outlen wrong: %zd, expected %zd\n", outlen,
+               sizeof (outbuf) - 15);
+       result = 1;
+     }
+diff --git a/nptl/tst-rwlock6.c b/nptl/tst-rwlock6.c
+index 8294868f3b..acf36098eb 100644
+--- a/nptl/tst-rwlock6.c
++++ b/nptl/tst-rwlock6.c
+@@ -104,16 +104,16 @@ do_test_clock (clockid_t clockid, const char *fnname)
+       pthread_rwlockattr_t a;
+ 
+       if (pthread_rwlockattr_init (&a) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlockattr_t failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlockattr_t failed\n", cnt);
+ 
+       if (pthread_rwlockattr_setkind_np (&a, kind[cnt]) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlockattr_setkind failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlockattr_setkind failed\n", cnt);
+ 
+       if (pthread_rwlock_init (&r, &a) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlock_init failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlock_init failed\n", cnt);
+ 
+       if (pthread_rwlockattr_destroy (&a) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlockattr_destroy failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlockattr_destroy failed\n", cnt);
+ 
+       struct timespec ts;
+       xclock_gettime (clockid_for_get, &ts);
+@@ -124,7 +124,7 @@ do_test_clock (clockid_t clockid, const char *fnname)
+ 	? pthread_rwlock_timedwrlock (&r, &ts)
+ 	: pthread_rwlock_clockwrlock (&r, clockid, &ts);
+       if (e != 0)
+-        FAIL_EXIT1 ("round %Zu: %swrlock failed (%d)\n",
++        FAIL_EXIT1 ("round %zu: %swrlock failed (%d)\n",
+                     cnt, fnname, e);
+ 
+       verbose_printf ("1st %swrlock done\n", fnname);
+@@ -160,7 +160,7 @@ do_test_clock (clockid_t clockid, const char *fnname)
+       puts ("joined thread");
+ 
+       if (pthread_rwlock_destroy (&r) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlock_destroy failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlock_destroy failed\n", cnt);
+     }
+ 
+   return 0;
+diff --git a/nptl/tst-rwlock7.c b/nptl/tst-rwlock7.c
+index a228009a92..7427bf8e20 100644
+--- a/nptl/tst-rwlock7.c
++++ b/nptl/tst-rwlock7.c
+@@ -100,16 +100,16 @@ do_test_clock (clockid_t clockid, const char *fnname)
+       pthread_rwlockattr_t a;
+ 
+       if (pthread_rwlockattr_init (&a) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlockattr_t failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlockattr_t failed\n", cnt);
+ 
+       if (pthread_rwlockattr_setkind_np (&a, kind[cnt]) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlockattr_setkind failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlockattr_setkind failed\n", cnt);
+ 
+       if (pthread_rwlock_init (&r, &a) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlock_init failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlock_init failed\n", cnt);
+ 
+       if (pthread_rwlockattr_destroy (&a) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlockattr_destroy failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlockattr_destroy failed\n", cnt);
+ 
+       struct timespec ts;
+       xclock_gettime (clockid_for_get, &ts);
+@@ -119,10 +119,10 @@ do_test_clock (clockid_t clockid, const char *fnname)
+       /* Get a read lock.  */
+       if (clockid == CLOCK_USE_TIMEDLOCK) {
+         if (pthread_rwlock_timedrdlock (&r, &ts) != 0)
+-          FAIL_EXIT1 ("round %Zu: rwlock_timedrdlock failed\n", cnt);
++          FAIL_EXIT1 ("round %zu: rwlock_timedrdlock failed\n", cnt);
+       } else {
+         if (pthread_rwlock_clockrdlock (&r, clockid, &ts) != 0)
+-          FAIL_EXIT1 ("round %Zu: rwlock_%srdlock failed\n", cnt, fnname);
++          FAIL_EXIT1 ("round %zu: rwlock_%srdlock failed\n", cnt, fnname);
+       }
+ 
+       printf ("%zu: got %srdlock\n", cnt, fnname);
+@@ -134,10 +134,10 @@ do_test_clock (clockid_t clockid, const char *fnname)
+       pthread_t th = xpthread_create (NULL, tf, &args);
+       void *status = xpthread_join (th);
+       if (status != NULL)
+-        FAIL_EXIT1 ("failure in round %Zu\n", cnt);
++        FAIL_EXIT1 ("failure in round %zu\n", cnt);
+ 
+       if (pthread_rwlock_destroy (&r) != 0)
+-        FAIL_EXIT1 ("round %Zu: rwlock_destroy failed\n", cnt);
++        FAIL_EXIT1 ("round %zu: rwlock_destroy failed\n", cnt);
+     }
+ 
+   return 0;
+diff --git a/posix/runptests.c b/posix/runptests.c
+index ded47324ce..6dfd3a4a1a 100644
+--- a/posix/runptests.c
++++ b/posix/runptests.c
+@@ -115,7 +115,7 @@ main (int argc, char *argv[])
+ 	regfree (&re);
+       }
+ 
+-  printf ("\n%Zu tests, %d errors\n", cnt, errors);
++  printf ("\n%zu tests, %d errors\n", cnt, errors);
+ 
+   return errors != 0;
+ }
+diff --git a/posix/wordexp-test.c b/posix/wordexp-test.c
+index 0a36e0a7a3..e330a0c3e7 100644
+--- a/posix/wordexp-test.c
++++ b/posix/wordexp-test.c
+@@ -413,11 +413,11 @@ testit (struct test_case_struct *tc)
+   if (bzzzt)
+     {
+       printf ("FAILED\n");
+-      printf ("info: Test words: <%s>, need retval %d, wordc %Zd\n",
++      printf ("info: Test words: <%s>, need retval %d, wordc %zd\n",
+ 	      tc->words, tc->retval, tc->wordc);
+       if (start_offs != 0)
+ 	printf ("(preceded by %d NULLs)\n", start_offs);
+-      printf ("Got retval %d, wordc %Zd: ", retval, we.we_wordc);
++      printf ("Got retval %d, wordc %zd: ", retval, we.we_wordc);
+       if (retval == 0 || retval == WRDE_NOSPACE)
+ 	{
+ 	  for (i = 0; i < we.we_wordc + start_offs; ++i)
+diff --git a/rt/tst-aio.c b/rt/tst-aio.c
+index 62a1dee78f..c7e9cd55ee 100644
+--- a/rt/tst-aio.c
++++ b/rt/tst-aio.c
+@@ -274,7 +274,7 @@ do_test (int argc, char *argv[])
+   for (cnt = 10; cnt > 0; )
+     if (aio_cancel (fd, cbp[--cnt]) == -1)
+       /* This is not an error.  The request can simply be finished.  */
+-      printf ("aio_cancel (fd, cbp[%Zd]) cannot be canceled\n", cnt);
++      printf ("aio_cancel (fd, cbp[%zd]) cannot be canceled\n", cnt);
+   puts ("finished2");
+ 
+   result |= do_wait (cbp, 10, ECANCELED);
+diff --git a/rt/tst-aio64.c b/rt/tst-aio64.c
+index 89129160ab..f598ac097d 100644
+--- a/rt/tst-aio64.c
++++ b/rt/tst-aio64.c
+@@ -275,7 +275,7 @@ do_test (int argc, char *argv[])
+   for (cnt = 10; cnt > 0; )
+     if (aio_cancel64 (fd, cbp[--cnt]) == -1)
+       /* This is not an error.  The request can simply be finished.  */
+-      printf ("aio_cancel64 (fd, cbp[%Zd]) cannot be canceled\n", cnt);
++      printf ("aio_cancel64 (fd, cbp[%zd]) cannot be canceled\n", cnt);
+   puts ("finished2");
+ 
+   result |= do_wait (cbp, 10, ECANCELED);
+diff --git a/stdio-common/bug1.c b/stdio-common/bug1.c
+index 18e7d4c257..1035409d92 100644
+--- a/stdio-common/bug1.c
++++ b/stdio-common/bug1.c
+@@ -13,12 +13,12 @@ main (void)
+   stream = open_memstream (&bp, &size);
+   fprintf (stream, "hello");
+   fflush (stream);
+-  printf ("buf = %s, size = %Zu\n", bp, size);
++  printf ("buf = %s, size = %zu\n", bp, size);
+   lose |= size != 5;
+   lose |= strncmp (bp, "hello", size);
+   fprintf (stream, ", world");
+   fclose (stream);
+-  printf ("buf = %s, size = %Zu\n", bp, size);
++  printf ("buf = %s, size = %zu\n", bp, size);
+   lose |= size != 12;
+   lose |= strncmp (bp, "hello, world", 12);
+ 
+diff --git a/stdio-common/bug5.c b/stdio-common/bug5.c
+index 7bfe9b2b8d..f30f8d4548 100644
+--- a/stdio-common/bug5.c
++++ b/stdio-common/bug5.c
+@@ -28,7 +28,7 @@ main (void)
+       return 1;
+     }
+   for (i = 0; i < 1000; ++i)
+-    fprintf (in, "%Zu\n", i);
++    fprintf (in, "%zu\n", i);
+ 
+   out = fopen (outname, "w");
+   if (out == NULL)
+diff --git a/stdio-common/test_rdwr.c b/stdio-common/test_rdwr.c
+index bab062d992..0ec091b8b3 100644
+--- a/stdio-common/test_rdwr.c
++++ b/stdio-common/test_rdwr.c
+@@ -60,13 +60,13 @@ main (int argc, char **argv)
+ 	int c = getc (f);
+ 	if (c == EOF)
+ 	  {
+-	    printf ("EOF at %Zu.\n", i);
++	    printf ("EOF at %zu.\n", i);
+ 	    lose = 1;
+ 	    break;
+ 	  }
+ 	else if (c != hello[i])
+ 	  {
+-	    printf ("Got '%c' instead of '%c' at %Zu.\n",
++	    printf ("Got '%c' instead of '%c' at %zu.\n",
+ 		    (unsigned char) c, hello[i], i);
+ 	    lose = 1;
+ 	    break;
+@@ -82,7 +82,7 @@ main (int argc, char **argv)
+ 	for (i = replace_from; i < replace_to; ++i)
+ 	  if (putc(replace[i], f) == EOF)
+ 	    {
+-	      printf ("putc('%c') got %s at %Zu.\n",
++	      printf ("putc('%c') got %s at %zu.\n",
+ 		      replace[i], strerror (errno), i);
+ 	      lose = 1;
+ 	      break;
+@@ -90,13 +90,13 @@ main (int argc, char **argv)
+       }
+     else if (where == -1L)
+       {
+-	printf ("ftell got %s (should be at %Zu).\n",
++	printf ("ftell got %s (should be at %zu).\n",
+ 		strerror (errno), replace_from);
+ 	lose = 1;
+       }
+     else
+       {
+-	printf ("ftell returns %lu; should be %Zu.\n", where, replace_from);
++	printf ("ftell returns %lu; should be %zu.\n", where, replace_from);
+ 	lose = 1;
+       }
+   }
+diff --git a/stdio-common/tst-fphex.c b/stdio-common/tst-fphex.c
+index efba482537..13008af728 100644
+--- a/stdio-common/tst-fphex.c
++++ b/stdio-common/tst-fphex.c
+@@ -56,8 +56,8 @@ do_test (void)
+       int n = SPRINT (buf, array_length (buf), t->fmt, t->value);
+       if (n != STR_LEN (t->expect) || STR_CMP (buf, t->expect) != 0)
+ 	{
+-	  PRINT (L_("" S "\tExpected \"" S "\" (%Zu)\n\tGot      \""
+-		    S "\" (%d, %Zu)\n"),
++	  PRINT (L_("" S "\tExpected \"" S "\" (%zu)\n\tGot      \""
++		    S "\" (%d, %zu)\n"),
+ 		 t->fmt, t->expect, STR_LEN (t->expect),
+ 		 buf, n, STR_LEN (buf));
+ 	  result = 1;
+diff --git a/stdio-common/tst-vfprintf-width-i18n.c b/stdio-common/tst-vfprintf-width-i18n.c
+new file mode 100644
+index 0000000000..69b4888fa9
+--- /dev/null
++++ b/stdio-common/tst-vfprintf-width-i18n.c
+@@ -0,0 +1,103 @@
++/* Test for width of non-ASCII digit sequences.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++/* Behavior is currently inconsistent between %d and %f (bug 28943,
++   bug 28944).  This test intends to capture the status quo.  */
++
++#include <monetary.h>
++#include <stdio.h>
++#include <support/support.h>
++#include <support/check.h>
++#include <libc-diag.h>
++
++static int
++do_test (void)
++{
++  char buf[40];
++
++  xsetlocale (LC_ALL, "hi_IN.UTF-8");
++
++  /* Ungrouped, not translated.  */
++  TEST_COMPARE (sprintf (buf, "%7d", 12345), 7);
++  TEST_COMPARE_STRING (buf, "  12345");
++  TEST_COMPARE (sprintf (buf, "%10.2f", 12345.67), 10);
++  TEST_COMPARE_STRING (buf, "  12345.67");
++  TEST_COMPARE (strfmon (buf, sizeof (buf), "%^13i", 12345.67), 13);
++  TEST_COMPARE_STRING (buf, "  INR12345.67");
++
++  /* Grouped.  */
++  TEST_COMPARE (sprintf (buf, "%'8d", 12345), 8);
++  TEST_COMPARE_STRING (buf, "  12,345");
++  TEST_COMPARE (sprintf (buf, "%'11.2f", 12345.67), 11);
++  TEST_COMPARE_STRING (buf, "  12,345.67");
++  TEST_COMPARE (strfmon (buf, sizeof (buf), "%13i", 12345.67), 13);
++  TEST_COMPARE_STRING (buf, " INR12,345.67");
++
++  /* Translated.  */
++  /* clang does not know about the GNU extension 'I'.  */
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (14, "-Wformat-invalid-specifier");
++  TEST_COMPARE (sprintf (buf, "%I16d", 12345), 16);
++  TEST_COMPARE_STRING (buf, " १२३४५");
++  TEST_COMPARE (sprintf (buf, "%I12.2f", 12345.67), 26);
++  TEST_COMPARE_STRING (buf, "    १२३४५.६७");
++
++  /* Translated and grouped.  */
++  TEST_COMPARE (sprintf (buf, "%'I17d", 12345), 17);
++  TEST_COMPARE_STRING (buf, " १२,३४५");
++  TEST_COMPARE (sprintf (buf, "%'I12.2f", 12345.67), 26);
++  TEST_COMPARE_STRING (buf, "   १२,३४५.६७");
++  DIAG_POP_NEEDS_COMMENT_CLANG;
++
++  xsetlocale (LC_ALL, "ps_AF.UTF-8");
++
++  /* Ungrouped, not translated.  */
++  TEST_COMPARE (sprintf (buf, "%7d", 12345), 7);
++  TEST_COMPARE_STRING (buf, "  12345");
++  TEST_COMPARE (sprintf (buf, "%10.2f", 12345.67), 11);
++  TEST_COMPARE_STRING (buf, "  12345٫67");
++  TEST_COMPARE (strfmon (buf, sizeof (buf), "%^13i", 12345.67), 13);
++  TEST_COMPARE_STRING (buf, "    12346 AFN");
++
++  /* Grouped.  */
++  TEST_COMPARE (sprintf (buf, "%'8d", 12345), 8);
++  TEST_COMPARE_STRING (buf, " 12٬345");
++  TEST_COMPARE (sprintf (buf, "%'11.2f", 12345.67), 13);
++  TEST_COMPARE_STRING (buf, "  12٬345٫67"); /* Counts characters.  */
++  TEST_COMPARE (strfmon (buf, sizeof (buf), "%13i", 12345.67), 13);
++  TEST_COMPARE_STRING (buf, "  12٬346 AFN"); /* Counts bytes.   */
++
++  /* Translated.  */
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (14, "-Wformat-invalid-specifier");
++  TEST_COMPARE (sprintf (buf, "%I11d", 12345), 11);
++  TEST_COMPARE_STRING (buf, " ١٢٣۴٥");
++  TEST_COMPARE (sprintf (buf, "%I12.2f", 12345.67), 20);
++  TEST_COMPARE_STRING (buf, "    ١٢٣۴٥٫٦٧");
++
++  /* Translated and grouped.  */
++  TEST_COMPARE (sprintf (buf, "%'I13d", 12345), 13);
++  TEST_COMPARE_STRING (buf, " ١٢٬٣۴٥");
++  TEST_COMPARE (sprintf (buf, "%'I12.2f", 12345.67), 21);
++  TEST_COMPARE_STRING (buf, "   ١٢٬٣۴٥٫٦٧");
++  DIAG_POP_NEEDS_COMMENT_CLANG;
++
++  return 0;
++}
++
++#include <support/test-driver.c>
+diff --git a/stdio-common/tstgetln.c b/stdio-common/tstgetln.c
+index 8d7f2375fa..4895f1416a 100644
+--- a/stdio-common/tstgetln.c
++++ b/stdio-common/tstgetln.c
+@@ -26,7 +26,7 @@ main (int argc, char *argv[])
+ 
+   while ((len = getline (&buf, &size, stdin)) != -1)
+     {
+-      printf ("bufsize %Zu; read %Zd: ", size, len);
++      printf ("bufsize %zu; read %zd: ", size, len);
+       if (fwrite (buf, len, 1, stdout) != 1)
+ 	{
+ 	  perror ("fwrite");
+diff --git a/string/tester.c b/string/tester.c
+index 5a397055b1..eed76239f5 100644
+--- a/string/tester.c
++++ b/string/tester.c
+@@ -1647,7 +1647,7 @@ main (void)
+   else
+     {
+       status = EXIT_FAILURE;
+-      printf("%Zd errors.\n", errors);
++      printf("%zd errors.\n", errors);
+     }
+ 
+   return status;
+diff --git a/time/tst-strftime.c b/time/tst-strftime.c
+index af3ff72faf..482cd16c39 100644
+--- a/time/tst-strftime.c
++++ b/time/tst-strftime.c
+@@ -102,18 +102,18 @@ do_test (void)
+ 
+       if (res == 0)
+ 	{
+-	  printf ("%Zu: %s: res == 0 despite size == %Zu\n",
++	  printf ("%zu: %s: res == 0 despite size == %zu\n",
+ 		  cnt, tests[cnt].fmt, size);
+ 	  result = 1;
+ 	}
+       else if (size < tests[cnt].min)
+ 	{
+-	  printf ("%Zu: %s: size == %Zu was enough\n",
++	  printf ("%zu: %s: size == %zu was enough\n",
+ 		  cnt, tests[cnt].fmt, size);
+ 	  result = 1;
+ 	}
+       else
+-	printf ("%Zu: %s: size == %Zu: OK\n", cnt, tests[cnt].fmt, size);
++	printf ("%zu: %s: size == %zu: OK\n", cnt, tests[cnt].fmt, size);
+ 
+       free (buf);
+     }
+diff --git a/wcsmbs/wcsmbs-tst1.c b/wcsmbs/wcsmbs-tst1.c
+index 0d0e18f63a..75b745af04 100644
+--- a/wcsmbs/wcsmbs-tst1.c
++++ b/wcsmbs/wcsmbs-tst1.c
+@@ -20,7 +20,7 @@ main (void)
+ 
+   pchar = setlocale (LC_ALL, "de_DE.UTF-8");
+   printf ("locale : %s\n",pchar);
+-  printf ("MB_CUR_MAX %Zd\n", MB_CUR_MAX);
++  printf ("MB_CUR_MAX %zd\n", MB_CUR_MAX);
+ 
+   puts ("---- test 1 ------");
+   test = mbstowcs (tmp, str, (strlen (str) + 1) * sizeof (char));
+-- 
+2.37.2
+

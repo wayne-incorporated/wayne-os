@@ -1,0 +1,24 @@
+commit 35767e43d62c273f212b420d617870cfc7e28f42
+Author: Nikita Popov <npopov@redhat.com>
+Date:   Thu Apr 20 14:20:43 2023 +0200
+
+    Revert "[ORC][LLJIT] Use JITLink by default on ELF/x86-64."
+    
+    This reverts commit 85c649bc02a6605f541b09b33a200a78275ed90f.
+    
+    Has been causing test failures in OrcV2Examples for the past few
+    days.
+
+diff --git a/llvm/lib/ExecutionEngine/Orc/LLJIT.cpp b/llvm/lib/ExecutionEngine/Orc/LLJIT.cpp
+index d61dde836fa7..a65c3567c148 100644
+--- a/llvm/lib/ExecutionEngine/Orc/LLJIT.cpp
++++ b/llvm/lib/ExecutionEngine/Orc/LLJIT.cpp
+@@ -750,7 +750,7 @@ Error LLJITBuilderState::prepareForConstruction() {
+       UseJITLink = !TT.isOSBinFormatCOFF();
+       break;
+     case Triple::x86_64:
+-      UseJITLink = !TT.isOSBinFormatCOFF();
++      UseJITLink = TT.isOSBinFormatMachO();
+       break;
+     default:
+       break;

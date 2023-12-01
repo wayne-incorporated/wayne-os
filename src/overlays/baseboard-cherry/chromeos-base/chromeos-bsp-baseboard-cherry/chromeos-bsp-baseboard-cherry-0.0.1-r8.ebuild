@@ -1,0 +1,1 @@
+chromeos-bsp-baseboard-cherry-0.0.1.ebuild

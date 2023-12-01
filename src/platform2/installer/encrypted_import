@@ -1,0 +1,60 @@
+#!/bin/sh
+
+# Copyright 2013 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+HELP="USAGE: encrypted_import [flags]
+This script is used to copy files validated with the output of sha256sum to
+a new directory. The caller is expected to create and manage both the source
+and target directories as needed, mostly to make sure permissions are handled
+correctly.
+
+To move files from one directory to another while validating them:
+  encrypted_import /path/from /output/validation /path/to
+
+This is intended for safely importing files from the unencrypted to encrypted
+portions of the stateful partition.
+"
+
+# Die on error
+set -e
+
+export LC_ALL=C
+
+copy_with_validation() {
+  local from validation to file
+
+  from="$1"
+  validation="$2"
+  to="$3"
+
+  echo "Copy ${from} -> ${to}, validated by ${validation}."
+
+  # Move files into protected temp location for validation.
+  local processing
+  processing="$(mktemp -d "${to}/import_tmp.XXXXXXXXXX")"
+  trap "rm -rf '${processing}'" EXIT
+
+  for file in $(awk '{ print $2 }' "${validation}"); do
+    mkdir -p "${processing}/$(dirname "${file}")"
+    cp -- "${from}/${file}" "${processing}/${file}"
+  done
+
+  # Validate the files being imported. Note that we will exit
+  # on failure because of the "set -e" above.
+  cd "${processing}"
+  sha256sum --check --strict --quiet "${validation}"
+
+  for file in $(awk '{ print $2 }' "${validation}"); do
+    mkdir -p "${to}/$(dirname "${file}")"
+    mv -- "${processing}/${file}" "${to}/${file}"
+  done
+}
+
+if [ $# -eq 3 ]; then
+  copy_with_validation "$@"
+else
+  echo "${HELP}"
+  exit 1
+fi

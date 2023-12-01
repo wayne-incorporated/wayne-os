@@ -1,0 +1,62 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  # Manually add the include path so that the generated hardware_verifier.pb.h
+  # can include runtime_probe.pb.h properly.
+  cflags = [ "-I${sysroot}/usr/include/runtime_probe/proto_bindings" ]
+
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libruntime_probe-client",
+    "libshill-client",
+    "libtpm_manager-client",
+    "libuser_data_auth-client",
+    "protobuf",
+    "system_api",
+  ]
+}
+
+source_set("libsystem") {
+  sources = [
+    "cryptohome_client_impl.cc",
+    "hardware_verifier_client_impl.cc",
+    "power_manager_client_impl.cc",
+    "runtime_probe_client_impl.cc",
+    "shill_client_impl.cc",
+    "tpm_manager_client_impl.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}
+
+if (use.test) {
+  pkg_config("test_pkg_deps") {
+    pkg_deps = [
+      "libruntime_probe-client-test",
+      "libshill-client-test",
+      "libtpm_manager-client-test",
+      "libuser_data_auth-client-test",
+    ]
+  }
+
+  source_set("libsystem_test") {
+    sources = [
+      "cryptohome_client_test.cc",
+      "hardware_verifier_client_test.cc",
+      "power_manager_client_test.cc",
+      "runtime_probe_client_test.cc",
+      "shill_client_test.cc",
+      "tpm_manager_client_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_pkg_deps",
+    ]
+    deps = [ ":libsystem" ]
+  }
+}

@@ -1,0 +1,29 @@
+From beb27fa8983e4d7e378e00c8881fb3b71ac6cb7d Mon Sep 17 00:00:00 2001
+From: Brett Brotherton <bbrotherton@google.com>
+Date: Wed, 15 Mar 2023 08:14:18 -0600
+Subject: [PATCH] update hack/make.sh to build in chromeos
+
+replace pkg-config call with ${PKG_CONFIG} and replace gcc call with
+${CC} per error messages in build
+---
+ hack/make.sh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hack/make.sh b/hack/make.sh
+index 427def3..7cb919f 100755
+--- a/hack/make.sh
++++ b/hack/make.sh
+@@ -94,8 +94,8 @@ fi
+ # libdm_no_deferred_remove in dynamic cases because the binary could be shipped
+ # with a newer libdevmapper than the one it was built with.
+ if
+-	command -v gcc &> /dev/null \
+-		&& ! (echo -e '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }' | gcc -xc - -o /dev/null $(pkg-config --libs devmapper) &> /dev/null) \
++	command -v ${CC} &> /dev/null \
++		&& ! (echo -e '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }' | ${CC} -xc - -o /dev/null $(${PKG_CONFIG} --libs devmapper) &> /dev/null) \
+ 		;
+ then
+ 	add_buildtag libdm dlsym_deferred_remove
+-- 
+2.39.2
+

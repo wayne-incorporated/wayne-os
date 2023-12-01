@@ -1,0 +1,59 @@
+commit d870a575631d2cedab2ff237af8edd17916edc64
+Author: Zequan Wu <zequanwu@google.com>
+Date:   Wed Jul 20 16:08:25 2022 -0700
+
+    [SemaCXX] Set promotion type for enum if its type is promotable to integer type even if it has no definition.
+    
+    EnumDecl's promotion type is set either to the parsed type or calculated type
+    after completing its definition. When it's bool type and has no definition,
+    its promotion type is bool which is not allowed by clang.
+    
+    Fixes #56560.
+    
+    Differential Revision: https://reviews.llvm.org/D130210
+
+diff --git a/clang/lib/Sema/SemaDecl.cpp b/clang/lib/Sema/SemaDecl.cpp
+index 736c299f38bb..8d2fc5331a0d 100644
+--- a/clang/lib/Sema/SemaDecl.cpp
++++ b/clang/lib/Sema/SemaDecl.cpp
+@@ -16209,7 +16209,10 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
+           ED->setIntegerTypeSourceInfo(TI);
+         else
+           ED->setIntegerType(QualType(EnumUnderlying.get<const Type *>(), 0));
+-        ED->setPromotionType(ED->getIntegerType());
++        QualType EnumTy = ED->getIntegerType();
++        ED->setPromotionType(EnumTy->isPromotableIntegerType()
++                                 ? Context.getPromotedIntegerType(EnumTy)
++                                 : EnumTy);
+       }
+     } else { // struct/union
+       New = RecordDecl::Create(Context, Kind, SearchDC, KWLoc, Loc, Name,
+@@ -16831,8 +16834,11 @@ CreateNewDecl:
+       if (TypeSourceInfo *TI = EnumUnderlying.dyn_cast<TypeSourceInfo*>())
+         ED->setIntegerTypeSourceInfo(TI);
+       else
+-        ED->setIntegerType(QualType(EnumUnderlying.get<const Type*>(), 0));
+-      ED->setPromotionType(ED->getIntegerType());
++        ED->setIntegerType(QualType(EnumUnderlying.get<const Type *>(), 0));
++      QualType EnumTy = ED->getIntegerType();
++      ED->setPromotionType(EnumTy->isPromotableIntegerType()
++                               ? Context.getPromotedIntegerType(EnumTy)
++                               : EnumTy);
+       assert(ED->isComplete() && "enum with type should be complete");
+     }
+   } else {
+diff --git a/clang/test/CXX/conv/conv.prom/p4.cpp b/clang/test/CXX/conv/conv.prom/p4.cpp
+index 8c86d2a1838d..be422f362d6e 100644
+--- a/clang/test/CXX/conv/conv.prom/p4.cpp
++++ b/clang/test/CXX/conv/conv.prom/p4.cpp
+@@ -26,3 +26,10 @@ enum B2 : bool {
+   // FIXME: DR1407 will make this ill-formed
+   e = +false_ // desired-error {{conversion from 'int' to 'bool'}}
+ };
++
++namespace GH56560 {
++enum GH56560_1 : bool;
++bool GH56560_2(GH56560_1 a, GH56560_1 b) {
++    return a == b;
++}
++} // namespace GH56560

@@ -1,0 +1,30 @@
+From 46fdf8f4cc3a3d7ba371c5b3aab7f7eeb81ba1f3 Mon Sep 17 00:00:00 2001
+From: Lepton Wu <lepton@chromium.org>
+Date: Thu, 16 Sep 2021 22:49:32 -0700
+Subject: [PATCH] vrend: disable GL_EXT_external_object_fd path on GLES
+
+This causes random polygons when running android apps in VM on i965 driver
+after https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/5594
+
+Signed-off-by: Lepton Wu <lepton@chromium.org>
+Reviewed-by: Gurchetan Singh <gurchetansingh@chromium.org>
+---
+ src/vrend_renderer.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/vrend_renderer.c b/src/vrend_renderer.c
+index 6ab19530..9b54451b 100644
+--- a/src/vrend_renderer.c
++++ b/src/vrend_renderer.c
+@@ -11701,7 +11701,7 @@ static void vrend_renderer_fill_caps_v2(int gl_ver, int gles_ver,  union virgl_c
+       if (has_feature(feat_memory_object) && has_feature(feat_memory_object_fd)) {
+          if ((!strcmp(gbm_device_get_backend_name(gbm->device), "i915") ||
+               !strcmp(gbm_device_get_backend_name(gbm->device), "amdgpu")) &&
+-             !vrend_winsys_different_gpu())
++             !vrend_winsys_different_gpu() && !vrend_state.use_gles)
+             caps->v2.capability_bits |= VIRGL_CAP_ARB_BUFFER_STORAGE;
+       }
+       caps->v2.capability_bits_v2 |= VIRGL_CAP_V2_SCANOUT_USES_GBM;
+-- 
+2.38.1.431.g37b22c650d-goog
+

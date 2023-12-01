@@ -1,0 +1,15 @@
+Copyright 2020 The ChromiumOS Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+
+This directory contains preference files for power_manager (powerd) that specify
+freeze order dependencies for programs launched by this package. For more
+details on freeze ordering, see the 'Suspend Freezer' section in
+chromiumos/src/platform2/power_manager/docs/suspend_resume.md.
+
+suspend_freezer_deps_{fuse-archive,mount-zip,rar2fs}: The fuse-archive,
+mount-zip and rar2fs freezer cgroups, which contain the respective FUSE
+daemons, depend on any cgroup that manages a filesystem which an archive may be
+mounted from. The dependencies listed in suspend_freezer-deps_* allows us to
+freeze the fuse-archive, mount-zip and rar2fs cgroups before the other FUSE
+related cgroups, avoiding timeouts on suspend due to FUSE.

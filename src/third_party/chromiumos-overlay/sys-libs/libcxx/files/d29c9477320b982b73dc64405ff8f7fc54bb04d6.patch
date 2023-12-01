@@ -1,0 +1,67 @@
+commit d29c9477320b982b73dc64405ff8f7fc54bb04d6
+Author: Xing Xue <xingxue@outlook.com>
+Date:   Sat Jul 16 18:11:04 2022 -0400
+
+    [libc++][AIX] Correct the definition of __regex_word for AIX
+    
+    Summary:
+    The patch changes the definition of __regex_word to 0x8000 for AIX because the current definition 0x80 clashes with ctype_base::print (_ISPRINT is defined as 0x80 in AIX ctype.h).
+    
+    Reviewed by: Mordante, hubert.reinterpretcast, libc++
+    
+    Differential Revision: https://reviews.llvm.org/D129862
+
+diff --git a/libcxx/include/__locale b/libcxx/include/__locale
+index 74ab0435879b..40f9a3ff57c2 100644
+--- a/libcxx/include/__locale
++++ b/libcxx/include/__locale
+@@ -492,7 +492,11 @@ public:
+     static const mask punct  = _ISPUNCT;
+     static const mask xdigit = _ISXDIGIT;
+     static const mask blank  = _ISBLANK;
++# if defined(_AIX)
++    static const mask __regex_word = 0x8000;
++# else
+     static const mask __regex_word = 0x80;
++# endif
+ #elif defined(_NEWLIB_VERSION)
+     // Same type as Newlib's _ctype_ array in newlib/libc/include/ctype.h.
+     typedef char mask;
+@@ -545,11 +549,8 @@ public:
+ 
+     _LIBCPP_INLINE_VISIBILITY ctype_base() {}
+ 
+-// TODO: Remove the ifndef when the assert no longer fails on AIX.
+-#ifndef _AIX
+     static_assert((__regex_word & ~(space | print | cntrl | upper | lower | alpha | digit | punct | xdigit | blank)) == __regex_word,
+                   "__regex_word can't overlap other bits");
+-#endif
+ };
+ 
+ template <class _CharT> class _LIBCPP_TEMPLATE_VIS ctype;
+diff --git a/libcxx/test/std/re/re.traits/isctype.pass.cpp b/libcxx/test/std/re/re.traits/isctype.pass.cpp
+index df8337a564fa..e49221101d15 100644
+--- a/libcxx/test/std/re/re.traits/isctype.pass.cpp
++++ b/libcxx/test/std/re/re.traits/isctype.pass.cpp
+@@ -6,8 +6,6 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
+-// XFAIL: LIBCXX-AIX-FIXME
+-
+ // <regex>
+ 
+ // template <class charT> struct regex_traits;
+diff --git a/libcxx/test/std/re/re.traits/lookup_classname.pass.cpp b/libcxx/test/std/re/re.traits/lookup_classname.pass.cpp
+index 3e27d03fe257..caa04c775fff 100644
+--- a/libcxx/test/std/re/re.traits/lookup_classname.pass.cpp
++++ b/libcxx/test/std/re/re.traits/lookup_classname.pass.cpp
+@@ -6,8 +6,6 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
+-// XFAIL: LIBCXX-AIX-FIXME
+-
+ // <regex>
+ 
+ // template <class charT> struct regex_traits;

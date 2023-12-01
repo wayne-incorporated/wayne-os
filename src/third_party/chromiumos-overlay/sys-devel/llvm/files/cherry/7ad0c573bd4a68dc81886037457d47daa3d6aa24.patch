@@ -1,0 +1,40 @@
+commit 7ad0c573bd4a68dc81886037457d47daa3d6aa24
+Author: Simon Pilgrim <llvm-dev@redking.me.uk>
+Date:   Sat Feb 13 11:59:52 2021 +0000
+
+    [DAG] Fix shift amount limit in SimplifyDemandedBits trunc(shift(x,c)) to truncated bitwidth
+    
+    We lost this in D56387/rG69bc0990a9181e6eb86228276d2f59435a7fae67 - where I got the src/dst bitwidths mixed up and assumed getValidShiftAmountConstant would catch it.
+    
+    Patch by @craig.topper - confirmed by @Carrot that it fixes PR49162
+
+diff --git a/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp b/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
+index 00c672154348..dda6187d41c4 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
+@@ -2011,7 +2011,7 @@ bool TargetLowering::SimplifyDemandedBits(
+ 
+         const APInt *ShAmtC =
+             TLO.DAG.getValidShiftAmountConstant(Src, DemandedElts);
+-        if (!ShAmtC)
++        if (!ShAmtC || ShAmtC->uge(BitWidth))
+           break;
+         uint64_t ShVal = ShAmtC->getZExtValue();
+ 
+diff --git a/llvm/test/CodeGen/X86/pr49162.ll b/llvm/test/CodeGen/X86/pr49162.ll
+index f186dc7dbe0b..d3c187883b12 100644
+--- a/llvm/test/CodeGen/X86/pr49162.ll
++++ b/llvm/test/CodeGen/X86/pr49162.ll
+@@ -17,7 +17,11 @@ define i32* @PR49162(i32* %base, i160* %ptr160) {
+ ;
+ ; X64-LABEL: PR49162:
+ ; X64:       # %bb.0:
+-; X64-NEXT:    leaq -4(%rdi), %rax
++; X64-NEXT:    movl 8(%rsi), %eax
++; X64-NEXT:    shll $16, %eax
++; X64-NEXT:    cltq
++; X64-NEXT:    sarq $16, %rax
++; X64-NEXT:    leaq (%rdi,%rax,4), %rax
+ ; X64-NEXT:    retq
+   %load160 = load i160, i160* %ptr160, align 4
+   %shl = shl i160 %load160, 80

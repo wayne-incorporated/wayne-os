@@ -1,0 +1,413 @@
+// Copyright 2022 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// API exposed by the cros_healthd daemon. This API is normally consumed by the
+// browser and the telem and diag command-line tools.
+
+// NOTE: This mojom should be kept in sync with the copy in Chromium's repo in
+// src/chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_routines.mojom.
+
+module ash.cros_healthd.mojom;
+
+import "diagnostics/mojom/external/time.mojom";
+import "diagnostics/mojom/public/cros_healthd_exception.mojom";
+
+// Routines interface exposed by the cros_healthd daemon.
+//
+// NextMinVersion: 2, NextIndex: 2
+interface CrosHealthdRoutinesService {
+  // Requests that the a routine using the RoutineControl API is created on the
+  // platform. This function creates different routine based on the
+  // RoutineArgument supplied.
+  //
+  // The request:
+  // * |routine_argument| - a RoutineArgument type that provides all the
+  //                        necessary parameters and configs to create a
+  //                        particular type of routine.
+  // * |routine_receiver| - a receiver that will be bound to the actual routine
+  //                        control implementation, where the remote will be
+  //                        held by the client for starting the routine and
+  //                        adding observer.
+  CreateRoutine@0(RoutineArgument routine_argument,
+      pending_receiver<RoutineControl> routine_receiver);
+
+  // Checks whether a routine is supported.
+  //
+  // The request:
+  // * |routine_argument| - a RoutineArgument type that provides all the
+  //                        necessary parameters and configs to create a
+  //                        particular type of routine.
+  //
+  // The response:
+  // * |status| - See the documentation of `SupportStatus`.
+  [MinVersion=1] IsRoutineSupported@1(
+      RoutineArgument routine_argument) => (SupportStatus status);
+};
+
+// Possible routines the RoutineControl API can create.
+//
+// NextMinVersion: 9, NextIndex: 9
+[Extensible]
+union RoutineArgument {
+  // Default field is required by extensible unions for backward compatibility.
+  // Any unrecognized Mojo field will deserialize to this field. Don't use this.
+  [Default, MinVersion=1] bool unrecognizedArgument @0;
+  // Arguments to create a memory routine.
+  MemoryRoutineArgument memory@1;
+  // Arguments to create an audio driver malfunction test routine.
+  [MinVersion=2] AudioDriverRoutineArgument audio_driver@2;
+  // Arguments to create a cpu stress routine.
+  [MinVersion=3] CpuStressRoutineArgument cpu_stress@3;
+  // Arguments to create a UFS lifetime routine.
+  [MinVersion=4] UfsLifetimeRoutineArgument ufs_lifetime@4;
+  // Arguments to create a disk read routine.
+  [MinVersion=5] DiskReadRoutineArgument disk_read@5;
+  // Arguments to create a cpu cache routine.
+  [MinVersion=6] CpuCacheRoutineArgument cpu_cache@6;
+  // Arguments to create a prime search routine.
+  [MinVersion=7] PrimeSearchRoutineArgument prime_search@7;
+  // Arguments to create a volume button routine.
+  [MinVersion=8] VolumeButtonRoutineArgument volume_button@8;
+};
+
+// This routine checks whether there is any memory problem by
+// reading/writing different patterns.
+struct MemoryRoutineArgument {
+  // An optional field to indicate how much memory should be tested. If the
+  // value is null, memory test will run with as much memory as possible.
+  uint32? max_testing_mem_kib;
+};
+
+// |AudioDriverRoutineArgument| is the argument struct to create the audio
+// driver malfunction test routine by calling |CreateRoutine|. There is no input
+// parameters so the struct remains empty.
+//
+// The routine checks the health of audio driver. It contains the following
+// examinations:
+// - CRAS can detect at least one internal audio card.
+// - No audio devices failed to open.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct AudioDriverRoutineArgument {};
+
+// This routine checks whether there is any CPU problem by stress testing the
+// CPU.
+//
+// NextMinVersion: 1, NextIndex: 1
+struct CpuStressRoutineArgument {
+  // |exec_duration| determines how long the stressapptest binary will run. If
+  // the provided value is null, default to running for 1 minute. The duration
+  // is rounded to the nearest seconds towards zero (see behaviour of
+  // std::trunc()).
+  ash.cros_healthd.external.mojo_base.mojom.TimeDelta? exec_duration@0;
+};
+
+// This routine checks the UFS drive's life time.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct UfsLifetimeRoutineArgument {};
+
+// The routine will create a test file with md5 checksum, read the test file
+// either randomly or linearly, repeatedly for a dedicated duration. If the md5
+// checksum of read back is validated, then the test will pass.
+struct DiskReadRoutineArgument {
+  // Type of how disk reading is performed, either linear or random.
+  DiskReadTypeEnum type@0;
+  // Expected duration to read the test file in the DiskRead routine, which will
+  // be rounded towards zero to the nearest second. This parameter should be
+  // strictly greater than zero.
+  ash.cros_healthd.external.mojo_base.mojom.TimeDelta disk_read_duration@1;
+  // Test file size, in megabytes (MiB), to test with DiskRead routine
+  uint32 file_size_mib@2;
+};
+
+// This routine checks whether there is any CPU cache problem by running a CPU
+// cache coherency test.
+//
+// NextMinVersion: 1, NextIndex: 1
+struct CpuCacheRoutineArgument {
+  // |exec_duration| determines how long the stressapptest binary will run. If
+  // the provided value is null, default to running for 1 minute. The duration
+  // is rounded to the nearest seconds towards zero (see behaviour of
+  // std::trunc()).
+  ash.cros_healthd.external.mojo_base.mojom.TimeDelta? exec_duration@0;
+};
+
+// This routine checks whether there is any cpu problem by repeatedly
+// calculating prime numbers.
+struct PrimeSearchRoutineArgument {
+  // |exec_duration| determines how long the prime search test will run. If
+  // the provided value is null, default to running for 1 minute. The duration
+  // is rounded to the nearest seconds towards zero (see behaviour of
+  // std::trunc()).
+  ash.cros_healthd.external.mojo_base.mojom.TimeDelta? exec_duration@0;
+};
+
+// This routine checks the functionality of the volume button. The routine
+// passes if the specified volume button event is received before the timeout.
+// Otherwise, the routine fails.
+//
+// NextMinVersion: 1, NextIndex: 2
+struct VolumeButtonRoutineArgument {
+  [Stable, Extensible]
+  enum ButtonType {
+    // The default value is for backward compatibility, should not be used.
+    [Default] kUnmappedEnumField = 0,
+    kVolumeUp = 1,    // Test for the volume up button.
+    kVolumeDown = 2,  // Test for the volume down button.
+  };
+
+  // The type of volume button to test.
+  ButtonType type@0;
+  // Length of time to listen to the volume button events. The timeout should be
+  // positive and less or equal to 600 seconds.
+  ash.cros_healthd.external.mojo_base.mojom.TimeDelta timeout@1;
+};
+
+// Interface exposed to clients for controlling a routine.
+//
+// NextMinVersion: 1, NextIndex: 3
+interface RoutineControl {
+  // Gets the current state of the routine.
+  GetState@0() => (RoutineState state);
+
+  // Sets an observer to receive the status update. It will only be called after
+  // the routine has started.
+  AddObserver@1(pending_remote<RoutineObserver> observer);
+
+  // Starts the routine. No operation if the routine has already started.
+  Start@2();
+};
+
+// Implemented by clients who desire routine update notifications.
+//
+// NextMinVersion: 1, NextIndex: 1
+interface RoutineObserver {
+  // Is called when the routine state has changed.
+  OnRoutineStateChange@0(RoutineState state);
+};
+
+// Used to pass information regarding routine state.
+//
+// NextMinVersion: 1, NextIndex: 2
+struct RoutineState {
+  // The percentage of the completion of the routine. 0 to 100.
+  uint8 percentage@0;
+
+  RoutineStateUnion state_union@1;
+};
+
+// Possible routine states.
+//
+// NextMinVersion: 1, NextIndex: 4
+union RoutineStateUnion {
+  // Routine has been initialized but not yet started.
+  RoutineStateInitialized initialized@0;
+  // Routine is running.
+  RoutineStateRunning running@1;
+  // Routine is waiting for something.
+  RoutineStateWaiting waiting@2;
+  // Routine has finished.
+  RoutineStateFinished finished@3;
+};
+
+// Routine has been initialized but not yet started.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct RoutineStateInitialized {};
+
+// Routine is currently running.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct RoutineStateRunning {};
+
+// Routine is currently waiting.
+//
+// NextMinVersion: 1, NextIndex: 2
+struct RoutineStateWaiting {
+  [Extensible]
+  enum Reason {
+    [Default] kUnmappedEnumField = 0,
+    // Waiting for the job to be scheduled for running.
+    kWaitingToBeScheduled = 1
+  };
+  // Reason for why the routine is waiting.
+  Reason reason@0;
+  // Message for why the routine is waiting, may be used to pass instruction or
+  // explanation.
+  string message@1;
+};
+
+// Routine has finished.
+//
+// NextMinVersion: 1, NextIndex: 2
+struct RoutineStateFinished {
+  // Whether the routine has passed or not.
+  bool has_passed@0;
+  // The details of the routine.
+  RoutineDetail? detail@1;
+};
+
+union RoutineDetail {
+  MemoryRoutineDetail memory;
+  AudioDriverRoutineDetail audio_driver;
+  CpuStressRoutineDetail cpu_stress;
+  UfsLifetimeRoutineDetail ufs_lifetime;
+  DiskReadRoutineDetail disk_read;
+  CpuCacheRoutineDetail cpu_cache;
+  PrimeSearchRoutineDetail prime_search;
+  VolumeButtonRoutineDetail volume_button;
+};
+
+// Details regarding memory routine.
+//
+// NextMinVersion: 1, NextIndex: 2
+struct MemoryRoutineDetail {
+  // Number of bytes tested in the memory routine.
+  uint64 bytes_tested@0;
+  // Contains the memtester test results.
+  MemtesterResult result@1;
+};
+
+// Details regarding audio driver routine.
+//
+// NextMinVersion: 1, NextIndex: 2
+struct AudioDriverRoutineDetail {
+  // Whether or not the routine can detect an internal audio card.
+  bool internal_card_detected@0;
+  // Whether or not all audio devices succeed to open.
+  bool audio_devices_succeed_to_open@1;
+};
+
+// Details regarding cpu stress routine.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct CpuStressRoutineDetail {};
+
+// Details regarding UFS lifetime routine.
+//
+// NextMinVersion: 1, NextIndex: 3
+struct UfsLifetimeRoutineDetail {
+  // Pre-end of life information.
+  uint8 pre_eol_info@0;
+  // Device life time estimation (type A).
+  uint8 device_life_time_est_a@1;
+  // Device life time estimation (type B).
+  uint8 device_life_time_est_b@2;
+};
+
+// Details regarding disk_read routine.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct DiskReadRoutineDetail {};
+
+// Details regarding cpu cache routine.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct CpuCacheRoutineDetail {};
+
+// Details regarding prime search routine.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct PrimeSearchRoutineDetail {};
+
+// Enumeration of each possible memtester test item.
+//
+// NextMinVersion: 1, NextIndex: 20
+[Extensible]
+enum MemtesterTestItemEnum {
+  [Default] kUnmappedEnumField = 0,
+  // The memtester test is not recognized.
+  kUnknown = 1,
+
+  // Test that all memory addresses to be tested can be set to itself and its
+  // complement.
+  kStuckAddress = 2,
+
+  // These tests test different operation of a random int64 with buffer
+  // initialized as 0xFFFFFFFF, repeating over 64 bit blocks.
+  // Perform AND operation.
+  kCompareAND = 3,
+  // Perform DIV operation.
+  kCompareDIV = 4,
+  // Perform MUL operation.
+  kCompareMUL = 5,
+  // Perform OR operation.
+  kCompareOR = 6,
+  // Perform SUB operation.
+  kCompareSUB = 7,
+  // Perform XOR operation.
+  kCompareXOR = 8,
+  // Perform ADD operation.
+  kSequentialIncrement = 9,
+
+  // These tests test setting memory regions in a certain pattern, repeating
+  // over each 64 bit blocks.
+  // Test Pattern: |0*10*| and |1*01*|.
+  kBitFlip = 10,
+  // Test Pattern:|0*1010*| and |1*0101*|.
+  kBitSpread = 11,
+  // Test Pattern: all 256 possible combinations of a 8 bit block, repeated 8
+  // times.
+  kBlockSequential = 12,
+  // Test Pattern: Alternating 0 and 1.
+  kCheckerboard = 13,
+  // Test Pattern: Random 64 bits.
+  kRandomValue = 14,
+  // Test Pattern: all 0s and all 1s.
+  kSolidBits = 15,
+  // Test Pattern: |0*10*|.
+  kWalkingOnes = 16,
+  // Test Pattern: |1*01*|.
+  kWalkingZeroes = 17,
+
+  // These tests test writing random n bit words across the memory regions.
+  // Test Pattern: 8 bit random words.
+  k8BitWrites = 18,
+  // Test Pattern: 16 bit random words.
+  k16BitWrites = 19,
+};
+
+// Result from running memtester.
+//
+// NextMinVersion: 1, NextIndex: 2
+struct MemtesterResult {
+  // Tests that have passed.
+  array<MemtesterTestItemEnum> passed_items@0;
+  // Tests that have failed.
+  array<MemtesterTestItemEnum> failed_items@1;
+};
+
+// Details regarding volume_button routine.
+//
+// NextMinVersion: 1, NextIndex: 0
+struct VolumeButtonRoutineDetail {};
+
+// This will be used as the disconnect reason of the RoutineControl interface
+// when an exception occurs.
+//
+// NextMinVersion: 1, NextIndex: 4
+[Extensible]
+enum RoutineControlExceptionEnum{
+  [Default] kUnmappedEnumField = 1,
+  // This is the default value of the mojo disconnect reason.
+  kMojoDisconnectWithoutReason = 0,
+  // The routine is not supported on this device. RoutineControl raises this
+  // error before any other methods are invoked.
+  kNotSupported = 2,
+  // Any other exceptions happen after creating the routine. E.g. No resource to
+  // run the routine / the required device is currently unavailable.
+  kRuntimeError = 3,
+};
+
+// Enumeration of the possible DiskRead routine's command type.
+//
+// NextMinVersion: 1, NextIndex: 3
+[Extensible]
+enum DiskReadTypeEnum {
+  // This is required for backwards compatibility, should not be used.
+  [Default] kUnmappedEnumField = 0,
+  kLinearRead = 1,
+  kRandomRead = 2,
+};

@@ -1,0 +1,20 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":libml-client-headers" ]
+}
+
+# ML Service client library generated headers. Used by other daemons to interact
+# with ML Service dbus instances, e.g. --task=adaptive_charging.
+generate_dbus_proxies("libml-client-headers") {
+  proxy_output_file = "include/ml/dbus-proxies.h"
+  mock_output_file = "include/ml/dbus-proxy-mocks.h"
+  proxy_path_in_mocks = "ml/dbus-proxies.h"
+  sources =
+      [ "../dbus_bindings/org.chromium.MachineLearning.AdaptiveCharging.xml" ]
+}

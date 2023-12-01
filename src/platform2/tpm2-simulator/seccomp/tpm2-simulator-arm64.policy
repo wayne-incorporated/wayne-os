@@ -1,0 +1,64 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This file lists out the seccomp policy for allowed syscalls on tpm2-simulator
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+gettid: 1
+getpid: 1
+getuid: 1
+getgid: 1
+geteuid: 1
+getegid: 1
+getresuid: 1
+getresgid: 1
+epoll_create1: 1
+epoll_pwait: 1
+epoll_ctl: 1
+pselect6: 1
+openat: 1
+unlinkat: 1
+fstat: 1
+newfstatat: 1
+read: 1
+write: 1
+close: 1
+sendto: 1
+mmap: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+mprotect: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+mremap: 1
+munmap: 1
+brk: 1
+lseek: 1
+faccessat: 1
+faccessat2: 1
+prlimit64: 1
+madvise: 1
+exit: 1
+exit_group: 1
+rt_sigreturn: 1
+rt_sigprocmask: 1
+restart_syscall: 1
+clock_getres: 1
+gettimeofday: 1
+clock_gettime: 1
+nanosleep: 1
+clock_nanosleep: 1
+futex: 1
+getrandom: 1
+sysinfo: 1
+mlock: 1
+munlock: 1
+
+# For Ti50 emulator
+connect: 1
+recvmsg: 1
+sendmsg: 1
+socket: arg0 == AF_UNIX
+wait4: 1
+
+# tgkill is used by abort() and CHECK()/LOG(FATAL).
+tgkill: 1

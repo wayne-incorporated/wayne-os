@@ -1,0 +1,122 @@
+From 928485b96863d8273b84f3fbce823c4de943aa4e Mon Sep 17 00:00:00 2001
+From: Dmitry Torokhov <dtor@chromium.org>
+Date: Fri, 7 Jun 2019 14:11:31 -0700
+Subject: [PATCH 5/6] CHROMIUM: linux_usbfs: parse devpath in sysfs to get port
+ numbers
+
+On linux, when sysfs is available, we can parse "devpath" attribute to
+get port data. This is helpful when we do not have full USB device tree
+present in libsysfs.
+
+Signed-off-by: Dmitry Torokhov <dtor@chromium.org>
+---
+ libusb/os/linux_usbfs.c | 65 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 65 insertions(+)
+
+diff --git a/libusb/os/linux_usbfs.c b/libusb/os/linux_usbfs.c
+index 9461f565..3e8177ac 100644
+--- a/libusb/os/linux_usbfs.c
++++ b/libusb/os/linux_usbfs.c
+@@ -92,6 +92,11 @@ static unsigned int max_iso_packet_len = 0;
+ /* is sysfs available (mounted) ? */
+ static int sysfs_available = -1;
+ 
++/* Linux v2.6.33 (commit 9af23624ae2c7978313b46e58fdc4ca5d8b799f5) adds
++ * devpath sysfs attribute containing list of ports on the way to the
++ * root port the device is connected to, so from then on we can use it. */
++static int sysfs_has_devpath = -1;
++
+ /* how many times have we initted (and not exited) ? */
+ static int init_count = 0;
+ 
+@@ -386,6 +391,11 @@ static int op_init(struct libusb_context *ctx)
+ 
+ 	usbi_dbg(ctx, "max iso packet length is (likely) %u bytes", max_iso_packet_len);
+ 
++	if (sysfs_has_devpath == -1) {
++		/* sysfs has devpath since Linux 2.6.33 */
++		sysfs_has_devpath = kernel_version_ge(&kversion,2,6,33);
++	}
++
+ 	if (sysfs_available == -1) {
+ 		struct statfs statfsbuf;
+ 
+@@ -396,6 +406,7 @@ static int op_init(struct libusb_context *ctx)
+ 		} else {
+ 			usbi_warn(ctx, "sysfs not mounted");
+ 			sysfs_available = 0;
++			sysfs_has_devpath = 0;
+ 		}
+ 	}
+ 
+@@ -1027,6 +1038,56 @@ static int device_speed_from_kernel(struct libusb_context *ctx, int speed)
+ 	}
+ }
+ 
++static int device_ports_from_sysfs(struct libusb_context *ctx,
++	struct linux_device_priv *priv, const char *sysfs_dir)
++{
++	char buf[LINE_MAX];
++	char *str, *rest, *port;
++	int fd;
++	FILE *f;
++	int count;
++
++	fd = open_sysfs_attr(ctx, sysfs_dir, "devpath");
++	if (fd < 0)
++		return fd;
++
++	f = fdopen(fd, "r");
++	if (!f) {
++		usbi_err(ctx, "fdopen failed errno=%d", errno);
++		close(fd);
++		return LIBUSB_ERROR_OTHER;
++	}
++
++	str = fgets(buf, sizeof(buf), f);
++	fclose(f);
++
++	if (!str)
++		return LIBUSB_ERROR_IO;
++
++	/* Count number of "dots" delimiting port numbers. We do not care if
++	 * we get malformed path with multiple consecutive dots, as it will
++	 * simply result in allocating a few extra bytes for the ports
++	 * array. */
++	count = 1; /* We should have at least one port */
++	while (*str != 0) {
++		if (*str == '.')
++			count++;
++		str++;
++	}
++
++	priv->ports = malloc(count);
++	if (!priv->ports)
++		return LIBUSB_ERROR_NO_MEM;
++
++	for (port = strtok_r(buf, ".\n", &rest);
++	     port != NULL;
++	     port = strtok_r(NULL, ".\n", &rest)) {
++		priv->ports[priv->num_ports++] = atoi(port);
++	}
++
++	return LIBUSB_SUCCESS;
++}
++
+ static int initialize_from_sysfs(struct libusb_device *dev, const char *sysfs_dir)
+ {
+ 	struct linux_device_priv *priv = usbi_get_device_priv(dev);
+@@ -1053,6 +1114,10 @@ static int initialize_from_sysfs(struct libusb_device *dev, const char *sysfs_di
+ 	/* sysfs descriptors are in bus-endian format */
+ 	usbi_localize_device_descriptor(&dev->device_descriptor);
+ 
++	/* try filling port info to the best of our abilities */
++	if (sysfs_has_devpath)
++		device_ports_from_sysfs(ctx, priv, sysfs_dir);
++
+ 	return LIBUSB_SUCCESS;
+ }
+ 
+-- 
+2.38.1.584.g0f3c55d4c2-goog
+

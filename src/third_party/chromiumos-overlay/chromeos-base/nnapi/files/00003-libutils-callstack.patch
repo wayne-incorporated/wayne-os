@@ -1,0 +1,55 @@
+This patch removes the dependency on libbacktrace from Callstack, as we will not
+be using these advanced Android debugging features in Chrome OS.
+
+diff --git a/platform2/aosp/system/core/libutils/CallStack.cpp b/platform2/aosp/system/core/libutils/CallStack.cpp
+index fe6f33d..cce3de4 100644
+--- a/platform2/aosp/system/core/libutils/CallStack.cpp
++++ b/platform2/aosp/system/core/libutils/CallStack.cpp
+@@ -20,8 +20,6 @@
+ #include <utils/Errors.h>
+ #include <utils/Log.h>
+ 
+-#include <backtrace/Backtrace.h>
+-
+ #define CALLSTACK_WEAK  // Don't generate weak definitions.
+ #include <utils/CallStack.h>
+ 
+@@ -38,16 +36,8 @@ CallStack::CallStack(const char* logtag, int32_t ignoreDepth) {
+ CallStack::~CallStack() {
+ }
+ 
+-void CallStack::update(int32_t ignoreDepth, pid_t tid) {
++void CallStack::update(int32_t /*ignoreDepth*/, pid_t /*tid*/) {
+     mFrameLines.clear();
+-
+-    std::unique_ptr<Backtrace> backtrace(Backtrace::Create(BACKTRACE_CURRENT_PROCESS, tid));
+-    if (!backtrace->Unwind(ignoreDepth)) {
+-        ALOGW("%s: Failed to unwind callstack.", __FUNCTION__);
+-    }
+-    for (size_t i = 0; i < backtrace->NumFrames(); i++) {
+-      mFrameLines.push_back(String8(backtrace->FormatFrameData(i).c_str()));
+-    }
+ }
+ 
+ void CallStack::log(const char* logtag, android_LogPriority priority, const char* prefix) const {
+diff --git a/platform2/aosp/system/core/libutils/include/utils/CallStack.h b/platform2/aosp/system/core/libutils/include/utils/CallStack.h
+index 7a4a345..fe4d4f5 100644
+--- a/platform2/aosp/system/core/libutils/include/utils/CallStack.h
++++ b/platform2/aosp/system/core/libutils/include/utils/CallStack.h
+@@ -20,7 +20,6 @@
+ #include <memory>
+ 
+ #include <android/log.h>
+-#include <backtrace/backtrace_constants.h>
+ #include <utils/String8.h>
+ #include <utils/Vector.h>
+ 
+@@ -59,7 +58,7 @@ public:
+ 
+     // Immediately collect the stack traces for the specified thread.
+     // The default is to dump the stack of the current call.
+-    void update(int32_t ignoreDepth = 1, pid_t tid = BACKTRACE_CURRENT_THREAD);
++    void update(int32_t ignoreDepth = 1, pid_t tid = -1);
+ 
+     // Dump a stack trace to the log using the supplied logtag.
+     void log(const char* logtag,

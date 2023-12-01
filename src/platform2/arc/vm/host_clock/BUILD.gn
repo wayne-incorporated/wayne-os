@@ -1,0 +1,30 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+group("all") {
+  deps = [
+    ":arc-host-clock-service",
+    ":install_init_config",
+    ":install_minijail_arc_host_clock_service",
+  ]
+}
+
+executable("arc-host-clock-service") {
+  sources = [ "arc_host_clock_service.cc" ]
+  install_path = "bin"
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+install_config("install_minijail_arc_host_clock_service") {
+  sources = [ "minijail/arc-host-clock-service.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_init_config") {
+  sources = [ "arc-host-clock-service.conf" ]
+  install_path = "/etc/init"
+}

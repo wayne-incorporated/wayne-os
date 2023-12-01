@@ -1,0 +1,62 @@
+From b7a24916a37462afd8279086a65c63235cc914ec Mon Sep 17 00:00:00 2001
+From: James Ye <jamesye@google.com>
+Date: Wed, 31 Aug 2022 17:11:10 +1000
+Subject: Add a VsockResolverFactory
+
+Prevents vsock addresses from being resolved over DNS.
+---
+ .../resolver/sockaddr/sockaddr_resolver.cc    | 19 +++++++++++++++++++
+ src/core/lib/address_utils/parse_address.h    |  2 +-
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/ext/filters/client_channel/resolver/sockaddr/sockaddr_resolver.cc b/src/core/ext/filters/client_channel/resolver/sockaddr/sockaddr_resolver.cc
+index 46efbb06b2..f99ac16c4d 100644
+--- a/src/core/ext/filters/client_channel/resolver/sockaddr/sockaddr_resolver.cc
++++ b/src/core/ext/filters/client_channel/resolver/sockaddr/sockaddr_resolver.cc
+@@ -175,6 +175,23 @@ class UnixAbstractResolverFactory : public ResolverFactory {
+ };
+ #endif  // GRPC_HAVE_UNIX_SOCKET
+ 
++class VsockResolverFactory : public ResolverFactory {
++ public:
++  bool IsValidUri(const URI& uri) const override {
++    return ParseUri(uri, grpc_parse_vsock, nullptr);
++  }
++
++  OrphanablePtr<Resolver> CreateResolver(ResolverArgs args) const override {
++    return CreateSockaddrResolver(std::move(args), grpc_parse_vsock);
++  }
++
++  std::string GetDefaultAuthority(const URI& /*uri*/) const override {
++    return "localhost";
++  }
++
++  const char* scheme() const override { return "vsock"; }
++};
++
+ }  // namespace
+ 
+ }  // namespace grpc_core
+@@ -190,6 +207,8 @@ void grpc_resolver_sockaddr_init() {
+   grpc_core::ResolverRegistry::Builder::RegisterResolverFactory(
+       absl::make_unique<grpc_core::UnixAbstractResolverFactory>());
+ #endif
++  grpc_core::ResolverRegistry::Builder::RegisterResolverFactory(
++      absl::make_unique<grpc_core::VsockResolverFactory>());
+ }
+ 
+ void grpc_resolver_sockaddr_shutdown() {}
+diff --git a/src/core/lib/address_utils/parse_address.h b/src/core/lib/address_utils/parse_address.h
+index 50ca4c3f84..cd26a77a6d 100644
+--- a/src/core/lib/address_utils/parse_address.h
++++ b/src/core/lib/address_utils/parse_address.h
+@@ -40,7 +40,7 @@ bool grpc_parse_unix_abstract(const grpc_core::URI& uri,
+ 
+ /** Populate \a addr and \a len from \a uri, whose path is expected to contain a
+  * vsock specification. Returns true upon success. */
+-bool grpc_parse_vsock(const grpc_core::URI* uri,
++bool grpc_parse_vsock(const grpc_core::URI& uri,
+                       grpc_resolved_address* resolved_addr);
+ 
+ /** Populate \a resolved_addr from \a uri, whose path is expected to contain an
+-- 

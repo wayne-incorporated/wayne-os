@@ -1,0 +1,81 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":install_minijail_conf",
+    ":server_proxy",
+  ]
+  if (use.test) {
+    deps += [ ":mojo_proxy_test" ]
+  }
+}
+
+install_config("install_minijail_conf") {
+  install_path = "/usr/share/minijail"
+  sources = [ "minijail/arcvm-server-proxy.conf" ]
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "protobuf-lite",
+  ]
+  defines = [ "FUSE_USE_VERSION=26" ]
+}
+
+proto_library("message") {
+  proto_in_dir = "."
+  proto_out_dir = "include/arc/vm/mojo_proxy"
+  sources = [ "${proto_in_dir}/message.proto" ]
+}
+
+static_library("mojo_proxy_lib") {
+  sources = [
+    "file_descriptor_util.cc",
+    "fuse_mount.cc",
+    "local_file.cc",
+    "message_stream.cc",
+    "mojo_proxy.cc",
+    "proxy_file_system.cc",
+    "server_proxy.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  pkg_deps = [ "fuse" ]
+  deps = [ ":message" ]
+}
+
+executable("server_proxy") {
+  sources = [ "server_proxy_main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":mojo_proxy_lib" ]
+}
+
+if (use.test) {
+  executable("mojo_proxy_test") {
+    sources = [
+      "file_descriptor_util_test.cc",
+      "local_file_test.cc",
+      "message_stream_test.cc",
+      "mojo_proxy_test.cc",
+      "proxy_file_system_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+    ]
+    deps = [
+      ":mojo_proxy_lib",
+      "//common-mk/testrunner",
+    ]
+  }
+}

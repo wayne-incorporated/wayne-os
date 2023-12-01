@@ -1,0 +1,34 @@
+From 45fb7ea97691c40d21fa37bf29177a54749459e0 Mon Sep 17 00:00:00 2001
+From: Bas Nieuwenhuizen <bas@basnieuwenhuizen.nl>
+Date: Mon, 8 Jul 2019 12:47:14 +0200
+Subject: [PATCH 2/3] anv: Add android dependencies on android.
+
+Specifically needed for nativewindow for some VK_EXT_external_memory_android_hardware_buffers
+functions, where we call into some AHardwareBuffer functions.
+
+The legacy Android ext did not have us call into any Android function
+at all and hence it was not noticed.
+
+Fixes: 755c633b8d9 "anv: Fix vulkan build in meson."
+Reviewed-by: Eric Engestrom <eric.engestrom@intel.com>
+Reviewed-by: Chad Versace <chadversary@chromium.org>
+(cherry picked from commit d4f0f1a6e21953a9bedc91f1de4366afdc51bb58)
+---
+ src/intel/vulkan/meson.build | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/intel/vulkan/meson.build b/src/intel/vulkan/meson.build
+index 86209b4857d..0a694e56c4b 100644
+--- a/src/intel/vulkan/meson.build
++++ b/src/intel/vulkan/meson.build
+@@ -176,6 +176,7 @@ if with_xlib_lease
+ endif
+ 
+ if with_platform_android
++  anv_deps += dep_android
+   anv_flags += '-DVK_USE_PLATFORM_ANDROID_KHR'
+   libanv_files += files('anv_android.c')
+ else
+-- 
+2.22.0.709.g102302147b-goog
+

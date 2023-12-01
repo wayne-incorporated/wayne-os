@@ -1,0 +1,188 @@
+commit 099bffe7f7df41d66195ce33e91888a4a16c6b4a
+Author: Vedant Kumar <vsk@apple.com>
+Date:   Thu Oct 22 11:11:12 2020 -0700
+
+    Revert "[CodeExtractor] Don't create bitcasts when inserting lifetime markers (NFCI)"
+    
+    This reverts commit 26ee8aff2b85ee28a2b2d0b1860d878b512fbdef.
+    
+    It's necessary to insert bitcast the pointer operand of a lifetime
+    marker if it has an opaque pointer type.
+    
+    rdar://70560161
+
+diff --git a/llvm/lib/Transforms/Utils/CodeExtractor.cpp b/llvm/lib/Transforms/Utils/CodeExtractor.cpp
+index 98e4d62aeea..98a3912719a 100644
+--- a/llvm/lib/Transforms/Utils/CodeExtractor.cpp
++++ b/llvm/lib/Transforms/Utils/CodeExtractor.cpp
+@@ -1025,21 +1025,32 @@ static void insertLifetimeMarkersSurroundingCall(
+     Module *M, ArrayRef<Value *> LifetimesStart, ArrayRef<Value *> LifetimesEnd,
+     CallInst *TheCall) {
+   LLVMContext &Ctx = M->getContext();
++  auto Int8PtrTy = Type::getInt8PtrTy(Ctx);
+   auto NegativeOne = ConstantInt::getSigned(Type::getInt64Ty(Ctx), -1);
+   Instruction *Term = TheCall->getParent()->getTerminator();
+ 
++  // The memory argument to a lifetime marker must be a i8*. Cache any bitcasts
++  // needed to satisfy this requirement so they may be reused.
++  DenseMap<Value *, Value *> Bitcasts;
++
+   // Emit lifetime markers for the pointers given in \p Objects. Insert the
+   // markers before the call if \p InsertBefore, and after the call otherwise.
+-  auto insertMarkers = [&](Intrinsic::ID IID, ArrayRef<Value *> Objects,
++  auto insertMarkers = [&](Function *MarkerFunc, ArrayRef<Value *> Objects,
+                            bool InsertBefore) {
+     for (Value *Mem : Objects) {
+       assert((!isa<Instruction>(Mem) || cast<Instruction>(Mem)->getFunction() ==
+                                             TheCall->getFunction()) &&
+              "Input memory not defined in original function");
+-      assert(Mem->getType()->isPointerTy() && "Expected pointer to memory");
+-      Function *MarkerFunc =
+-          llvm::Intrinsic::getDeclaration(M, IID, Mem->getType());
+-      auto Marker = CallInst::Create(MarkerFunc, {NegativeOne, Mem});
++      Value *&MemAsI8Ptr = Bitcasts[Mem];
++      if (!MemAsI8Ptr) {
++        if (Mem->getType() == Int8PtrTy)
++          MemAsI8Ptr = Mem;
++        else
++          MemAsI8Ptr =
++              CastInst::CreatePointerCast(Mem, Int8PtrTy, "lt.cast", TheCall);
++      }
++
++      auto Marker = CallInst::Create(MarkerFunc, {NegativeOne, MemAsI8Ptr});
+       if (InsertBefore)
+         Marker->insertBefore(TheCall);
+       else
+@@ -1047,9 +1058,17 @@ static void insertLifetimeMarkersSurroundingCall(
+     }
+   };
+ 
+-  insertMarkers(Intrinsic::lifetime_start, LifetimesStart,
+-                /*InsertBefore=*/true);
+-  insertMarkers(Intrinsic::lifetime_end, LifetimesEnd, /*InsertBefore=*/false);
++  if (!LifetimesStart.empty()) {
++    auto StartFn = llvm::Intrinsic::getDeclaration(
++        M, llvm::Intrinsic::lifetime_start, Int8PtrTy);
++    insertMarkers(StartFn, LifetimesStart, /*InsertBefore=*/true);
++  }
++
++  if (!LifetimesEnd.empty()) {
++    auto EndFn = llvm::Intrinsic::getDeclaration(
++        M, llvm::Intrinsic::lifetime_end, Int8PtrTy);
++    insertMarkers(EndFn, LifetimesEnd, /*InsertBefore=*/false);
++  }
+ }
+ 
+ /// emitCallAndSwitchStatement - This method sets up the caller side by adding
+diff --git a/llvm/test/Transforms/CodeExtractor/PartialInlineInvokeProducesOutVal.ll b/llvm/test/Transforms/CodeExtractor/PartialInlineInvokeProducesOutVal.ll
+index 32013579f18..2e0fbf6073e 100644
+--- a/llvm/test/Transforms/CodeExtractor/PartialInlineInvokeProducesOutVal.ll
++++ b/llvm/test/Transforms/CodeExtractor/PartialInlineInvokeProducesOutVal.ll
+@@ -26,10 +26,11 @@ bb5:                                              ; preds = %bb4, %bb1, %bb
+ ; CHECK-LABEL: bb:
+ ; CHECK-NEXT:  [[CALL26LOC:%.*]] = alloca i8*
+ ; CHECK-LABEL: codeRepl.i:
+-; CHECK-NEXT:   call void @llvm.lifetime.start.p0p0i8(i64 -1, i8** [[CALL26LOC]])
++; CHECK-NEXT:   %lt.cast.i = bitcast i8** [[CALL26LOC]] to i8*
++; CHECK-NEXT:   call void @llvm.lifetime.start.p0i8(i64 -1, i8* %lt.cast.i)
+ ; CHECK-NEXT:   call void @bar.1.bb1(i8** [[CALL26LOC]])
+ ; CHECK-NEXT:   %call26.reload.i = load i8*, i8** [[CALL26LOC]]
+-; CHECK-NEXT:   call void @llvm.lifetime.end.p0p0i8(i64 -1, i8** [[CALL26LOC]])
++; CHECK-NEXT:   call void @llvm.lifetime.end.p0i8(i64 -1, i8* %lt.cast.i)
+ define i8* @dummy_caller(i32 %arg) {
+ bb:
+   %tmp = tail call i8* @bar(i32 %arg)
+diff --git a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll
+index d8afa44d514..6d9214482c8 100644
+--- a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll
++++ b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-1.ll
+@@ -29,8 +29,10 @@ normalPath:
+   ret void
+ 
+ ; CHECK-LABEL: codeRepl:
+-; CHECK: call void @llvm.lifetime.start.p0i256(i64 -1, i256* %local1)
+-; CHECK-NEXT: call void @llvm.lifetime.start.p0i256(i64 -1, i256* %local2)
++; CHECK: [[local1_cast:%.*]] = bitcast i256* %local1 to i8*
++; CHECK-NEXT: call void @llvm.lifetime.start.p0i8(i64 -1, i8* [[local1_cast]])
++; CHECK-NEXT: [[local2_cast:%.*]] = bitcast i256* %local2 to i8*
++; CHECK-NEXT: call void @llvm.lifetime.start.p0i8(i64 -1, i8* [[local2_cast]])
+ ; CHECK-NEXT: call i1 @foo.cold.1(i8* %local1_cast, i8* %local2_cast)
+ ; CHECK-NEXT: br i1
+ 
+@@ -59,4 +61,4 @@ outlinedPathExit:
+ }
+ 
+ ; CHECK-LABEL: define {{.*}}@foo.cold.1(
+-; CHECK-NOT: call void @llvm.lifetime
++; CHECK-NOT: @llvm.lifetime
+diff --git a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll
+index 3d5a3bb8636..e0df965632a 100644
+--- a/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll
++++ b/llvm/test/Transforms/HotColdSplit/lifetime-markers-on-inputs-2.ll
+@@ -37,12 +37,13 @@ declare void @use(i8*)
+ define void @only_lifetime_start_is_cold() {
+ ; CHECK-LABEL: @only_lifetime_start_is_cold(
+ ; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256, align 8
++; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256
+ ; CHECK-NEXT:    [[LOCAL1_CAST:%.*]] = bitcast i256* [[LOCAL1]] to i8*
+ ; CHECK-NEXT:    br i1 undef, label [[CODEREPL:%.*]], label [[NO_EXTRACT1:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    call void @llvm.lifetime.start.p0i256(i64 -1, i256* [[LOCAL1]])
+-; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @only_lifetime_start_is_cold.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR3:#.*]]
++; CHECK-NEXT:    [[LT_CAST:%.*]] = bitcast i256* [[LOCAL1]] to i8*
++; CHECK-NEXT:    call void @llvm.lifetime.start.p0i8(i64 -1, i8* [[LT_CAST]])
++; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @only_lifetime_start_is_cold.cold.1(i8* [[LOCAL1_CAST]]) #3
+ ; CHECK-NEXT:    br i1 [[TARGETBLOCK]], label [[NO_EXTRACT1]], label [[EXIT:%.*]]
+ ; CHECK:       no-extract1:
+ ; CHECK-NEXT:    br label [[EXIT]]
+@@ -97,7 +98,7 @@ exit:
+ define void @only_lifetime_end_is_cold() {
+ ; CHECK-LABEL: @only_lifetime_end_is_cold(
+ ; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256, align 8
++; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256
+ ; CHECK-NEXT:    [[LOCAL1_CAST:%.*]] = bitcast i256* [[LOCAL1]] to i8*
+ ; CHECK-NEXT:    call void @llvm.lifetime.start.p0i8(i64 1, i8* [[LOCAL1_CAST]])
+ ; CHECK-NEXT:    br i1 undef, label [[NO_EXTRACT1:%.*]], label [[CODEREPL:%.*]]
+@@ -105,7 +106,7 @@ define void @only_lifetime_end_is_cold() {
+ ; CHECK-NEXT:    call void @llvm.lifetime.end.p0i8(i64 1, i8* [[LOCAL1_CAST]])
+ ; CHECK-NEXT:    br label [[EXIT:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    call void @only_lifetime_end_is_cold.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR3]]
++; CHECK-NEXT:    call void @only_lifetime_end_is_cold.cold.1(i8* [[LOCAL1_CAST]]) #3
+ ; CHECK-NEXT:    br label [[EXIT]]
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+@@ -137,7 +138,7 @@ exit:
+ define void @do_not_lift_lifetime_end() {
+ ; CHECK-LABEL: @do_not_lift_lifetime_end(
+ ; CHECK-NEXT:  entry:
+-; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256, align 8
++; CHECK-NEXT:    [[LOCAL1:%.*]] = alloca i256
+ ; CHECK-NEXT:    [[LOCAL1_CAST:%.*]] = bitcast i256* [[LOCAL1]] to i8*
+ ; CHECK-NEXT:    call void @llvm.lifetime.start.p0i8(i64 1, i8* [[LOCAL1_CAST]])
+ ; CHECK-NEXT:    br label [[HEADER:%.*]]
+@@ -145,7 +146,7 @@ define void @do_not_lift_lifetime_end() {
+ ; CHECK-NEXT:    call void @use(i8* [[LOCAL1_CAST]])
+ ; CHECK-NEXT:    br i1 undef, label [[EXIT:%.*]], label [[CODEREPL:%.*]]
+ ; CHECK:       codeRepl:
+-; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @do_not_lift_lifetime_end.cold.1(i8* [[LOCAL1_CAST]]) [[ATTR3]]
++; CHECK-NEXT:    [[TARGETBLOCK:%.*]] = call i1 @do_not_lift_lifetime_end.cold.1(i8* [[LOCAL1_CAST]]) #3
+ ; CHECK-NEXT:    br i1 [[TARGETBLOCK]], label [[HEADER]], label [[EXIT]]
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+diff --git a/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll b/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll
+index 0222c57fc66..2f5360ccb1e 100644
+--- a/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll
++++ b/llvm/test/Transforms/HotColdSplit/split-phis-in-exit-blocks.ll
+@@ -12,7 +12,8 @@ target triple = "x86_64-apple-macosx10.14.0"
+ ; CHECK-NEXT:  ]
+ ;
+ ; CHECK:  codeRepl:
+-; CHECK:         lifetime.start
++; CHECK-NEXT:    bitcast
++; CHECK-NEXT:    lifetime.start
+ ; CHECK-NEXT:    call void @pluto.cold.1(i1* %tmp8.ce.loc)
+ ; CHECK-NEXT:    %tmp8.ce.reload = load i1, i1* %tmp8.ce.loc
+ ; CHECK-NEXT:    lifetime.end

@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<node xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+  <interface name="org.chromium.CrosDisks">
+    <tp:struct name="DiskDevice" array-name="DiskDevices">
+      <tp:member name="DeviceIsDrive" type="b" />
+      <tp:member name="DevicePresentationHide" type="b" />
+      <tp:member name="DeviceIsMounted" type="b" />
+      <tp:member name="DeviceMediaType" type="u" />
+      <tp:member name="DeviceMountPaths" type="s" />
+      <tp:member name="DeviceIsMediaAvailable" type="b" />
+      <tp:member name="DeviceIsOnBootDevice" type="b" />
+      <tp:member name="DeviceIsOnRemovableDevice" type="b" />
+      <tp:member name="DeviceIsVirtual" type="b" />
+      <tp:member name="IsAutoMountable" type="b" />
+      <tp:member name="IdUuid" type="s" />
+      <tp:member name="IdLabel" type="s" />
+      <tp:member name="VendorId" type="s" />
+      <tp:member name="VendorName" type="s" />
+      <tp:member name="ProductId" type="s" />
+      <tp:member name="ProductName" type="s" />
+      <tp:member name="DeviceFile" type="s" />
+      <tp:member name="DriveModel" type="s" />
+      <tp:member name="DeviceIsReadOnly" type="b" />
+      <tp:member name="DeviceSize" type="t" />
+      <tp:member name="FileSystemType" type="s" />
+    </tp:struct>
+    <tp:struct name="MountEntry" array-name="MountEntries">
+      <tp:member name="Status" type="u" />
+      <tp:member name="SourcePath" type="s" />
+      <tp:member name="SourceType" type="u" />
+      <tp:member name="MountPath" type="s" />
+      <tp:member name="ReadOnly" type="b" />
+    </tp:struct>
+    <method name="Mount">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="path" type="s" direction="in" />
+      <arg name="filesystem_type" type="s" direction="in" />
+      <arg name="options" type="as" direction="in" />
+    </method>
+    <method name="Unmount">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="path" type="s" direction="in" />
+      <arg name="options" type="as" direction="in" />
+      <arg name="status" type="u" direction="out" />
+    </method>
+    <method name="UnmountAll">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+    </method>
+    <method name="EnumerateDevices">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="devices" type="as" direction="out" />
+    </method>
+    <method name="EnumerateMountEntries">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="mount_entries" type="a(ususb)" direction="out"
+           tp:type="MountEntries" />
+    </method>
+    <method name="GetDeviceProperties">
+      <annotation name="org.chromium.DBus.Method.Kind" value="normal" />
+      <arg name="device_path" type="s" direction="in" />
+      <arg name="properties" type="a{sv}" direction="out"
+           tp:type="DiskDevices" />
+    </method>
+    <method name="Format">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="path" type="s" direction="in" />
+      <arg name="filesystem_type" type="s" direction="in" />
+      <arg name="options" type="as" direction="in" />
+    </method>
+    <method name="SinglePartitionFormat">
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="path" type="s" direction="in" />
+      <arg name="status" type="u" direction="out" />
+    </method>
+    <method name="Rename">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="path" type="s" direction="in" />
+      <arg name="volume_name" type="s" direction="in" />
+    </method>
+    <method name="AddDeviceToAllowlist">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="device_path" type="s" direction="in" />
+    </method>
+    <method name="RemoveDeviceFromAllowlist">
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="device_path" type="s" direction="in" />
+    </method>
+
+    <signal name="DeviceAdded">
+      <arg name="device" type="s" direction="out" />
+    </signal>
+    <signal name="DeviceRemoved">
+      <arg name="device" type="s" direction="out" />
+    </signal>
+    <signal name="DeviceScanned">
+      <arg name="device" type="s" direction="out" />
+    </signal>
+    <signal name="DiskAdded">
+      <arg name="disk" type="s" direction="out" />
+    </signal>
+    <signal name="DiskRemoved">
+      <arg name="disk" type="s" direction="out" />
+    </signal>
+    <signal name="DiskChanged">
+      <arg name="disk" type="s" direction="out" />
+    </signal>
+    <signal name="MountProgress">
+      <arg name="percent" type="u" direction="out" />
+      <arg name="source_path" type="s" direction="out" />
+      <arg name="source_type" type="u" direction="out" />
+      <arg name="mount_path" type="s" direction="out" />
+      <arg name="read_only" type="b" direction="out" />
+    </signal>
+    <signal name="MountCompleted">
+      <arg name="status" type="u" direction="out" />
+      <arg name="source_path" type="s" direction="out" />
+      <arg name="source_type" type="u" direction="out" />
+      <arg name="mount_path" type="s" direction="out" />
+      <arg name="read_only" type="b" direction="out" />
+    </signal>
+    <signal name="Unmounted">
+      <arg name="source_path" type="s" direction="out" />
+      <arg name="source_type" type="u" direction="out" />
+      <arg name="mount_path" type="s" direction="out" />
+      <arg name="read_only" type="b" direction="out" />
+    </signal>
+    <signal name="FormatCompleted">
+      <arg name="status" type="u" direction="out" />
+      <arg name="device" type="s" direction="out" />
+    </signal>
+    <signal name="RenameCompleted">
+      <arg name="status" type="u" direction="out" />
+      <arg name="device" type="s" direction="out" />
+    </signal>
+  </interface>
+</node>

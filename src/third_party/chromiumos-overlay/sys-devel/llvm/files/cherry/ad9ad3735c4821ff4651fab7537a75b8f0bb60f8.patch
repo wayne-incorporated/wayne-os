@@ -1,0 +1,24 @@
+commit ad9ad3735c4821ff4651fab7537a75b8f0bb60f8
+Author: serge-sans-paille <sguelton@mozilla.com>
+Date:   Tue Apr 4 20:38:25 2023 +0200
+
+    Do not move "auto-init" instruction if they're volatile
+    
+    This is overly conservative, but at least it's safe.
+    
+    This is a follow-up to https://reviews.llvm.org/D137707
+
+diff --git a/llvm/lib/Transforms/Utils/MoveAutoInit.cpp b/llvm/lib/Transforms/Utils/MoveAutoInit.cpp
+index ca8a5875593a..2c38adba57c2 100644
+--- a/llvm/lib/Transforms/Utils/MoveAutoInit.cpp
++++ b/llvm/lib/Transforms/Utils/MoveAutoInit.cpp
+@@ -109,7 +109,8 @@ static bool runMoveAutoInit(Function &F, DominatorTree &DT, MemorySSA &MSSA) {
+     if (!hasAutoInitMetadata(I))
+       continue;
+ 
+-    assert(!I.isVolatile() && "auto init instructions cannot be volatile.");
++    if (I.isVolatile())
++      continue;
+ 
+     BasicBlock *UsersDominator = usersDominator(&I, DT, MSSA);
+     if (!UsersDominator)

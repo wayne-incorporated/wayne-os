@@ -1,0 +1,82 @@
+#!/bin/bash
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Force clean up some SDK packages that have been removed.
+pkgs=(
+  app-admin/eselect-fontconfig
+  app-admin/python-updater
+  app-emulation/renode
+  app-emulation/virt-what
+  app-eselect/eselect-ctags
+  app-portage/esearch
+  app-text/htmltidy
+  app-text/yelp-tools
+  chromeos-base/android-installer
+  chromeos-base/cypress-tools
+  chromeos-base/devserver-deps
+  dev-cpp/ctemplate
+  dev-cpp/yaml-cpp
+  dev-go/gcp-trace
+  dev-lang/mono
+  dev-libs/dbus-c++
+  dev-python/astroid
+  dev-python/autopep8
+  dev-python/backports
+  dev-python/black
+  dev-python/dnspython
+  dev-python/flake8
+  dev-python/ipython
+  dev-python/ipython_genutils
+  dev-python/isort
+  dev-python/jedi
+  dev-python/lazy-object-proxy
+  dev-python/logbook
+  dev-python/mccabe
+  dev-python/mypy_extensions
+  dev-python/path-py
+  dev-python/pep8
+  dev-python/pickleshare
+  dev-python/prompt_toolkit
+  dev-python/pyblake2
+  dev-python/pycodestyle
+  dev-python/pyflakes
+  dev-python/pyinotify
+  dev-python/pylint
+  dev-python/robotframework
+  dev-python/scandir
+  dev-python/setuptools_scm_git_archive
+  dev-python/simplegeneric
+  dev-python/traitlets
+  dev-python/trollius
+  dev-python/wcwidth
+  dev-util/codespell
+  dev-util/ctags
+  dev-util/diffstat
+  dev-util/google-web-toolkit
+  dev-util/provision-server
+  dev-util/tclint
+  dev-util/test-exec-server
+  gnome-extra/yelp-xsl
+  media-libs/gd
+  sys-devel/arc-cache-builder
+  sys-devel/bin86
+  sys-devel/dev86
+  sys-devel/smatch
+  sys-firmware/vgabios
+  sys-libs/libcxxabi
+  virtual/libffi
+  virtual/mailx
+  virtual/python-enum34
+  virtual/python-ipaddress
+  virtual/python-pathlib
+  virtual/python-singledispatch
+  virtual/python-typing
+  virtual/shadow
+  x11-apps/xcursorgen
+)
+mapfile -t installed_pkgs < <(qlist -IC "${pkgs[@]}" || :)
+if [[ ${#installed_pkgs[@]} -gt 0 ]]; then
+  sudo emerge --rage -q "${installed_pkgs[@]}"
+fi

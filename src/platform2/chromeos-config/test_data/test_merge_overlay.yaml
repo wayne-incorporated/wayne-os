@@ -1,0 +1,32 @@
+#
+# Copyright 2018 The ChromiumOS Authors
+#
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+chromeos:
+  devices:
+    - $name: "IdentityMatch"
+      skus:
+        - config:
+            identity:
+              # - frid should be case insensitive.
+              # - sku-id should match, as it was unspecified.
+              frid: "google_somedevice"
+            wallpaper: "wallpaper-overridden-by-identity"
+    - $name: "NameMatch"
+      skus:
+        - config:
+            name: "{{$name}}"
+            wallpaper: "wallpaper-overridden-by-name"
+    - $name: "NoMatchAppended"
+      skus:
+        - config:
+            name: "{{$name}}"
+            identity:
+              platform-name: "PlatformName"
+              frid: "Google_SomeDevice"
+              sku-id: 4
+            firmware:
+              image-name: "foo"
+              no-firmware: true

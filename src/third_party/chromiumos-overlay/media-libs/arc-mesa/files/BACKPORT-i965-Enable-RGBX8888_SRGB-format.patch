@@ -1,0 +1,44 @@
+From ea5bf15c5f071745bd39805e8fd5d2e08780503b Mon Sep 17 00:00:00 2001
+From: Lepton Wu <lepton@chromium.org>
+Date: Sat, 14 Aug 2021 15:52:47 -0700
+Subject: [PATCH] i965: Enable RGBX8888_SRGB format.
+
+This is required by Android. Some Android games like nier reincarnation
+show a black screen without this.
+
+Change-Id: I73befd665ea4606d0ad838b1af460c1c7f4642bc
+---
+ src/mesa/drivers/dri/i965/intel_screen.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/mesa/drivers/dri/i965/intel_screen.c b/src/mesa/drivers/dri/i965/intel_screen.c
+index 8fa46681aff..3016b9b1362 100644
+--- a/src/mesa/drivers/dri/i965/intel_screen.c
++++ b/src/mesa/drivers/dri/i965/intel_screen.c
+@@ -2133,7 +2133,8 @@ intel_allowed_format(__DRIscreen *dri_screen, mesa_format format)
+    if (!allow_rgba_ordering &&
+        (format == MESA_FORMAT_R8G8B8A8_UNORM ||
+         format == MESA_FORMAT_R8G8B8X8_UNORM ||
+-        format == MESA_FORMAT_R8G8B8A8_SRGB))
++        format == MESA_FORMAT_R8G8B8A8_SRGB ||
++        format == MESA_FORMAT_R8G8B8X8_SRGB))
+       return false;
+ 
+     /* Shall we expose 10 bpc formats? */
+@@ -2190,11 +2191,11 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
+ 
+       /* Required by Android, for HAL_PIXEL_FORMAT_RGBA_8888. */
+       MESA_FORMAT_R8G8B8A8_UNORM,
++      MESA_FORMAT_R8G8B8A8_SRGB,
+ 
+       /* Required by Android, for HAL_PIXEL_FORMAT_RGBX_8888. */
+       MESA_FORMAT_R8G8B8X8_UNORM,
+-
+-      MESA_FORMAT_R8G8B8A8_SRGB,
++      MESA_FORMAT_R8G8B8X8_SRGB,
+    };
+ 
+    /* __DRI_ATTRIB_SWAP_COPY is not supported due to page flipping. */
+-- 
+2.31.0
+

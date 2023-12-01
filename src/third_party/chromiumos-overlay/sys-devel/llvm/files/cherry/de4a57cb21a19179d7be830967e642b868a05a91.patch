@@ -1,0 +1,3393 @@
+commit de4a57cb21a19179d7be830967e642b868a05a91
+Author: Louis Dionne <ldionne.2@gmail.com>
+Date:   Mon Jun 27 15:53:41 2022 -0400
+
+    [libc++] Re-add transitive includes that had been removed since LLVM 14
+    
+    This commit re-adds transitive includes that had been removed by
+    4cd04d1687f1, c36870c8e79c, a83f4b9cda57, 1458458b558d, 2e2f3158c604,
+    and 489637e66dd3. This should cover almost all the includes that had
+    been removed since LLVM 14 and that would contribute to breaking user
+    code when releasing LLVM 15.
+    
+    It is possible to disable the inclusion of these headers by defining
+    _LIBCPP_REMOVE_TRANSITIVE_INCLUDES. The intent is that vendors will
+    enable that macro and start fixing downstream issues immediately. We
+    can then remove the macro (and the transitive includes) by default in
+    a future release. That way, we will break users only once by removing
+    transitive includes in bulk instead of doing it bit by bit a every
+    release, which is more disruptive for users.
+    
+    Note 1: The set of headers to re-add was found by re-generating the
+            transitive include test on a checkout of release/14.x, which
+            provided the list of all transitive includes we used to provide.
+    
+    Note 2: Several includes of <vector>, <optional>, <array> and <unordered_map>
+            have been added in this commit. These transitive inclusions were
+            added when we implemented boyer_moore_searcher in <functional>.
+    
+    Note 3: This is a best effort patch to try and resolve downstream breakage
+            caused since branching LLVM 14. I wasn't able to perfectly mirror
+            transitive includes in LLVM 14 for a few headers, so I added a
+            release note explaining it. To summarize, adding boyer_moore_searcher
+            created a bunch of circular dependencies, so we have to break
+            backwards compatibility in a few cases.
+    
+    Differential Revision: https://reviews.llvm.org/D128661
+
+diff --git a/libcxx/cmake/caches/Generic-no-transitive-includes.cmake b/libcxx/cmake/caches/Generic-no-transitive-includes.cmake
+new file mode 100644
+index 000000000000..31e807366e16
+--- /dev/null
++++ b/libcxx/cmake/caches/Generic-no-transitive-includes.cmake
+@@ -0,0 +1,2 @@
++set(LIBCXX_TEST_PARAMS "enable_transitive_includes=False" CACHE STRING "")
++set(LIBCXXABI_TEST_PARAMS "${LIBCXX_TEST_PARAMS}" CACHE STRING "")
+diff --git a/libcxx/docs/ReleaseNotes.rst b/libcxx/docs/ReleaseNotes.rst
+index c7f9cb3c270f..dfc849c771fa 100644
+--- a/libcxx/docs/ReleaseNotes.rst
++++ b/libcxx/docs/ReleaseNotes.rst
+@@ -97,19 +97,15 @@ API Changes
+   ``<filesystem>`` header. The associated macro
+   ``_LIBCPP_DEPRECATED_EXPERIMENTAL_FILESYSTEM`` has also been removed.
+ 
+-- Some libc++ headers no longer transitively include all of:
+-    - ``<algorithm>``
+-    - ``<chrono>``
+-    - ``<exception>``
+-    - ``<functional>``
+-    - ``<iterator>``
+-    - ``<new>``
+-    - ``<typeinfo>``
+-    - ``<utility>``
+-
+-  If, after updating libc++, you see compiler errors related to missing declarations
+-  in namespace ``std``, it might be because one of your source files now needs to
+-  include one or more of the headers listed above.
++- Libc++ is getting ready to remove unnecessary transitive inclusions. This may
++  break your code in the future. To future-proof your code to these removals,
++  please compile your code with ``_LIBCPP_REMOVE_TRANSITIVE_INCLUDES`` defined
++  and fix any compilation error resulting from missing includes.
++
++- The ``<algorithm>``, ``<array>``, ``<optional>``, ``<unordered_map>`` and ``<vector>``
++  headers no longer transitively include the ``<functional>`` header. If you see compiler
++  errors related to missing declarations in namespace ``std``, make sure you have the
++  necessary includes.
+ 
+ - The integer distributions ``binomial_distribution``, ``discrete_distribution``,
+   ``geometric_distribution``, ``negative_binomial_distribution``, ``poisson_distribution``,
+diff --git a/libcxx/include/algorithm b/libcxx/include/algorithm
+index cb1cb1dc6b43..9ae647181c5f 100644
+--- a/libcxx/include/algorithm
++++ b/libcxx/include/algorithm
+@@ -1260,6 +1260,12 @@ template <class BidirectionalIterator, class Compare>
+ #include <__algorithm/unwrap_iter.h>
+ #include <__algorithm/upper_bound.h>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <chrono>
++#  include <iterator>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ #include <initializer_list>
+ 
+diff --git a/libcxx/include/any b/libcxx/include/any
+index 991d887bf29a..7e12034b45a7 100644
+--- a/libcxx/include/any
++++ b/libcxx/include/any
+@@ -94,6 +94,10 @@ namespace std {
+ #include <typeinfo>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <chrono>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/array b/libcxx/include/array
+index ab919309b966..e96c3d813339 100644
+--- a/libcxx/include/array
++++ b/libcxx/include/array
+@@ -123,6 +123,12 @@ template <size_t I, class T, size_t N> const T&& get(const array<T, N>&&) noexce
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <iterator>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/atomic b/libcxx/include/atomic
+index 3ccc8bc94436..0c6d3079c96a 100644
+--- a/libcxx/include/atomic
++++ b/libcxx/include/atomic
+@@ -534,6 +534,10 @@ template <class T>
+ # include <__threading_support>
+ #endif
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <chrono>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/bit b/libcxx/include/bit
+index f634372836b3..fe1bcadc818a 100644
+--- a/libcxx/include/bit
++++ b/libcxx/include/bit
+@@ -71,6 +71,10 @@ namespace std {
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iosfwd>
++#endif
++
+ #if defined(__IBMCPP__)
+ #  include "__support/ibm/support.h"
+ #endif
+diff --git a/libcxx/include/charconv b/libcxx/include/charconv
+index 80aa44d28e81..6a63e5fe9057 100644
+--- a/libcxx/include/charconv
++++ b/libcxx/include/charconv
+@@ -96,6 +96,10 @@ namespace std {
+ #include <limits>
+ #include <type_traits>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iosfwd>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/coroutine b/libcxx/include/coroutine
+index a96c4a7a5af8..6582f5554ed0 100644
+--- a/libcxx/include/coroutine
++++ b/libcxx/include/coroutine
+@@ -46,6 +46,10 @@ struct suspend_always;
+ #include <__coroutine/trivial_awaitables.h>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iosfwd>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ 
+diff --git a/libcxx/include/deque b/libcxx/include/deque
+index 27cd7b213e81..d8f48f07954c 100644
+--- a/libcxx/include/deque
++++ b/libcxx/include/deque
+@@ -185,6 +185,12 @@ template <class T, class Allocator, class Predicate>
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <functional>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/experimental/simd b/libcxx/include/experimental/simd
+index 02a7a490a160..9b55cc009986 100644
+--- a/libcxx/include/experimental/simd
++++ b/libcxx/include/experimental/simd
+@@ -656,6 +656,11 @@ public:
+ #include <experimental/__config>
+ #include <tuple>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <functional>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/experimental/unordered_map b/libcxx/include/experimental/unordered_map
+index 71ce4408c49f..636d31bdc557 100644
+--- a/libcxx/include/experimental/unordered_map
++++ b/libcxx/include/experimental/unordered_map
+@@ -45,6 +45,14 @@ namespace pmr {
+ #include <experimental/memory_resource>
+ #include <unordered_map>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <array>
++#  include <bit>
++#  include <functional>
++#  include <vector>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/ext/hash_map b/libcxx/include/ext/hash_map
+index 92572c08c24c..8afe12f6319b 100644
+--- a/libcxx/include/ext/hash_map
++++ b/libcxx/include/ext/hash_map
+@@ -210,6 +210,10 @@ template <class Key, class T, class Hash, class Pred, class Alloc>
+ #include <stdexcept>
+ #include <type_traits>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iterator>
++#endif
++
+ #if defined(__DEPRECATED) && __DEPRECATED
+ #if defined(_LIBCPP_WARNING)
+     _LIBCPP_WARNING("Use of the header <ext/hash_map> is deprecated.  Migrate to <unordered_map>")
+diff --git a/libcxx/include/ext/hash_set b/libcxx/include/ext/hash_set
+index eb6193940668..433c13f80bb2 100644
+--- a/libcxx/include/ext/hash_set
++++ b/libcxx/include/ext/hash_set
+@@ -199,6 +199,10 @@ template <class Value, class Hash, class Pred, class Alloc>
+ #include <ext/__hash>
+ #include <functional>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iterator>
++#endif
++
+ #if defined(__DEPRECATED) && __DEPRECATED
+ #if defined(_LIBCPP_WARNING)
+     _LIBCPP_WARNING("Use of the header <ext/hash_set> is deprecated.  Migrate to <unordered_set>")
+diff --git a/libcxx/include/forward_list b/libcxx/include/forward_list
+index 4600d82ecdd8..6a7272027351 100644
+--- a/libcxx/include/forward_list
++++ b/libcxx/include/forward_list
+@@ -194,6 +194,12 @@ template <class T, class Allocator, class Predicate>
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <functional>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/functional b/libcxx/include/functional
+index dd39e274a56b..ca17dd4ed3de 100644
+--- a/libcxx/include/functional
++++ b/libcxx/include/functional
+@@ -529,6 +529,10 @@ POLICY:  For non-variadic implementations, the number of arguments is limited
+ #include <typeinfo>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <utility>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/future b/libcxx/include/future
+index 4f49bf158bac..f4a5b43eef08 100644
+--- a/libcxx/include/future
++++ b/libcxx/include/future
+@@ -378,6 +378,10 @@ template <class R, class Alloc> struct uses_allocator<packaged_task<R>, Alloc>;
+ #include <thread>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <chrono>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/iterator b/libcxx/include/iterator
+index dfa1d35e0d90..d2f5ac2c0e93 100644
+--- a/libcxx/include/iterator
++++ b/libcxx/include/iterator
+@@ -724,6 +724,13 @@ template <class E> constexpr const E* data(initializer_list<E> il) noexcept;
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <exception>
++#  include <new>
++#  include <typeinfo>
++#  include <utility>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/list b/libcxx/include/list
+index 7ae1bc897ce0..d75b15c060be 100644
+--- a/libcxx/include/list
++++ b/libcxx/include/list
+@@ -202,6 +202,12 @@ template <class T, class Allocator, class Predicate>
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <functional>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/locale b/libcxx/include/locale
+index 8ac2aacb6edf..7f6f1e509745 100644
+--- a/libcxx/include/locale
++++ b/libcxx/include/locale
+@@ -211,6 +211,10 @@ template <class charT> class messages_byname;
+ #include <streambuf>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iterator>
++#endif
++
+ #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
+ // Most unix variants have catopen.  These are the specific ones that don't.
+ #  if !defined(__BIONIC__) && !defined(_NEWLIB_VERSION) && !defined(__EMSCRIPTEN__)
+diff --git a/libcxx/include/map b/libcxx/include/map
+index b253d0ffc848..106ed5259ed9 100644
+--- a/libcxx/include/map
++++ b/libcxx/include/map
+@@ -546,6 +546,12 @@ erase_if(multimap<Key, T, Compare, Allocator>& c, Predicate pred);  // C++20
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#  include <iterator>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/memory b/libcxx/include/memory
+index aafe4bf4ba00..299746022274 100644
+--- a/libcxx/include/memory
++++ b/libcxx/include/memory
+@@ -871,6 +871,11 @@ template<size_t N, class T>
+ #include <typeinfo>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iterator>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ 
+diff --git a/libcxx/include/mutex b/libcxx/include/mutex
+index ded33514f79d..5dfaad2b3510 100644
+--- a/libcxx/include/mutex
++++ b/libcxx/include/mutex
+@@ -198,6 +198,10 @@ template<class Callable, class ...Args>
+ #endif
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/numeric b/libcxx/include/numeric
+index 809838b21071..057faf508e6b 100644
+--- a/libcxx/include/numeric
++++ b/libcxx/include/numeric
+@@ -163,6 +163,11 @@ template<class T>
+ #include <__numeric/transform_inclusive_scan.h>
+ #include <__numeric/transform_reduce.h>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#  include <iterator>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/optional b/libcxx/include/optional
+index 73e902dc84be..349ceb5bc7f6 100644
+--- a/libcxx/include/optional
++++ b/libcxx/include/optional
+@@ -177,6 +177,21 @@ template<class T>
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <atomic>
++#  include <chrono>
++#  include <climits>
++#  include <concepts>
++#  include <ctime>
++#  include <iterator>
++#  include <memory>
++#  include <ratio>
++#  include <tuple>
++#  include <typeinfo>
++#  include <utility>
++#  include <variant>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ 
+diff --git a/libcxx/include/ostream b/libcxx/include/ostream
+index aa4c8c3d8792..283774585b92 100644
+--- a/libcxx/include/ostream
++++ b/libcxx/include/ostream
+@@ -142,6 +142,10 @@ template <class Stream, class T>
+ #include <streambuf>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iterator>
++#endif
++
+ #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+ #  pragma GCC system_header
+ #endif
+diff --git a/libcxx/include/queue b/libcxx/include/queue
+index a6e8a52e19b5..9a5cfb39f24e 100644
+--- a/libcxx/include/queue
++++ b/libcxx/include/queue
+@@ -231,6 +231,10 @@ template <class T, class Container, class Compare>
+ #include <vector>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ #include <initializer_list>
+diff --git a/libcxx/include/random b/libcxx/include/random
+index b0817dd3a7cc..41ee4d85fda3 100644
+--- a/libcxx/include/random
++++ b/libcxx/include/random
+@@ -1718,6 +1718,10 @@ class piecewise_linear_distribution
+ #include <__random/weibull_distribution.h>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#endif
++
+ // standard-mandated includes
+ #include <initializer_list>
+ 
+diff --git a/libcxx/include/regex b/libcxx/include/regex
+index a0a6561ef030..a117c50f3984 100644
+--- a/libcxx/include/regex
++++ b/libcxx/include/regex
+@@ -778,6 +778,11 @@ typedef regex_token_iterator<wstring::const_iterator> wsregex_token_iterator;
+ #include <vector>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iterator>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/set b/libcxx/include/set
+index 3c062a123125..da62f6f5ca5b 100644
+--- a/libcxx/include/set
++++ b/libcxx/include/set
+@@ -485,6 +485,11 @@ erase_if(multiset<Key, Compare, Allocator>& c, Predicate pred);  // C++20
+ #include <__utility/forward.h>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/span b/libcxx/include/span
+index 84b23ce60287..00793a210cbe 100644
+--- a/libcxx/include/span
++++ b/libcxx/include/span
+@@ -148,6 +148,11 @@ template<class R>
+ #include <type_traits>  // for remove_cv, etc
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/stack b/libcxx/include/stack
+index 59878c1d84df..86435c4559de 100644
+--- a/libcxx/include/stack
++++ b/libcxx/include/stack
+@@ -107,6 +107,10 @@ template <class T, class Container>
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ #include <initializer_list>
+diff --git a/libcxx/include/string b/libcxx/include/string
+index 0ce8c4fecebd..bb169a82c9e7 100644
+--- a/libcxx/include/string
++++ b/libcxx/include/string
+@@ -555,6 +555,16 @@ basic_string<char32_t> operator "" s( const char32_t *str, size_t len );
+ #  include <cwchar>
+ #endif
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <functional>
++#  include <iterator>
++#  include <new>
++#  include <typeinfo>
++#  include <utility>
++#  include <vector>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/string_view b/libcxx/include/string_view
+index 8088f66bcdc5..28013e7cb08e 100644
+--- a/libcxx/include/string_view
++++ b/libcxx/include/string_view
+@@ -218,6 +218,12 @@ namespace std {
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <functional>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/thread b/libcxx/include/thread
+index 06b4824d4c6f..1c8eb198986d 100644
+--- a/libcxx/include/thread
++++ b/libcxx/include/thread
+@@ -98,6 +98,11 @@ void sleep_for(const chrono::duration<Rep, Period>& rel_time);
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <chrono>
++#  include <functional>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ 
+diff --git a/libcxx/include/tuple b/libcxx/include/tuple
+index d36b9902526b..221eb23dd3f8 100644
+--- a/libcxx/include/tuple
++++ b/libcxx/include/tuple
+@@ -219,6 +219,14 @@ template <class... Types>
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <exception>
++#  include <iosfwd>
++#  include <new>
++#  include <typeinfo>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ 
+diff --git a/libcxx/include/typeindex b/libcxx/include/typeindex
+index fb61cfc81769..5fb7b30ecfee 100644
+--- a/libcxx/include/typeindex
++++ b/libcxx/include/typeindex
+@@ -50,6 +50,12 @@ struct hash<type_index>
+ #include <typeinfo>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iosfwd>
++#  include <new>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ 
+diff --git a/libcxx/include/unordered_map b/libcxx/include/unordered_map
+index 12b4e5af63f5..72749e11e843 100644
+--- a/libcxx/include/unordered_map
++++ b/libcxx/include/unordered_map
+@@ -531,6 +531,12 @@ template <class Key, class T, class Hash, class Pred, class Alloc>
+ #include <tuple>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <bit>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/unordered_set b/libcxx/include/unordered_set
+index 3fc686c8d354..97aa935f187c 100644
+--- a/libcxx/include/unordered_set
++++ b/libcxx/include/unordered_set
+@@ -474,6 +474,11 @@ template <class Value, class Hash, class Pred, class Alloc>
+ #include <__utility/forward.h>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <functional>
++#  include <iterator>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/include/utility b/libcxx/include/utility
+index fc7909aef11a..7a1a45e334a3 100644
+--- a/libcxx/include/utility
++++ b/libcxx/include/utility
+@@ -243,6 +243,10 @@ template <class T>
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <iosfwd>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ #include <initializer_list>
+diff --git a/libcxx/include/valarray b/libcxx/include/valarray
+index 5e601758e041..6f8a3b84197b 100644
+--- a/libcxx/include/valarray
++++ b/libcxx/include/valarray
+@@ -360,6 +360,11 @@ template <class T> unspecified2 end(const valarray<T>& v);
+ #include <new>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <functional>
++#endif
++
+ // standard-mandated includes
+ #include <initializer_list>
+ 
+diff --git a/libcxx/include/variant b/libcxx/include/variant
+index 5f8c06510d91..65dec64dbbbd 100644
+--- a/libcxx/include/variant
++++ b/libcxx/include/variant
+@@ -219,6 +219,11 @@ namespace std {
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <typeinfo>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ #include <compare>
+ 
+diff --git a/libcxx/include/vector b/libcxx/include/vector
+index 1cb4cbf10794..f5c09011948d 100644
+--- a/libcxx/include/vector
++++ b/libcxx/include/vector
+@@ -305,6 +305,12 @@ erase_if(vector<T, Allocator>& c, Predicate pred);    // C++20
+ #include <type_traits>
+ #include <version>
+ 
++#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
++#  include <algorithm>
++#  include <typeinfo>
++#  include <utility>
++#endif
++
+ // standard-mandated includes
+ 
+ // [iterator.range]
+diff --git a/libcxx/test/libcxx/transitive_includes.sh.cpp b/libcxx/test/libcxx/transitive_includes.sh.cpp
+index 19d6ab036f68..aaf26fbf40dc 100644
+--- a/libcxx/test/libcxx/transitive_includes.sh.cpp
++++ b/libcxx/test/libcxx/transitive_includes.sh.cpp
+@@ -34,6 +34,11 @@
+ // This test doesn't work on AIX or Windows, but it should. Needs investigation.
+ // XFAIL: buildhost=aix, buildhost=windows
+ 
++// This test is not supported when we remove the transitive includes provided for backwards
++// compatibility. When we bulk-remove them, we'll adjust the includes that are expected by
++// this test instead.
++// XFAIL: transitive-includes-disabled
++
+ // Prevent <ext/hash_map> from generating deprecated warnings for this test.
+ #if defined(__DEPRECATED)
+ #    undef __DEPRECATED
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.algorithm b/libcxx/test/libcxx/transitive_includes/expected.algorithm
+index 8e539be98cbc..944a3eeea2d6 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.algorithm
++++ b/libcxx/test/libcxx/transitive_includes/expected.algorithm
+@@ -1,6 +1,7 @@
+ algorithm
+ atomic
+ bit
++chrono
+ climits
+ cmath
+ compare
+@@ -13,6 +14,7 @@ ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -21,4 +23,6 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.any b/libcxx/test/libcxx/transitive_includes/expected.any
+index 4f3cff5c0634..86009188e53e 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.any
++++ b/libcxx/test/libcxx/transitive_includes/expected.any
+@@ -1,5 +1,6 @@
+ any
+ atomic
++chrono
+ climits
+ cmath
+ compare
+@@ -12,6 +13,7 @@ ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -20,4 +22,6 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.array b/libcxx/test/libcxx/transitive_includes/expected.array
+index 0fb1b67d13d0..7145642a8f46 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.array
++++ b/libcxx/test/libcxx/transitive_includes/expected.array
+@@ -1,14 +1,29 @@
++algorithm
+ array
++atomic
++bit
++chrono
++climits
+ cmath
+ compare
+ concepts
+ cstddef
+ cstdint
+ cstdlib
++cstring
++ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
++memory
++new
++ratio
+ stdexcept
++tuple
+ type_traits
++typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.atomic b/libcxx/test/libcxx/transitive_includes/expected.atomic
+index 42e3c191ac89..3e9917b3da1a 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.atomic
++++ b/libcxx/test/libcxx/transitive_includes/expected.atomic
+@@ -1,5 +1,8 @@
+ atomic
++chrono
+ climits
++cmath
++compare
+ cstddef
+ cstdint
+ cstring
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.barrier b/libcxx/test/libcxx/transitive_includes/expected.barrier
+index cb7845f45e0c..c2865c8d3ef0 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.barrier
++++ b/libcxx/test/libcxx/transitive_includes/expected.barrier
+@@ -1,5 +1,6 @@
+ atomic
+ barrier
++chrono
+ climits
+ cmath
+ compare
+@@ -12,6 +13,7 @@ ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -20,4 +22,6 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.bit b/libcxx/test/libcxx/transitive_includes/expected.bit
+index 3f58643d6062..4fb5285f8142 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.bit
++++ b/libcxx/test/libcxx/transitive_includes/expected.bit
+@@ -2,6 +2,7 @@ bit
+ cstddef
+ cstdint
+ cstdlib
++iosfwd
+ limits
+ type_traits
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.bitset b/libcxx/test/libcxx/transitive_includes/expected.bitset
+index d3ee4af66e1b..3cf3e8dbdfc7 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.bitset
++++ b/libcxx/test/libcxx/transitive_includes/expected.bitset
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
++chrono
+ climits
+ cmath
+ compare
+@@ -14,11 +18,14 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -26,4 +33,8 @@ string_view
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.ccomplex b/libcxx/test/libcxx/transitive_includes/expected.ccomplex
+index cfc2d04436fe..98bf9a8010e4 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.ccomplex
++++ b/libcxx/test/libcxx/transitive_includes/expected.ccomplex
+@@ -1,8 +1,12 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ ccomplex
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -18,15 +22,18 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ sstream
+@@ -38,4 +45,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.charconv b/libcxx/test/libcxx/transitive_includes/expected.charconv
+index 5ce64d0c6a23..1ca2d688ddea 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.charconv
++++ b/libcxx/test/libcxx/transitive_includes/expected.charconv
+@@ -6,6 +6,7 @@ cstddef
+ cstdint
+ cstdlib
+ cstring
++iosfwd
+ limits
+ type_traits
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.codecvt b/libcxx/test/libcxx/transitive_includes/expected.codecvt
+index f846715edf80..0931ca137c0b 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.codecvt
++++ b/libcxx/test/libcxx/transitive_includes/expected.codecvt
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ codecvt
+@@ -15,12 +19,15 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ mutex
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -29,4 +36,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.complex b/libcxx/test/libcxx/transitive_includes/expected.complex
+index eb5fe7c87bf7..64161c1d331f 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.complex
++++ b/libcxx/test/libcxx/transitive_includes/expected.complex
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -17,15 +21,18 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ sstream
+@@ -37,4 +44,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.condition_variable b/libcxx/test/libcxx/transitive_includes/expected.condition_variable
+index 081849db56d2..968007a37cef 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.condition_variable
++++ b/libcxx/test/libcxx/transitive_includes/expected.condition_variable
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -15,11 +19,14 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -28,4 +35,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.coroutine b/libcxx/test/libcxx/transitive_includes/expected.coroutine
+index 1f31012bf5be..8dd332d47254 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.coroutine
++++ b/libcxx/test/libcxx/transitive_includes/expected.coroutine
+@@ -4,6 +4,7 @@ coroutine
+ cstddef
+ cstdint
+ cstring
++iosfwd
+ limits
+ type_traits
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.ctgmath b/libcxx/test/libcxx/transitive_includes/expected.ctgmath
+index ac37b74ac56e..7467a5ab5952 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.ctgmath
++++ b/libcxx/test/libcxx/transitive_includes/expected.ctgmath
+@@ -1,8 +1,12 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ ccomplex
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -19,15 +23,18 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ sstream
+@@ -39,4 +46,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.deque b/libcxx/test/libcxx/transitive_includes/expected.deque
+index aa51131432ea..c26bdc7479b6 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.deque
++++ b/libcxx/test/libcxx/transitive_includes/expected.deque
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -10,14 +14,21 @@ cstring
+ ctime
+ deque
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_algorithm b/libcxx/test/libcxx/transitive_includes/expected.experimental_algorithm
+index 7e307913a9fe..8a5cd7de65d8 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_algorithm
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_algorithm
+@@ -1,6 +1,7 @@
+ algorithm
+ atomic
+ bit
++chrono
+ climits
+ cmath
+ compare
+@@ -14,6 +15,7 @@ exception
+ experimental/algorithm
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -22,4 +24,6 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_coroutine b/libcxx/test/libcxx/transitive_includes/expected.experimental_coroutine
+index 89fc3edcec46..682f0fa0e7a8 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_coroutine
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_coroutine
+@@ -1,4 +1,5 @@
+ atomic
++chrono
+ climits
+ cmath
+ compare
+@@ -12,6 +13,7 @@ exception
+ experimental/coroutine
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -20,4 +22,6 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_deque b/libcxx/test/libcxx/transitive_includes/expected.experimental_deque
+index e1677c7dd843..bd86d1588beb 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_deque
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_deque
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -13,15 +17,21 @@ exception
+ experimental/deque
+ experimental/memory_resource
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_forward_list b/libcxx/test/libcxx/transitive_includes/expected.experimental_forward_list
+index af433ce90949..c43fab08b41f 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_forward_list
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_forward_list
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -13,15 +17,21 @@ experimental/forward_list
+ experimental/memory_resource
+ experimental/utility
+ forward_list
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_functional b/libcxx/test/libcxx/transitive_includes/expected.experimental_functional
+index ce502b5e9803..87cee2d28882 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_functional
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_functional
+@@ -1,5 +1,8 @@
++algorithm
+ array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -14,6 +17,7 @@ experimental/functional
+ functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -24,5 +28,7 @@ tuple
+ type_traits
+ typeinfo
+ unordered_map
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_iterator b/libcxx/test/libcxx/transitive_includes/expected.experimental_iterator
+index 83a9b8d93c65..14d31c215ffb 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_iterator
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_iterator
+@@ -14,5 +14,7 @@ limits
+ new
+ tuple
+ type_traits
++typeinfo
++utility
+ variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_list b/libcxx/test/libcxx/transitive_includes/expected.experimental_list
+index aae9f23d08e9..ac800654f532 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_list
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_list
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -12,16 +16,22 @@ exception
+ experimental/list
+ experimental/memory_resource
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ list
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_map b/libcxx/test/libcxx/transitive_includes/expected.experimental_map
+index cb76c7642ec9..d132098b01a1 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_map
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_map
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -12,8 +16,10 @@ exception
+ experimental/map
+ experimental/memory_resource
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ map
+ memory
+@@ -24,5 +30,8 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_memory_resource b/libcxx/test/libcxx/transitive_includes/expected.experimental_memory_resource
+index 67d2441ae369..94d9abd26b6c 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_memory_resource
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_memory_resource
+@@ -1,4 +1,5 @@
+ atomic
++chrono
+ climits
+ cmath
+ compare
+@@ -13,6 +14,7 @@ experimental/memory_resource
+ experimental/utility
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -22,4 +24,5 @@ tuple
+ type_traits
+ typeinfo
+ utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_regex b/libcxx/test/libcxx/transitive_includes/expected.experimental_regex
+index 6490adb5a1b4..8a49aac962c2 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_regex
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_regex
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -19,12 +23,15 @@ experimental/memory_resource
+ experimental/regex
+ experimental/string
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ mutex
+ new
++optional
+ ratio
+ regex
+ stdexcept
+@@ -34,6 +41,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_set b/libcxx/test/libcxx/transitive_includes/expected.experimental_set
+index 03a09aff0574..f1d2953360dc 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_set
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_set
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -12,8 +16,10 @@ exception
+ experimental/memory_resource
+ experimental/set
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -24,5 +30,8 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_simd b/libcxx/test/libcxx/transitive_includes/expected.experimental_simd
+index 999b0aafb666..f06f6e9cea01 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_simd
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_simd
+@@ -1,16 +1,34 @@
++algorithm
+ array
++atomic
++bit
++chrono
++climits
+ cmath
+ compare
+ concepts
+ cstddef
+ cstdint
+ cstdlib
++cstring
++ctime
+ exception
+ experimental/simd
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
++memory
++new
++optional
++ratio
+ stdexcept
+ tuple
+ type_traits
++typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_string b/libcxx/test/libcxx/transitive_includes/expected.experimental_string
+index 4fb05391c7b4..367a9ed7da4b 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_string
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_string
+@@ -1,5 +1,9 @@
++algorithm
++array
+ atomic
++bit
+ cctype
++chrono
+ climits
+ cmath
+ compare
+@@ -16,11 +20,14 @@ exception
+ experimental/memory_resource
+ experimental/string
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -28,5 +35,8 @@ string_view
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_map b/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_map
+index 04efa3377d81..16753ae30a7b 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_map
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_map
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -12,8 +16,10 @@ exception
+ experimental/memory_resource
+ experimental/unordered_map
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -25,4 +31,6 @@ type_traits
+ typeinfo
+ unordered_map
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_set b/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_set
+index 798b920506cf..1aafa61386b7 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_set
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_unordered_set
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -12,8 +16,10 @@ exception
+ experimental/memory_resource
+ experimental/unordered_set
+ experimental/utility
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -23,6 +29,9 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ unordered_set
+ utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_utility b/libcxx/test/libcxx/transitive_includes/expected.experimental_utility
+index 788283fb30b9..a399b3ebb27c 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_utility
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_utility
+@@ -5,6 +5,7 @@ cstdint
+ cstdlib
+ experimental/utility
+ initializer_list
++iosfwd
+ limits
+ type_traits
+ utility
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.experimental_vector b/libcxx/test/libcxx/transitive_includes/expected.experimental_vector
+index 35355e4d3547..1c569628be18 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.experimental_vector
++++ b/libcxx/test/libcxx/transitive_includes/expected.experimental_vector
+@@ -1,4 +1,7 @@
++algorithm
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -14,6 +17,7 @@ experimental/utility
+ experimental/vector
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -23,5 +27,6 @@ tuple
+ type_traits
+ typeinfo
+ utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.ext_hash_map b/libcxx/test/libcxx/transitive_includes/expected.ext_hash_map
+index 238ba8fade71..459536294e0c 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.ext_hash_map
++++ b/libcxx/test/libcxx/transitive_includes/expected.ext_hash_map
+@@ -3,6 +3,7 @@ array
+ atomic
+ bit
+ cctype
++chrono
+ climits
+ cmath
+ compare
+@@ -20,6 +21,7 @@ ext/hash_map
+ functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -32,5 +34,7 @@ tuple
+ type_traits
+ typeinfo
+ unordered_map
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.ext_hash_set b/libcxx/test/libcxx/transitive_includes/expected.ext_hash_set
+index 5e58c46663a5..160335aab367 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.ext_hash_set
++++ b/libcxx/test/libcxx/transitive_includes/expected.ext_hash_set
+@@ -3,6 +3,7 @@ array
+ atomic
+ bit
+ cctype
++chrono
+ climits
+ cmath
+ compare
+@@ -20,6 +21,7 @@ ext/hash_set
+ functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -32,5 +34,7 @@ tuple
+ type_traits
+ typeinfo
+ unordered_map
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.filesystem b/libcxx/test/libcxx/transitive_includes/expected.filesystem
+index adc5812121df..22e80bc11192 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.filesystem
++++ b/libcxx/test/libcxx/transitive_includes/expected.filesystem
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -17,16 +21,19 @@ cwchar
+ cwctype
+ exception
+ filesystem
++functional
+ initializer_list
+ iomanip
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ stdexcept
+@@ -37,4 +44,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.format b/libcxx/test/libcxx/transitive_includes/expected.format
+index d88f3f66919f..08d46d27a9c0 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.format
++++ b/libcxx/test/libcxx/transitive_includes/expected.format
+@@ -1,9 +1,11 @@
++algorithm
+ array
+ atomic
+ bit
+ cctype
+ cerrno
+ charconv
++chrono
+ climits
+ cmath
+ compare
+@@ -19,9 +21,11 @@ cwchar
+ cwctype
+ exception
+ format
++functional
+ initializer_list
+ ios
+ iosfwd
++iterator
+ limits
+ locale
+ memory
+@@ -37,4 +41,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.forward_list b/libcxx/test/libcxx/transitive_includes/expected.forward_list
+index de184d39a0da..33afc74bd420 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.forward_list
++++ b/libcxx/test/libcxx/transitive_includes/expected.forward_list
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -10,14 +14,21 @@ cstring
+ ctime
+ exception
+ forward_list
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.fstream b/libcxx/test/libcxx/transitive_includes/expected.fstream
+index 31ef4da04630..7a892e11bfe6 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.fstream
++++ b/libcxx/test/libcxx/transitive_includes/expected.fstream
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -18,16 +22,19 @@ cwctype
+ exception
+ filesystem
+ fstream
++functional
+ initializer_list
+ iomanip
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ stdexcept
+@@ -38,4 +45,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.functional b/libcxx/test/libcxx/transitive_includes/expected.functional
+index 944f5a2cedd7..7625982373f8 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.functional
++++ b/libcxx/test/libcxx/transitive_includes/expected.functional
+@@ -1,5 +1,8 @@
++algorithm
+ array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -13,6 +16,7 @@ exception
+ functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -23,5 +27,7 @@ tuple
+ type_traits
+ typeinfo
+ unordered_map
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.future b/libcxx/test/libcxx/transitive_includes/expected.future
+index 978baba9b8ec..92bd4e044ecc 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.future
++++ b/libcxx/test/libcxx/transitive_includes/expected.future
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -14,13 +18,16 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ future
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ mutex
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -30,4 +37,8 @@ thread
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.iomanip b/libcxx/test/libcxx/transitive_includes/expected.iomanip
+index 86446ab031fb..39829086f4cb 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.iomanip
++++ b/libcxx/test/libcxx/transitive_includes/expected.iomanip
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -16,16 +20,19 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iomanip
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ stdexcept
+@@ -36,4 +43,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.ios b/libcxx/test/libcxx/transitive_includes/expected.ios
+index 3ecae9323ab4..6e7e5b268976 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.ios
++++ b/libcxx/test/libcxx/transitive_includes/expected.ios
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -14,13 +18,16 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
++iterator
+ limits
+ memory
+ mutex
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -29,4 +36,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.iostream b/libcxx/test/libcxx/transitive_includes/expected.iostream
+index 2e4e74cc18b4..580aeaf86734 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.iostream
++++ b/libcxx/test/libcxx/transitive_includes/expected.iostream
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -16,16 +20,19 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
+ iostream
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ stdexcept
+@@ -36,4 +43,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.istream b/libcxx/test/libcxx/transitive_includes/expected.istream
+index cbd4a87c1613..fd0c4b4ca736 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.istream
++++ b/libcxx/test/libcxx/transitive_includes/expected.istream
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -16,15 +20,18 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ stdexcept
+@@ -35,4 +42,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.iterator b/libcxx/test/libcxx/transitive_includes/expected.iterator
+index 698f6cf9de2f..447087a3f6f9 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.iterator
++++ b/libcxx/test/libcxx/transitive_includes/expected.iterator
+@@ -13,5 +13,7 @@ limits
+ new
+ tuple
+ type_traits
++typeinfo
++utility
+ variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.latch b/libcxx/test/libcxx/transitive_includes/expected.latch
+index 3d00941b9231..a7a6bbc912ce 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.latch
++++ b/libcxx/test/libcxx/transitive_includes/expected.latch
+@@ -1,5 +1,8 @@
+ atomic
++chrono
+ climits
++cmath
++compare
+ cstddef
+ cstdint
+ cstring
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.list b/libcxx/test/libcxx/transitive_includes/expected.list
+index 96d4f33db7d4..b596079c340b 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.list
++++ b/libcxx/test/libcxx/transitive_includes/expected.list
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -9,15 +13,22 @@ cstdlib
+ cstring
+ ctime
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ list
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.locale b/libcxx/test/libcxx/transitive_includes/expected.locale
+index cdd6609f8440..29719367689e 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.locale
++++ b/libcxx/test/libcxx/transitive_includes/expected.locale
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -15,14 +19,17 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ratio
+ stdexcept
+ streambuf
+@@ -32,4 +39,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.map b/libcxx/test/libcxx/transitive_includes/expected.map
+index a6896289ab3f..c871579ea35e 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.map
++++ b/libcxx/test/libcxx/transitive_includes/expected.map
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -9,8 +13,10 @@ cstdlib
+ cstring
+ ctime
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ map
+ memory
+@@ -21,4 +27,8 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.memory b/libcxx/test/libcxx/transitive_includes/expected.memory
+index 3b7a13de63fe..f36910fde696 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.memory
++++ b/libcxx/test/libcxx/transitive_includes/expected.memory
+@@ -1,4 +1,5 @@
+ atomic
++chrono
+ climits
+ cmath
+ compare
+@@ -11,6 +12,7 @@ ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -19,4 +21,6 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.mutex b/libcxx/test/libcxx/transitive_includes/expected.mutex
+index 1aa71f549fd4..4d101cb290c1 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.mutex
++++ b/libcxx/test/libcxx/transitive_includes/expected.mutex
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -14,12 +18,15 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ mutex
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -28,4 +35,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.numeric b/libcxx/test/libcxx/transitive_includes/expected.numeric
+index 843582958e10..558b32457eb4 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.numeric
++++ b/libcxx/test/libcxx/transitive_includes/expected.numeric
+@@ -1,8 +1,34 @@
++algorithm
++array
++atomic
++bit
++chrono
++climits
+ cmath
++compare
+ concepts
+ cstddef
+ cstdint
++cstdlib
++cstring
++ctime
++exception
++functional
++initializer_list
++iosfwd
++iterator
+ limits
++memory
++new
+ numeric
++optional
++ratio
++stdexcept
++tuple
+ type_traits
++typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.optional b/libcxx/test/libcxx/transitive_includes/expected.optional
+index e888c8f4e0bd..993ce23d8009 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.optional
++++ b/libcxx/test/libcxx/transitive_includes/expected.optional
+@@ -1,15 +1,27 @@
++atomic
++chrono
++climits
+ cmath
+ compare
++concepts
+ cstddef
+ cstdint
+ cstdlib
+ cstring
++ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
++memory
+ new
+ optional
++ratio
+ stdexcept
++tuple
+ type_traits
++typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.ostream b/libcxx/test/libcxx/transitive_includes/expected.ostream
+index 1d7da3e2f96d..762d13c26ac3 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.ostream
++++ b/libcxx/test/libcxx/transitive_includes/expected.ostream
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -16,14 +20,17 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ stdexcept
+@@ -34,4 +41,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.queue b/libcxx/test/libcxx/transitive_includes/expected.queue
+index 07743c837beb..5861852fc532 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.queue
++++ b/libcxx/test/libcxx/transitive_includes/expected.queue
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -10,16 +14,22 @@ cstring
+ ctime
+ deque
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ queue
+ ratio
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.random b/libcxx/test/libcxx/transitive_includes/expected.random
+index c8060db2909a..96a956ad800a 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.random
++++ b/libcxx/test/libcxx/transitive_includes/expected.random
+@@ -1,6 +1,9 @@
++algorithm
++array
+ atomic
+ bit
+ cctype
++chrono
+ climits
+ cmath
+ compare
+@@ -14,12 +17,15 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+ numeric
++optional
+ random
+ ratio
+ stdexcept
+@@ -28,5 +34,8 @@ string_view
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.ranges b/libcxx/test/libcxx/transitive_includes/expected.ranges
+index f16d5e5d5505..3dbb13bb9680 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.ranges
++++ b/libcxx/test/libcxx/transitive_includes/expected.ranges
+@@ -1,4 +1,9 @@
++algorithm
+ array
++atomic
++bit
++chrono
++climits
+ cmath
+ compare
+ concepts
+@@ -6,17 +11,25 @@ cstddef
+ cstdint
+ cstdlib
+ cstring
++ctime
+ exception
++functional
+ initializer_list
+ iosfwd
+ iterator
+ limits
++memory
+ new
+ optional
+ ranges
++ratio
+ span
+ stdexcept
+ tuple
+ type_traits
++typeinfo
++unordered_map
++utility
+ variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.regex b/libcxx/test/libcxx/transitive_includes/expected.regex
+index 447e31831d8f..76df20736662 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.regex
++++ b/libcxx/test/libcxx/transitive_includes/expected.regex
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -15,12 +19,15 @@ cwchar
+ cwctype
+ deque
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ mutex
+ new
++optional
+ ratio
+ regex
+ stdexcept
+@@ -30,5 +37,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.scoped_allocator b/libcxx/test/libcxx/transitive_includes/expected.scoped_allocator
+index f4345de47a6a..22dcb319a5e6 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.scoped_allocator
++++ b/libcxx/test/libcxx/transitive_includes/expected.scoped_allocator
+@@ -1,4 +1,5 @@
+ atomic
++chrono
+ climits
+ cmath
+ compare
+@@ -11,6 +12,7 @@ ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -20,4 +22,6 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.semaphore b/libcxx/test/libcxx/transitive_includes/expected.semaphore
+index 6893d0995506..d6802e25aa70 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.semaphore
++++ b/libcxx/test/libcxx/transitive_includes/expected.semaphore
+@@ -1,5 +1,8 @@
+ atomic
++chrono
+ climits
++cmath
++compare
+ cstddef
+ cstdint
+ cstring
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.set b/libcxx/test/libcxx/transitive_includes/expected.set
+index 9b0f3cb52c18..849e87331b72 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.set
++++ b/libcxx/test/libcxx/transitive_includes/expected.set
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -9,8 +13,10 @@ cstdlib
+ cstring
+ ctime
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -21,4 +27,8 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.shared_mutex b/libcxx/test/libcxx/transitive_includes/expected.shared_mutex
+index 2bd4140b3d11..fdea61e19bba 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.shared_mutex
++++ b/libcxx/test/libcxx/transitive_includes/expected.shared_mutex
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -14,11 +18,14 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ shared_mutex
+ stdexcept
+@@ -28,4 +35,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.span b/libcxx/test/libcxx/transitive_includes/expected.span
+index 4ec98478d7ab..a46c30df8851 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.span
++++ b/libcxx/test/libcxx/transitive_includes/expected.span
+@@ -1,15 +1,34 @@
++algorithm
+ array
++atomic
++bit
++chrono
++climits
+ cmath
+ compare
+ concepts
+ cstddef
+ cstdint
+ cstdlib
++cstring
++ctime
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
++memory
++new
++optional
++ratio
+ span
+ stdexcept
++tuple
+ type_traits
++typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.sstream b/libcxx/test/libcxx/transitive_includes/expected.sstream
+index 1acc28a14008..1724fbdde39e 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.sstream
++++ b/libcxx/test/libcxx/transitive_includes/expected.sstream
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -16,15 +20,18 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ sstream
+@@ -36,4 +43,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.stack b/libcxx/test/libcxx/transitive_includes/expected.stack
+index 17c8d991260c..1a7d18cb85f2 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.stack
++++ b/libcxx/test/libcxx/transitive_includes/expected.stack
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -10,15 +14,22 @@ cstring
+ ctime
+ deque
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stack
+ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.streambuf b/libcxx/test/libcxx/transitive_includes/expected.streambuf
+index 5e8e278a70ff..a3001ce44a1b 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.streambuf
++++ b/libcxx/test/libcxx/transitive_includes/expected.streambuf
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -14,13 +18,16 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
++iterator
+ limits
+ memory
+ mutex
+ new
++optional
+ ratio
+ stdexcept
+ streambuf
+@@ -30,4 +37,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.string b/libcxx/test/libcxx/transitive_includes/expected.string
+index 960707082bab..0dacf739a785 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.string
++++ b/libcxx/test/libcxx/transitive_includes/expected.string
+@@ -1,5 +1,9 @@
++algorithm
++array
+ atomic
++bit
+ cctype
++chrono
+ climits
+ cmath
+ compare
+@@ -13,11 +17,14 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -25,4 +32,8 @@ string_view
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.string_view b/libcxx/test/libcxx/transitive_includes/expected.string_view
+index 6bb7edfd0bf0..e814351725ef 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.string_view
++++ b/libcxx/test/libcxx/transitive_includes/expected.string_view
+@@ -1,4 +1,10 @@
++algorithm
++array
++atomic
++bit
+ cctype
++chrono
++climits
+ cmath
+ compare
+ concepts
+@@ -7,13 +13,26 @@ cstdint
+ cstdio
+ cstdlib
+ cstring
++ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
++memory
++new
++optional
++ratio
+ stdexcept
+ string_view
++tuple
+ type_traits
++typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.strstream b/libcxx/test/libcxx/transitive_includes/expected.strstream
+index ed208f4d5eb3..782153b595b6 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.strstream
++++ b/libcxx/test/libcxx/transitive_includes/expected.strstream
+@@ -1,7 +1,11 @@
++algorithm
++array
+ atomic
++bit
+ bitset
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -16,15 +20,18 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ ios
+ iosfwd
+ istream
++iterator
+ limits
+ locale
+ memory
+ mutex
+ new
++optional
+ ostream
+ ratio
+ stdexcept
+@@ -36,4 +43,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.system_error b/libcxx/test/libcxx/transitive_includes/expected.system_error
+index 30ca93cf23bd..4101ee5209a3 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.system_error
++++ b/libcxx/test/libcxx/transitive_includes/expected.system_error
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -14,11 +18,14 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -27,4 +34,8 @@ system_error
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.thread b/libcxx/test/libcxx/transitive_includes/expected.thread
+index 102ca5891713..ab8c3c7c85ba 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.thread
++++ b/libcxx/test/libcxx/transitive_includes/expected.thread
+@@ -1,6 +1,10 @@
++algorithm
++array
+ atomic
++bit
+ cctype
+ cerrno
++chrono
+ climits
+ cmath
+ compare
+@@ -14,11 +18,14 @@ ctime
+ cwchar
+ cwctype
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
++optional
+ ratio
+ stdexcept
+ string
+@@ -28,4 +35,8 @@ thread
+ tuple
+ type_traits
+ typeinfo
++unordered_map
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.tuple b/libcxx/test/libcxx/transitive_includes/expected.tuple
+index 2a4e44c6f4e9..69858dc888c3 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.tuple
++++ b/libcxx/test/libcxx/transitive_includes/expected.tuple
+@@ -2,7 +2,14 @@ cmath
+ compare
+ cstddef
+ cstdint
++cstdlib
++exception
++initializer_list
++iosfwd
+ limits
++new
+ tuple
+ type_traits
++typeinfo
++utility
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.typeindex b/libcxx/test/libcxx/transitive_includes/expected.typeindex
+index 8ed579013db7..8f1c65253537 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.typeindex
++++ b/libcxx/test/libcxx/transitive_includes/expected.typeindex
+@@ -4,8 +4,12 @@ cstddef
+ cstdint
+ cstdlib
+ exception
++initializer_list
++iosfwd
+ limits
++new
+ type_traits
+ typeindex
+ typeinfo
++utility
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.unordered_map b/libcxx/test/libcxx/transitive_includes/expected.unordered_map
+index 4f2f2ff02388..2250cf96690a 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.unordered_map
++++ b/libcxx/test/libcxx/transitive_includes/expected.unordered_map
+@@ -1,4 +1,7 @@
++algorithm
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -11,6 +14,7 @@ ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -21,4 +25,6 @@ tuple
+ type_traits
+ typeinfo
+ unordered_map
++utility
++variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.unordered_set b/libcxx/test/libcxx/transitive_includes/expected.unordered_set
+index 2c825fb58ac9..9352f0b05b72 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.unordered_set
++++ b/libcxx/test/libcxx/transitive_includes/expected.unordered_set
+@@ -1,4 +1,8 @@
++algorithm
++array
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -9,8 +13,10 @@ cstdlib
+ cstring
+ ctime
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -20,5 +26,9 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++unordered_map
+ unordered_set
++utility
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.utility b/libcxx/test/libcxx/transitive_includes/expected.utility
+index 30781fff9336..799a14724cf4 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.utility
++++ b/libcxx/test/libcxx/transitive_includes/expected.utility
+@@ -4,6 +4,7 @@ cstddef
+ cstdint
+ cstdlib
+ initializer_list
++iosfwd
+ limits
+ type_traits
+ utility
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.valarray b/libcxx/test/libcxx/transitive_includes/expected.valarray
+index b5543ea5c701..a069f37119fa 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.valarray
++++ b/libcxx/test/libcxx/transitive_includes/expected.valarray
+@@ -1,15 +1,34 @@
++algorithm
++array
++atomic
++bit
++chrono
++climits
+ cmath
++compare
+ concepts
+ cstddef
+ cstdint
+ cstdlib
+ cstring
++ctime
+ exception
++functional
+ initializer_list
+ iosfwd
++iterator
+ limits
++memory
+ new
++optional
++ratio
+ stdexcept
++tuple
+ type_traits
++typeinfo
++unordered_map
++utility
+ valarray
++variant
++vector
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.variant b/libcxx/test/libcxx/transitive_includes/expected.variant
+index 44553c77ce56..d94d72974cb8 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.variant
++++ b/libcxx/test/libcxx/transitive_includes/expected.variant
+@@ -6,9 +6,12 @@ cstdlib
+ cstring
+ exception
+ initializer_list
++iosfwd
+ limits
+ new
+ tuple
+ type_traits
++typeinfo
++utility
+ variant
+ version
+diff --git a/libcxx/test/libcxx/transitive_includes/expected.vector b/libcxx/test/libcxx/transitive_includes/expected.vector
+index 9553eb0c04d7..5fb9d7d19cc1 100644
+--- a/libcxx/test/libcxx/transitive_includes/expected.vector
++++ b/libcxx/test/libcxx/transitive_includes/expected.vector
+@@ -1,4 +1,7 @@
++algorithm
+ atomic
++bit
++chrono
+ climits
+ cmath
+ compare
+@@ -11,6 +14,7 @@ ctime
+ exception
+ initializer_list
+ iosfwd
++iterator
+ limits
+ memory
+ new
+@@ -19,5 +23,7 @@ stdexcept
+ tuple
+ type_traits
+ typeinfo
++utility
++variant
+ vector
+ version
+diff --git a/libcxx/utils/ci/buildkite-pipeline.yml b/libcxx/utils/ci/buildkite-pipeline.yml
+index 9264ea19576d..755f98d9c6b3 100644
+--- a/libcxx/utils/ci/buildkite-pipeline.yml
++++ b/libcxx/utils/ci/buildkite-pipeline.yml
+@@ -336,7 +336,6 @@ steps:
+       timeout_in_minutes: 120
+ 
+   # Tests with various build configurations.
+-
+   - label: "Static libraries"
+     command: "libcxx/utils/ci/run-buildbot generic-static"
+     artifact_paths:
+@@ -393,6 +392,20 @@ steps:
+           limit: 2
+     timeout_in_minutes: 120
+ 
++  - label: "No transitive includes"
++    command: "libcxx/utils/ci/run-buildbot generic-no-transitive-includes"
++    artifact_paths:
++      - "**/test-results.xml"
++      - "**/*.abilist"
++    agents:
++      queue: "libcxx-builders"
++      os: "linux"
++    retry:
++      automatic:
++        - exit_status: -1  # Agent was lost
++          limit: 2
++    timeout_in_minutes: 120
++
+   - label: "With LLVM's libunwind"
+     command: "libcxx/utils/ci/run-buildbot generic-with_llvm_unwinder"
+     artifact_paths:
+diff --git a/libcxx/utils/ci/run-buildbot b/libcxx/utils/ci/run-buildbot
+index 81f7d6cafc74..81a68467e3e1 100755
+--- a/libcxx/utils/ci/run-buildbot
++++ b/libcxx/utils/ci/run-buildbot
+@@ -324,6 +324,11 @@ generic-with_llvm_unwinder)
+     generate-cmake -DLIBCXXABI_USE_LLVM_UNWINDER=ON
+     check-runtimes
+ ;;
++generic-no-transitive-includes)
++    clean
++    generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/Generic-no-transitive-includes.cmake"
++    check-runtimes
++;;
+ generic-no-threads)
+     clean
+     generate-cmake -C "${MONOREPO_ROOT}/libcxx/cmake/caches/Generic-no-threads.cmake"
+diff --git a/libcxx/utils/libcxx/test/params.py b/libcxx/utils/libcxx/test/params.py
+index 82fe93fc48fe..dcfefeced957 100644
+--- a/libcxx/utils/libcxx/test/params.py
++++ b/libcxx/utils/libcxx/test/params.py
+@@ -186,6 +186,15 @@ DEFAULT_PARAMETERS = [
+                  "This should be used sparingly since specifying ad-hoc features manually is error-prone and "
+                  "brittle in the long run as changes are made to the test suite.",
+             actions=lambda features: [AddFeature(f) for f in features]),
++
++  Parameter(name='enable_transitive_includes', choices=[True, False], type=bool, default=True,
++            help="Whether to enable backwards-compatibility transitive includes when running the tests. This "
++                 "is provided to ensure that the trimmed-down version of libc++ does not bit-rot in between "
++                 "points at which we bulk-remove transitive includes.",
++            actions=lambda enabled: [] if enabled else [
++              AddFeature('transitive-includes-disabled'),
++              AddCompileFlag('-D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES')
++            ]),
+ ]
+ 
+ DEFAULT_PARAMETERS += [

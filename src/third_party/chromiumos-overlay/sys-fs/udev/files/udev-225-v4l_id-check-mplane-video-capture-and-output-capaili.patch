@@ -1,0 +1,35 @@
+From 53a38a800ca264ac24312020f4ccc6bc2a0b682a Mon Sep 17 00:00:00 2001
+From: Ricky Liang <jcliang@chromium.org>
+Date: Fri, 16 Mar 2018 09:56:12 +0800
+Subject: [PATCH] v4l_id: check mplane video capture and output capailities
+
+Video devices using mplane buffer API declare capture and output
+capabilities with V4L2_CAP_VIDEO_CAPTURE_MPLANE and
+V4L2_CAP_VIDEO_OUTPUT_MPLANE.
+
+[Upstream PR: https://github.com/systemd/systemd/pull/8464]
+---
+ src/udev/v4l_id/v4l_id.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/udev/v4l_id/v4l_id.c b/src/udev/v4l_id/v4l_id.c
+index 5c57db4..e14c43f 100644
+--- a/src/udev/v4l_id/v4l_id.c
++++ b/src/udev/v4l_id/v4l_id.c
+@@ -66,9 +66,11 @@ int main(int argc, char *argv[]) {
+                 printf("ID_V4L_VERSION=2\n");
+                 printf("ID_V4L_PRODUCT=%s\n", v2cap.card);
+                 printf("ID_V4L_CAPABILITIES=:");
+-                if ((v2cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) > 0)
++                if ((v2cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) > 0 ||
++                    (v2cap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE) > 0)
+                         printf("capture:");
+-                if ((v2cap.capabilities & V4L2_CAP_VIDEO_OUTPUT) > 0)
++                if ((v2cap.capabilities & V4L2_CAP_VIDEO_OUTPUT) > 0 ||
++                    (v2cap.capabilities & V4L2_CAP_VIDEO_OUTPUT_MPLANE) > 0)
+                         printf("video_output:");
+                 if ((v2cap.capabilities & V4L2_CAP_VIDEO_OVERLAY) > 0)
+                         printf("video_overlay:");
+--
+2.13.5
+

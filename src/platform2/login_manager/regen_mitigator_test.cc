@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <optional>
 #include <string>
 
 #include <base/memory/ref_counted.h>
-#include <base/optional.h>
 #include <base/time/time.h>
 #include <gtest/gtest.h>
 
@@ -42,10 +42,10 @@ class RegenMitigatorTest : public ::testing::Test {
 TEST_F(RegenMitigatorTest, Mitigate) {
   MockKeyGenerator gen;
   std::string fake_ownername("user");
-  EXPECT_CALL(gen, Start(StrEq(fake_ownername), Eq(base::nullopt)))
+  EXPECT_CALL(gen, Start(StrEq(fake_ownername), Eq(std::nullopt)))
       .WillOnce(Return(true));
   RegenMitigator mitigator(&gen);
-  EXPECT_TRUE(mitigator.Mitigate(fake_ownername, base::nullopt));
+  EXPECT_TRUE(mitigator.Mitigate(fake_ownername, std::nullopt));
 }
 
 }  // namespace login_manager

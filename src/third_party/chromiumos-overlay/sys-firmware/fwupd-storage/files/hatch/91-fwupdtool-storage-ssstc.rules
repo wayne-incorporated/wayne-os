@@ -1,0 +1,12 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# udev rules to start firmware update for NVME SSD: SSSTC
+# b/264579155: "CL1-3D256" contains its vendor name inside the model name.
+SUBSYSTEM=="nvme", \
+ATTRS{vendor}=="0x1e95", \
+ATTR{firmware_rev}!="CR22002", \
+ATTR{model}=="SSSTC CL1-3D256", \
+ACTION=="add", \
+RUN+="/sbin/initctl emit fwupdtool-update PLUGIN=nvme GUID=da6c6856-9c1f-5f3d-98fc-5d2179f21b18"

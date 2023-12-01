@@ -1,0 +1,57 @@
+From dc3867058d672f92598166eacab6ca1a560d50ec Mon Sep 17 00:00:00 2001
+From: Micah Morton <mortonm@chromium.org>
+Date: Fri, 20 Apr 2018 11:54:26 -0700
+Subject: [PATCH] Allow pppd to start as non-root.
+
+This patch adds #ifndef macros in 2 spots in order to allow pppd to be
+spawned as a non-root user with only runtime capabilities (e.g.
+CAP_NET_{RAW/ADMIN}) instead of giving pppd full root privileges. This
+is helpful if pppd is itself spawned by a non-root user and the use of
+file permissions (e.g. setuid-root) on the pppd binary is not a
+desirable solution.
+---
+ pppd/main.c    | 2 ++
+ pppd/options.c | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/pppd/main.c b/pppd/main.c
+index 87a5d29..fc9b322 100644
+--- a/pppd/main.c
++++ b/pppd/main.c
+@@ -359,6 +359,7 @@ main(int argc, char *argv[])
+     if (debug)
+ 	setlogmask(LOG_UPTO(LOG_DEBUG));
+ 
++#ifndef ALLOW_START_AS_NON_ROOT
+     /*
+      * Check that we are running as root.
+      */
+@@ -367,6 +368,7 @@ main(int argc, char *argv[])
+ 		     argv[0]);
+ 	exit(EXIT_NOT_ROOT);
+     }
++#endif
+ 
+     if (!ppp_available()) {
+ 	option_error("%s", no_ppp_msg);
+diff --git a/pppd/options.c b/pppd/options.c
+index f8d6c00..2272912 100644
+--- a/pppd/options.c
++++ b/pppd/options.c
+@@ -694,11 +694,13 @@ process_option(option_t *opt, char *cmd, char **argv)
+ 		     opt->name, optopt);
+ 	return 0;
+     }
++#ifndef ALLOW_START_AS_NON_ROOT
+     if ((opt->flags & OPT_PRIV) && !privileged_option) {
+ 	option_error("using the %s%s requires root privilege",
+ 		     opt->name, optopt);
+ 	return 0;
+     }
++#endif
+     if ((opt->flags & OPT_ENABLE) && *(bool *)(opt->addr2) == 0) {
+ 	option_error("%s%s is disabled", opt->name, optopt);
+ 	return 0;
+-- 
+2.30.1
+

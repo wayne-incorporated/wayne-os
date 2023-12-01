@@ -1,0 +1,68 @@
+commit 733952136ee500b545fbac222bb1c63a1cf0a229
+Author: Adrian Ratiu <adrian.ratiu@collabora.corp-partner.google.com>
+Date:   Tue Feb 16 23:12:39 2021 +0200
+
+    extra/util: replace deprecated sys_siglist with strsignal
+    
+    Starting with Glibc 2.32:
+    
+    * The deprecated arrays sys_siglist, _sys_siglist, and
+    sys_sigabbrev are no longer available to newly linked binaries,
+    and their declarations have been removed from <string.h>. They
+    are exported solely as compatibility symbols to support old
+    binaries. All programs should use strsignal instead.
+    
+    https://sourceware.org/pipermail/libc-announce/2020/000029.html
+    
+    BUG=chromium:1171287
+    BRANCH=none
+    TEST=Local builds on x86_64 / eve and arm / kevin. Sent SIGINT
+         to iteflash and verified output.
+    
+    Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.corp-partner.google.com>
+    Change-Id: I8b4deaf8743c806a9610863648b345be3b35e1b5
+    Reviewed-on: https://chromium-review.googlesource.com/c/chromiumos/platform/ec/+/2698188
+    Reviewed-by: Vadim Bendebury <vbendeb@chromium.org>
+    Reviewed-by: Tom Hughes <tomhughes@chromium.org>
+    Commit-Queue: Manoj Gupta <manojgupta@chromium.org>
+    Tested-by: Manoj Gupta <manojgupta@chromium.org>
+
+diff --git a/extra/touchpad_updater/touchpad_updater.c b/extra/touchpad_updater/touchpad_updater.c
+index 7029d1b0c..716ded00f 100644
+--- a/extra/touchpad_updater/touchpad_updater.c
++++ b/extra/touchpad_updater/touchpad_updater.c
+@@ -184,7 +184,7 @@ static void request_exit(const char *format, ...)
+ 
+ static void sighandler(int signum)
+ {
+-	request_exit("caught signal %d: %s\n", signum, sys_siglist[signum]);
++	request_exit("caught signal %d: %s\n", signum, strsignal(signum));
+ }
+ 
+ static int find_interface_with_endpoint(int want_ep_num)
+diff --git a/extra/usb_console/usb_console.c b/extra/usb_console/usb_console.c
+index 3599076a2..e4f8ea504 100644
+--- a/extra/usb_console/usb_console.c
++++ b/extra/usb_console/usb_console.c
+@@ -46,7 +46,7 @@ static void request_exit(const char *format, ...)
+ 
+ static void sighandler(int signum)
+ {
+-	request_exit("caught signal %d: %s\n", signum, sys_siglist[signum]);
++	request_exit("caught signal %d: %s\n", signum, strsignal(signum));
+ }
+ 
+ #if 0
+diff --git a/util/iteflash.c b/util/iteflash.c
+index 73dfc4e00..5b1f5b707 100644
+--- a/util/iteflash.c
++++ b/util/iteflash.c
+@@ -2249,7 +2249,7 @@ static int parse_parameters(int argc, char **argv, struct iteflash_config *conf)
+ static void sighandler(int signum)
+ {
+ 	printf("\nCaught signal %d: %s\nExiting...\n",
+-		signum, sys_siglist[signum]);
++		signum, strsignal(signum));
+ 	exit_requested = 1;
+ }
+ 

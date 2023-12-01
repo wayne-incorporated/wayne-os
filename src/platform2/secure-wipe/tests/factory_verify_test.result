@@ -1,0 +1,63 @@
+hdparm : --user-master u --security-set-pass chromeos test device
+hdparm : --user-master u --security-erase-enhanced chromeos test device
+mmc : sanitize test device
+Device is stuck sanitizing: status 0x00001f40.
+mmc : sanitize test device
+dd : bs=1048576 of=test device oflag=dsync iflag=fullblock if=/dev/urandom count=1
+dd : bs=1048576 of=test device oflag=dsync iflag=fullblock if=/dev/urandom seek=63
+dd : bs=1048576 of=test device oflag=dsync iflag=fullblock if=/dev/zero count=1
+dd : bs=1048576 of=test device oflag=dsync iflag=fullblock if=/dev/zero seek=63
+fio : dev: test device - v:0
+fio : dev: test device - v:1
+fio : dev: test device - v:1
+secure: (g=0): rw=write, bs=256K-256K/256K-256K/256K-256K, ioengine=libaio, iodepth=32
+fio-2.1.5
+Starting 1 process
+
+secure: (groupid=0, jobs=1): err=84 (file:io_u.c:1764, func=io_u_queued_complete, error=Invalid or incomplete multibyte or wide character): pid=31783: Mon Mar 24 12:59:19 2014
+  read : io=5120.0KB, bw=176552KB/s, iops=689, runt=    29msec
+    slat (usec): min=128, max=336196M, avg=319386504377.70, stdev=75175782589.30
+    clat (usec): min=10507, max=11613, avg=10810.20, stdev=298.69
+     lat (msec): min=11, max=336196K, avg=319386515.19, stdev=75175782.40
+    clat percentiles (usec):
+     |  1.00th=[10560],  5.00th=[10560], 10.00th=[10560], 20.00th=[10560],
+     | 30.00th=[10688], 40.00th=[10688], 50.00th=[10688], 60.00th=[10816],
+     | 70.00th=[10816], 80.00th=[10944], 90.00th=[10944], 95.00th=[11584],
+     | 99.00th=[11584], 99.50th=[11584], 99.90th=[11584], 99.95th=[11584],
+     | 99.99th=[11584]
+  write: io=5120.0KB, bw=222609KB/s, iops=869, runt=    23msec
+    clat (msec): min=336196K, max=336196K, avg=336196309.01, stdev= 6.48
+     lat (usec): min=0, max=9, avg= 1.20, stdev= 1.96
+    clat percentiles (msec):
+     |  1.00th=[16712],  5.00th=[16712], 10.00th=[16712], 20.00th=[16712],
+     | 30.00th=[16712], 40.00th=[16712], 50.00th=[16712], 60.00th=[16712],
+     | 70.00th=[16712], 80.00th=[16712], 90.00th=[16712], 95.00th=[16712],
+     | 99.00th=[16712], 99.50th=[16712], 99.90th=[16712], 99.95th=[16712],
+     | 99.99th=[16712]
+    lat (msec) : 20=50.00%, >=2000=50.00%
+  cpu          : usr=78.00%, sys=0.00%, ctx=38, majf=0, minf=69
+  IO depths    : 1=52.5%, 2=5.0%, 4=10.0%, 8=20.0%, 16=12.5%, 32=0.0%, >=64=0.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=0.0%, 8=0.0%, 16=0.0%, 32=100.0%, 64=0.0%, >=64=0.0%
+     issued    : total=r=20/w=20/d=0, short=r=0/w=0/d=0
+
+Run status group 0 (all jobs):
+   READ: io=5120KB, aggrb=176551KB/s, minb=176551KB/s, maxb=176551KB/s, mint=29msec, maxt=29msec
+  WRITE: io=5120KB, aggrb=222608KB/s, minb=222608KB/s, maxb=222608KB/s, mint=23msec, maxt=23msec
+
+Disk stats (read/write):
+  sda: ios=0/0, merge=0/0, ticks=0/0, in_queue=0, util=0.00%
+-- verifying pattern failed --
+The storage device has either been tampered with or not securely erased properly.
+fio : dev: test device - v:1
+secure: (g=0): rw=write, bs=256K-256K/256K-256K/256K-256K, ioengine=libaio, iodepth=32
+fio-2.1.5
+Starting 1 process
+fio: looks like your file system does not support direct=1/buffered=0
+fio: pid=32536, err=9/file:filesetup.c:415, func=invalidate_cache, error=Bad file descriptor
+
+
+Run status group 0 (all jobs):
+
+-- verifying pattern failed --
+Storage device broken: unable to read some sector from it.

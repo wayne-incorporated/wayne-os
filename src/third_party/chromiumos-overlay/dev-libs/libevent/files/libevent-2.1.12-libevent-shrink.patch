@@ -1,0 +1,43 @@
+https://github.com/libevent/libevent/pull/142
+
+hack the build to generate a small libevent.so until we can sort out upstream
+
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -251,14 +251,14 @@ am__objects_11 = buffer.lo bufferevent.lo bufferevent_filter.lo \
+ 	evutil_time.lo listener.lo log.lo $(am__objects_10)
+ am__objects_12 = evdns.lo event_tagging.lo evrpc.lo http.lo
+ am_libevent_la_OBJECTS = $(am__objects_11) $(am__objects_12)
+-libevent_la_OBJECTS = $(am_libevent_la_OBJECTS)
++libevent_la_OBJECTS = libevent_core.la libevent_extra.la
+ AM_V_lt = $(am__v_lt_@AM_V@)
+ am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
+ am__v_lt_0 = --silent
+ am__v_lt_1 = 
+ libevent_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+ 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
+-	$(libevent_la_LDFLAGS) $(LDFLAGS) -o $@
++	$(libevent_la_LDFLAGS) $(LDFLAGS) -Wl,--no-as-needed -o $@
+ @INSTALL_LIBEVENT_FALSE@am_libevent_la_rpath =
+ @INSTALL_LIBEVENT_TRUE@am_libevent_la_rpath = -rpath $(libdir)
+ libevent_core_la_DEPENDENCIES = @LTLIBOBJS@ $(am__DEPENDENCIES_1) \
+@@ -1099,7 +1099,7 @@ EXTRA_DIST = ChangeLog-1.4 ChangeLog-2.0 Doxyfile LICENSE \
+ 	test/regress.gen.c test/regress.gen.h test/regress.rpc \
+ 	test/rpcgen_wrapper.sh test/print-winsock-errors.c \
+ 	test/test.sh
+-LIBEVENT_LIBS_LA = libevent.la libevent_core.la libevent_extra.la \
++LIBEVENT_LIBS_LA = libevent_core.la libevent_extra.la libevent.la \
+ 	$(am__append_1) $(am__append_3)
+ @INSTALL_LIBEVENT_TRUE@lib_LTLIBRARIES = $(LIBEVENT_LIBS_LA)
+ @INSTALL_LIBEVENT_TRUE@pkgconfig_DATA = $(LIBEVENT_PKGCONFIG)
+--- a/libevent.pc.in
++++ b/libevent.pc.in
+@@ -10,7 +10,7 @@ Description: libevent is an asynchronous notification event loop library
+ Version: @VERSION@
+ Requires:
+ Conflicts:
+-Libs: -L${libdir} -levent
++Libs: -L${libdir} -levent_core -levent_extra
+ Libs.private: @LIBS@
+ Cflags: -I${includedir}
+ 

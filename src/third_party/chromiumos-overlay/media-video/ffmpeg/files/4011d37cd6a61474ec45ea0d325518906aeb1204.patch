@@ -1,0 +1,173 @@
+From 4011d37cd6a61474ec45ea0d325518906aeb1204 Mon Sep 17 00:00:00 2001
+From: Linjie Fu <linjie.fu@intel.com>
+Date: Sun, 7 Jul 2019 11:55:35 -0400
+Subject: [PATCH] lavc/vaapi_decode: recreate hw_frames_ctx for vp9 without
+ destroy va_context
+
+VP9 allows resolution changes per frame. Currently in VAAPI, resolution
+changes leads to va context destroy and reinit. This will cause
+reference frame surface lost and produce garbage.
+
+Though refs surface id could be passed to media driver and found in RTtbl,
+vp9RefList[] in hal layer has already been destoryed. Thus the new
+created VaContext could only got an empty RefList.
+
+As libva allows re-create surface separately without changing the
+context, this issue could be handled by only recreating hw_frames_ctx.
+
+Set hwaccel_priv_data_keeping flag for vp9 to only recreating
+hw_frame_ctx when dynamic resolution changing happens.
+
+Could be verified by:
+ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -i
+./resolutions.ivf
+-pix_fmt p010le -f rawvideo -vframes 20 -y vaapi.yuv
+
+Signed-off-by: Linjie Fu <linjie.fu@intel.com>
+---
+ libavcodec/decode.c        |  9 +++++----
+ libavcodec/internal.h      |  1 +
+ libavcodec/pthread_frame.c |  2 ++
+ libavcodec/vaapi_decode.c  | 38 ++++++++++++++++++++++----------------
+ libavcodec/vaapi_vp9.c     |  4 ++++
+ 5 files changed, 34 insertions(+), 20 deletions(-)
+
+diff --git a/libavcodec/decode.c b/libavcodec/decode.c
+index be4fe41513c..fce714f2ab0 100644
+--- a/libavcodec/decode.c
++++ b/libavcodec/decode.c
+@@ -1062,7 +1062,7 @@ static int hwaccel_init(AVCodecContext *avctx,
+         return AVERROR_PATCHWELCOME;
+     }
+ 
+-    if (hwaccel->priv_data_size) {
++    if (hwaccel->priv_data_size && !avctx->internal->hwaccel_priv_data) {
+         avctx->internal->hwaccel_priv_data =
+             av_mallocz(hwaccel->priv_data_size);
+         if (!avctx->internal->hwaccel_priv_data)
+@@ -1123,9 +1123,10 @@ int ff_get_format(AVCodecContext *avctx, const enum AVPixelFormat *fmt)
+         return AV_PIX_FMT_NONE;
+ 
+     for (;;) {
+-        // Remove the previous hwaccel, if there was one.
+-        hwaccel_uninit(avctx);
+-
++        // Remove the previous hwaccel, if there was one,
++        // and no need for keeping.
++        if (!avctx->internal->hwaccel_priv_data_keeping)
++            hwaccel_uninit(avctx);
+         user_choice = avctx->get_format(avctx, choices);
+         if (user_choice == AV_PIX_FMT_NONE) {
+             // Explicitly chose nothing, give up.
+diff --git a/libavcodec/internal.h b/libavcodec/internal.h
+index 17e1de8127a..cd3e6c7ae61 100644
+--- a/libavcodec/internal.h
++++ b/libavcodec/internal.h
+@@ -118,6 +118,7 @@ typedef struct AVCodecInternal {
+      * hwaccel-specific private data
+      */
+     void *hwaccel_priv_data;
++    int hwaccel_priv_data_keeping;
+ 
+     /**
+      * checks API usage: after codec draining, flush is required to resume operation
+diff --git a/libavcodec/pthread_frame.c b/libavcodec/pthread_frame.c
+index 8faea75a498..eb2f32ed884 100644
+--- a/libavcodec/pthread_frame.c
++++ b/libavcodec/pthread_frame.c
+@@ -309,6 +309,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
+             return err;
+ 
+         dst->internal->hwaccel_priv_data = src->internal->hwaccel_priv_data;
++        dst->internal->hwaccel_priv_data_keeping = src->internal->hwaccel_priv_data_keeping;
+ 
+         if (!!dst->hw_frames_ctx != !!src->hw_frames_ctx ||
+             (dst->hw_frames_ctx && dst->hw_frames_ctx->data != src->hw_frames_ctx->data)) {
+@@ -371,6 +372,7 @@ FF_DISABLE_DEPRECATION_WARNINGS
+     dst->thread_safe_callbacks = src->thread_safe_callbacks;
+ FF_ENABLE_DEPRECATION_WARNINGS
+ #endif
++    dst->internal->hwaccel_priv_data_keeping = src->internal->hwaccel_priv_data_keeping;
+ 
+     if (src->slice_count && src->slice_offset) {
+         if (dst->slice_count < src->slice_count) {
+diff --git a/libavcodec/vaapi_decode.c b/libavcodec/vaapi_decode.c
+index a7abddb06be..0e2dfbf3b11 100644
+--- a/libavcodec/vaapi_decode.c
++++ b/libavcodec/vaapi_decode.c
+@@ -639,9 +639,13 @@ int ff_vaapi_decode_init(AVCodecContext *avctx)
+     VAStatus vas;
+     int err;
+ 
+-    ctx->va_config  = VA_INVALID_ID;
+-    ctx->va_context = VA_INVALID_ID;
++    if (!ctx->va_config && !ctx->va_context){
++        ctx->va_config  = VA_INVALID_ID;
++        ctx->va_context = VA_INVALID_ID;
++    }
+ 
++    // Get a new hw_frames_ctx even if there is already one
++    // recreate surface without reconstuct va_context
+     err = ff_decode_get_hw_frames_ctx(avctx, AV_HWDEVICE_TYPE_VAAPI);
+     if (err < 0)
+         goto fail;
+@@ -656,21 +660,23 @@ int ff_vaapi_decode_init(AVCodecContext *avctx)
+     if (err)
+         goto fail;
+ 
+-    vas = vaCreateContext(ctx->hwctx->display, ctx->va_config,
+-                          avctx->coded_width, avctx->coded_height,
+-                          VA_PROGRESSIVE,
+-                          ctx->hwfc->surface_ids,
+-                          ctx->hwfc->nb_surfaces,
+-                          &ctx->va_context);
+-    if (vas != VA_STATUS_SUCCESS) {
+-        av_log(avctx, AV_LOG_ERROR, "Failed to create decode "
+-               "context: %d (%s).\n", vas, vaErrorStr(vas));
+-        err = AVERROR(EIO);
+-        goto fail;
+-    }
++    if (ctx->va_context == VA_INVALID_ID) {
++        vas = vaCreateContext(ctx->hwctx->display, ctx->va_config,
++                              avctx->coded_width, avctx->coded_height,
++                              VA_PROGRESSIVE,
++                              ctx->hwfc->surface_ids,
++                              ctx->hwfc->nb_surfaces,
++                              &ctx->va_context);
++        if (vas != VA_STATUS_SUCCESS) {
++            av_log(avctx, AV_LOG_ERROR, "Failed to create decode "
++                   "context: %d (%s).\n", vas, vaErrorStr(vas));
++            err = AVERROR(EIO);
++            goto fail;
++        }
+ 
+-    av_log(avctx, AV_LOG_DEBUG, "Decode context initialised: "
+-           "%#x/%#x.\n", ctx->va_config, ctx->va_context);
++        av_log(avctx, AV_LOG_DEBUG, "Decode context initialised: "
++               "%#x/%#x.\n", ctx->va_config, ctx->va_context);
++    }
+ 
+     return 0;
+ 
+diff --git a/libavcodec/vaapi_vp9.c b/libavcodec/vaapi_vp9.c
+index 776382f6837..d6444b70eaf 100644
+--- a/libavcodec/vaapi_vp9.c
++++ b/libavcodec/vaapi_vp9.c
+@@ -25,6 +25,7 @@
+ #include "hwconfig.h"
+ #include "vaapi_decode.h"
+ #include "vp9shared.h"
++#include "internal.h"
+ 
+ static VASurfaceID vaapi_vp9_surface_id(const VP9Frame *vf)
+ {
+@@ -44,6 +45,9 @@ static int vaapi_vp9_start_frame(AVCodecContext          *avctx,
+     const AVPixFmtDescriptor *pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
+     int err, i;
+ 
++    // keep hardware context because of DRC support for VP9
++    avctx->internal->hwaccel_priv_data_keeping = 1;
++
+     pic->output_surface = vaapi_vp9_surface_id(&h->frames[CUR_FRAME]);
+ 
+     pic_param = (VADecPictureParameterBufferVP9) {

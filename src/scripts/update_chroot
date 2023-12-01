@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-
+# shellcheck source=common.sh
 . "$(dirname "$0")/common.sh" || exit 1
 
 # Script must run inside the chroot
@@ -14,10 +14,10 @@ assert_inside_chroot "$@"
 assert_not_root_user
 
 # Developer-visible flags.
-DEFINE_boolean usepkg $FLAGS_TRUE \
+DEFINE_boolean usepkg "${FLAGS_TRUE}" \
   "Use binary packages to bootstrap."
 
-FLAGS_HELP="usage: $(basename $0) [flags]
+FLAGS_HELP="usage: $(basename "$0") [flags]
 Performs an update of the chroot. This script is called as part of
 build_packages, so there is typically no need to call this script directly.
 "
@@ -27,11 +27,12 @@ build_packages, so there is typically no need to call this script directly.
 # not needed for the typical developer workflow.
 DEFINE_integer jobs -1 \
   "How many packages to build in parallel at maximum."
-DEFINE_boolean skip_toolchain_update $FLAGS_FALSE \
+DEFINE_boolean skip_toolchain_update "${FLAGS_FALSE}" \
   "Don't update the toolchains."
 DEFINE_string toolchain_boards "" \
   "Extra toolchains to setup for the specified boards."
 DEFINE_boolean eclean "${FLAGS_TRUE}" "Run eclean to delete old binpkgs."
+DEFINE_integer backtrack 10 "See emerge --backtrack."
 
 # Parse command line flags
 FLAGS "$@" || exit 1
@@ -41,7 +42,8 @@ eval set -- "${FLAGS_ARGV}"
 # so will die prematurely if 'switch_to_strict_mode' is specified before now.
 switch_to_strict_mode
 
-. ${SCRIPTS_DIR}/sdk_lib/make_conf_util.sh
+# shellcheck source=sdk_lib/make_conf_util.sh
+. "${SCRIPTS_DIR}"/sdk_lib/make_conf_util.sh
 
 # Run version hooks as pre-update
 run_chroot_version_hooks
@@ -61,16 +63,14 @@ create_host_setup
 
 sudo_clear_shadow_locks /
 
-# First make sure the cross-compilers have the right config settings.
-# We don't actually build them yet though as we want to wait for the
-# sdk to have all up-to-date packages.
+# First update the cross-compilers.
+# Note that this uses binpkgs only, unless we pass --nousepkg below.
 if [ "${FLAGS_skip_toolchain_update}" -eq "${FLAGS_FALSE}" ]; then
   info "Updating cross-compilers"
   TOOLCHAIN_FLAGS=()
 
   if [[ -n ${FLAGS_toolchain_boards} ]]; then
     TOOLCHAIN_FLAGS+=(
-      "--targets=boards"
       "--include-boards=${FLAGS_toolchain_boards}"
     )
   fi
@@ -80,14 +80,25 @@ if [ "${FLAGS_skip_toolchain_update}" -eq "${FLAGS_FALSE}" ]; then
     TOOLCHAIN_FLAGS+=( --nousepkg )
   fi
   # Expand the path before sudo, as root doesn't have the same path magic.
-  info_run sudo -E $(type -p cros_setup_toolchains) "${TOOLCHAIN_FLAGS[@]}"
+  info_run sudo -E "$(type -p cros_setup_toolchains)" "${TOOLCHAIN_FLAGS[@]}"
 fi
 
 # Make sure depot_tools is bootstrapped, so that it can build chromeos-chrome.
 info "Bootstrapping depot_tools"
-ensure_bootstrap
+"${DEPOT_TOOLS_DIR}"/ensure_bootstrap
 
-# Perform an update of all the sdk packages in the chroot.
+# Clean outdated packages in SDK.
+CONFIG_DIR="${HOME}/.config"
+if [[ "${USER}" == "chrome-bot" ]]; then
+  CONFIG_DIR=$(python -c "import tempfile; print(tempfile.gettempdir())")
+  CONFIG_DIR+="/.config/"
+fi
+if [[ ! -e "${CONFIG_DIR}/chromite/autocop-off" ]] && \
+   [[ "${CROS_CLEAN_OUTDATED_PKGS}" != "0" ]]; then
+  # Use "|| true" to not exit on errors for one command.
+  cros clean-outdated-pkgs --host || true
+fi
+
 EMERGE_CMD="${CHROMITE_BIN}/parallel_emerge"
 
 info "Rebuilding Portage cache"
@@ -104,19 +115,18 @@ fi
 
 info "Updating the SDK"
 
-EMERGE_FLAGS=( -uNv --with-bdeps=y )
+EMERGE_FLAGS=( -uNv --with-bdeps=y --backtrack="${FLAGS_backtrack}" )
 if [ "${FLAGS_usepkg}" -eq "${FLAGS_TRUE}" ]; then
   EMERGE_FLAGS+=( --getbinpkg )
 
-  # Only update toolchain when binpkgs are available. Toolchain rollout
-  # process only takes place when the chromiumos sdk builder finishes
-  # a successful build.
+  # Avoid building toolchain packages or "post-cross" packages from
+  # source. The toolchain rollout process only takes place when the
+  # chromiumos-sdk builder finishes a successful build.
   PACKAGES=(
     $("${CHROMITE_BIN}/cros_setup_toolchains" --show-packages host)
   )
   # Sanity check we got some valid results.
   [[ ${#PACKAGES[@]} -eq 0 ]] && die_notrace "cros_setup_toolchains failed"
-  # Update post cross-packages. This is needed to update rust.
   PACKAGES+=(
     $("${CHROMITE_BIN}/cros_setup_toolchains" --show-packages host-post-cross)
   )
@@ -135,13 +145,22 @@ done
 
 # Second pass, update everything else.
 EMERGE_FLAGS+=( --deep )
-info_run sudo -E ${EMERGE_CMD} "${EMERGE_FLAGS[@]}" virtual/target-sdk world
+info_run sudo -E "${EMERGE_CMD}" "${EMERGE_FLAGS[@]}" virtual/target-sdk world
 
-# Install post cross packages if binary pkgs are available.
 if [ "${FLAGS_usepkg}" -eq "${FLAGS_TRUE}" ]; then
+  # Update "post-cross" packages.
+  # Use --usepkgonly to ensure that packages are not built from source.
+  EMERGE_FLAGS=( -uNv --with-bdeps=y --oneshot --getbinpkg --deep )
+  EMERGE_FLAGS+=( --usepkgonly --rebuilt-binaries=n )
+  EMERGE_FLAGS+=(
+    $("${CHROMITE_BIN}/cros_setup_toolchains" --show-packages host-post-cross)
+  )
+  sudo -E "${EMERGE_CMD}" "${EMERGE_FLAGS[@]}"
+
   # Install nobdeps packages only when binary pkgs are available, since we don't
   # want to accidentally pull in build deps for a rebuild.
-  EMERGE_FLAGS=( -uNv --with-bdeps=n --oneshot --getbinpkg --deep --usepkgonly )
+  EMERGE_FLAGS=( -uNv --with-bdeps=n --oneshot --getbinpkg --deep )
+  EMERGE_FLAGS+=( --usepkgonly --rebuilt-binaries=n )
   info_run sudo -E "${EMERGE_CMD}" "${EMERGE_FLAGS[@]}" \
     virtual/target-sdk-nobdeps
 fi
@@ -160,5 +179,9 @@ if [[ "${FLAGS_eclean}" -eq "${FLAGS_TRUE}" ]]; then
   info "Deep cleaning stale binpkgs"
   get_eclean_exclusions | sudo eclean -e /dev/stdin -d packages
 fi
+
+# Generate /usr/bin/remote_toolchain_inputs file for Reclient used by Chrome
+# for distributed builds, go/rbe/dev/x/reclient .
+info_run generate_reclient_inputs
 
 command_completed

@@ -1,0 +1,32 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":dlc_client" ]
+  if (use.test) {
+    deps += []
+  }
+  if (use.fuzzer) {
+    deps += []
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libchrome",
+    "libdlcservice-client",
+    "protobuf",
+    "system_api",
+  ]
+}
+
+static_library("dlc_client") {
+  sources = [
+    "dlc_client.cc",
+    "dlc_loader.cc",
+  ]
+  configs += [ ":target_defaults" ]
+}

@@ -1,0 +1,43 @@
+From 3c2b1968faae324966aa6ec5315563cf1886eae7 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 13:57:38 -0300
+Subject: [PATCH 023/163] locale: Remove set but unused variable on
+ ld-collate.c
+
+Checked on x86_64-linux-gnu and i686-linux-gnu.
+
+(cherry picked from commit c5c65de1b29f8f73f8aff5c3526427fc37760f2e)
+---
+ locale/programs/ld-collate.c | 9 +--------
+ 1 file changed, 1 insertion(+), 8 deletions(-)
+
+diff --git a/locale/programs/ld-collate.c b/locale/programs/ld-collate.c
+index 7b0d1bf70b..992814491d 100644
+--- a/locale/programs/ld-collate.c
++++ b/locale/programs/ld-collate.c
+@@ -1562,7 +1562,6 @@ collate_finish (struct localedef_t *locale, const struct charmap_t *charmap)
+   int need_undefined = 0;
+   struct section_list *sect;
+   int ruleidx;
+-  int nr_wide_elems = 0;
+ 
+   if (collate == NULL)
+     {
+@@ -1716,13 +1715,7 @@ symbol `%s' has the same encoding as"), (*eptr)->name);
+ 	}
+ 
+       if (runp->used_in_level)
+-	{
+-	  runp->wcorder = wcact++;
+-
+-	  /* We take the opportunity to count the elements which have
+-	     wide characters.  */
+-	  ++nr_wide_elems;
+-	}
++	runp->wcorder = wcact++;
+ 
+       if (runp->is_character)
+ 	{
+-- 
+2.37.2
+

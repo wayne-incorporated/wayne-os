@@ -1,0 +1,22 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+source_set("features") {
+  sources = [ "//camera/features/feature_profile.cc" ]
+
+  public_configs = [ "//camera/build:cros_camera_common" ]
+
+  # -fPIC needed by the libcros_camera.so shared library.
+  configs += [ "//common-mk:pic" ]
+}
+
+pkg_config("test_target_defaults") {
+  configs = [
+    "//camera/build:cros_camera_common",
+    "//common-mk:test",
+  ]
+  pkg_deps = [ "libchrome-test" ]
+}

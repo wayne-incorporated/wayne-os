@@ -1,0 +1,150 @@
+commit 35e76a939cabbaa40aeeb572c3cf4039c3077fdf
+Author: Dmitry Vyukov <dvyukov@google.com>
+Date:   Tue Jul 27 11:05:11 2021 +0200
+
+    Revert "sanitizer_common: split LibIgnore into fast/slow paths"
+    
+    This reverts commit 1e1f7520279c93a59fa6511028ff40412065985e.
+    
+    It breaks ignore_noninstrumented_modules=1.
+    Somehow we did not have any portable tests for this mode before
+    (only Darwin tests). Add a portable test as well.
+    
+    Moreover, I think I was too fast uninlining all LibIgnore checks.
+    For Java, Darwin and OpenMP LibIgnore is always enabled,
+    so it makes sense to leave it as it was before.
+    
+    Reviewed By: melver
+    
+    Differential Revision: https://reviews.llvm.org/D106855
+
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_libignore.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_libignore.cpp
+index 431efc574fa6..a65d3d896e33 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_libignore.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_libignore.cpp
+@@ -84,7 +84,6 @@ void LibIgnore::OnLibraryLoaded(const char *name) {
+         ignored_code_ranges_[idx].begin = range.beg;
+         ignored_code_ranges_[idx].end = range.end;
+         atomic_store(&ignored_ranges_count_, idx + 1, memory_order_release);
+-        atomic_store(&enabled_, 1, memory_order_release);
+         break;
+       }
+     }
+@@ -115,7 +114,6 @@ void LibIgnore::OnLibraryLoaded(const char *name) {
+         instrumented_code_ranges_[idx].end = range.end;
+         atomic_store(&instrumented_ranges_count_, idx + 1,
+                      memory_order_release);
+-        atomic_store(&enabled_, 1, memory_order_release);
+       }
+     }
+   }
+@@ -125,29 +123,6 @@ void LibIgnore::OnLibraryUnloaded() {
+   OnLibraryLoaded(nullptr);
+ }
+ 
+-bool LibIgnore::IsIgnoredSlow(uptr pc, bool *pc_in_ignored_lib) const {
+-  const uptr n = atomic_load(&ignored_ranges_count_, memory_order_acquire);
+-  for (uptr i = 0; i < n; i++) {
+-    if (IsInRange(pc, ignored_code_ranges_[i])) {
+-      *pc_in_ignored_lib = true;
+-      return true;
+-    }
+-  }
+-  *pc_in_ignored_lib = false;
+-  if (track_instrumented_libs_ && !IsPcInstrumented(pc))
+-    return true;
+-  return false;
+-}
+-
+-bool LibIgnore::IsPcInstrumented(uptr pc) const {
+-  const uptr n = atomic_load(&instrumented_ranges_count_, memory_order_acquire);
+-  for (uptr i = 0; i < n; i++) {
+-    if (IsInRange(pc, instrumented_code_ranges_[i]))
+-      return true;
+-  }
+-  return false;
+-}
+-
+ } // namespace __sanitizer
+ 
+ #endif  // SANITIZER_FREEBSD || SANITIZER_LINUX || SANITIZER_MAC ||
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_libignore.h b/compiler-rt/lib/sanitizer_common/sanitizer_libignore.h
+index 85452e57ba3c..256f685979f4 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_libignore.h
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_libignore.h
+@@ -45,6 +45,9 @@ class LibIgnore {
+   // "pc_in_ignored_lib" if the PC is in an ignored library, false otherwise.
+   bool IsIgnored(uptr pc, bool *pc_in_ignored_lib) const;
+ 
++  // Checks whether the provided PC belongs to an instrumented module.
++  bool IsPcInstrumented(uptr pc) const;
++
+  private:
+   struct Lib {
+     char *templ;
+@@ -58,10 +61,6 @@ class LibIgnore {
+     uptr end;
+   };
+ 
+-  // Checks whether the provided PC belongs to an instrumented module.
+-  bool IsPcInstrumented(uptr pc) const;
+-  bool IsIgnoredSlow(uptr pc, bool *pc_in_ignored_lib) const;
+-
+   inline bool IsInRange(uptr pc, const LibCodeRange &range) const {
+     return (pc >= range.begin && pc < range.end);
+   }
+@@ -71,8 +70,6 @@ class LibIgnore {
+   static const uptr kMaxLibs = 1024;
+ 
+   // Hot part:
+-  atomic_uintptr_t enabled_;
+-
+   atomic_uintptr_t ignored_ranges_count_;
+   LibCodeRange ignored_code_ranges_[kMaxIgnoredRanges];
+ 
+@@ -90,11 +87,27 @@ class LibIgnore {
+   void operator = (const LibIgnore&);  // not implemented
+ };
+ 
+-ALWAYS_INLINE
+-bool LibIgnore::IsIgnored(uptr pc, bool *pc_in_ignored_lib) const {
+-  if (LIKELY(atomic_load(&enabled_, memory_order_acquire) == 0))
+-    return false;
+-  return IsIgnoredSlow(pc, pc_in_ignored_lib);
++inline bool LibIgnore::IsIgnored(uptr pc, bool *pc_in_ignored_lib) const {
++  const uptr n = atomic_load(&ignored_ranges_count_, memory_order_acquire);
++  for (uptr i = 0; i < n; i++) {
++    if (IsInRange(pc, ignored_code_ranges_[i])) {
++      *pc_in_ignored_lib = true;
++      return true;
++    }
++  }
++  *pc_in_ignored_lib = false;
++  if (track_instrumented_libs_ && !IsPcInstrumented(pc))
++    return true;
++  return false;
++}
++
++inline bool LibIgnore::IsPcInstrumented(uptr pc) const {
++  const uptr n = atomic_load(&instrumented_ranges_count_, memory_order_acquire);
++  for (uptr i = 0; i < n; i++) {
++    if (IsInRange(pc, instrumented_code_ranges_[i]))
++      return true;
++  }
++  return false;
+ }
+ 
+ }  // namespace __sanitizer
+diff --git a/compiler-rt/test/tsan/ignore_lib0.cpp b/compiler-rt/test/tsan/ignore_lib0.cpp
+index d6d6acdbc370..cba58c617703 100644
+--- a/compiler-rt/test/tsan/ignore_lib0.cpp
++++ b/compiler-rt/test/tsan/ignore_lib0.cpp
+@@ -7,6 +7,8 @@
+ // RUN: env LD_LIBRARY_PATH=%t-dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} %deflake %run %t | FileCheck %s --check-prefix=CHECK-NOSUPP
+ // RUN: echo running with suppressions:
+ // RUN: env LD_LIBRARY_PATH=%t-dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} %env_tsan_opts=suppressions='%s.supp' %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-WITHSUPP
++// RUN: echo running with generic suppression of noninstrumented code:
++// RUN: env LD_LIBRARY_PATH=%t-dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} %env_tsan_opts=ignore_noninstrumented_modules=1 %run %t 2>&1 | FileCheck %s --check-prefix=CHECK-WITHSUPP
+ 
+ // Tests that interceptors coming from a library specified in called_from_lib
+ // suppression are ignored.

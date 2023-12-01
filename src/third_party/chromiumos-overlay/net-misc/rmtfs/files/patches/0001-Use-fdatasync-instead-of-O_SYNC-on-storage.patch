@@ -1,0 +1,84 @@
+From a5d253123fb404116d4c6f6e028aabbce6264e22 Mon Sep 17 00:00:00 2001
+From: Evan Green <evgreen@chromium.org>
+Date: Thu, 8 Jul 2021 15:01:45 -0700
+Subject: [PATCH] Use fdatasync instead of O_SYNC on storage
+
+Opening the backing files with O_SYNC makes things really slow. So slow
+in fact that the modem times out after 10 seconds waiting for the last
+EFS sync to go through. I think this takes forever because rmtfs is
+doing 512-byte reads and writes.
+
+One option would be to make this bigger. But a better option is to not
+use O_SYNC, but explicitly do an fdatasync() after the iovec operation
+is complete. This is better because 1) it's way faster, we no longer see
+10-12 second delays at rebooto time, and 2) partial syncs of the EFS
+file aren't useful anyway.
+
+Use fdatasync() as opposed to fsync() since it's not important for the
+metadata to be synced, just the file contents.
+
+Signed-off-by: Evan Green <evangreen86@gmail.com>
+---
+ rmtfs.c   |  4 ++++
+ rmtfs.h   |  1 +
+ storage.c | 10 +++++++++-
+ 3 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/rmtfs.c b/rmtfs.c
+index 25862d1..ffca070 100644
+--- a/rmtfs.c
++++ b/rmtfs.c
+@@ -220,6 +220,10 @@ static void rmtfs_iovec(int sock, struct qrtr_packet *pkt)
+ respond:
+ 	dbgprintf("[RMTFS] iovec %d, %sforced => (%d:%d)\n", caller_id, force ? "" : "not ",
+ 							     resp.result.result, resp.result.error);
++
++	if (is_write)
++		storage_sync(rmtfd);
++
+ 	for (i = 0; i < num_entries; i++) {
+ 		dbgprintf("[RMTFS]       %s %d:%d 0x%x\n", is_write ? "write" : "read",
+ 							   entries[i].sector_addr,
+diff --git a/rmtfs.h b/rmtfs.h
+index 242baa5..fa4b806 100644
+--- a/rmtfs.h
++++ b/rmtfs.h
+@@ -34,6 +34,7 @@ int storage_get_error(const struct rmtfd *rmtfd);
+ void storage_exit(void);
+ ssize_t storage_pread(const struct rmtfd *rmtfd, void *buf, size_t nbyte, off_t offset);
+ ssize_t storage_pwrite(struct rmtfd *rmtfd, const void *buf, size_t nbyte, off_t offset);
++int storage_sync(struct rmtfd *rmtfd);
+ 
+ int rproc_init(void);
+ int rproc_start(void);
+diff --git a/storage.c b/storage.c
+index 0f882eb..aaf73d0 100644
+--- a/storage.c
++++ b/storage.c
+@@ -122,7 +122,7 @@ found:
+ 	fspath = alloca(pathlen);
+ 	snprintf(fspath, pathlen, "%s/%s", storage_dir, file);
+ 	if (!storage_read_only) {
+-		fd = open(fspath, O_RDWR | O_SYNC);
++		fd = open(fspath, O_RDWR);
+ 		if (fd < 0) {
+ 			saved_errno = errno;
+ 			fprintf(stderr, "[storage] failed to open '%s' (requested '%s'): %s\n",
+@@ -245,6 +245,14 @@ ssize_t storage_pwrite(struct rmtfd *rmtfd, const void *buf, size_t nbyte, off_t
+ 	return nbyte;
+ }
+ 
++int storage_sync(struct rmtfd *rmtfd)
++{
++	if (storage_read_only)
++		return 0;
++	
++	return fdatasync(rmtfd->fd);
++}
++
+ static int storage_populate_shadow_buf(struct rmtfd *rmtfd, const char *file)
+ {
+ 	ssize_t len;
+-- 
+2.31.0
+

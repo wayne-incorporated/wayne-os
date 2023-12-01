@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# usage:
+# list-connected-services [[service-type [[service-prop1] ... [service-propN]]]]
+#     service-type: shill service type: wifi, ethernet, etc
+#     service-propX: shill service property: Connectable, Name, etc
+#
+# Queries the currently connected services from shill, optionally filtering
+# for specific service types and properties
+
+from __future__ import print_function
+
+import sys
+
+import dbus
+import flimflam
+
+def main():
+    if len(sys.argv) > 1 and str(sys.argv[1]) in ['-h', '-?', '--help']:
+        print('usage: %s [[service-type [[service-prop1] ... [service-propN]]]]'
+              % str(sys.argv[0]))
+        return
+
+    flim = flimflam.FlimFlam(dbus.SystemBus())
+
+    # Nothing found -> exit(1)
+    retval = 1
+
+    for service in flim.GetObjectList('Service'):
+        properties = service.GetProperties()
+        if not bool(properties['IsConnected']):
+            continue
+
+        if len(sys.argv) > 1 and str(properties['Type']) != sys.argv[1]:
+            continue
+
+        if len(sys.argv) > 2:
+            requested_keys = sys.argv[2:]
+        else:
+            print('[ %s ]' % service.object_path)
+            requested_keys = properties.keys()
+
+        for key in requested_keys:
+            retval = 0
+            print('    %s = %s' % (
+                key, flimflam.convert_dbus_value(properties[key], 4)))
+
+    return retval
+
+
+if __name__ == '__main__':
+    sys.exit(main())

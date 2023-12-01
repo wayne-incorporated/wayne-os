@@ -1,0 +1,38 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_headers",
+    ":libsecure_erase_file",
+    ":secure_erase_file",
+  ]
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+shared_library("libsecure_erase_file") {
+  sources = [ "secure_erase_file.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "lib"
+}
+
+executable("secure_erase_file") {
+  sources = [ "secure_erase_file_main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libsecure_erase_file" ]
+}
+
+install_config("install_headers") {
+  sources = [ "secure_erase_file.h" ]
+  install_path = "/usr/include/chromeos/secure_erase_file"
+}

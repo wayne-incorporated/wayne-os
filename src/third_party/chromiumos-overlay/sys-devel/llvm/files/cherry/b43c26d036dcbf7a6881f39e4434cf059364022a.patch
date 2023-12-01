@@ -1,0 +1,40 @@
+commit b43c26d036dcbf7a6881f39e4434cf059364022a
+Author: Harald van Dijk <harald@gigawatt.nl>
+Date:   Mon Jan 25 22:34:49 2021 +0000
+
+    Restore GNU , ## __VA_ARGS__ behavior in MSVC mode
+    
+    As noted in D91913, MSVC implements the GNU behavior for
+    , ## __VA_ARGS__ as well. Do the same when `-fms-compatibility` is used.
+    
+    Reviewed By: rsmith
+    
+    Differential Revision: https://reviews.llvm.org/D95392
+
+diff --git a/clang/lib/Lex/TokenLexer.cpp b/clang/lib/Lex/TokenLexer.cpp
+index 6e962dfa2c34..97cb2cf0bb8c 100644
+--- a/clang/lib/Lex/TokenLexer.cpp
++++ b/clang/lib/Lex/TokenLexer.cpp
+@@ -152,7 +152,8 @@ bool TokenLexer::MaybeRemoveCommaBeforeVaArgs(
+   // named arguments, where it remains.  With GNU extensions, it is removed
+   // regardless of named arguments.
+   // Microsoft also appears to support this extension, unofficially.
+-  if (!PP.getLangOpts().GNUMode && Macro->getNumParams() < 2)
++  if (!PP.getLangOpts().GNUMode && !PP.getLangOpts().MSVCCompat &&
++      Macro->getNumParams() < 2)
+     return false;
+ 
+   // Is a comma available to be removed?
+diff --git a/clang/test/Preprocessor/macro_fn_comma_swallow2.c b/clang/test/Preprocessor/macro_fn_comma_swallow2.c
+index 89ef8c0579c4..4e4960ca7f18 100644
+--- a/clang/test/Preprocessor/macro_fn_comma_swallow2.c
++++ b/clang/test/Preprocessor/macro_fn_comma_swallow2.c
+@@ -9,6 +9,8 @@
+ // RUN: %clang_cc1 -E -x c++ -std=c++11 %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+ // RUN: %clang_cc1 -E -std=gnu99 %s | FileCheck -check-prefix=GCC -strict-whitespace %s
+ // RUN: %clang_cc1 -E -fms-compatibility %s | FileCheck -check-prefix=MS -strict-whitespace %s
++// RUN: %clang_cc1 -E -x c++ -fms-compatibility %s | FileCheck -check-prefix=MS -strict-whitespace %s
++// RUN: %clang_cc1 -E -x c++ -std=c++11 -fms-compatibility %s | FileCheck -check-prefix=MS -strict-whitespace %s
+ // RUN: %clang_cc1 -E -DNAMED %s | FileCheck -check-prefix=GCC -strict-whitespace %s
+ // RUN: %clang_cc1 -E -std=c99 -DNAMED %s | FileCheck -check-prefix=C99 -strict-whitespace %s
+ 

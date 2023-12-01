@@ -1,0 +1,37 @@
+From 9fe3348299de0836cd025c65cee18c49e84b5838 Mon Sep 17 00:00:00 2001
+From: paulhsia <paulhsia@chromium.org>
+Date: Fri, 29 Nov 2019 01:33:42 +0800
+Subject: [PATCH] ucm: Use strncmp to avoid access-out-of-boundary
+
+If the length of the identifier is less than the length of the prefix,
+access-out-of-boundary will occur in memcmp().
+
+Signed-off-by: paulhsia <paulhsia@chromium.org>
+---
+ src/ucm/main.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/ucm/main.c b/src/ucm/main.c
+index 99b1cd08..c78f917a 100644
+--- a/src/ucm/main.c
++++ b/src/ucm/main.c
+@@ -60,11 +60,13 @@ static int check_identifier(const char *identifier, const char *prefix)
+ {
+ 	int len;
+ 
+-	if (strcmp(identifier, prefix) == 0)
+-		return 1;
+ 	len = strlen(prefix);
+-	if (memcmp(identifier, prefix, len) == 0 && identifier[len] == '/')
++	if (strncmp(identifier, prefix, len) != 0)
++		return 0;
++
++	if (identifier[len] == 0 || identifier[len] == '/')
+ 		return 1;
++
+ 	return 0;
+ }
+ 
+-- 
+2.24.0.393.g34dc348eaf-goog
+

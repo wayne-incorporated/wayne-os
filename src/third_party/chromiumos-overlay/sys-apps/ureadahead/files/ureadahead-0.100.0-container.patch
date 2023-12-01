@@ -1,0 +1,221 @@
+diff --git a/src/trace.c b/src/trace.c
+index 240a17f..bb4d696 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -31,6 +31,7 @@
+ #include <sys/types.h>
+ #include <sys/mman.h>
+ #include <sys/stat.h>
++#include <sys/param.h>
+ 
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -88,6 +89,7 @@
+ /* Prototypes for static functions */
+ static int       read_trace        (const void *parent,
+ 				    int dfd, const char *path,
++				    const PathPrefixOption *path_prefix,
+ 				    PackFile **files, size_t *num_files);
+ static void      fix_path          (char *pathname);
+ static int       trace_add_path    (const void *parent, const char *pathname,
+@@ -114,7 +116,9 @@ sig_interrupt (int signum)
+ 
+ int
+ trace (int daemonise,
+-       int timeout)
++       int timeout,
++       const char *filename_to_replace,
++       const PathPrefixOption *path_prefix)
+ {
+ 	int                 dfd;
+ 	FILE                *fp;
+@@ -248,7 +252,7 @@ trace (int daemonise,
+ 		;
+ 
+ 	/* Read trace log */
+-	if (read_trace (NULL, dfd, "trace", &files, &num_files) < 0)
++	if (read_trace (NULL, dfd, "trace", path_prefix, &files, &num_files) < 0)
+ 		goto error;
+ 
+ 	/*
+@@ -284,6 +288,15 @@ trace (int daemonise,
+ 			continue;
+ 		}
+ 
++		/* If filename_to_replace is not NULL, only write out the
++		 * file and skip others.
++		 */
++		if (filename_to_replace &&
++		    strcmp (filename_to_replace, filename)) {
++			nih_info ("Skipping %s", filename);
++			continue;
++		}
++
+ 		nih_info ("Writing %s", filename);
+ 
+ 		/* We only need to apply additional sorting to the
+@@ -320,6 +333,7 @@ static int
+ read_trace (const void *parent,
+ 	    int         dfd,
+ 	    const char *path,
++	    const PathPrefixOption *path_prefix,
+ 	    PackFile ** files,
+ 	    size_t *    num_files)
+ {
+@@ -328,6 +342,7 @@ read_trace (const void *parent,
+ 	char *line;
+ 
+ 	nih_assert (path != NULL);
++	nih_assert (path_prefix != NULL);
+ 	nih_assert (files != NULL);
+ 	nih_assert (num_files != NULL);
+ 
+@@ -373,9 +388,22 @@ read_trace (const void *parent,
+ 		*end = '\0';
+ 
+ 		fix_path (ptr);
++		if (path_prefix->st_dev != NODEV && ptr[0] == '/') {
++			struct stat stbuf;
++			char *rewritten = nih_sprintf (
++			    line, "%s%s", path_prefix->prefix, ptr);
++			if (! lstat (rewritten, &stbuf) &&
++			    stbuf.st_dev == path_prefix->st_dev) {
++				/* If |rewritten| exists on the same device as
++				 * path_prefix->st_dev, record the rewritten one
++				 * instead of the original path.
++				 */
++				ptr = rewritten;
++			}
++		}
+ 		trace_add_path (parent, ptr, files, num_files);
+ 
+-		nih_free (line);
++		nih_free (line);  /* also frees |rewritten| */
+ 	}
+ 
+ 	if (fclose (fp) < 0)
+diff --git a/src/trace.h b/src/trace.h
+index 8e10890..986b10c 100644
+--- a/src/trace.h
++++ b/src/trace.h
+@@ -19,6 +19,7 @@
+ #ifndef UREADAHEAD_TRACE_H
+ #define UREADAHEAD_TRACE_H
+ 
++#include <limits.h>
+ #include <sys/types.h>
+ 
+ #include <nih/macros.h>
+@@ -27,7 +28,14 @@
+ 
+ NIH_BEGIN_EXTERN
+ 
+-int trace (int daemonise, int timeout);
++typedef struct path_prefix_option {
++        dev_t st_dev;
++        char prefix[PATH_MAX];
++} PathPrefixOption;
++
++int trace (int daemonise, int timeout,
++           const char *filename_to_replace,
++           const PathPrefixOption *path_prefix);
+ 
+ NIH_END_EXTERN
+ 
+diff --git a/src/ureadahead.c b/src/ureadahead.c
+index 0cd4994..0e91693 100644
+--- a/src/ureadahead.c
++++ b/src/ureadahead.c
+@@ -30,6 +30,7 @@
+ 
+ #include <sys/types.h>
+ #include <sys/stat.h>
++#include <sys/param.h>
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -86,6 +87,47 @@ static int dump_pack = FALSE;
+  **/
+ static SortOption sort_pack = SORT_OPEN;
+ 
++/**
++ * path_prefix:
++ *
++ * path_prefix.st_dev is set to >=0 if we should prepend path_prefix.prefix
++ * to all path names on the device.
++ **/
++static PathPrefixOption path_prefix = { NODEV };
++
++static int
++path_prefix_option (NihOption  *option,
++                    const char *arg)
++{
++	PathPrefixOption *value;
++	struct stat st;
++	dev_t st_dev;
++
++	nih_assert (option != NULL);
++	nih_assert (option->value != NULL);
++	nih_assert (arg != NULL);
++
++	value = (PathPrefixOption *)option->value;
++
++	if (strlen (arg) >= PATH_MAX) {
++		goto error;
++	}
++
++	if (lstat (arg, &st) < 0 || !S_ISDIR (st.st_mode)) {
++		goto error;
++	}
++
++	value->st_dev = st.st_dev;
++	strcpy (value->prefix, arg);
++
++	return 0;
++
++error:
++	fprintf (stderr, _("%s: illegal argument: %s\n"),
++		 program_name, arg);
++	nih_main_suggest_help ();
++	return -1;
++}
+ 
+ static int
+ sort_option (NihOption  *option,
+@@ -134,6 +176,8 @@ static NihOption options[] = {
+ 	  NULL, NULL, &dump_pack, NULL },
+ 	{ 0, "sort", N_("how to sort the pack file when dumping [default: path]"),
+ 	  NULL, "SORT", &sort_pack, sort_option },
++	{ 0, "path-prefix", N_("pathname to prepend for files on the device"),
++	  NULL, "PREFIX", &path_prefix, path_prefix_option },
+ 
+ 	NIH_OPTION_LAST
+ };
+@@ -165,13 +209,14 @@ main (int   argc,
+ 	if (! args)
+ 		exit (1);
+ 
++	/* Lookup the filename for the pack based on the path given
++	 * (if any).
++	 */
++	filename = pack_file_name (NULL, args[0]);
++
+ 	if (! force_trace) {
+ 		NihError *err;
+ 
+-		/* Lookup the filename for the pack based on the path given
+-		 * (if any).
+-		 */
+-		filename = pack_file_name (NULL, args[0]);
+ 		if (! filename) {
+ 			NihError *err;
+ 
+@@ -220,7 +265,7 @@ main (int   argc,
+ 	}
+ 
+ 	/* Trace to generate new pack files */
+-	if (trace (daemonise, timeout) < 0) {
++	if (trace (daemonise, timeout, filename, &path_prefix) < 0) {
+ 		NihError *err;
+ 
+ 		err = nih_error_get ();

@@ -1,0 +1,45 @@
+type cros_udevd, chromeos_domain, domain;
+
+permissive cros_udevd;
+
+domain_auto_trans(cros_init, cros_udevd_exec, cros_udevd)
+
+filetrans_pattern(cros_udevd, cros_run, cros_run_udev, dir, "udev")
+allow cros_udevd cros_run_udev:{file lnk_file} create_file_perms;
+allow cros_udevd cros_run_udev:dir rw_dir_perms;
+
+exec_coreutils(cros_udevd)
+
+allow cros_udevd cros_passwd_file:file r_file_perms;
+
+allow cros_udevd self:capability2 wake_alarm;
+allow cros_udevd self:capability { sys_module chown fsetid fowner net_admin sys_admin };
+
+# neverallow { domain -kernel -init -recovery -ueventd -healthd -uncrypt -tee } self:capability sys_rawio;
+arc_cts_fails_release(`
+allow cros_udevd self:capability { sys_rawio };
+', (`cros_udevd'))
+
+# neverallow * ~{ system_file rootfs }:system module_load;
+arc_cts_fails_release(`
+allow cros_udevd cros_kernel_modules_ko_file:system module_load;
+', (`cros_udevd'))
+
+allow cros_udevd cros_kernel_modules_file:dir r_dir_perms;
+allow cros_udevd {cros_kernel_modules_file cros_kernel_modules_ko_file}:file getattr;
+
+allow cros_udevd self:netlink_kobject_uevent_socket create_socket_perms_no_ioctl;
+
+# TODO(fqj): label chr_file separately
+allow cros_udevd device:dir create_dir_perms;
+allow cros_udevd device:lnk_file create_file_perms;
+
+# TODO(fqj): "allow cros_udevd device:blk_file create_file_perms;" (without rename)
+# neverallow * *:{ blk_file chr_file } rename;
+
+allow cros_udevd sysfs:dir r_dir_perms;
+allow cros_udevd sysfs:file { rw_file_perms setattr };
+
+# /proc
+# /proc/1/
+r_dir_file(cros_udevd, cros_init)

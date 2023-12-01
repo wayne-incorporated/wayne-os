@@ -1,0 +1,46 @@
+From 20e94ae6703274bb75784af45eb452916d84adc3 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Sun, 3 Apr 2022 09:46:45 -0300
+Subject: [PATCH 148/163] conform: Do not use __SIG_ATOMIC_TYPE__
+
+clang does not define __SIG_ATOMIC_TYPE__, instead add another
+directive ('size:') which instruct to use an interger type of
+defined minimum size.
+---
+ conform/conformtest.py     | 4 ++++
+ conform/data/stdint.h-data | 4 ++--
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/conform/conformtest.py b/conform/conformtest.py
+index 1474001c7e..532a7f2a0a 100644
+--- a/conform/conformtest.py
++++ b/conform/conformtest.py
+@@ -172,6 +172,10 @@ class ConstantTest(object):
+                 c_type = self.c_type[len('promoted:'):]
+                 text = ('__typeof__ ((%s) 0 + (%s) 0) a2_%d;\n'
+                         % (c_type, c_type, self.num))
++            elif self.c_type.startswith('size:'):
++                c_type = "int{}_t".format(self.c_type[len('size:'):])
++                text = ('__typeof__ ((%s) 0 + (%s) 0) a2_%d;\n'
++                        % (c_type, c_type, self.num))
+             else:
+                 text = '__typeof__ ((%s) 0) a2_%d;\n' % (self.c_type, self.num)
+             text += 'extern __typeof__ (%s) a2_%d;\n' % (self.symbol, self.num)
+diff --git a/conform/data/stdint.h-data b/conform/data/stdint.h-data
+index 4e84e17fb8..5d65d4ecd5 100644
+--- a/conform/data/stdint.h-data
++++ b/conform/data/stdint.h-data
+@@ -88,8 +88,8 @@ macro-int-constant UINTMAX_MAX {promoted:uintmax_t} >= 18446744073709551615ULL
+ macro-int-constant PTRDIFF_MIN {promoted:__PTRDIFF_TYPE__} <= -65535
+ macro-int-constant PTRDIFF_MAX {promoted:__PTRDIFF_TYPE__} >= 65535
+ 
+-macro-int-constant SIG_ATOMIC_MIN {promoted:__SIG_ATOMIC_TYPE__}
+-macro-int-constant SIG_ATOMIC_MAX {promoted:__SIG_ATOMIC_TYPE__} >= 127
++macro-int-constant SIG_ATOMIC_MIN {size:__SIG_ATOMIC_WIDTH__}
++macro-int-constant SIG_ATOMIC_MAX {size:__SIG_ATOMIC_WIDTH__} >= 127
+ 
+ macro-int-constant SIZE_MAX {promoted:__SIZE_TYPE__} >= 65535
+ 
+-- 
+2.37.2
+

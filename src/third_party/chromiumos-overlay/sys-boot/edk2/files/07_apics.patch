@@ -1,0 +1,31 @@
+commit e2ef8b9a684fcee4bb52c706020bfa5fca796665
+Author: Benjamin You <benjamin.you@intel.com>
+Date:   Tue Nov 14 16:41:13 2017 +0800
+
+    CorebootModulePkg/CbSupportDxe: Remove duplicated IO Space addition
+    
+    Since UefiCpuPkg's CpuDxe Driver already adds Local Apic's MMIO space to
+    GCD, CorebootModulePkg's CbSupportDxe should not do this again. Doing this
+    again causes error return status from GCD service, and ASSERT (FALSE) with
+    debug build, so the duplicated addition is removed.
+    
+    Cc: Maurice Ma <maurice.ma@intel.com>
+    Cc: Prince Agyeman <prince.agyeman@intel.com>
+    Contributed-under: TianoCore Contribution Agreement 1.0
+    Signed-off-by: Benjamin You <benjamin.you@intel.com>
+    Reviewed-by: Maurice Ma <maurice.ma@intel.com>
+
+diff --git a/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c b/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c
+index 24bacf815c..c526c9e871 100755
+--- a/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c
++++ b/CorebootModulePkg/CbSupportDxe/CbSupportDxe.c
+@@ -140,9 +140,6 @@ CbDxeEntryPoint (
+   //
+   // Report MMIO/IO Resources
+   //
+-  Status = CbReserveResourceInGcd (TRUE, EfiGcdMemoryTypeMemoryMappedIo, 0xFEE00000, SIZE_1MB, 0, SystemTable); // LAPIC
+-  ASSERT_EFI_ERROR (Status);
+-
+   Status = CbReserveResourceInGcd (TRUE, EfiGcdMemoryTypeMemoryMappedIo, 0xFEC00000, SIZE_4KB, 0, SystemTable); // IOAPIC
+   ASSERT_EFI_ERROR (Status);
+ 

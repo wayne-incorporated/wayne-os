@@ -1,0 +1,54 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":libu2fd-client",
+    ":u2fd-client",
+  ]
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libsession_manager-client",
+    "openssl",
+    "protobuf",
+    "system_api",
+  ]
+}
+
+proto_library("user_state_proto") {
+  proto_in_dir = "."
+  proto_out_dir = "include/u2fd/client"
+  sources = [ "user_state.proto" ]
+
+  # Use -fPIC so this code can be linked into a shared library.
+  use_pic = true
+}
+
+shared_library("libu2fd-client") {
+  sources = [
+    "u2f_apdu.cc",
+    "u2f_corp_firmware_version.cc",
+    "user_state.cc",
+    "util.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  libs = [ "hwsec" ]
+  deps = [ ":user_state_proto" ]
+  install_path = "lib"
+}
+
+generate_pkg_config("u2fd-client") {
+  name = "libu2fd-client"
+  version = getenv("PV")
+  description = "U2F client shared library"
+  cflags = [ "-I/usr/include/u2f/client" ]
+  libs = [ "-lu2fd-client" ]
+  install = true
+}

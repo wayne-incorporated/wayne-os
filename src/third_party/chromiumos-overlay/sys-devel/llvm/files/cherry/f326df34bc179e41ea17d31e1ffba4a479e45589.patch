@@ -1,0 +1,82 @@
+commit f326df34bc179e41ea17d31e1ffba4a479e45589
+Author: Daniel Kiss <daniel.kiss@arm.com>
+Date:   Thu Apr 28 10:01:22 2022 +0200
+
+    [libunwind][AArch64] Fix _Unwind_ForcedUnwind via sigreturn.
+    
+    When the sigreturn trampoline is found the unw_proc_info_t.end_ip need to be set to
+    indicate a stack frame is found.
+    
+    Reviewed By: cjdb, #libunwind, MaskRay
+    
+    Differential Revision: https://reviews.llvm.org/D124522
+
+diff --git a/libcxxabi/test/forced_unwind4.pass.cpp b/libcxxabi/test/forced_unwind4.pass.cpp
+new file mode 100644
+index 000000000000..53a0121da92e
+--- /dev/null
++++ b/libcxxabi/test/forced_unwind4.pass.cpp
+@@ -0,0 +1,50 @@
++// -*- C++ -*-
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// REQUIRES: linux && target={{aarch64-.+}}
++
++// pthread_cancel in case of glibc calls _Unwind_ForcedUnwind from a signal on
++// the child_thread. This test ensures sigretrun is handled correctly (see:
++// UnwindCursor<A, R>::setInfoForSigReturn).
++
++#include <chrono>
++#include <condition_variable>
++#include <pthread.h>
++#include <unistd.h>
++
++using namespace std::chrono_literals;
++
++std::condition_variable cv;
++std::mutex cv_m;
++bool thread_ready = false;
++
++static void* test(void* arg) {
++  (void)arg;
++  thread_ready = true;
++  cv.notify_all();
++
++  // This must be a pthread cancellation point.
++  while (1)
++    sleep(100);
++
++  return (void*)1;
++}
++
++int main() {
++  pthread_t child_thread;
++  std::unique_lock<std::mutex> lk(cv_m);
++  pthread_create(&child_thread, 0, test, (void*)0);
++
++  if (!cv.wait_for(lk, 100ms, [] { return thread_ready; }))
++    return -1;
++
++  pthread_cancel(child_thread);
++  pthread_join(child_thread, NULL);
++  return 0;
++}
+diff --git a/libunwind/src/UnwindCursor.hpp b/libunwind/src/UnwindCursor.hpp
+index dd849b781753..29ded5c4e78e 100644
+--- a/libunwind/src/UnwindCursor.hpp
++++ b/libunwind/src/UnwindCursor.hpp
+@@ -2606,6 +2606,8 @@ bool UnwindCursor<A, R>::setInfoForSigReturn(Registers_arm64 &) {
+   if (_addressSpace.get32(pc) == 0xd2801168 &&
+       _addressSpace.get32(pc + 4) == 0xd4000001) {
+     _info = {};
++    _info.start_ip = pc;
++    _info.end_ip = pc + 4;
+     _isSigReturn = true;
+     return true;
+   }

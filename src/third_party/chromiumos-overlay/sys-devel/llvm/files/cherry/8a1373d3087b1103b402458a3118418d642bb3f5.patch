@@ -1,0 +1,203 @@
+commit 8a1373d3087b1103b402458a3118418d642bb3f5
+Author: Nuno Lopes <nuno.lopes@tecnico.ulisboa.pt>
+Date:   Sun Apr 30 09:56:34 2023 +0100
+
+    Revert "[InstCombine] Generate better code for std::bit_floor from libstdc++"
+    
+    This reverts commit d775fc390d3c78cc81872e276c4b1314f19af577.
+    
+    The patch is wrong wrt undef and the author didn't fix it after 2 weeks.
+
+diff --git a/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp b/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp
+index c76f9baabd72..be1571da4afe 100644
+--- a/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp
++++ b/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp
+@@ -3291,79 +3291,6 @@ static Instruction *foldBitCeil(SelectInst &SI, IRBuilderBase &Builder) {
+                                 Masked);
+ }
+ 
+-// Transform:
+-//
+-//   1 << (C - ctlz(X >> 1))
+-//
+-// into
+-//
+-//   (1 << (C - 1)) >> ctlz(X)
+-//
+-// The caller must guarantee that X is nonzero.
+-//
+-// TODO: Relax the requirement that X be nonzero.  We just need to require X to
+-// be nonzero or the second argument of CTLZ to be true (that is, returning
+-// poison on zero).
+-static Instruction *foldBitFloorNonzero(Value *N, Value *X,
+-                                        InstCombiner::BuilderTy &Builder) {
+-  Type *NType = N->getType();
+-  unsigned BitWidth = NType->getScalarSizeInBits();
+-
+-  // Match C - ctlz(X >> 1), where C is in (0, BitWidth].
+-  // TODO: Handle C in [0, BitWidth] (with 0 included in the range), in which
+-  // case 1 << C - ctlz(X >> 1) is equivalent to
+-  // (1 << ((C - 1) & (BitWidth - 1))) >> ctlz(X).
+-  const APInt *C = nullptr;
+-  Value *CTLZ;
+-  if (!match(N, m_OneUse(m_Shl(m_One(),
+-                               m_OneUse(m_Sub(m_APInt(C), m_Value(CTLZ)))))) ||
+-      !(C->ugt(0) && C->ule(BitWidth)) ||
+-      !match(CTLZ, m_OneUse(m_Intrinsic<Intrinsic::ctlz>(
+-                       m_OneUse(m_LShr(m_Specific(X), m_One())), m_Zero()))))
+-    return nullptr;
+-
+-  APInt ShiftedBit = APInt::getOneBitSet(BitWidth, C->getZExtValue() - 1);
+-
+-  // Build ShiftedBit >> CTLZ.
+-  Value *NewCTLZ =
+-      Builder.CreateIntrinsic(Intrinsic::ctlz, {CTLZ->getType()},
+-                              {X, cast<Instruction>(CTLZ)->getOperand(1)});
+-  auto *Shift = cast<Instruction>(
+-      Builder.CreateLShr(ConstantInt::get(NType, ShiftedBit), NewCTLZ));
+-  Shift->setIsExact();
+-  return Shift;
+-}
+-
+-// Transform:
+-//
+-//   X == 0 ? 0 : (1 << (C1 - ctlz(X >> 1)))
+-//
+-// into
+-//
+-//   X == 0 ? 0 : (C2 >> ctlz(X))
+-//
+-// where C2 is computed by foldBitFloorNonzero based on C1.  The caller is
+-// responsible for replacing one of the select operands.
+-static Instruction *foldBitFloor(SelectInst &SI,
+-                                 InstCombiner::BuilderTy &Builder) {
+-  Value *TrueVal = SI.getTrueValue();
+-  Value *FalseVal = SI.getFalseValue();
+-
+-  ICmpInst::Predicate Pred;
+-  Value *Cond0;
+-  if (!match(SI.getCondition(), m_ICmp(Pred, m_Value(Cond0), m_Zero())) ||
+-      !ICmpInst::isEquality(Pred))
+-    return nullptr;
+-
+-  if (Pred == ICmpInst::ICMP_NE)
+-    std::swap(TrueVal, FalseVal);
+-
+-  if (!match(TrueVal, m_Zero()))
+-    return nullptr;
+-
+-  return foldBitFloorNonzero(FalseVal, Cond0, Builder);
+-}
+-
+ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
+   Value *CondVal = SI.getCondition();
+   Value *TrueVal = SI.getTrueValue();
+@@ -3794,8 +3721,5 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
+   if (Instruction *I = foldBitCeil(SI, Builder))
+     return I;
+ 
+-  if (Instruction *I = foldBitFloor(SI, Builder))
+-    return replaceOperand(SI, match(SI.getTrueValue(), m_Zero()) ? 2 : 1, I);
+-
+   return nullptr;
+ }
+diff --git a/llvm/test/Transforms/InstCombine/bit_floor.ll b/llvm/test/Transforms/InstCombine/bit_floor.ll
+index f9452b27e6c3..9daa8eee8969 100644
+--- a/llvm/test/Transforms/InstCombine/bit_floor.ll
++++ b/llvm/test/Transforms/InstCombine/bit_floor.ll
+@@ -4,9 +4,11 @@
+ define i32 @bit_floor_32(i32 %x) {
+ ; CHECK-LABEL: @bit_floor_32(
+ ; CHECK-NEXT:    [[EQ0:%.*]] = icmp eq i32 [[X:%.*]], 0
+-; CHECK-NEXT:    [[TMP1:%.*]] = call i32 @llvm.ctlz.i32(i32 [[X]], i1 false), !range [[RNG0:![0-9]+]]
+-; CHECK-NEXT:    [[TMP2:%.*]] = lshr exact i32 -2147483648, [[TMP1]]
+-; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i32 0, i32 [[TMP2]]
++; CHECK-NEXT:    [[LSHR:%.*]] = lshr i32 [[X]], 1
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG0:![0-9]+]]
++; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw i32 32, [[CTLZ]]
++; CHECK-NEXT:    [[SHL:%.*]] = shl nuw i32 1, [[SUB]]
++; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i32 0, i32 [[SHL]]
+ ; CHECK-NEXT:    ret i32 [[SEL]]
+ ;
+   %eq0 = icmp eq i32 %x, 0
+@@ -21,9 +23,11 @@ define i32 @bit_floor_32(i32 %x) {
+ define i64 @bit_floor_64(i64 %x) {
+ ; CHECK-LABEL: @bit_floor_64(
+ ; CHECK-NEXT:    [[EQ0:%.*]] = icmp eq i64 [[X:%.*]], 0
+-; CHECK-NEXT:    [[TMP1:%.*]] = call i64 @llvm.ctlz.i64(i64 [[X]], i1 false), !range [[RNG1:![0-9]+]]
+-; CHECK-NEXT:    [[TMP2:%.*]] = lshr exact i64 -9223372036854775808, [[TMP1]]
+-; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i64 0, i64 [[TMP2]]
++; CHECK-NEXT:    [[LSHR:%.*]] = lshr i64 [[X]], 1
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i64 @llvm.ctlz.i64(i64 [[LSHR]], i1 false), !range [[RNG1:![0-9]+]]
++; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw i64 64, [[CTLZ]]
++; CHECK-NEXT:    [[SHL:%.*]] = shl nuw i64 1, [[SUB]]
++; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i64 0, i64 [[SHL]]
+ ; CHECK-NEXT:    ret i64 [[SEL]]
+ ;
+   %eq0 = icmp eq i64 %x, 0
+@@ -39,9 +43,11 @@ define i64 @bit_floor_64(i64 %x) {
+ define i32 @bit_floor_commuted_operands(i32 %x) {
+ ; CHECK-LABEL: @bit_floor_commuted_operands(
+ ; CHECK-NEXT:    [[NE0_NOT:%.*]] = icmp eq i32 [[X:%.*]], 0
+-; CHECK-NEXT:    [[TMP1:%.*]] = call i32 @llvm.ctlz.i32(i32 [[X]], i1 false), !range [[RNG0]]
+-; CHECK-NEXT:    [[TMP2:%.*]] = lshr exact i32 -2147483648, [[TMP1]]
+-; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[NE0_NOT]], i32 0, i32 [[TMP2]]
++; CHECK-NEXT:    [[LSHR:%.*]] = lshr i32 [[X]], 1
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG0]]
++; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw i32 32, [[CTLZ]]
++; CHECK-NEXT:    [[SHL:%.*]] = shl nuw i32 1, [[SUB]]
++; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[NE0_NOT]], i32 0, i32 [[SHL]]
+ ; CHECK-NEXT:    ret i32 [[SEL]]
+ ;
+   %ne0 = icmp ne i32 %x, 0
+@@ -58,7 +64,7 @@ define i32 @bit_floor_lshr_used_twice(i32 %x, ptr %p) {
+ ; CHECK-LABEL: @bit_floor_lshr_used_twice(
+ ; CHECK-NEXT:    [[EQ0:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[LSHR:%.*]] = lshr i32 [[X]], 1
+-; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG2:![0-9]+]]
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG0]]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw i32 32, [[CTLZ]]
+ ; CHECK-NEXT:    [[SHL:%.*]] = shl nuw i32 1, [[SUB]]
+ ; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i32 0, i32 [[SHL]]
+@@ -80,7 +86,7 @@ define i32 @bit_floor_ctlz_used_twice(i32 %x, ptr %p) {
+ ; CHECK-LABEL: @bit_floor_ctlz_used_twice(
+ ; CHECK-NEXT:    [[EQ0:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[LSHR:%.*]] = lshr i32 [[X]], 1
+-; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG2]]
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG0]]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw i32 32, [[CTLZ]]
+ ; CHECK-NEXT:    [[SHL:%.*]] = shl nuw i32 1, [[SUB]]
+ ; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i32 0, i32 [[SHL]]
+@@ -102,7 +108,7 @@ define i32 @bit_floor_sub_used_twice(i32 %x, ptr %p) {
+ ; CHECK-LABEL: @bit_floor_sub_used_twice(
+ ; CHECK-NEXT:    [[EQ0:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[LSHR:%.*]] = lshr i32 [[X]], 1
+-; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG2]]
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG0]]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw i32 32, [[CTLZ]]
+ ; CHECK-NEXT:    [[SHL:%.*]] = shl nuw i32 1, [[SUB]]
+ ; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i32 0, i32 [[SHL]]
+@@ -124,7 +130,7 @@ define i32 @bit_floor_shl_used_twice(i32 %x, ptr %p) {
+ ; CHECK-LABEL: @bit_floor_shl_used_twice(
+ ; CHECK-NEXT:    [[EQ0:%.*]] = icmp eq i32 [[X:%.*]], 0
+ ; CHECK-NEXT:    [[LSHR:%.*]] = lshr i32 [[X]], 1
+-; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG2]]
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call i32 @llvm.ctlz.i32(i32 [[LSHR]], i1 false), !range [[RNG0]]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw i32 32, [[CTLZ]]
+ ; CHECK-NEXT:    [[SHL:%.*]] = shl nuw i32 1, [[SUB]]
+ ; CHECK-NEXT:    [[SEL:%.*]] = select i1 [[EQ0]], i32 0, i32 [[SHL]]
+@@ -145,9 +151,11 @@ define i32 @bit_floor_shl_used_twice(i32 %x, ptr %p) {
+ define <4 x i32> @bit_floor_v4i32(<4 x i32> %x) {
+ ; CHECK-LABEL: @bit_floor_v4i32(
+ ; CHECK-NEXT:    [[EQ0:%.*]] = icmp eq <4 x i32> [[X:%.*]], zeroinitializer
+-; CHECK-NEXT:    [[TMP1:%.*]] = call <4 x i32> @llvm.ctlz.v4i32(<4 x i32> [[X]], i1 false), !range [[RNG0]]
+-; CHECK-NEXT:    [[TMP2:%.*]] = lshr exact <4 x i32> <i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648>, [[TMP1]]
+-; CHECK-NEXT:    [[SEL:%.*]] = select <4 x i1> [[EQ0]], <4 x i32> zeroinitializer, <4 x i32> [[TMP2]]
++; CHECK-NEXT:    [[LSHR:%.*]] = lshr <4 x i32> [[X]], <i32 1, i32 1, i32 1, i32 1>
++; CHECK-NEXT:    [[CTLZ:%.*]] = tail call <4 x i32> @llvm.ctlz.v4i32(<4 x i32> [[LSHR]], i1 false), !range [[RNG0]]
++; CHECK-NEXT:    [[SUB:%.*]] = sub nuw nsw <4 x i32> <i32 32, i32 32, i32 32, i32 32>, [[CTLZ]]
++; CHECK-NEXT:    [[SHL:%.*]] = shl nuw <4 x i32> <i32 1, i32 1, i32 1, i32 1>, [[SUB]]
++; CHECK-NEXT:    [[SEL:%.*]] = select <4 x i1> [[EQ0]], <4 x i32> zeroinitializer, <4 x i32> [[SHL]]
+ ; CHECK-NEXT:    ret <4 x i32> [[SEL]]
+ ;
+   %eq0 = icmp eq <4 x i32> %x, <i32 0, i32 0, i32 0, i32 0>

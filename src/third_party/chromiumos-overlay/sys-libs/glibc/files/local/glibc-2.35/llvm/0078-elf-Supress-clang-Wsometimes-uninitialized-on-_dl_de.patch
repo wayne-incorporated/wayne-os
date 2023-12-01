@@ -1,0 +1,47 @@
+From 740607a363cebea9fb00fb8bae0d22229ea3951a Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 24 Aug 2022 12:25:05 -0300
+Subject: [PATCH 078/163] elf: Supress clang -Wsometimes-uninitialized on
+ _dl_debug_initialize
+
+Clang issues an warning where variable 'r' is used uninitialized
+whenever 'if' condition is false.  The _dl_debug_initialize is called
+for static case always with LM_ID_BASE (csu/libc-start.c and
+elf/dl-reloc-static-pie.c) and DL_NSS will be always larger than 1
+for shared case.
+---
+ elf/dl-debug.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/elf/dl-debug.c b/elf/dl-debug.c
+index 538468dc0b..74aabeed0d 100644
+--- a/elf/dl-debug.c
++++ b/elf/dl-debug.c
+@@ -54,7 +54,15 @@ _dl_debug_update (Lmid_t ns)
+ struct r_debug *
+ _dl_debug_initialize (ElfW(Addr) ldbase, Lmid_t ns)
+ {
+-  struct r_debug_extended *r, **pp = NULL;
++  /* clang issues an warning where variable 'r' is used uninitialized whenever
++     'if' condition is false.  The _dl_debug_initialize is called for static
++     case always with LM_ID_BASE (csu/libc-start.c and
++     elf/dl-reloc-static-pie.c) and DL_NSS will be always larger than 1 for
++     shared case.  */
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wsometimes-uninitialized");
++  struct r_debug_extended *r;
++  struct r_debug_extended **pp = NULL;
+ 
+   if (ns == LM_ID_BASE)
+     {
+@@ -81,6 +89,7 @@ _dl_debug_initialize (ElfW(Addr) ldbase, Lmid_t ns)
+ 	  r->base.r_version = 2;
+ 	}
+     }
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+ 
+   if (r->base.r_brk == 0)
+     {
+-- 
+2.37.2
+

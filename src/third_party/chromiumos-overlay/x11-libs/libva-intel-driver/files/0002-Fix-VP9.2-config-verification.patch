@@ -1,0 +1,82 @@
+From 3ed3f6a783fdfff3fa1b567888518dcbda7eb2a3 Mon Sep 17 00:00:00 2001
+From: Ed Baker <edward.baker@intel.com>
+Date: Thu, 26 Aug 2021 16:27:39 -0700
+Subject: [PATCH] Fix VP9.2 config verification
+
+This commit addresses the following test_va_api failures collected on
+a Braswell with the hybrid codec enabled. Fixes #534.
+
+localhost ~ # test_va_api
+<snip>
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/210, where GetParam() = (21:VAProfileVP9Profile2, 1:VAEntrypointVLD)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/211, where GetParam() = (21:VAProfileVP9Profile2, 2:VAEntrypointIZZ)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/212, where GetParam() = (21:VAProfileVP9Profile2, 3:VAEntrypointIDCT)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/213, where GetParam() = (21:VAProfileVP9Profile2, 4:VAEntrypointMoComp)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/214, where GetParam() = (21:VAProfileVP9Profile2, 5:VAEntrypointDeblocking)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/215, where GetParam() = (21:VAProfileVP9Profile2, 6:VAEntrypointEncSlice)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/216, where GetParam() = (21:VAProfileVP9Profile2, 7:VAEntrypointEncPicture)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/217, where GetParam() = (21:VAProfileVP9Profile2, 8:VAEntrypointEncSliceLP)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/218, where GetParam() = (21:VAProfileVP9Profile2, 10:VAEntrypointVideoProc)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigWithAttributes/219, where GetParam() = (21:VAProfileVP9Profile2, 11:VAEntrypointFEI)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/210, where GetParam() = (21:VAProfileVP9Profile2, 1:VAEntrypointVLD)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/211, where GetParam() = (21:VAProfileVP9Profile2, 2:VAEntrypointIZZ)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/212, where GetParam() = (21:VAProfileVP9Profile2, 3:VAEntrypointIDCT)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/213, where GetParam() = (21:VAProfileVP9Profile2, 4:VAEntrypointMoComp)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/214, where GetParam() = (21:VAProfileVP9Profile2, 5:VAEntrypointDeblocking)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/215, where GetParam() = (21:VAProfileVP9Profile2, 6:VAEntrypointEncSlice)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/216, where GetParam() = (21:VAProfileVP9Profile2, 7:VAEntrypointEncPicture)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/217, where GetParam() = (21:VAProfileVP9Profile2, 8:VAEntrypointEncSliceLP)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/218, where GetParam() = (21:VAProfileVP9Profile2, 10:VAEntrypointVideoProc)
+[  FAILED  ] GetCreateConfig/VAAPIGetCreateConfig.CreateConfigNoAttributes/219, where GetParam() = (21:VAProfileVP9Profile2, 11:VAEntrypointFEI)
+
+Signed-off-by: Ed Baker <edward.baker@intel.com>
+---
+ src/i965_drv_video.c | 25 +++++++++++++++++++++----
+ 1 file changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/src/i965_drv_video.c b/src/i965_drv_video.c
+index 80278bb..2948d5b 100644
+--- a/src/i965_drv_video.c
++++ b/src/i965_drv_video.c
+@@ -885,10 +885,6 @@ i965_validate_config(VADriverContextP ctx, VAProfile profile,
+                     profile == VAProfileVP9Profile0 &&
+                     entrypoint == VAEntrypointEncSliceLP)) {
+             va_status = VA_STATUS_SUCCESS;
+-        } else if (profile == VAProfileVP9Profile0 &&
+-                   entrypoint == VAEntrypointVLD &&
+-                   i965->wrapper_pdrvctx) {
+-            va_status = VA_STATUS_SUCCESS;
+         } else if (!HAS_VP9_DECODING_PROFILE(i965, profile) &&
+                    !HAS_VP9_ENCODING(i965) &&
+                    !HAS_LP_VP9_ENCODING(i965) &&
+@@ -898,6 +894,27 @@ i965_validate_config(VADriverContextP ctx, VAProfile profile,
+             va_status = VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
+         }
+ 
++        if (i965->wrapper_pdrvctx && va_status != VA_STATUS_SUCCESS) {
++            VAEntrypoint wrapper_entrypoints[5] = {0};
++            int32_t wrapper_num_entrypoints = 0;
++            VADriverContextP pdrvctx = i965->wrapper_pdrvctx;
++
++            CALL_VTABLE(pdrvctx, va_status,
++                        vaQueryConfigEntrypoints(pdrvctx,
++                                                 profile,
++                                                 wrapper_entrypoints,
++                                                 &wrapper_num_entrypoints));
++
++            if (va_status == VA_STATUS_SUCCESS) {
++                va_status = VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
++                for (int i = 0; i < wrapper_num_entrypoints; i++) {
++                    if (entrypoint == wrapper_entrypoints[i]) {
++                        va_status = VA_STATUS_SUCCESS;
++                    }
++                }
++            }
++        }
++
+         break;
+ 
+     default:
+-- 
+2.25.1
+

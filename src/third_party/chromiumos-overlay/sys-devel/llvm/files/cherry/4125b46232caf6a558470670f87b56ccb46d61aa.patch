@@ -1,0 +1,304 @@
+commit 4125b46232caf6a558470670f87b56ccb46d61aa
+Author: Raphael Isemann <teemperor@gmail.com>
+Date:   Fri Jun 11 14:51:17 2021 +0200
+
+    Revert "[lldb] Add support for evaluating expressions in static member functions"
+    
+    This reverts commit 00764c36edf88ae9806e8d57a6addb782e6ceae8 and the
+    follow up d2223c7a49973a61cc2de62992662afa8d19065a.
+    
+    The original patch broke that one could use static member variables while
+    inside a static member functions without having a running target. It seems that
+    LLDB currently requires that static variables are only found via the global
+    variable lookup so that they can get materialized and mapped to the argument
+    struct of the expression.
+    
+    After 00764c36edf88ae9806e8d57a6addb782e6ceae8 static variables of the current
+    class could be found via Clang's lookup which LLDB isn't observing. This
+    resulting in expressions actually containing these variables as normal
+    globals that can't be rewritten to a member of the argument struct.
+    
+    More specifically, in the test TestCPPThis, the expression
+    `expr --j false -- s_a` is now only passing if we have a runnable target.
+    
+    I'll revert the patch as the possible fixes aren't trivial and it degrades
+    the debugging experience more than the issue that the revert patch addressed.
+    
+    The underlying bug can be reproduced before/after this patch by stopping
+    in `TestCPPThis` main function and running: `e -j false -- my_a; A<int>::s_a`.
+    The `my_a` will pull in the `A<int>` class and the second expression will
+    be resolved by Clang on its own (which causes LLDB to not materialize the
+    static variable).
+    
+    Note: A workaround is to just do `::s_a` which will force LLDB to take the global
+    variable lookup.
+
+diff --git a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.cpp b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.cpp
+index 761e6aa273f7..731b81c61a6f 100644
+--- a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.cpp
++++ b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.cpp
+@@ -810,7 +810,7 @@ void ClangExpressionDeclMap::LookUpLldbClass(NameSearchContext &context) {
+     LLDB_LOG(log, "  CEDM::FEVD Adding type for $__lldb_class: {1}",
+              class_qual_type.getAsString());
+ 
+-    AddContextClassType(context, class_user_type, method_decl);
++    AddContextClassType(context, class_user_type);
+ 
+     if (method_decl->isInstance()) {
+       // self is a pointer to the object
+@@ -1890,9 +1890,8 @@ void ClangExpressionDeclMap::AddOneFunction(NameSearchContext &context,
+   }
+ }
+ 
+-void ClangExpressionDeclMap::AddContextClassType(
+-    NameSearchContext &context, const TypeFromUser &ut,
+-    CXXMethodDecl *context_method) {
++void ClangExpressionDeclMap::AddContextClassType(NameSearchContext &context,
++                                                 const TypeFromUser &ut) {
+   CompilerType copied_clang_type = GuardedCopyType(ut);
+ 
+   Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
+@@ -1914,12 +1913,7 @@ void ClangExpressionDeclMap::AddContextClassType(
+         void_clang_type, &void_ptr_clang_type, 1, false, 0);
+ 
+     const bool is_virtual = false;
+-    // If we evaluate an expression inside a static method, we also need to
+-    // make our lldb_expr method static so that Clang denies access to
+-    // non-static members.
+-    // If we don't have a context_method we are evaluating within a context
+-    // object and we can allow access to non-static members.
+-    const bool is_static = context_method ? context_method->isStatic() : false;
++    const bool is_static = false;
+     const bool is_inline = false;
+     const bool is_explicit = false;
+     const bool is_attr_used = true;
+diff --git a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.h b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.h
+index 1af5df95821e..93060bd6b587 100644
+--- a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.h
++++ b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionDeclMap.h
+@@ -607,13 +607,8 @@ private:
+   ///
+   /// \param[in] type
+   ///     The type of the class that serves as the evaluation context.
+-  ///
+-  /// \param[in] context_method
+-  ///     The member function declaration in which the expression is being
+-  ///     evaluated or null if the expression is not evaluated in the context
+-  ///     of a member function.
+-  void AddContextClassType(NameSearchContext &context, const TypeFromUser &type,
+-                           clang::CXXMethodDecl *context_method = nullptr);
++  void AddContextClassType(NameSearchContext &context,
++                           const TypeFromUser &type);
+ 
+   /// Move a type out of the current ASTContext into another, but make sure to
+   /// export all components of the type also.
+diff --git a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.cpp b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.cpp
+index 1a050fc5ffb4..31707f81a270 100644
+--- a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.cpp
++++ b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.cpp
+@@ -420,7 +420,6 @@ bool ClangExpressionSourceCode::GetText(
+                          module_imports.c_str(), m_name.c_str(),
+                          lldb_local_var_decls.GetData(), tagged_body.c_str());
+       break;
+-    case WrapKind::CppStaticMemberFunction:
+     case WrapKind::CppMemberFunction:
+       wrap_stream.Printf("%s"
+                          "void                                   \n"
+diff --git a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.h b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.h
+index 509cab98c875..54ae837fb30f 100644
+--- a/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.h
++++ b/lldb/source/Plugins/ExpressionParser/Clang/ClangExpressionSourceCode.h
+@@ -33,13 +33,12 @@ public:
+   enum class WrapKind {
+     /// Wrapped in a non-static member function of a C++ class.
+     CppMemberFunction,
+-    /// Wrapped in a static member function of a C++ class.
+-    CppStaticMemberFunction,
+     /// Wrapped in an instance Objective-C method.
+     ObjCInstanceMethod,
+     /// Wrapped in a static Objective-C method.
+     ObjCStaticMethod,
+     /// Wrapped in a non-member function.
++    /// Note that this is also used for static member functions of a C++ class.
+     Function
+   };
+ 
+diff --git a/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.cpp b/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.cpp
+index 978eb7d0a4f1..7db813d06a1c 100644
+--- a/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.cpp
++++ b/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.cpp
+@@ -155,35 +155,32 @@ void ClangUserExpression::ScanContext(ExecutionContext &exe_ctx, Status &err) {
+     m_needs_object_ptr = true;
+   } else if (clang::CXXMethodDecl *method_decl =
+           TypeSystemClang::DeclContextGetAsCXXMethodDecl(decl_context)) {
+-    if (m_allow_cxx) {
+-      if (method_decl->isInstance()) {
+-        if (m_enforce_valid_object) {
+-          lldb::VariableListSP variable_list_sp(
+-              function_block->GetBlockVariableList(true));
++    if (m_allow_cxx && method_decl->isInstance()) {
++      if (m_enforce_valid_object) {
++        lldb::VariableListSP variable_list_sp(
++            function_block->GetBlockVariableList(true));
+ 
+-          const char *thisErrorString =
+-              "Stopped in a C++ method, but 'this' "
+-              "isn't available; pretending we are in a "
+-              "generic context";
++        const char *thisErrorString = "Stopped in a C++ method, but 'this' "
++                                      "isn't available; pretending we are in a "
++                                      "generic context";
+ 
+-          if (!variable_list_sp) {
+-            err.SetErrorString(thisErrorString);
+-            return;
+-          }
++        if (!variable_list_sp) {
++          err.SetErrorString(thisErrorString);
++          return;
++        }
+ 
+-          lldb::VariableSP this_var_sp(
+-              variable_list_sp->FindVariable(ConstString("this")));
++        lldb::VariableSP this_var_sp(
++            variable_list_sp->FindVariable(ConstString("this")));
+ 
+-          if (!this_var_sp || !this_var_sp->IsInScope(frame) ||
+-              !this_var_sp->LocationIsValidForFrame(frame)) {
+-            err.SetErrorString(thisErrorString);
+-            return;
+-          }
++        if (!this_var_sp || !this_var_sp->IsInScope(frame) ||
++            !this_var_sp->LocationIsValidForFrame(frame)) {
++          err.SetErrorString(thisErrorString);
++          return;
+         }
+-        m_needs_object_ptr = true;
+       }
++
+       m_in_cplusplus_method = true;
+-      m_in_static_method = !method_decl->isInstance();
++      m_needs_object_ptr = true;
+     }
+   } else if (clang::ObjCMethodDecl *method_decl =
+                  TypeSystemClang::DeclContextGetAsObjCMethodDecl(
+@@ -405,11 +402,9 @@ ClangExpressionSourceCode::WrapKind ClangUserExpression::GetWrapKind() const {
+   assert(m_options.GetExecutionPolicy() != eExecutionPolicyTopLevel &&
+          "Top level expressions aren't wrapped.");
+   using Kind = ClangExpressionSourceCode::WrapKind;
+-  if (m_in_cplusplus_method) {
+-    if (m_in_static_method)
+-      return Kind::CppStaticMemberFunction;
++  if (m_in_cplusplus_method)
+     return Kind::CppMemberFunction;
+-  } else if (m_in_objectivec_method) {
++  else if (m_in_objectivec_method) {
+     if (m_in_static_method)
+       return Kind::ObjCStaticMethod;
+     return Kind::ObjCInstanceMethod;
+diff --git a/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.h b/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.h
+index 5f6db2f80978..b628f6debf66 100644
+--- a/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.h
++++ b/lldb/source/Plugins/ExpressionParser/Clang/ClangUserExpression.h
+@@ -254,7 +254,7 @@ private:
+   bool m_in_objectivec_method = false;
+   /// True if the expression is compiled as a static (or class) method
+   /// (currently true if it was parsed when exe_ctx was in an Objective-C class
+-  /// method or static C++ member function).
++  /// method).
+   bool m_in_static_method = false;
+   /// True if "this" or "self" must be looked up and passed in.  False if the
+   /// expression doesn't really use them and they can be NULL.
+diff --git a/lldb/test/API/lang/cpp/stopped_in_static_member_function/Makefile b/lldb/test/API/lang/cpp/stopped_in_static_member_function/Makefile
+deleted file mode 100644
+index 99998b20bcb0..000000000000
+--- a/lldb/test/API/lang/cpp/stopped_in_static_member_function/Makefile
++++ /dev/null
+@@ -1,3 +0,0 @@
+-CXX_SOURCES := main.cpp
+-
+-include Makefile.rules
+diff --git a/lldb/test/API/lang/cpp/stopped_in_static_member_function/TestStoppedInStaticMemberFunction.py b/lldb/test/API/lang/cpp/stopped_in_static_member_function/TestStoppedInStaticMemberFunction.py
+deleted file mode 100644
+index b69263a00fd2..000000000000
+--- a/lldb/test/API/lang/cpp/stopped_in_static_member_function/TestStoppedInStaticMemberFunction.py
++++ /dev/null
+@@ -1,41 +0,0 @@
+-import lldb
+-from lldbsuite.test.decorators import *
+-from lldbsuite.test.lldbtest import *
+-from lldbsuite.test import lldbutil
+-
+-
+-class TestCase(TestBase):
+-
+-    mydir = TestBase.compute_mydir(__file__)
+-
+-    # On Windows we can lookup the declarations of static members but finding
+-    # up the underlying symbols doesn't work yet.
+-    @expectedFailureAll(oslist=["windows"])
+-    @no_debug_info_test
+-    def test(self):
+-        self.build()
+-        lldbutil.run_to_source_breakpoint(self, "// break in static member function", lldb.SBFileSpec("main.cpp"))
+-
+-        # Evaluate a static member and call a static member function.
+-        self.expect_expr("static_member_var", result_type="int", result_value="2")
+-        self.expect_expr("static_const_member_var", result_type="const int", result_value="3")
+-        self.expect_expr("static_constexpr_member_var", result_type="const int", result_value="4")
+-        self.expect_expr("static_func()", result_type="int", result_value="6")
+-
+-        # Check that accessing non-static members just reports a diagnostic.
+-        self.expect("expr member_var", error=True,
+-                    substrs=["invalid use of member 'member_var' in static member function"])
+-        self.expect("expr member_func()", error=True,
+-                    substrs=["call to non-static member function without an object argument"])
+-        self.expect("expr this", error=True,
+-                    substrs=["invalid use of 'this' outside of a non-static member function"])
+-
+-        # Continue to a non-static member function of the same class and make
+-        # sure that evaluating non-static members now works.
+-        breakpoint = self.target().BreakpointCreateBySourceRegex(
+-            "// break in member function", lldb.SBFileSpec("main.cpp"))
+-        self.assertNotEqual(breakpoint.GetNumResolvedLocations(), 0)
+-        stopped_threads = lldbutil.continue_to_breakpoint(self.process(), breakpoint)
+-
+-        self.expect_expr("member_var", result_type="int", result_value="1")
+-        self.expect_expr("member_func()", result_type="int", result_value="5")
+diff --git a/lldb/test/API/lang/cpp/stopped_in_static_member_function/main.cpp b/lldb/test/API/lang/cpp/stopped_in_static_member_function/main.cpp
+deleted file mode 100644
+index 8c8b7c183903..000000000000
+--- a/lldb/test/API/lang/cpp/stopped_in_static_member_function/main.cpp
++++ /dev/null
+@@ -1,31 +0,0 @@
+-struct A {
+-  int member_var = 1;
+-  static int static_member_var;
+-  static const int static_const_member_var;
+-  static constexpr int static_constexpr_member_var = 4;
+-  int member_func() { return 5; }
+-  static int static_func() { return 6; }
+-
+-  static int context_static_func() {
+-    int i = static_member_var;
+-    i += static_func();
+-    return i; // break in static member function
+-  }
+-
+-  int context_member_func() {
+-    int i = member_var;
+-    i += member_func();
+-    return i; // break in member function
+-  }
+-};
+-
+-int A::static_member_var = 2;
+-const int A::static_const_member_var = 3;
+-constexpr int A::static_constexpr_member_var;
+-
+-int main() {
+-  int i = A::context_static_func();
+-  A a;
+-  a.context_member_func();
+-  return i;
+-}

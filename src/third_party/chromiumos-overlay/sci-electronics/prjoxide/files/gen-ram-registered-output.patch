@@ -1,0 +1,19 @@
+This patch doesn't need to be applied unless you want to recreate
+lram-registered-output-timing.patch
+
+diff --git a/timing/fuzzers/LIFCL/02-ram/gen_ram.py b/timing/fuzzers/LIFCL/02-ram/gen_ram.py
+index 4dae903..ad76d26 100644
+--- a/timing/fuzzers/LIFCL/02-ram/gen_ram.py
++++ b/timing/fuzzers/LIFCL/02-ram/gen_ram.py
+@@ -122,7 +122,10 @@ for i in range(N, N+M):
+     lram_prim = random.choice(["DPSC512K", "PDPSC512K", "SP512K"])
+     if lram_prim == "DPSC512K":
+         next_data = get_next_data(i, 32+32+4)
+-        print("    DPSC512K lram_{} (".format(i))
++        print("    DPSC512K #(")
++        print(".OUTREG_A(\"OUT_REG\")")
++        print(".OUTREG_B(\"OUT_REG\")")
++        print(") lram_{} (".format(i))
+         clock_port("CLK")
+         ce_port("CEA")
+         ce_port("CEB")

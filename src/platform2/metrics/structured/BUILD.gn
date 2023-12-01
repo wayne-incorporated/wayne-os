@@ -1,0 +1,94 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+_event_output_dir = "${root_gen_dir}/include/metrics/structured"
+_xml_file = "structured.xml"
+
+proto_library("storage") {
+  proto_in_dir = "./proto"
+  proto_out_dir = "include/metrics/structured/proto"
+  sources = [
+    "${proto_in_dir}/storage.proto",
+    "${proto_in_dir}/structured_data.proto",
+  ]
+  use_pic = true
+}
+
+action("gen_structured_events") {
+  script = "gen_events.py"
+
+  inputs = [
+    "gen_events.py",
+    "codegen.py",
+    "model.py",
+    "model_util.py",
+    "templates.py",
+  ]
+  sources = [ _xml_file ]
+
+  outputs = [
+    _event_output_dir + "/structured_events.cc",
+    _event_output_dir + "/structured_events.h",
+  ]
+
+  args = [
+    "--input",
+    rebase_path(_xml_file, root_build_dir),
+    "--output",
+    _event_output_dir,
+  ]
+}
+
+shared_library("libstructuredmetrics") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "protobuf-lite",
+  ]
+
+  sources = [
+    "c_structured_metrics.cc",
+    "event_base.cc",
+    "event_base.h",
+    "fake_recorder.cc",
+    "fake_recorder.h",
+    "key_data.cc",
+    "key_data.h",
+    "persistent_proto.cc",
+    "persistent_proto.h",
+    "recorder.h",
+    "recorder_impl.cc",
+    "recorder_impl.h",
+    "recorder_singleton.cc",
+    "recorder_singleton.h",
+  ]
+
+  # Also include the generated event files.
+  sources += get_target_outputs(":gen_structured_events")
+
+  deps = [
+    ":gen_structured_events",
+    ":storage",
+    "//metrics:libmetrics",
+  ]
+}
+
+generate_pkg_config("libstructuredmetrics_pkg_config") {
+  name = "libstructuredmetrics"
+  deps = [ ":libstructuredmetrics" ]
+  description = "Chrome OS structured metrics library"
+  version = "${libbase_ver}"
+  requires_private = [ "libmetrics" ]
+  cflags = [ "-I/usr/include/metrics" ]
+  libs = [ "-lstructuredmetrics" ]
+}
+
+executable("update_reset_counter") {
+  pkg_deps = [ "libchrome" ]
+  sources = [ "reset_counter_updater.cc" ]
+  install_path = "bin"
+}

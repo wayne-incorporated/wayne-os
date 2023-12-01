@@ -1,0 +1,219 @@
+commit b52cd719699b9a62bd104cfff6dded98be06cf85
+Author: pliard <pliard@google.com>
+Date:   Wed Jul 24 10:55:05 2019 +0900
+
+    Add pack-file and path-prefix-filter options
+    
+    This change adds two command line options allowing multiple instances of
+    ureadahead to be more isolated:
+    * --pack-file: Overrides the path to the pack file instead of
+    determining it from the underlying device which an unrelated pack file
+    might already exist for. This overridden path gets used for tracing,
+    dumping the pack file as well as reading ahead.
+    * --path-prefix-filter: Prefix that the paths read from the debugfs
+    trace file have to start with for them to be retained in the pack file.
+    
+    These new options will be used by the upstart job starting ureadahead
+    when the login screen appears in order to preload ARCVM files.
+    
+    BUG=b:137810150
+    TEST=/var/lib/ureadahead/opt.google.vms.android.pack gets created with \
+         these options and only contains entries under \
+         /opt/google/vms/android \
+    TEST=/var/lib/ureadahead/pack gets recreated correctly on boot if \
+         deleted
+
+diff --git a/src/trace.c b/src/trace.c
+index 9f0ec09..0e34d70 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -90,6 +90,7 @@
+ /* Prototypes for static functions */
+ static int       read_trace        (const void *parent,
+ 				    int dfd, const char *path,
++				    const char *path_prefix_filter,
+ 				    const PathPrefixOption *path_prefix,
+ 				    PackFile **files, size_t *num_files);
+ static void      fix_path          (char *pathname);
+@@ -119,6 +120,8 @@ int
+ trace (int daemonise,
+        int timeout,
+        const char *filename_to_replace,
++       const char *pack_file,
++       const char *path_prefix_filter,
+        const PathPrefixOption *path_prefix)
+ {
+ 	int                 dfd;
+@@ -253,7 +256,8 @@ trace (int daemonise,
+ 		;
+ 
+ 	/* Read trace log */
+-	if (read_trace (NULL, dfd, "trace", path_prefix, &files, &num_files) < 0)
++	if (read_trace (NULL, dfd, "trace", path_prefix_filter, path_prefix,
++			&files, &num_files) < 0)
+ 		goto error;
+ 
+ 	/*
+@@ -277,27 +281,30 @@ trace (int daemonise,
+ 	/* Write out pack files */
+ 	for (size_t i = 0; i < num_files; i++) {
+ 		nih_local char *filename = NULL;
++		if (pack_file) {
++			filename = NIH_MUST (nih_strdup (NULL, pack_file));
++		} else {
++			filename = pack_file_name_for_device (NULL,
++							      files[i].dev);
++			if (! filename) {
++				NihError *err;
+ 
+-		filename = pack_file_name_for_device (NULL, files[i].dev);
+-		if (! filename) {
+-			NihError *err;
+-
+-			err = nih_error_get ();
+-			nih_warn ("%s", err->message);
+-			nih_free (err);
++				err = nih_error_get ();
++				nih_warn ("%s", err->message);
++				nih_free (err);
+ 
+-			continue;
+-		}
++				continue;
++			}
+ 
+-		/* If filename_to_replace is not NULL, only write out the
+-		 * file and skip others.
+-		 */
+-		if (filename_to_replace &&
+-		    strcmp (filename_to_replace, filename)) {
+-			nih_info ("Skipping %s", filename);
+-			continue;
++			/* If filename_to_replace is not NULL, only write out
++			 * the file and skip others.
++			 */
++			if (filename_to_replace &&
++			    strcmp (filename_to_replace, filename)) {
++				nih_info ("Skipping %s", filename);
++				continue;
++			}
+ 		}
+-
+ 		nih_info ("Writing %s", filename);
+ 
+ 		/* We only need to apply additional sorting to the
+@@ -334,6 +341,7 @@ static int
+ read_trace (const void *parent,
+ 	    int         dfd,
+ 	    const char *path,
++	    const char *path_prefix_filter,  /* May be null */
+ 	    const PathPrefixOption *path_prefix,
+ 	    PackFile ** files,
+ 	    size_t *    num_files)
+@@ -389,6 +397,14 @@ read_trace (const void *parent,
+ 		*end = '\0';
+ 
+ 		fix_path (ptr);
++
++		if (path_prefix_filter &&
++		    strncmp (ptr, path_prefix_filter,
++			     strlen (path_prefix_filter))) {
++			nih_warn ("Skipping %s due to path prefix filter", ptr);
++			continue;
++		}
++
+ 		if (path_prefix->st_dev != NODEV && ptr[0] == '/') {
+ 			struct stat stbuf;
+ 			char *rewritten = nih_sprintf (
+diff --git a/src/trace.h b/src/trace.h
+index 986b10c..16af782 100644
+--- a/src/trace.h
++++ b/src/trace.h
+@@ -35,6 +35,8 @@ typedef struct path_prefix_option {
+ 
+ int trace (int daemonise, int timeout,
+            const char *filename_to_replace,
++           const char *pack_file,  /* May be null */
++           const char *path_prefix_filter,  /* May be null */
+            const PathPrefixOption *path_prefix);
+ 
+ NIH_END_EXTERN
+diff --git a/src/ureadahead.c b/src/ureadahead.c
+index 0e91693..066bfff 100644
+--- a/src/ureadahead.c
++++ b/src/ureadahead.c
+@@ -95,6 +95,21 @@ static SortOption sort_pack = SORT_OPEN;
+  **/
+ static PathPrefixOption path_prefix = { NODEV };
+ 
++/**
++ * pack_file:
++ *
++ * Path to the pack file to use.
++ */
++static char *pack_file = NULL;
++
++/**
++ * path_prefix_filter:
++ *
++ * Path prefix that files read during tracing have to start with to be included
++ * in the pack file.
++ */
++static char *path_prefix_filter = NULL;
++
+ static int
+ path_prefix_option (NihOption  *option,
+                     const char *arg)
+@@ -129,6 +144,19 @@ error:
+ 	return -1;
+ }
+ 
++static int
++dup_string_handler (NihOption   *option,
++		    const char  *arg)
++{
++	nih_assert (option != NULL);
++	nih_assert (option->value != NULL);
++	nih_assert (arg != NULL);
++
++	char **value = (char **)option->value;
++	*value = NIH_MUST (nih_strdup (NULL, arg));
++	return 0;
++}
++
+ static int
+ sort_option (NihOption  *option,
+ 	     const char *arg)
+@@ -178,6 +206,11 @@ static NihOption options[] = {
+ 	  NULL, "SORT", &sort_pack, sort_option },
+ 	{ 0, "path-prefix", N_("pathname to prepend for files on the device"),
+ 	  NULL, "PREFIX", &path_prefix, path_prefix_option },
++	{ 0, "path-prefix-filter",
++	  N_("Path prefix that retained files during tracing must start with"),
++	  NULL, "PREFIX_FILTER", &path_prefix_filter, dup_string_handler },
++	{ 0, "pack-file", N_("Path of the pack file to use"),
++	  NULL, "PACK_FILE", &pack_file, dup_string_handler },
+ 
+ 	NIH_OPTION_LAST
+ };
+@@ -212,7 +245,9 @@ main (int   argc,
+ 	/* Lookup the filename for the pack based on the path given
+ 	 * (if any).
+ 	 */
+-	filename = pack_file_name (NULL, args[0]);
++	filename = pack_file
++		? NIH_MUST (nih_strdup (NULL, pack_file))
++		: pack_file_name (NULL, args[0]);
+ 
+ 	if (! force_trace) {
+ 		NihError *err;
+@@ -265,7 +300,8 @@ main (int   argc,
+ 	}
+ 
+ 	/* Trace to generate new pack files */
+-	if (trace (daemonise, timeout, filename, &path_prefix) < 0) {
++	if (trace (daemonise, timeout, filename, pack_file,
++		   path_prefix_filter, &path_prefix) < 0) {
+ 		NihError *err;
+ 
+ 		err = nih_error_get ();

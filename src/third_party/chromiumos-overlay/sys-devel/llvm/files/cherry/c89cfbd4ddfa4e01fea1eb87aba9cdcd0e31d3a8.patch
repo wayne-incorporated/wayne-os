@@ -1,0 +1,376 @@
+From c89cfbd4ddfa4e01fea1eb87aba9cdcd0e31d3a8 Mon Sep 17 00:00:00 2001
+From: David Green <david.green@arm.com>
+Date: Tue, 1 Feb 2022 20:18:40 +0000
+Subject: [PATCH] Revert "[DAG] Extend SearchForAndLoads with any_extend
+ handling"
+
+This reverts commit 100763a88fe97b22cd5e3f69d203669aac3ed48f as it was
+making incorrect assumptions about implicit zero_extends.
+---
+ llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp |  41 ++----
+ .../CodeGen/AArch64/combine-andintoload.ll    | 120 ++++++++++--------
+ llvm/test/CodeGen/X86/pr35763.ll              |   8 +-
+ 3 files changed, 84 insertions(+), 85 deletions(-)
+
+diff --git a/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp b/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp
+index 0ed2bd9d6d62..041d7e5b4a4a 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp
+@@ -5531,8 +5531,6 @@ bool DAGCombiner::SearchForAndLoads(SDNode *N,
+ 
+     // Some constants may need fixing up later if they are too large.
+     if (auto *C = dyn_cast<ConstantSDNode>(Op)) {
+-      if (Mask->getValueType(0) != C->getValueType(0))
+-        return false;
+       if ((N->getOpcode() == ISD::OR || N->getOpcode() == ISD::XOR) &&
+           (Mask->getAPIntValue() & C->getAPIntValue()) != C->getAPIntValue())
+         NodesWithConsts.insert(N);
+@@ -5566,9 +5564,9 @@ bool DAGCombiner::SearchForAndLoads(SDNode *N,
+     case ISD::AssertZext: {
+       unsigned ActiveBits = Mask->getAPIntValue().countTrailingOnes();
+       EVT ExtVT = EVT::getIntegerVT(*DAG.getContext(), ActiveBits);
+-      EVT VT = Op.getOpcode() == ISD::AssertZext
+-                   ? cast<VTSDNode>(Op.getOperand(1))->getVT()
+-                   : Op.getOperand(0).getValueType();
++      EVT VT = Op.getOpcode() == ISD::AssertZext ?
++        cast<VTSDNode>(Op.getOperand(1))->getVT() :
++        Op.getOperand(0).getValueType();
+ 
+       // We can accept extending nodes if the mask is wider or an equal
+       // width to the original type.
+@@ -5576,15 +5574,6 @@ bool DAGCombiner::SearchForAndLoads(SDNode *N,
+         continue;
+       break;
+     }
+-    case ISD::ANY_EXTEND: {
+-      unsigned ActiveBits = Mask->getAPIntValue().countTrailingOnes();
+-      EVT ExtVT = EVT::getIntegerVT(*DAG.getContext(), ActiveBits);
+-      EVT VT = Op.getOperand(0).getValueType();
+-      if (ExtVT.bitsGE(VT))
+-        break;
+-      // Fallthrough to searching for nodes from the operands of the extend.
+-      LLVM_FALLTHROUGH;
+-    }
+     case ISD::OR:
+     case ISD::XOR:
+     case ISD::AND:
+@@ -5644,14 +5633,12 @@ bool DAGCombiner::BackwardsPropagateMask(SDNode *N) {
+     // masking.
+     if (FixupNode) {
+       LLVM_DEBUG(dbgs() << "First, need to fix up: "; FixupNode->dump());
+-      SDValue MaskOpT = DAG.getZExtOrTrunc(MaskOp, SDLoc(FixupNode),
+-                                           FixupNode->getValueType(0));
+-      SDValue And =
+-          DAG.getNode(ISD::AND, SDLoc(FixupNode), FixupNode->getValueType(0),
+-                      SDValue(FixupNode, 0), MaskOpT);
++      SDValue And = DAG.getNode(ISD::AND, SDLoc(FixupNode),
++                                FixupNode->getValueType(0),
++                                SDValue(FixupNode, 0), MaskOp);
+       DAG.ReplaceAllUsesOfValueWith(SDValue(FixupNode, 0), And);
+       if (And.getOpcode() == ISD ::AND)
+-        DAG.UpdateNodeOperands(And.getNode(), SDValue(FixupNode, 0), MaskOpT);
++        DAG.UpdateNodeOperands(And.getNode(), SDValue(FixupNode, 0), MaskOp);
+     }
+ 
+     // Narrow any constants that need it.
+@@ -5660,12 +5647,10 @@ bool DAGCombiner::BackwardsPropagateMask(SDNode *N) {
+       SDValue Op1 = LogicN->getOperand(1);
+ 
+       if (isa<ConstantSDNode>(Op0))
+-        std::swap(Op0, Op1);
++          std::swap(Op0, Op1);
+ 
+-      SDValue MaskOpT =
+-          DAG.getZExtOrTrunc(MaskOp, SDLoc(Op1), Op1.getValueType());
+-      SDValue And =
+-          DAG.getNode(ISD::AND, SDLoc(Op1), Op1.getValueType(), Op1, MaskOpT);
++      SDValue And = DAG.getNode(ISD::AND, SDLoc(Op1), Op1.getValueType(),
++                                Op1, MaskOp);
+ 
+       DAG.UpdateNodeOperands(LogicN, Op0, And);
+     }
+@@ -5673,14 +5658,12 @@ bool DAGCombiner::BackwardsPropagateMask(SDNode *N) {
+     // Create narrow loads.
+     for (auto *Load : Loads) {
+       LLVM_DEBUG(dbgs() << "Propagate AND back to: "; Load->dump());
+-      SDValue MaskOpT =
+-          DAG.getZExtOrTrunc(MaskOp, SDLoc(Load), Load->getValueType(0));
+       SDValue And = DAG.getNode(ISD::AND, SDLoc(Load), Load->getValueType(0),
+-                                SDValue(Load, 0), MaskOpT);
++                                SDValue(Load, 0), MaskOp);
+       DAG.ReplaceAllUsesOfValueWith(SDValue(Load, 0), And);
+       if (And.getOpcode() == ISD ::AND)
+         And = SDValue(
+-            DAG.UpdateNodeOperands(And.getNode(), SDValue(Load, 0), MaskOpT), 0);
++            DAG.UpdateNodeOperands(And.getNode(), SDValue(Load, 0), MaskOp), 0);
+       SDValue NewLoad = reduceLoadWidth(And.getNode());
+       assert(NewLoad &&
+              "Shouldn't be masking the load if it can't be narrowed");
+diff --git a/llvm/test/CodeGen/AArch64/combine-andintoload.ll b/llvm/test/CodeGen/AArch64/combine-andintoload.ll
+index d7a69fdd1193..693d318b272a 100644
+--- a/llvm/test/CodeGen/AArch64/combine-andintoload.ll
++++ b/llvm/test/CodeGen/AArch64/combine-andintoload.ll
+@@ -5,14 +5,16 @@
+ define i64 @load32_and16_and(i32* %p, i64 %y) {
+ ; CHECK-LABEL: load32_and16_and:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrh w8, [x0]
+-; CHECK-NEXT:    and w0, w1, w8
++; CHECK-NEXT:    ldr w8, [x0]
++; CHECK-NEXT:    and w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xffff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load32_and16_and:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrh w8, [x0, #2]
+-; CHECKBE-NEXT:    and w0, w1, w8
++; CHECKBE-NEXT:    ldr w8, [x0]
++; CHECKBE-NEXT:    and w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xffff
+ ; CHECKBE-NEXT:    ret
+   %x = load i32, i32* %p, align 4
+   %xz = zext i32 %x to i64
+@@ -24,14 +26,16 @@ define i64 @load32_and16_and(i32* %p, i64 %y) {
+ define i64 @load32_and16_andr(i32* %p, i64 %y) {
+ ; CHECK-LABEL: load32_and16_andr:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrh w8, [x0]
+-; CHECK-NEXT:    and w0, w1, w8
++; CHECK-NEXT:    ldr w8, [x0]
++; CHECK-NEXT:    and w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xffff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load32_and16_andr:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrh w8, [x0, #2]
+-; CHECKBE-NEXT:    and w0, w1, w8
++; CHECKBE-NEXT:    ldr w8, [x0]
++; CHECKBE-NEXT:    and w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xffff
+ ; CHECKBE-NEXT:    ret
+   %x = load i32, i32* %p, align 4
+   %xz = zext i32 %x to i64
+@@ -43,14 +47,16 @@ define i64 @load32_and16_andr(i32* %p, i64 %y) {
+ define i64 @load32_and16_and_sext(i32* %p, i64 %y) {
+ ; CHECK-LABEL: load32_and16_and_sext:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrh w8, [x0]
+-; CHECK-NEXT:    and w0, w1, w8
++; CHECK-NEXT:    ldr w8, [x0]
++; CHECK-NEXT:    and w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xffff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load32_and16_and_sext:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrh w8, [x0, #2]
+-; CHECKBE-NEXT:    and w0, w1, w8
++; CHECKBE-NEXT:    ldr w8, [x0]
++; CHECKBE-NEXT:    and w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xffff
+ ; CHECKBE-NEXT:    ret
+   %x = load i32, i32* %p, align 4
+   %xz = sext i32 %x to i64
+@@ -62,16 +68,16 @@ define i64 @load32_and16_and_sext(i32* %p, i64 %y) {
+ define i64 @load32_and16_or(i32* %p, i64 %y) {
+ ; CHECK-LABEL: load32_and16_or:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrh w8, [x0]
+-; CHECK-NEXT:    and w9, w1, #0xffff
+-; CHECK-NEXT:    orr w0, w9, w8
++; CHECK-NEXT:    ldr w8, [x0]
++; CHECK-NEXT:    orr w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xffff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load32_and16_or:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrh w8, [x0, #2]
+-; CHECKBE-NEXT:    and w9, w1, #0xffff
+-; CHECKBE-NEXT:    orr w0, w9, w8
++; CHECKBE-NEXT:    ldr w8, [x0]
++; CHECKBE-NEXT:    orr w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xffff
+ ; CHECKBE-NEXT:    ret
+   %x = load i32, i32* %p, align 4
+   %xz = zext i32 %x to i64
+@@ -164,14 +170,16 @@ define i64 @load16_and16(i16* %p, i64 %y) {
+ define i64 @load16_and8(i16* %p, i64 %y) {
+ ; CHECK-LABEL: load16_and8:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrb w8, [x0]
+-; CHECK-NEXT:    and w0, w1, w8
++; CHECK-NEXT:    ldrh w8, [x0]
++; CHECK-NEXT:    and w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load16_and8:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrb w8, [x0, #1]
+-; CHECKBE-NEXT:    and w0, w1, w8
++; CHECKBE-NEXT:    ldrh w8, [x0]
++; CHECKBE-NEXT:    and w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xff
+ ; CHECKBE-NEXT:    ret
+   %x = load i16, i16* %p, align 4
+   %xz = zext i16 %x to i64
+@@ -224,13 +232,15 @@ define i64 @load8_and16_zext(i8* %p, i8 %y) {
+ ; CHECK-LABEL: load8_and16_zext:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    ldrb w8, [x0]
+-; CHECK-NEXT:    and w0, w1, w8
++; CHECK-NEXT:    and w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load8_and16_zext:
+ ; CHECKBE:       // %bb.0:
+ ; CHECKBE-NEXT:    ldrb w8, [x0]
+-; CHECKBE-NEXT:    and w0, w1, w8
++; CHECKBE-NEXT:    and w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xff
+ ; CHECKBE-NEXT:    ret
+   %x = load i8, i8* %p, align 4
+   %xz = zext i8 %x to i64
+@@ -286,14 +296,16 @@ define i64 @load8_and16_or(i8* %p, i64 %y) {
+ define i64 @load16_and8_manyext(i16* %p, i32 %y) {
+ ; CHECK-LABEL: load16_and8_manyext:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrb w8, [x0]
+-; CHECK-NEXT:    and w0, w1, w8
++; CHECK-NEXT:    ldrh w8, [x0]
++; CHECK-NEXT:    and w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load16_and8_manyext:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrb w8, [x0, #1]
+-; CHECKBE-NEXT:    and w0, w1, w8
++; CHECKBE-NEXT:    ldrh w8, [x0]
++; CHECKBE-NEXT:    and w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xff
+ ; CHECKBE-NEXT:    ret
+   %x = load i16, i16* %p, align 4
+   %xz = zext i16 %x to i32
+@@ -306,16 +318,18 @@ define i64 @load16_and8_manyext(i16* %p, i32 %y) {
+ define i64 @multiple_load(i16* %p, i32* %q) {
+ ; CHECK-LABEL: multiple_load:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrb w8, [x0]
+-; CHECK-NEXT:    ldrb w9, [x1]
+-; CHECK-NEXT:    and w0, w9, w8
++; CHECK-NEXT:    ldrh w8, [x0]
++; CHECK-NEXT:    ldr w9, [x1]
++; CHECK-NEXT:    and w8, w9, w8
++; CHECK-NEXT:    and x0, x8, #0xff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: multiple_load:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrb w8, [x0, #1]
+-; CHECKBE-NEXT:    ldrb w9, [x1, #3]
+-; CHECKBE-NEXT:    and w0, w9, w8
++; CHECKBE-NEXT:    ldrh w8, [x0]
++; CHECKBE-NEXT:    ldr w9, [x1]
++; CHECKBE-NEXT:    and w8, w9, w8
++; CHECKBE-NEXT:    and x0, x8, #0xff
+ ; CHECKBE-NEXT:    ret
+   %x = load i16, i16* %p, align 4
+   %xz = zext i16 %x to i64
+@@ -329,16 +343,18 @@ define i64 @multiple_load(i16* %p, i32* %q) {
+ define i64 @multiple_load_or(i16* %p, i32* %q) {
+ ; CHECK-LABEL: multiple_load_or:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrb w8, [x0]
+-; CHECK-NEXT:    ldrb w9, [x1]
+-; CHECK-NEXT:    orr w0, w9, w8
++; CHECK-NEXT:    ldrh w8, [x0]
++; CHECK-NEXT:    ldr w9, [x1]
++; CHECK-NEXT:    orr w8, w9, w8
++; CHECK-NEXT:    and x0, x8, #0xff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: multiple_load_or:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrb w8, [x0, #1]
+-; CHECKBE-NEXT:    ldrb w9, [x1, #3]
+-; CHECKBE-NEXT:    orr w0, w9, w8
++; CHECKBE-NEXT:    ldrh w8, [x0]
++; CHECKBE-NEXT:    ldr w9, [x1]
++; CHECKBE-NEXT:    orr w8, w9, w8
++; CHECKBE-NEXT:    and x0, x8, #0xff
+ ; CHECKBE-NEXT:    ret
+   %x = load i16, i16* %p, align 4
+   %xz = zext i16 %x to i64
+@@ -352,16 +368,16 @@ define i64 @multiple_load_or(i16* %p, i32* %q) {
+ define i64 @load32_and16_zexty(i32* %p, i32 %y) {
+ ; CHECK-LABEL: load32_and16_zexty:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrh w8, [x0]
+-; CHECK-NEXT:    and w9, w1, #0xffff
+-; CHECK-NEXT:    orr w0, w9, w8
++; CHECK-NEXT:    ldr w8, [x0]
++; CHECK-NEXT:    orr w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xffff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load32_and16_zexty:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrh w8, [x0, #2]
+-; CHECKBE-NEXT:    and w9, w1, #0xffff
+-; CHECKBE-NEXT:    orr w0, w9, w8
++; CHECKBE-NEXT:    ldr w8, [x0]
++; CHECKBE-NEXT:    orr w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xffff
+ ; CHECKBE-NEXT:    ret
+   %x = load i32, i32* %p, align 4
+   %xz = zext i32 %x to i64
+@@ -374,16 +390,16 @@ define i64 @load32_and16_zexty(i32* %p, i32 %y) {
+ define i64 @load32_and16_sexty(i32* %p, i32 %y) {
+ ; CHECK-LABEL: load32_and16_sexty:
+ ; CHECK:       // %bb.0:
+-; CHECK-NEXT:    ldrh w8, [x0]
+-; CHECK-NEXT:    and w9, w1, #0xffff
+-; CHECK-NEXT:    orr w0, w9, w8
++; CHECK-NEXT:    ldr w8, [x0]
++; CHECK-NEXT:    orr w8, w1, w8
++; CHECK-NEXT:    and x0, x8, #0xffff
+ ; CHECK-NEXT:    ret
+ ;
+ ; CHECKBE-LABEL: load32_and16_sexty:
+ ; CHECKBE:       // %bb.0:
+-; CHECKBE-NEXT:    ldrh w8, [x0, #2]
+-; CHECKBE-NEXT:    and w9, w1, #0xffff
+-; CHECKBE-NEXT:    orr w0, w9, w8
++; CHECKBE-NEXT:    ldr w8, [x0]
++; CHECKBE-NEXT:    orr w8, w1, w8
++; CHECKBE-NEXT:    and x0, x8, #0xffff
+ ; CHECKBE-NEXT:    ret
+   %x = load i32, i32* %p, align 4
+   %xz = zext i32 %x to i64
+diff --git a/llvm/test/CodeGen/X86/pr35763.ll b/llvm/test/CodeGen/X86/pr35763.ll
+index 53a0a0284d11..8b3e91dc577a 100644
+--- a/llvm/test/CodeGen/X86/pr35763.ll
++++ b/llvm/test/CodeGen/X86/pr35763.ll
+@@ -10,10 +10,10 @@
+ define dso_local void @PR35763() {
+ ; CHECK-LABEL: PR35763:
+ ; CHECK:       # %bb.0: # %entry
+-; CHECK-NEXT:    movzwl z(%rip), %eax
+-; CHECK-NEXT:    movzwl z+2(%rip), %ecx
+-; CHECK-NEXT:    orl %eax, %ecx
+-; CHECK-NEXT:    movq %rcx, tf_3_var_136(%rip)
++; CHECK-NEXT:    movl z(%rip), %eax
++; CHECK-NEXT:    orl z+2(%rip), %eax
++; CHECK-NEXT:    movzwl %ax, %eax
++; CHECK-NEXT:    movq %rax, tf_3_var_136(%rip)
+ ; CHECK-NEXT:    movl z+6(%rip), %eax
+ ; CHECK-NEXT:    movzbl z+10(%rip), %ecx
+ ; CHECK-NEXT:    shlq $32, %rcx
+-- 
+2.35.1.723.g4982287a31-goog
+

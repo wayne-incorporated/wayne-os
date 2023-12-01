@@ -1,0 +1,365 @@
+From 3332f72d0e50eac2fefd5c3ddecc139abab25a21 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 30 Mar 2022 09:23:35 -0300
+Subject: [PATCH 043/163] elf: Remove -fno-tree-loop-distribute-patterns usage
+ on dl-support
+
+Besides the option being gcc specific, this approach is still fragile
+and not future proof since we do not if this will be the only
+optimization option gcc will add that transform loops to memset
+(or any libcall).
+
+This patch add a new header dl-symbol-hacks.h that can be used to
+redirect the compiler generated libcalls to port specific string
+implementatation if required (defined by dl-ifunc-generic.h).
+
+Checked on x86_64-linux-gnu and aarch64-linux-gnu.
+---
+ elf/Makefile                                  |  5 ---
+ elf/dl-support.c                              |  1 +
+ elf/dl-symbol-hacks.h                         | 31 ++++++++++++++++
+ sysdeps/aarch64/multiarch/dl-ifunc-generic.h  | 24 ++++++++++++
+ sysdeps/generic/dl-ifunc-generic.h            | 37 +++++++++++++++++++
+ .../i386/i686/multiarch/dl-ifunc-generic.h    | 24 ++++++++++++
+ .../powerpc64/le/multiarch/dl-ifunc-generic.h | 24 ++++++++++++
+ sysdeps/s390/multiarch/dl-ifunc-generic.h     | 29 +++++++++++++++
+ .../sparcv9/multiarch/dl-ifunc-generic.h      | 24 ++++++++++++
+ .../sparc64/multiarch/dl-ifunc-generic.h      | 24 ++++++++++++
+ sysdeps/x86_64/multiarch/dl-ifunc-generic.h   | 24 ++++++++++++
+ 11 files changed, 242 insertions(+), 5 deletions(-)
+ create mode 100644 elf/dl-symbol-hacks.h
+ create mode 100644 sysdeps/aarch64/multiarch/dl-ifunc-generic.h
+ create mode 100644 sysdeps/generic/dl-ifunc-generic.h
+ create mode 100644 sysdeps/i386/i686/multiarch/dl-ifunc-generic.h
+ create mode 100644 sysdeps/powerpc/powerpc64/le/multiarch/dl-ifunc-generic.h
+ create mode 100644 sysdeps/s390/multiarch/dl-ifunc-generic.h
+ create mode 100644 sysdeps/sparc/sparc32/sparcv9/multiarch/dl-ifunc-generic.h
+ create mode 100644 sysdeps/sparc/sparc64/multiarch/dl-ifunc-generic.h
+ create mode 100644 sysdeps/x86_64/multiarch/dl-ifunc-generic.h
+
+diff --git a/elf/Makefile b/elf/Makefile
+index f0acfc58e2..853b658033 100644
+--- a/elf/Makefile
++++ b/elf/Makefile
+@@ -158,11 +158,6 @@ ifeq (yes,$(have-loop-to-function))
+ CFLAGS-rtld.c += -fno-tree-loop-distribute-patterns
+ endif
+ 
+-ifeq (yes,$(have-loop-to-function))
+-# Likewise, during static library startup, memset is not yet available.
+-CFLAGS-dl-support.c = -fno-tree-loop-distribute-patterns
+-endif
+-
+ # Compile rtld itself without stack protection.
+ # Also compile all routines in the static library that are elided from
+ # the shared libc because they are in libc.a in the same way.
+diff --git a/elf/dl-support.c b/elf/dl-support.c
+index 0d18c81b58..93855af186 100644
+--- a/elf/dl-support.c
++++ b/elf/dl-support.c
+@@ -44,6 +44,7 @@
+ #include <dl-vdso-setup.h>
+ #include <dl-auxv.h>
+ #include <array_length.h>
++#include <dl-symbol-hacks.h>
+ 
+ extern char *__progname;
+ char **_dl_argv = &__progname;	/* This is checked for some error messages.  */
+diff --git a/elf/dl-symbol-hacks.h b/elf/dl-symbol-hacks.h
+new file mode 100644
+index 0000000000..1b83b284dd
+--- /dev/null
++++ b/elf/dl-symbol-hacks.h
+@@ -0,0 +1,31 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_SYMBOL_HACKS_H
++#define _DL_SYMBOL_HACKS_H
++
++#include <dl-ifunc-generic.h>
++
++/* Some compiler optimizations may transform loops into memset/memmove
++   calls and without proper redirection it might call PLT throught
++   ifunc without relocations being processed.  */
++#ifdef HAVE_MEMSET_IFUNC_GENERIC
++asm ("memset = " HAVE_MEMSET_IFUNC_GENERIC);
++#endif
++
++#endif
+diff --git a/sysdeps/aarch64/multiarch/dl-ifunc-generic.h b/sysdeps/aarch64/multiarch/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..1278a06ff0
+--- /dev/null
++++ b/sysdeps/aarch64/multiarch/dl-ifunc-generic.h
+@@ -0,0 +1,24 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++#define HAVE_MEMSET_IFUNC_GENERIC "__memset_generic"
++
++#endif
+diff --git a/sysdeps/generic/dl-ifunc-generic.h b/sysdeps/generic/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..5e1d5c1fd8
+--- /dev/null
++++ b/sysdeps/generic/dl-ifunc-generic.h
+@@ -0,0 +1,37 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++/* The compiler might optimize loops or other constructs to library calls even
++   in freestanding mode.  Although it is safe in most scenarios, on program
++   loading and static startup, iFUNC resolution might require other dynamic
++   relocation that are not yet done.
++
++   Instead of adding per-file compiler flags to avoid the libcall generation,
++   this header defines generic symbols that will be routed instead of the
++   default symbols name.
++
++   Each port can then define the following macro to the expected generic
++   implementation if the symbol is provided as iFUNC:
++
++   HAVE_MEMSET_IFUNC_GENERIC - the generic memset call.
++ */
++
++#endif
+diff --git a/sysdeps/i386/i686/multiarch/dl-ifunc-generic.h b/sysdeps/i386/i686/multiarch/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..a538931c03
+--- /dev/null
++++ b/sysdeps/i386/i686/multiarch/dl-ifunc-generic.h
+@@ -0,0 +1,24 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++#define HAVE_MEMSET_IFUNC_GENERIC "__memset_ia32"
++
++#endif
+diff --git a/sysdeps/powerpc/powerpc64/le/multiarch/dl-ifunc-generic.h b/sysdeps/powerpc/powerpc64/le/multiarch/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..1bf516494d
+--- /dev/null
++++ b/sysdeps/powerpc/powerpc64/le/multiarch/dl-ifunc-generic.h
+@@ -0,0 +1,24 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++#define HAVE_MEMSET_IFUNC_GENERIC "__memset_power8"
++
++#endif
+diff --git a/sysdeps/s390/multiarch/dl-ifunc-generic.h b/sysdeps/s390/multiarch/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..b0e5ed23aa
+--- /dev/null
++++ b/sysdeps/s390/multiarch/dl-ifunc-generic.h
+@@ -0,0 +1,29 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++#include <ifunc-memset.h>
++
++#define IFUNC_SYMBOL_STR1(s)	#s
++#define IFUNC_SYMBOL_STR(s)	IFUNC_SYMBOL_STR1(s)
++
++#define HAVE_MEMSET_IFUNC_GENERIC IFUNC_SYMBOL_STR(MEMSET_DEFAULT)
++
++#endif
+diff --git a/sysdeps/sparc/sparc32/sparcv9/multiarch/dl-ifunc-generic.h b/sysdeps/sparc/sparc32/sparcv9/multiarch/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..417b24d2c1
+--- /dev/null
++++ b/sysdeps/sparc/sparc32/sparcv9/multiarch/dl-ifunc-generic.h
+@@ -0,0 +1,24 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++#define HAVE_MEMSET_IFUNC_GENERIC "__memset_ultra1"
++
++#endif
+diff --git a/sysdeps/sparc/sparc64/multiarch/dl-ifunc-generic.h b/sysdeps/sparc/sparc64/multiarch/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..417b24d2c1
+--- /dev/null
++++ b/sysdeps/sparc/sparc64/multiarch/dl-ifunc-generic.h
+@@ -0,0 +1,24 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++#define HAVE_MEMSET_IFUNC_GENERIC "__memset_ultra1"
++
++#endif
+diff --git a/sysdeps/x86_64/multiarch/dl-ifunc-generic.h b/sysdeps/x86_64/multiarch/dl-ifunc-generic.h
+new file mode 100644
+index 0000000000..c9482928a2
+--- /dev/null
++++ b/sysdeps/x86_64/multiarch/dl-ifunc-generic.h
+@@ -0,0 +1,24 @@
++/* Symbol rediretion for loader/static initialization code.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _DL_IFUNC_GENERIC_H
++#define _DL_IFUNC_GENERIC_H
++
++#define HAVE_MEMSET_IFUNC_GENERIC "__memset_sse2_unaligned"
++
++#endif
+-- 
+2.37.2
+

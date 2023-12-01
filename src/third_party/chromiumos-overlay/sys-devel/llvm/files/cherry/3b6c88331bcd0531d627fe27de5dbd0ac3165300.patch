@@ -1,0 +1,62 @@
+From 3b6c88331bcd0531d627fe27de5dbd0ac3165300 Mon Sep 17 00:00:00 2001
+From: Tobias Hieta <tobias@hieta.se>
+Date: Tue, 21 Feb 2023 16:47:54 +0100
+Subject: [PATCH] Revert "[Clang] Implement fix for DR2628"
+
+This reverts commit 368b6832de33b366d4eb155f940e7476daace6a8.
+
+See https://github.com/llvm/llvm-project/issues/60777 for details
+---
+ clang/lib/Sema/SemaTemplate.cpp |  2 --
+ clang/test/CXX/drs/dr26xx.cpp   | 16 +++++++++++-----
+ 2 files changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/clang/lib/Sema/SemaTemplate.cpp b/clang/lib/Sema/SemaTemplate.cpp
+index 8df8eadad3fe..c3338e4eaed2 100644
+--- a/clang/lib/Sema/SemaTemplate.cpp
++++ b/clang/lib/Sema/SemaTemplate.cpp
+@@ -2540,8 +2540,6 @@ private:
+                                       TInfo->getType(), TInfo, LocEnd, Ctor);
+     Guide->setImplicit();
+     Guide->setParams(Params);
+-    if (Ctor && Ctor->getTrailingRequiresClause())
+-      Guide->setTrailingRequiresClause(Ctor->getTrailingRequiresClause());
+ 
+     for (auto *Param : Params)
+       Param->setDeclContext(Guide);
+diff --git a/clang/test/CXX/drs/dr26xx.cpp b/clang/test/CXX/drs/dr26xx.cpp
+index 36aea3982474..e69a151b9d02 100644
+--- a/clang/test/CXX/drs/dr26xx.cpp
++++ b/clang/test/CXX/drs/dr26xx.cpp
+@@ -14,17 +14,23 @@ using enum E; // expected-error {{unknown type name E}}
+ }
+ }
+ 
+-namespace dr2628 { // dr2628: yes open
++namespace dr2628 { // dr2628: no, this was reverted for the 16.x release
++                   // due to regressions, see the issue for more details:
++                   // https://github.com/llvm/llvm-project/issues/60777
+ 
+ template <bool A = false, bool B = false>
+ struct foo {
+-  constexpr foo() requires (!A && !B) = delete; // #DR2628_CTOR
+-  constexpr foo() requires (A || B) = delete;
++  // The expected notes below should be removed when dr2628 is fully implemented again
++  constexpr foo() requires (!A && !B) = delete; // expected-note {{candidate function [with A = false, B = false]}} #DR2628_CTOR
++  constexpr foo() requires (A || B) = delete; // expected-note {{candidate function [with A = false, B = false]}}
+ };
+ 
+ void f() {
+-  foo fooable; // expected-error {{call to deleted}}
+-  // expected-note@#DR2628_CTOR {{marked deleted here}}
++  // The FIXME's below should be the expected errors when dr2628 is
++  // fully implemented again.
++  // FIXME-expected-error {{call to deleted}}
++  foo fooable; // expected-error {{ambiguous deduction for template arguments of 'foo'}}
++  // FIXME-expected-note@#DR2628_CTOR {{marked deleted here}}
+ }
+ 
+ }
+-- 
+2.40.0.348.gf938b09366-goog
+

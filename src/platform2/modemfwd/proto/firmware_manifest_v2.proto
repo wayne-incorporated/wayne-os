@@ -1,0 +1,67 @@
+// Copyright 2019 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+
+package modemfwd;
+
+option go_package = "chromiumos/modemfwd";
+
+enum Compression {
+  NONE = 0;
+  XZ = 1;
+}
+
+message AssociatedFirmware {
+  string tag = 1;
+  string filename = 2;
+  string version = 3;
+  Compression compression = 4;
+}
+
+message MainFirmwareV2 {
+  string filename = 1;
+  string version = 2;
+  Compression compression = 3;
+  repeated AssociatedFirmware assoc_firmware = 4;
+}
+
+message OemFirmwareV2 {
+  string filename = 1;
+  string version = 2;
+  repeated string main_firmware_version = 3;
+  Compression compression = 4;
+}
+
+message CarrierFirmwareV2 {
+  string filename = 1;
+  repeated string carrier_id = 2;
+  string version = 3;
+  string main_firmware_version = 4;
+  Compression compression = 5;
+}
+
+message Dlc {
+  // The ID of the DLC containing the firmware files for this variant.
+  string dlc_id = 1;
+  // If the flag is true, the DLC will be installed, but modemfwd will
+  // automatically fallback to the rootfs without looking for the FW in the DLC.
+  // This allows boards that share the same FW to have a small number of FWs in
+  // the rootfs, and skip the maintenance needed to keep all DLCs updated.
+  bool is_dlc_empty = 2;
+}
+
+message Device {
+  string device_id = 1;
+  string variant = 2;
+  string default_main_firmware_version = 3;
+  repeated MainFirmwareV2 main_firmware = 4;
+  repeated CarrierFirmwareV2 carrier_firmware = 5;
+  repeated OemFirmwareV2 oem_firmware = 6;
+  Dlc dlc = 7;
+}
+
+message FirmwareManifestV2 {
+  repeated Device device = 1;
+}

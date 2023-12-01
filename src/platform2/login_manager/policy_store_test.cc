@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
 #include <base/logging.h>
+#include <brillo/files/file_util.h>
 #include <gtest/gtest.h>
 
 namespace em = enterprise_management;
@@ -27,7 +28,7 @@ class PolicyStoreTest : public ::testing::Test {
     // Create a temporary filename that's guaranteed to not exist, but is
     // inside our scoped directory so it'll get deleted later.
     ASSERT_TRUE(base::CreateTemporaryFileInDir(tmpdir_.GetPath(), &tmpfile_));
-    ASSERT_TRUE(base::DeleteFile(tmpfile_));
+    ASSERT_TRUE(brillo::DeleteFile(tmpfile_));
   }
 
   void TearDown() override {}
@@ -95,20 +96,6 @@ TEST_F(PolicyStoreTest, LoadStoreFromDisk) {
   PolicyStore store2(tmpfile_);
   ASSERT_TRUE(store2.EnsureLoadedOrCreated());
   CheckExpectedPolicy(&store2, policy);
-}
-
-TEST_F(PolicyStoreTest, DeleteRemovesFileAndData) {
-  PolicyStore store(tmpfile_);
-  enterprise_management::PolicyFetchResponse policy;
-  policy.set_error_message("policy");
-  store.Set(policy);
-  EXPECT_TRUE(store.Persist());
-  CheckExpectedPolicy(&store, policy);
-
-  EXPECT_TRUE(base::PathExists(tmpfile_));
-  EXPECT_TRUE(store.Delete());
-  EXPECT_FALSE(base::PathExists(tmpfile_));
-  CheckExpectedPolicy(&store, em::PolicyFetchResponse());
 }
 
 }  // namespace login_manager

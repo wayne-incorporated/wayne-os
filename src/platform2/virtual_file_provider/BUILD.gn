@@ -1,0 +1,110 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_configs",
+    ":install_dbus_config",
+    ":install_powerd_prefs",
+    ":install_virtual-file-provider-jailed",
+    ":libvirtual-file-provider",
+    ":virtual-file-provider",
+  ]
+  if (use.test) {
+    deps += [ ":virtual-file-provider_testrunner" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  # NOSORT
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+    "protobuf-lite",
+  ]
+}
+
+pkg_config("virtual-file-provider_config") {
+  pkg_deps = [
+    "fuse",
+    "libcap",
+  ]
+}
+
+executable("virtual-file-provider") {
+  sources = [ "virtual_file_provider.cc" ]
+  configs += [
+    ":target_defaults",
+    ":virtual-file-provider_config",
+  ]
+  install_path = "bin"
+  deps = [ ":libvirtual-file-provider" ]
+}
+
+install_config("install_virtual-file-provider-jailed") {
+  if (use.arcvm) {
+    sources = [ "virtual-file-provider-jailed-arcvm.sh" ]
+  } else {
+    sources = [ "virtual-file-provider-jailed.sh" ]
+  }
+  outputs = [ "virtual-file-provider-jailed" ]
+  install_path = "bin"
+  type = "executable"
+  deps = [ ":libvirtual-file-provider" ]
+}
+
+static_library("libvirtual-file-provider") {
+  sources = [
+    "fuse_main.cc",
+    "operation_throttle.cc",
+    "service.cc",
+    "size_map.cc",
+    "util.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  defines = [ "FUSE_USE_VERSION=26" ]
+}
+
+install_config("install_dbus_config") {
+  sources = [ "org.chromium.VirtualFileProvider.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_configs") {
+  sources = [
+    "init/virtual-file-provider-cgroup.conf",
+    "init/virtual-file-provider.conf",
+  ]
+  install_path = "/etc/init"
+}
+
+install_config("install_powerd_prefs") {
+  sources = [ "powerd_prefs/suspend_freezer_deps_virtual-file-provider" ]
+  install_path = "/usr/share/power_manager"
+}
+
+if (use.test) {
+  executable("virtual-file-provider_testrunner") {
+    sources = [
+      "operation_throttle_test.cc",
+      "service_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libvirtual-file-provider",
+      "//common-mk/testrunner",
+    ]
+    run_test = true
+  }
+}

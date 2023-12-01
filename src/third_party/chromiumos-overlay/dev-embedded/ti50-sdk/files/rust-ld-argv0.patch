@@ -1,0 +1,63 @@
+From 7f8a36c0a9d997d625ba887e3ae492bc2fa2888b Mon Sep 17 00:00:00 2001
+From: George Burgess IV <gbiv@google.com>
+Date: Sun, 1 Aug 2021 07:12:17 +0000
+Subject: [PATCH 7/8] ld-argv0.patch
+
+---
+ library/std/src/sys/unix/os.rs | 35 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/library/std/src/sys/unix/os.rs b/library/std/src/sys/unix/os.rs
+index 41ca97623..ffe3b99cd 100644
+--- a/library/std/src/sys/unix/os.rs
++++ b/library/std/src/sys/unix/os.rs
+@@ -352,12 +352,45 @@
+ 
+ #[cfg(any(target_os = "linux", target_os = "android", target_os = "emscripten"))]
+ pub fn current_exe() -> io::Result<PathBuf> {
++    let is_ld_so = |p: &crate::path::Path| -> Option<bool> {
++        let parent_dir_name = p.parent()?.file_name()?;
++        if parent_dir_name != OsStr::new("lib") {
++            return Some(false);
++        }
++        // We assume that the `ld.so` path is always valid unicode, since there's... no reason for
++        // it not to be. :)
++        let file_name = p.file_name()?.to_str()?;
++        Some(
++            file_name.starts_with("ld-linux-")
++                && (file_name.ends_with(".so") || file_name.contains(".so.")),
++        )
++    };
++
+     match crate::fs::read_link("/proc/self/exe") {
+         Err(ref e) if e.kind() == io::ErrorKind::NotFound => Err(io::const_io_error!(
+             io::ErrorKind::Uncategorized,
+             "no /proc/self/exe available. Is /proc mounted?",
+         )),
+-        other => other,
++        Err(x) => Err(x),
++        Ok(p) => {
++            // Chrome OS-specific: in some configurations, Rust binaries are invoked through
++            // `ld.so`. In these cases, we want to present the user with the path to the Rust
++            // binary that was invoked.
++            //
++            // Because the ld.so wrappers _generally_ don't want to invoke things with absolute
++            // paths, this is _generally_ a path relative to dirname(ld.so).
++            if is_ld_so(&p) == Some(true) {
++                if let Some(relative_to_ld) = crate::env::var_os("LD_ARGV0_REL") {
++                    let relative_to_ld = PathBuf::from(relative_to_ld);
++                    if relative_to_ld.is_absolute() {
++                        return Ok(relative_to_ld);
++                    }
++                    // safety: is_ld_so checks the parent directory of `p`.
++                    return Ok(p.parent().unwrap().join(relative_to_ld));
++                }
++            }
++            Ok(p)
++        }
+     }
+ }
+ 
+-- 
+2.32.0.554.ge1b32706d8-goog
+

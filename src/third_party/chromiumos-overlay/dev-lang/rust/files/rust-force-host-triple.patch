@@ -1,0 +1,20 @@
+bootstrap will detect the host triple as `HOST`, which is set by the `cargo`
+that's invoking `bootstrap`. `cargo` autodetects `HOST` from the `rustc` it has
+available (e.g., rust-bootstrap's). The `rustc` from `rust-bootstrap` has
+`x86_64-unknown-linux-gnu` hardcoded as its host.
+
+To break this cycle, hardcode x86_64-pc-linux-gnu here.
+
+diff --git a/src/bootstrap/build.rs b/src/bootstrap/build.rs
+index cd1f41802..33cedd624 100644
+--- a/src/bootstrap/build.rs
++++ b/src/bootstrap/build.rs
+@@ -1,7 +1,4 @@
+-use std::env;
+-
+ fn main() {
+-    let host = env::var("HOST").unwrap();
+     println!("cargo:rerun-if-changed=build.rs");
+-    println!("cargo:rustc-env=BUILD_TRIPLE={}", host);
++    println!("cargo:rustc-env=BUILD_TRIPLE=x86_64-pc-linux-gnu");
+ }

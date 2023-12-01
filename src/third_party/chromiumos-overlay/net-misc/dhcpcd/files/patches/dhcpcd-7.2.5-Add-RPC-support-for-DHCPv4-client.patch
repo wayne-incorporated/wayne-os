@@ -1,0 +1,431 @@
+From a38901d5190608778ea9fb426e900ebdbf21cb67 Mon Sep 17 00:00:00 2001
+From: Peter Qiu <zqiu@chromium.org>
+Date: Wed, 9 Jun 2021 19:45:02 +0000
+Subject: [PATCH 10/19] Add RPC support for DHCPv4 client
+
+Define a RPC interface for the daemon to interact with other
+applications (command execution and status update), and integrate
+it with the DHCPv4 client.  Default to stub implementation for now
+until new RPC mechanism is implemented and enabled.
+
+Also add a new compiler flag "PASSIVE_MODE" which will be enabled
+when a RPC mechanism is enabled (e.g. DBus).  This compiler flag
+will prevent the daemon from modifying system configurations
+(e.g. routing table, interface address).  The idea is that when
+RPC is enabled, the daemon will provide configurations through
+RPC, and the remote application will be the one responsible for
+modifying system configurations.
+
+Integration with DHCPv6 client will be added in the future.
+
+Author: Paul Stewart <pstew@chromium.org>
+Reviewed-on: https://chromium-review.googlesource.com/208835
+Review URL: http://codereview.chromium.org/3061018
+---
+ src/Makefile        |  2 +-
+ src/dhcp.c          | 20 ++++++++++---
+ src/dhcpcd.c        |  7 +++++
+ src/if-linux.c      | 11 ++++++++
+ src/ipv4.c          | 12 ++++++--
+ src/ipv4.h          |  2 +-
+ src/rpc-interface.h | 51 +++++++++++++++++++++++++++++++++
+ src/rpc-stub.c      | 69 +++++++++++++++++++++++++++++++++++++++++++++
+ 8 files changed, 166 insertions(+), 8 deletions(-)
+ create mode 100644 src/rpc-interface.h
+ create mode 100644 src/rpc-stub.c
+
+diff --git a/src/Makefile b/src/Makefile
+index fe78631d..c916bcc1 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -3,7 +3,7 @@
+ PROG=		dhcpcd
+ SRCS=		common.c control.c dhcpcd.c duid.c eloop.c logerr.c
+ SRCS+=		if.c if-options.c sa.c route.c
+-SRCS+=		dhcp-common.c script.c
++SRCS+=		dhcp-common.c script.c rpc-stub.c
+ 
+ CFLAGS?=	-O2
+ SUBDIRS+=	${MKDIRS}
+diff --git a/src/dhcp.c b/src/dhcp.c
+index 9cb64fbd..d0bb26e5 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -65,6 +65,7 @@
+ #include "ipv4.h"
+ #include "ipv4ll.h"
+ #include "logerr.h"
++#include "rpc-interface.h"
+ #include "sa.h"
+ #include "script.h"
+ 
+@@ -1965,6 +1966,7 @@ dhcp_discover(void *arg)
+ 	struct dhcp_state *state = D_STATE(ifp);
+ 	struct if_options *ifo = ifp->options;
+ 
++	rpc_signal_status("Discover");
+ 	state->state = DHS_DISCOVER;
+ 	state->nak_receive_count = 0;
+ 	state->failed_address_offer_count = 0;
+@@ -1993,6 +1995,7 @@ dhcp_request(void *arg)
+ 	struct interface *ifp = arg;
+ 	struct dhcp_state *state = D_STATE(ifp);
+ 
++	rpc_signal_status("Request");
+ 	state->state = DHS_REQUEST;
+ 	state->nak_receive_count = 0;
+ 	send_request(ifp);
+@@ -2094,7 +2097,7 @@ dhcp_startrenew(void *arg)
+ void
+ dhcp_renew(struct interface *ifp)
+ {
+-
++	rpc_signal_status("Renew");
+ 	dhcp_startrenew(ifp);
+ }
+ 
+@@ -2105,6 +2108,7 @@ dhcp_rebind(void *arg)
+ 	struct dhcp_state *state = D_STATE(ifp);
+ 	struct dhcp_lease *lease = &state->lease;
+ 
++	rpc_signal_status("Rebind");
+ 	logwarnx("%s: failed to renew DHCP, rebinding", ifp->name);
+ 	logdebugx("%s: expire in %"PRIu32" seconds",
+ 	    ifp->name, lease->leasetime - lease->rebindtime);
+@@ -2164,7 +2168,7 @@ dhcp_probe_gw_response(struct arp_state *astate, const struct arp_msg *amsg)
+ 	    amsg->sip.s_addr == astate->addr.s_addr) {
+ 		if (astate->dest_hwlen) {
+ 			/* Response to unicast ARP. */
+-			/* TODO(zqiu): notify listener. */
++			rpc_notify_unicast_arp(astate->iface);
+ 		} else {
+ 			/* Response to arpgw request. */
+ 			save_gateway_addr(astate->iface, amsg->sha);
+@@ -2764,6 +2768,7 @@ dhcp_arp_address(struct interface *ifp)
+ 		    ifp->name, inet_ntoa(l.addr), inet_ntocidr(l.mask));
+ 		/* We need to handle DAD. */
+ 		arp_probe(astate);
++		rpc_signal_status("ArpSelf");
+ 		return 0;
+ 	}
+ #endif
+@@ -2823,6 +2828,7 @@ dhcp_inform(struct interface *ifp)
+ 	state = D_STATE(ifp);
+ 	ifo = ifp->options;
+ 
++	rpc_signal_status("Inform");
+ 	state->state = DHS_INFORM;
+ 	free(state->offer);
+ 	state->offer = NULL;
+@@ -2982,6 +2988,7 @@ dhcp_reboot(struct interface *ifp)
+ 
+ 	if (state == NULL || state->state == DHS_NONE)
+ 		return;
++	rpc_signal_status("Reboot");
+ 	ifo = ifp->options;
+ 	state->state = DHS_REBOOT;
+ 	state->interval = 0;
+@@ -3274,7 +3281,6 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 	struct if_options *ifo = ifp->options;
+ 	struct dhcp_lease *lease = &state->lease;
+ 	uint8_t type, tmp;
+-	struct in_addr addr;
+ 	unsigned int i;
+ 	char *msg;
+ 	bool bootp_copied;
+@@ -3445,7 +3451,8 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 		}
+ 		if (state->state == DHS_INFORM) /* INFORM should not be NAKed */
+ 			return;
+-                LOGDHCP(logwarnx, "NAK (deferred)");
++		LOGDHCP(logwarnx, "NAK (deferred)");
++		rpc_signal_status("NakDefer");
+ 		if (state->nak_receive_count == 0)
+ 			eloop_timeout_add_sec(ifp->ctx->eloop, DHCP_BASE,
+ 					      handle_nak, ifp);
+@@ -3517,6 +3524,7 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 	    &&
+ 	    (bootp->yiaddr == INADDR_ANY || bootp->yiaddr == INADDR_BROADCAST))
+ 	{
++		rpc_signal_status("IgnoreInvalidOffer");
+ 		LOGDHCP(logwarnx, "reject invalid address");
+ 		return;
+ 	}
+@@ -3540,6 +3548,7 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 		if (bootp->yiaddr == state->failed.s_addr &&
+ 		    state->failed_address_offer_count == 0) {
+ 			LOGDHCP(logwarnx, "reject previously declined address");
++			rpc_signal_status("IgnoreFailedOffer");
+ 			state->failed_address_offer_count++;
+ 			return;
+ 		}
+@@ -3605,12 +3614,14 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
+ 	if (type) {
+ 		if (type == DHCP_OFFER) {
+ 			LOGDHCP(logwarnx, "ignoring offer of");
++			rpc_signal_status("IgnoreAdditionalOffer");
+ 			return;
+ 		}
+ 
+ 		/* We should only be dealing with acks */
+ 		if (type != DHCP_ACK) {
+ 			LOGDHCP(logerr, "not ACK or OFFER");
++			rpc_signal_status("IgnoreNonOffer");
+ 			return;
+ 		}
+ 
+@@ -3658,6 +3669,7 @@ rapidcommit:
+ 
+ #ifdef ARP
+ 	if ((ifo->options & DHCPCD_ARPGW) && (dhcp_probe_gw(ifp))) {
++		rpc_signal_status("ArpGateway");
+ 		return;
+ 	}
+ 
+diff --git a/src/dhcpcd.c b/src/dhcpcd.c
+index 7e778338..bba72a3d 100644
+--- a/src/dhcpcd.c
++++ b/src/dhcpcd.c
+@@ -65,6 +65,7 @@ const char dhcpcd_copyright[] = "Copyright (c) 2006-2019 Roy Marples";
+ #include "ipv6.h"
+ #include "ipv6nd.h"
+ #include "logerr.h"
++#include "rpc-interface.h"
+ #include "script.h"
+ 
+ #ifdef HAVE_UTIL_H
+@@ -1978,6 +1979,12 @@ printpidfile:
+ 	    (DHCPCD_MASTER | DHCPCD_DEV))
+ 		dev_start(&ctx);
+ 
++	if (rpc_init(&ctx) == -1) {
++		/* NB: rpc_init generates a syslog msg */
++		goto exit_failure;
++	}
++	rpc_signal_status("Init");
++
+ 	ctx.ifaces = if_discover(&ctx, &ifaddrs, ctx.ifc, ctx.ifv);
+ 	if (ctx.ifaces == NULL) {
+ 		logerr("%s: if_discover", __func__);
+diff --git a/src/if-linux.c b/src/if-linux.c
+index 3b7fa25c..f4437859 100644
+--- a/src/if-linux.c
++++ b/src/if-linux.c
+@@ -1198,6 +1198,10 @@ struct nlmr
+ int
+ if_route(unsigned char cmd, const struct rt *rt)
+ {
++/* Do not modify route table when running in passive mode. */
++#ifdef PASSIVE_MODE
++	return 0;
++#endif
+ 	struct nlmr nlm;
+ 	bool gateway_unspec;
+ 
+@@ -1457,6 +1461,10 @@ bpf_attach(int s, void *filter, unsigned int filter_len)
+ int
+ if_address(unsigned char cmd, const struct ipv4_addr *addr)
+ {
++/* Do not modify addresses when running in passive mode. */
++#ifdef PASSIVE_MODE
++	return 0;
++#endif
+ 	struct nlma nlm;
+ 	int retval = 0;
+ #if defined(IFA_F_NOPREFIXROUTE)
+@@ -1511,6 +1519,9 @@ __unused const struct in_addr *addr, __unused const char *alias)
+ int
+ if_address6(unsigned char cmd, const struct ipv6_addr *ia)
+ {
++#ifdef PASSIVE_MODE
++	return 0;
++#endif
+ 	struct nlma nlm;
+ 	struct ifa_cacheinfo cinfo;
+ /* IFA_FLAGS is not a define, but is was added at the same time
+diff --git a/src/ipv4.c b/src/ipv4.c
+index 7a39c2c5..fd380750 100644
+--- a/src/ipv4.c
++++ b/src/ipv4.c
+@@ -55,6 +55,9 @@
+ #include "route.h"
+ #include "script.h"
+ #include "sa.h"
++#ifdef PASSIVE_MODE
++#include "rpc-interface.h"
++#endif
+ 
+ #define IPV4_LOOPBACK_ROUTE
+ #if defined(__linux__) || defined(__sun) || (defined(BSD) && defined(RTF_LOCAL))
+@@ -690,9 +693,8 @@ ipv4_daddaddr(struct interface *ifp, const struct dhcp_lease *lease)
+ }
+ 
+ void
+-ipv4_applyaddr(void *arg)
++ipv4_applyaddr(struct interface *ifp)
+ {
+-	struct interface *ifp = arg;
+ 	struct dhcp_state *state = D_STATE(ifp);
+ 	struct dhcp_lease *lease;
+ 	struct if_options *ifo = ifp->options;
+@@ -702,6 +704,12 @@ ipv4_applyaddr(void *arg)
+ 	if (state == NULL)
+ 		return;
+ 
++#ifdef PASSIVE_MODE
++	/* Note that in passive mode we still allow to update internal state
++	 * below - this is in order to have valid information (important in case
++	 * we need to e.g. renew) and to handle properly ARP. */
++	rpc_update_ipv4(ifp);
++#endif
+ 	lease = &state->lease;
+ 	if (state->new == NULL) {
+ 		if ((ifo->options & (DHCPCD_EXITING | DHCPCD_PERSISTENT)) !=
+diff --git a/src/ipv4.h b/src/ipv4.h
+index 506d83b5..5d15e01a 100644
+--- a/src/ipv4.h
++++ b/src/ipv4.h
+@@ -123,7 +123,7 @@ bool inet_getroutes(struct dhcpcd_ctx *, struct rt_head *);
+ int ipv4_deladdr(struct ipv4_addr *, int);
+ struct ipv4_addr *ipv4_addaddr(struct interface *,
+     const struct in_addr *, const struct in_addr *, const struct in_addr *);
+-void ipv4_applyaddr(void *);
++void ipv4_applyaddr(struct interface *);
+ 
+ struct ipv4_addr *ipv4_iffindaddr(struct interface *,
+     const struct in_addr *, const struct in_addr *);
+diff --git a/src/rpc-interface.h b/src/rpc-interface.h
+new file mode 100644
+index 00000000..6e1e7e0c
+--- /dev/null
++++ b/src/rpc-interface.h
+@@ -0,0 +1,51 @@
++/*
++ * dhcpcd - DHCP client daemon
++ * Copyright (c) 2006-2015 Roy Marples <roy@marples.name>
++ * All rights reserved
++
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#ifndef RPC_INTERFACE_H
++#define RPC_INTERFACE_H
++
++#include "dhcpcd.h"
++
++/* Initialize RPC interface. Return 0 on success. */
++int rpc_init(struct dhcpcd_ctx *ctx);
++
++/* Tear down RPC interface. */
++void rpc_close(void);
++
++/* Emit signal status to RPC interface. */
++void rpc_signal_status(const char *);
++
++/* Update IPv4 configuration. Return 0 on success. */
++int rpc_update_ipv4(struct interface *ifp);
++
++/* Update IPv6 configuration. Return 0 on success. */
++int rpc_update_ipv6(struct interface *ifp);
++
++/* Emit notification for successful unicast ARP. Return 0 on success. */
++int rpc_notify_unicast_arp(struct interface *ifp);
++
++#endif
+diff --git a/src/rpc-stub.c b/src/rpc-stub.c
+new file mode 100644
+index 00000000..aa650974
+--- /dev/null
++++ b/src/rpc-stub.c
+@@ -0,0 +1,69 @@
++/*
++ * dhcpcd - DHCP client daemon
++ * Copyright (c) 2006-2015 Roy Marples <roy@marples.name>
++ * All rights reserved
++
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#include "rpc-interface.h"
++
++int
++rpc_init(struct dhcpcd_ctx *ctx)
++{
++	/* Stub implementation. */
++	return 0;
++}
++
++void
++rpc_close(void)
++{
++	/* Stub implementation. */
++}
++
++void
++rpc_signal_status(const char *reason)
++{
++	/* Stub implementation. */
++}
++
++int
++rpc_update_ipv4(struct interface *ifp)
++{
++	/* Stub implementation. */
++	return 0;
++}
++
++int
++rpc_update_ipv6(struct interface *ifp)
++{
++	/* Stub implementation. */
++	return 0;
++}
++
++int
++rpc_notify_unicast_arp(struct interface *ifp)
++{
++	/* Stub implementation. */
++	return 0;
++}
++
+-- 
+2.33.0.800.g4c38ced690-goog
+

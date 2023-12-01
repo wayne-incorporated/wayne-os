@@ -1,0 +1,390 @@
+From 191e152209741ef5d9f47e0b4a086261239782bb Mon Sep 17 00:00:00 2001
+From: Daniel Kiss <daniel.kiss@arm.com>
+Date: Thu, 6 Jan 2022 19:17:45 +0100
+Subject: [PATCH] Revert "[AArch64] Emit .cfi_negate_ra_state for PAC-auth
+ instructions."
+
+This reverts commit f903c8505515f15e956febbd8cdfa0037fbaf689.
+---
+ .../Target/AArch64/AArch64FrameLowering.cpp   |  9 +-
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp  |  8 +-
+ .../machine-outliner-retaddr-sign-cfi.ll      |  3 +-
+ .../machine-outliner-retaddr-sign-regsave.mir |  1 -
+ .../machine-outliner-retaddr-sign-sp-mod.mir  |  9 --
+ .../machine-outliner-retaddr-sign-thunk.ll    |  5 --
+ .../CodeGen/AArch64/sign-return-address.ll    | 84 +++++++------------
+ 7 files changed, 32 insertions(+), 87 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp b/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp
+index b630f4f0df5f..f5bb78266748 100644
+--- a/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp
+@@ -1653,8 +1653,7 @@ static void InsertReturnAddressAuth(MachineFunction &MF,
+   // The AUTIASP instruction assembles to a hint instruction before v8.3a so
+   // this instruction can safely used for any v8a architecture.
+   // From v8.3a onwards there are optimised authenticate LR and return
+-  // instructions, namely RETA{A,B}, that can be used instead. In this case the
+-  // DW_CFA_AARCH64_negate_ra_state can't be emitted.
++  // instructions, namely RETA{A,B}, that can be used instead.
+   if (Subtarget.hasPAuth() && MBBI != MBB.end() &&
+       MBBI->getOpcode() == AArch64::RET_ReallyLR) {
+     BuildMI(MBB, MBBI, DL,
+@@ -1666,12 +1665,6 @@ static void InsertReturnAddressAuth(MachineFunction &MF,
+         MBB, MBBI, DL,
+         TII->get(MFI.shouldSignWithBKey() ? AArch64::AUTIBSP : AArch64::AUTIASP))
+         .setMIFlag(MachineInstr::FrameDestroy);
+-
+-    unsigned CFIIndex =
+-        MF.addFrameInst(MCCFIInstruction::createNegateRAState(nullptr));
+-    BuildMI(MBB, MBBI, DL, TII->get(TargetOpcode::CFI_INSTRUCTION))
+-        .addCFIIndex(CFIIndex)
+-        .setMIFlags(MachineInstr::FrameDestroy);
+   }
+ }
+ 
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index f8f8ee3f1e6c..d13b898a3189 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -7348,8 +7348,7 @@ static void signOutlinedFunction(MachineFunction &MF, MachineBasicBlock &MBB,
+         .setMIFlags(MachineInstr::FrameSetup);
+ 
+     // If v8.3a features are available we can replace a RET instruction by
+-    // RETAA or RETAB and omit the AUT instructions. In this case the
+-    // DW_CFA_AARCH64_negate_ra_state can't be emitted.
++    // RETAA or RETAB and omit the AUT instructions
+     if (Subtarget.hasPAuth() && MBBAUT != MBB.end() &&
+         MBBAUT->getOpcode() == AArch64::RET) {
+       BuildMI(MBB, MBBAUT, DL,
+@@ -7362,11 +7361,6 @@ static void signOutlinedFunction(MachineFunction &MF, MachineBasicBlock &MBB,
+               TII->get(ShouldSignReturnAddrWithAKey ? AArch64::AUTIASP
+                                                     : AArch64::AUTIBSP))
+           .setMIFlag(MachineInstr::FrameDestroy);
+-      unsigned CFIIndexAuth =
+-          MF.addFrameInst(MCCFIInstruction::createNegateRAState(nullptr));
+-      BuildMI(MBB, MBBAUT, DL, TII->get(TargetOpcode::CFI_INSTRUCTION))
+-          .addCFIIndex(CFIIndexAuth)
+-          .setMIFlags(MachineInstr::FrameDestroy);
+     }
+   }
+ }
+diff --git a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-cfi.ll b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-cfi.ll
+index 74d2795db14c..3b61588f41ed 100644
+--- a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-cfi.ll
++++ b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-cfi.ll
+@@ -28,8 +28,7 @@ define void @a() "sign-return-address"="all" "sign-return-address-key"="b_key" {
+ ; CHECK-NOT:          bl OUTLINED_FUNCTION_{{[0-9]+}}
+ ; V8A:                hint #31
+ ; V83A:               autibsp
+-; V8A-NEXT, V83A-NEXT: .cfi_negate_ra_state
+-; V8A-NEXT, V83A-NEXT: ret
++; CHECK-NEXT:         ret
+   ret void
+ }
+ 
+diff --git a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-regsave.mir b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-regsave.mir
+index 3760712f1d3d..9e2ea8a6d104 100644
+--- a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-regsave.mir
++++ b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-regsave.mir
+@@ -31,7 +31,6 @@
+ # CHECK:            BL @[[OUTLINED_FUNCTION]]
+ # CHECK:        bb.5:
+ # CHECK:            frame-destroy AUTIBSP
+-# CHECK-NEXT:       frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NEXT:       RET
+ name:            foo
+ tracksRegLiveness: true
+diff --git a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-sp-mod.mir b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-sp-mod.mir
+index 896740d51c03..d20053b40991 100644
+--- a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-sp-mod.mir
++++ b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-sp-mod.mir
+@@ -81,7 +81,6 @@ body:             |
+     STRXui killed renamable $x9, killed renamable $x8, target-flags(aarch64-pageoff, aarch64-nc) @v :: (volatile store (s64) into @v)
+     $sp = frame-destroy ADDXri $sp, 16, 0
+     frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-    frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+     RET undef $lr
+ 
+ # CHECK-LABEL:    name:            legal0
+@@ -92,7 +91,6 @@ body:             |
+ # CHECK-NEXT:           frame-setup CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK:                BL @[[OUTLINED_FUNC:OUTLINED_FUNCTION_[0-9]+]]
+ # CHECK:                frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-# CHECK-NEXT:           frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NEXT:           RET undef $lr
+ 
+ ...
+@@ -116,7 +114,6 @@ body:             |
+     STRXui killed renamable $x9, killed renamable $x8, target-flags(aarch64-pageoff, aarch64-nc) @v :: (volatile store (s64) into @v)
+     $sp = frame-destroy ADDXri $sp, 16, 0
+     frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-    frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+     RET undef $lr
+ 
+ # CHECK-LABEL:    name:            legal1
+@@ -127,7 +124,6 @@ body:             |
+ # CHECK-NEXT:           frame-setup CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK:                BL @[[OUTLINED_FUNC]]
+ # CHECK:                frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-# CHECK-NEXT:           frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NEXT:           RET undef $lr
+ 
+ ...
+@@ -151,7 +147,6 @@ body:             |
+     STRXui killed renamable $x9, killed renamable $x8, target-flags(aarch64-pageoff, aarch64-nc) @v :: (volatile store (s64) into @v)
+     $sp = frame-destroy ADDXri $sp, 12, 0
+     frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-    frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+     RET undef $lr
+ 
+ ...
+@@ -175,7 +170,6 @@ body:             |
+     STRXui killed renamable $x9, killed renamable $x8, target-flags(aarch64-pageoff, aarch64-nc) @v :: (volatile store (s64) into @v)
+     $sp = frame-destroy ADDXri $sp, 12, 0
+     frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-    frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+     RET undef $lr
+ 
+ # CHECK-LABEL:    name:            illegal0
+@@ -186,7 +180,6 @@ body:             |
+ # CHECK-NEXT:           frame-setup CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NOT:            BL @OUTLINED_FUNCTION_{{.*}}
+ # CHECK:                frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-# CHECK-NEXT:           frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NEXT:           RET undef $lr
+ 
+ # CHECK-LABEL:    name:            illegal1
+@@ -197,7 +190,6 @@ body:             |
+ # CHECK-NEXT:           frame-setup CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NOT:            BL @OUTLINED_FUNCTION_{{.*}}
+ # CHECK:                frame-destroy AUTIASP implicit-def $lr, implicit killed $lr, implicit $sp
+-# CHECK-NEXT:           frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NEXT:           RET undef $lr
+ 
+ # Outlined function that contains only legal sp modifications
+@@ -211,5 +203,4 @@ body:             |
+ # CHECK-NEXT:         $sp = frame-setup SUBXri $sp, 16, 0
+ # CHECK:              $sp = frame-destroy ADDXri $sp, 16, 0
+ # CHECK-NEXT:         frame-destroy AUTIASP implicit-def $lr, implicit $lr, implicit $sp
+-# CHECK-NEXT:         frame-destroy CFI_INSTRUCTION negate_ra_sign_state
+ # CHECK-NEXT:         RET $lr
+diff --git a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-thunk.ll b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-thunk.ll
+index a9e2433c97e7..3c4eff39c60b 100644
+--- a/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-thunk.ll
++++ b/llvm/test/CodeGen/AArch64/machine-outliner-retaddr-sign-thunk.ll
+@@ -11,10 +11,8 @@ define i32 @a() #0 {
+ ; CHECK:        // %bb.0:                               // %entry
+ ; V8A-NEXT:         hint #25
+ ; V83A-NEXT:        paciasp
+-; CHECK-NEXT:       .cfi_negate_ra_state
+ ; V8A:              hint #29
+ ; V83A:             autiasp
+-; CHECK-NEXT:       .cfi_negate_ra_state
+ ; CHECK-NEXT:       ret
+ entry:
+   %call = tail call i32 @thunk_called_fn(i32 1, i32 2, i32 3, i32 4)
+@@ -30,7 +28,6 @@ define i32 @b() #0 {
+ ; CHECK-NEXT:       .cfi_negate_ra_state
+ ; V8A:              hint #29
+ ; V83A:             autiasp
+-; CHECK-NEXT:       .cfi_negate_ra_state
+ ; CHECK-NEXT:       ret
+ entry:
+   %call = tail call i32 @thunk_called_fn(i32 1, i32 2, i32 3, i32 4)
+@@ -46,7 +43,6 @@ define hidden i32 @c(i32 (i32, i32, i32, i32)* %fptr) #0 {
+ ; CHECK-NEXT:       .cfi_negate_ra_state
+ ; V8A:              hint #29
+ ; V83A:             autiasp
+-; CHECK-NEXT:       .cfi_negate_ra_state
+ ; CHECK-NEXT:       ret
+ entry:
+   %call = tail call i32 %fptr(i32 1, i32 2, i32 3, i32 4)
+@@ -62,7 +58,6 @@ define hidden i32 @d(i32 (i32, i32, i32, i32)* %fptr) #0 {
+ ; CHECK-NEXT:       .cfi_negate_ra_state
+ ; V8A:              hint #29
+ ; V83A:             autiasp
+-; CHECK-NEXT:       .cfi_negate_ra_state
+ ; CHECK-NEXT:       ret
+ entry:
+   %call = tail call i32 %fptr(i32 1, i32 2, i32 3, i32 4)
+diff --git a/llvm/test/CodeGen/AArch64/sign-return-address.ll b/llvm/test/CodeGen/AArch64/sign-return-address.ll
+index 30a2647a0702..498f82a00e98 100644
+--- a/llvm/test/CodeGen/AArch64/sign-return-address.ll
++++ b/llvm/test/CodeGen/AArch64/sign-return-address.ll
+@@ -24,9 +24,7 @@ define i32 @leaf_sign_non_leaf(i32 %x) "sign-return-address"="non-leaf"  {
+ 
+ ; CHECK-LABEL: @leaf_sign_all
+ ; CHECK:       hint #25
+-; CHECK-NEXT:  .cfi_negate_ra_state
+ ; CHECK:       hint #29
+-; CHECK-NEXT:  .cfi_negate_ra_state
+ ; CHECK:       ret
+ ; CHECK-V83A:  pacia x30, sp
+ ; CHECK-V83A:  retaa
+@@ -36,12 +34,10 @@ define i32 @leaf_sign_all(i32 %x) "sign-return-address"="all" {
+ 
+ ; CHECK:             @leaf_clobbers_lr
+ ; CHECK:             hint #25
+-; CHECK-NEXT:        .cfi_negate_ra_state
+ ; CHECK-V83A:        pacia x30, sp
+ ; CHECK, CHECK-V83A: str x30, [sp, #-16]!
+ ; CHECK, CHECK-V83A: ldr x30, [sp], #16
+ ; CHECK:             hint #29
+-; CHECK-NEXT:        .cfi_negate_ra_state
+ ; CHECK:             ret
+ ; CHECK-V32A-NEXT:   retaa
+ define i64 @leaf_clobbers_lr(i64 %x) "sign-return-address"="non-leaf"  {
+@@ -53,9 +49,7 @@ declare i32 @foo(i32)
+ 
+ ; CHECK:      @non_leaf_sign_all
+ ; CHECK:      hint #25
+-; CHECK-NEXT: .cfi_negate_ra_state
+ ; CHECK:      hint #29
+-; CHECK-NEXT: .cfi_negate_ra_state
+ ; CHECK:      ret
+ ; CHECK-V83A: pacia x30, sp
+ ; CHECK-V83A: retaa
+@@ -66,12 +60,10 @@ define i32 @non_leaf_sign_all(i32 %x) "sign-return-address"="all" {
+ 
+ ; CHECK:             @non_leaf_sign_non_leaf
+ ; CHECK:             hint #25
+-; CHECK-NEXT:        .cfi_negate_ra_state
+ ; CHECK-V83A:        pacia x30, sp
+ ; CHECK, CHECK-V83A: str x30, [sp, #-16]!
+ ; CHECK, CHECK-V83A: ldr x30, [sp], #16
+ ; CHECK:             hint #29
+-; CHECK-NEXT:        .cfi_negate_ra_state
+ ; CHECK:             ret
+ ; CHECK-V83A:        retaa
+ define i32 @non_leaf_sign_non_leaf(i32 %x) "sign-return-address"="non-leaf"  {
+@@ -80,11 +72,10 @@ define i32 @non_leaf_sign_non_leaf(i32 %x) "sign-return-address"="non-leaf"  {
+ }
+ 
+ ; CHECK-LABEL: @leaf_sign_all_v83
+-; CHECK:        pacia x30, sp
+-; CHECK-NEXT:  .cfi_negate_ra_state
+-; CHECK-NOT:   ret
+-; CHECK:       retaa
+-; CHECK-NOT:   ret
++; CHECK: pacia x30, sp
++; CHECK-NOT: ret
++; CHECK: retaa
++; CHECK-NOT: ret
+ define i32 @leaf_sign_all_v83(i32 %x) "sign-return-address"="all" "target-features"="+v8.3a" {
+   ret i32 %x
+ }
+@@ -93,14 +84,11 @@ declare fastcc i64 @bar(i64)
+ 
+ ; CHECK-LABEL:       @spill_lr_and_tail_call
+ ; CHECK:             hint #25
+-; CHECK-NEXT:        .cfi_negate_ra_state
+ ; CHECK-V83A:        pacia x30, sp
+-; CHECK-V83A-NEXT:  .cfi_negate_ra_state
+ ; CHECK, CHECK-V83A: str x30, [sp, #-16]!
+ ; CHECK, CHECK-V83A: ldr x30, [sp], #16
+ ; CHECK-V83A:        autiasp
+ ; CHECK:             hint #29
+-; CHECK-NEXT:        .cfi_negate_ra_state
+ ; CHECK:             b bar
+ define fastcc void @spill_lr_and_tail_call(i64 %x) "sign-return-address"="all" {
+   call void asm sideeffect "mov x30, $0", "r,~{lr}"(i64 %x) #1
+@@ -109,71 +97,57 @@ define fastcc void @spill_lr_and_tail_call(i64 %x) "sign-return-address"="all" {
+ }
+ 
+ ; CHECK-LABEL: @leaf_sign_all_a_key
+-; CHECK:            hint #25
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK:            hint #29
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK-V83A:       pacia x30, sp
+-; CHECK-V83A-NEXT:  .cfi_negate_ra_state
+-; CHECK-V83A:       retaa
++; CHECK:       hint #25
++; CHECK:       hint #29
++; CHECK-V83A:  pacia x30, sp
++; CHECK-V83A:  retaa
+ define i32 @leaf_sign_all_a_key(i32 %x) "sign-return-address"="all" "sign-return-address-key"="a_key" {
+   ret i32 %x
+ }
+ 
+ ; CHECK-LABEL: @leaf_sign_all_b_key
+-; CHECK:            hint #27
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK:            hint #31
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK-V83A:       pacib x30, sp
+-; CHECK-V83A-NEXT:  .cfi_negate_ra_state
+-; CHECK-V83A:       retab
++; CHECK:       hint #27
++; CHECK:       hint #31
++; CHECK-V83A:  pacib x30, sp
++; CHECK-V83A:  retab
+ define i32 @leaf_sign_all_b_key(i32 %x) "sign-return-address"="all" "sign-return-address-key"="b_key" {
+   ret i32 %x
+ }
+ 
+ ; CHECK-LABEL: @leaf_sign_all_v83_b_key
+-; CHECK:       pacib x30, sp
+-; CHECK-NEXT:  .cfi_negate_ra_state
+-; CHECK-NOT:   ret
+-; CHECK:       retab
+-; CHECK-NOT:   ret
++; CHECK: pacib x30, sp
++; CHECK-NOT: ret
++; CHECK: retab
++; CHECK-NOT: ret
+ define i32 @leaf_sign_all_v83_b_key(i32 %x) "sign-return-address"="all" "target-features"="+v8.3a" "sign-return-address-key"="b_key" {
+   ret i32 %x
+ }
+ 
+ ; CHECK-LABEL: @leaf_sign_all_a_key_bti
+-; CHECK-NOT:        hint #34
+-; CHECK:            hint #25
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK:            hint #29
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK-V83A:       pacia x30, sp
+-; CHECK-V83A-NEXT:  .cfi_negate_ra_state
+-; CHECK-V83A:       retaa
++; CHECK-NOT:   hint #34
++; CHECK:       hint #25
++; CHECK:       hint #29
++; CHECK-V83A:  pacia x30, sp
++; CHECK-V83A:  retaa
+ define i32 @leaf_sign_all_a_key_bti(i32 %x) "sign-return-address"="all" "sign-return-address-key"="a_key" "branch-target-enforcement"="true"{
+   ret i32 %x
+ }
+ 
+ ; CHECK-LABEL: @leaf_sign_all_b_key_bti
+-; CHECK-NOT:        hint #34
+-; CHECK:            hint #27
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK:            hint #31
+-; CHECK-NEXT:       .cfi_negate_ra_state
+-; CHECK-V83A:       pacib x30, sp
+-; CHECK-V83A-NEXT:  .cfi_negate_ra_state
+-; CHECK-V83A:       retab
++; CHECK-NOT:   hint #34
++; CHECK:       hint #27
++; CHECK:       hint #31
++; CHECK-V83A:  pacib x30, sp
++; CHECK-V83A:  retab
+ define i32 @leaf_sign_all_b_key_bti(i32 %x) "sign-return-address"="all" "sign-return-address-key"="b_key" "branch-target-enforcement"="true"{
+   ret i32 %x
+ }
+ 
+ ; CHECK-LABEL: @leaf_sign_all_v83_b_key_bti
+ ; CHECK:       pacib x30, sp
+-; CHECK-NEXT:  .cfi_negate_ra_state
+-; CHECK-NOT:   ret
+-; CHECK:       retab
+-; CHECK-NOT:   ret
++; CHECK-NOT: ret
++; CHECK: retab
++; CHECK-NOT: ret
+ define i32 @leaf_sign_all_v83_b_key_bti(i32 %x) "sign-return-address"="all" "target-features"="+v8.3a" "sign-return-address-key"="b_key" "branch-target-enforcement"="true" {
+   ret i32 %x
+ }
+-- 
+2.35.0.rc0.227.g00780c9af4-goog
+

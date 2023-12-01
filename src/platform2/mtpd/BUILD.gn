@@ -1,0 +1,75 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":libmtpd",
+    ":mtpd",
+    ":mtpd-adaptors",
+  ]
+  if (use.test) {
+    deps += [ ":mtpd_testrunner" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  # NOSORT
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmtp",
+    "libudev",
+
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+    "protobuf-lite",
+  ]
+}
+
+generate_dbus_adaptors("mtpd-adaptors") {
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/mtpd/dbus_adaptors"
+  sources = [ "dbus_bindings/org.chromium.Mtpd.xml" ]
+}
+
+static_library("libmtpd") {
+  sources = [
+    "assert_matching_file_types.cc",
+    "device_manager.cc",
+    "file_entry.cc",
+    "mtpd_server_impl.cc",
+    "storage_info.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":mtpd-adaptors" ]
+}
+
+executable("mtpd") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":libmtpd",
+    ":mtpd-adaptors",
+  ]
+}
+
+if (use.test) {
+  executable("mtpd_testrunner") {
+    sources = [ "device_manager_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libmtpd",
+      ":mtpd-adaptors",
+      "//common-mk/testrunner",
+    ]
+  }
+}

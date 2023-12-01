@@ -1,0 +1,105 @@
+#!/bin/sh -ue
+# Copyright 2010 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# A script to mark the current kernel partition as successfully booted.
+
+# If we're not running as root, restart as root.
+if [ "$(id -u)" -ne 0 ]; then
+  exec sudo "$0" "$@"
+fi
+
+# Load functions and constants for chromeos-install.
+# shellcheck disable=SC1091
+. /usr/share/misc/chromeos-common.sh || exit 1
+
+get_dev_by_part_uuid() {
+  local dev guid="$1"
+  # Look through the root device, the most likely place to find the partition.
+  dev="$(cgpt find -1 -u "${guid}" "$(rootdev -d -s)")"
+  if [ -z "${dev}" ]; then
+    # Look through all the known devices to find that one partition.
+    dev="$(cgpt find -1 -u "${guid}")"
+  fi
+  echo "${dev}"
+}
+
+FAFT_LOCKFILE="/usr/local/tmp/faft/lock"
+if [ -f "${FAFT_LOCKFILE}" ]; then
+  echo "FAFT lockfile exists, skipping chromeos-setgoodkernel actions"
+  exit
+fi
+
+if grep -q 'cros_efi' /proc/cmdline ; then
+  is_efi=1
+else
+  is_efi=0
+fi
+
+# Extract the kernel partition's UniqueGuid from the command line.
+if [ "${is_efi}" -eq 1 ]; then
+  guid=$(sed -n 's/.*root=PARTUUID=\([0-9a-fA-F-]\+\).*/\1/p' /proc/cmdline)
+  if [ -n "${guid}" ]; then
+    root_dev=$(get_dev_by_part_uuid "${guid}")
+  fi
+else
+  guid=$(sed -n 's/.*kern_guid=\([0-9a-fA-F-]\+\).*/\1/p' /proc/cmdline)
+  if [ -n "${guid}" ]; then
+    kern_dev=$(get_dev_by_part_uuid "${guid}")
+  fi
+fi
+
+# If no Guid extracted from cmdline, get the root partition.
+if [ -z "${guid}" ]; then
+  root_dev=$(rootdev -s)
+fi
+
+# Split the kernel device into the base device and paritition number.
+if [ -n "${kern_dev:+x}" ]; then
+  base_dev=$(get_block_dev_from_partition_dev "${kern_dev}")
+  kern_num=$(get_partition_number "${kern_dev}")
+else
+  base_dev=$(get_block_dev_from_partition_dev "${root_dev}")
+  # EFI and legacy BIOSes boot the ROOT-x partition which is KERN-x + 1
+  kern_num=$(($(get_partition_number "${root_dev}") - 1))
+fi
+
+# kern_dev would be /dev/mtd2 or /dev/mtd4 on NAND, base_dev will be /dev/mtd.
+# But that's wrong, it should be /dev/mtd0 because there is no /dev/mtd device.
+# ChromeOS only supports one NAND device, we use /dev/mtd0 for that.
+if [ "${base_dev}" = "/dev/mtd" ]; then
+  base_dev="/dev/mtd0"
+fi
+
+# Mark the kernel as successfully booted (success=1, tries=0).
+cgpt add "${base_dev}" -i "${kern_num}" -S1 -T0
+# Mark the kernel as highest priority
+cgpt prioritize "${base_dev}" -i "${kern_num}"
+
+# Collect any startup time firmware updater logs (see chromeos_startup)
+FIRMWARE_UPDATE_LOG='/mnt/stateful_partition/update_firmware.log'
+if [ -f "${FIRMWARE_UPDATE_LOG}" ]; then
+  echo "Found startup-time firmware updating logs:"
+  stat -c "%y" "${FIRMWARE_UPDATE_LOG}"
+  echo "------------------------------------------"
+  cat "${FIRMWARE_UPDATE_LOG}" && rm -f "${FIRMWARE_UPDATE_LOG}"
+  echo "------------------------------------------"
+fi
+
+# Set firmware as 'good' if possible.
+SET_GOOD_FIRMWARE_SCRIPT='/usr/sbin/chromeos-setgoodfirmware'
+if [ -x "${SET_GOOD_FIRMWARE_SCRIPT}" ]; then
+  "${SET_GOOD_FIRMWARE_SCRIPT}"
+fi
+
+# Remove slow_boot_required file if it exists.
+SLOW_BOOT_REQ_FILE='/mnt/stateful_partition/etc/slow_boot_required'
+if [ -f "${SLOW_BOOT_REQ_FILE}" ]; then
+  rm "${SLOW_BOOT_REQ_FILE}"
+fi
+
+# Run the verified boot debugging tool now, because we won't be able to run it
+# manually if there's a problem (no root shell). It leaves a log file that we
+# can look at.
+dev_debug_vboot --cleanup > /dev/null 2>&1 &

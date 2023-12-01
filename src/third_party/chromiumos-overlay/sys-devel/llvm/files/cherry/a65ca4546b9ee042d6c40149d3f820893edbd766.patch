@@ -1,0 +1,40 @@
+commit a65ca4546b9ee042d6c40149d3f820893edbd766
+Author: OCHyams <orlando.hyams@sony.com>
+Date:   Wed Apr 19 19:16:40 2023 +0100
+
+    Revert D146987 "[Assignment Tracking] Enable by default"
+    
+    This reverts commit 89d27854ec7f5e8bd83e72fa574740bf3d06355b.
+    
+    See https://reviews.llvm.org/D146987 for issues.
+
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index 604b4a45fffc..eed0d517a1ad 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -5817,7 +5817,7 @@ def fexperimental_assignment_tracking_EQ : Joined<["-"], "fexperimental-assignme
+   Group<f_Group>, CodeGenOpts<"EnableAssignmentTracking">,
+   NormalizedValuesScope<"CodeGenOptions::AssignmentTrackingOpts">,
+   Values<"disabled,enabled,forced">, NormalizedValues<["Disabled","Enabled","Forced"]>,
+-  MarshallingInfoEnum<CodeGenOpts<"AssignmentTrackingMode">, "Enabled">;
++  MarshallingInfoEnum<CodeGenOpts<"AssignmentTrackingMode">, "Disabled">;
+ 
+ } // let Flags = [CC1Option, NoDriverOption]
+ 
+diff --git a/clang/test/CodeGen/assignment-tracking/flag.cpp b/clang/test/CodeGen/assignment-tracking/flag.cpp
+index 3bd974fe07c6..aa1f054dae4d 100644
+--- a/clang/test/CodeGen/assignment-tracking/flag.cpp
++++ b/clang/test/CodeGen/assignment-tracking/flag.cpp
+@@ -8,10 +8,10 @@
+ // RUN:     -emit-llvm  %s -o - -fexperimental-assignment-tracking=disabled -O1\
+ // RUN: | FileCheck %s --check-prefixes=DISABLE
+ 
+-//// Enabled by default:
++//// Disabled by default:
+ // RUN: %clang_cc1 -triple x86_64-none-linux-gnu -debug-info-kind=standalone   \
+ // RUN:     -emit-llvm  %s -o - -O1                                            \
+-// RUN: | FileCheck %s --check-prefixes=ENABLE
++// RUN: | FileCheck %s --check-prefixes=DISABLE
+ 
+ //// Disabled at O0 unless forced.
+ // RUN: %clang_cc1 -triple x86_64-none-linux-gnu -debug-info-kind=standalone   \

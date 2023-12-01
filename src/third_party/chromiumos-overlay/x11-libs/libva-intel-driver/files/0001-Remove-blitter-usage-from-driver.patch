@@ -1,0 +1,147 @@
+From f063cb2f990f18dc64d535e3e029a962a66829a3 Mon Sep 17 00:00:00 2001
+From: "Kristian H. Kristensen" <hoegsberg@google.com>
+Date: Mon, 18 Nov 2019 14:40:06 -0800
+Subject: [PATCH] Remove blitter usage from driver
+
+---
+ src/gen75_picture_process.c | 18 ++++++++++--------
+ src/i965_post_processing.c  | 16 ++++++++++------
+ src/i965_render.c           |  3 +++
+ 3 files changed, 23 insertions(+), 14 deletions(-)
+
+diff --git a/src/gen75_picture_process.c b/src/gen75_picture_process.c
+index 0ae28cb..2c8d680 100644
+--- a/src/gen75_picture_process.c
++++ b/src/gen75_picture_process.c
+@@ -107,6 +107,7 @@ rgb_to_yuv(unsigned int argb,
+     *a = ((argb >> 24) & 0xff);
+ }
+ 
++#if 0
+ static void
+ gen8plus_vpp_clear_surface(VADriverContextP ctx,
+                            struct i965_post_processing_context *pp_context,
+@@ -189,6 +190,7 @@ gen8plus_vpp_clear_surface(VADriverContextP ctx,
+     ADVANCE_BATCH(batch);
+     intel_batchbuffer_end_atomic(batch);
+ }
++#endif
+ 
+ VAStatus
+ gen75_proc_picture(VADriverContextP ctx,
+@@ -288,6 +290,14 @@ gen75_proc_picture(VADriverContextP ctx,
+         dst_rect.height = obj_dst_surf->orig_height;
+     }
+ 
++    /* Make sure we won't need the blitter clear. */
++    if (dst_rect.x != 0 || dst_rect.y != 0 ||
++        dst_rect.width != obj_dst_surf->orig_width ||
++        dst_rect.height != obj_dst_surf->orig_height) {
++        status = VA_STATUS_ERROR_UNIMPLEMENTED;
++	goto error;
++    }
++
+     if (pipeline_param->num_filters == 0 || pipeline_param->filters == NULL) {
+         VAStatus status = VA_STATUS_ERROR_UNIMPLEMENTED;
+         struct i965_proc_context *gpe_proc_ctx;
+@@ -296,14 +306,6 @@ gen75_proc_picture(VADriverContextP ctx,
+         gpe_proc_ctx = (struct i965_proc_context *)proc_ctx->vpp_fmt_cvt_ctx;
+         assert(gpe_proc_ctx != NULL); // gpe_proc_ctx must be a non-NULL pointer
+ 
+-        if ((gpe_proc_ctx->pp_context.scaling_gpe_context_initialized & VPPGPE_8BIT_8BIT) &&
+-            (obj_dst_surf->fourcc == VA_FOURCC_NV12) &&
+-            pipeline_param->output_background_color)
+-            gen8plus_vpp_clear_surface(ctx,
+-                                       &gpe_proc_ctx->pp_context,
+-                                       obj_dst_surf,
+-                                       pipeline_param->output_background_color);
+-
+         src_surface.base = (struct object_base *)obj_src_surf;
+         src_surface.type = I965_SURFACE_TYPE_SURFACE;
+         dst_surface.base = (struct object_base *)obj_dst_surf;
+diff --git a/src/i965_post_processing.c b/src/i965_post_processing.c
+index c604c71..e285152 100644
+--- a/src/i965_post_processing.c
++++ b/src/i965_post_processing.c
+@@ -4783,6 +4783,7 @@ rgb_to_yuv(unsigned int argb,
+     *a = ((argb >> 24) & 0xff);
+ }
+ 
++#if 0
+ static void
+ i965_vpp_clear_surface(VADriverContextP ctx,
+                        struct i965_post_processing_context *pp_context,
+@@ -4872,6 +4873,7 @@ i965_vpp_clear_surface(VADriverContextP ctx,
+     ADVANCE_BATCH(batch);
+     intel_batchbuffer_end_atomic(batch);
+ }
++#endif
+ 
+ VAStatus
+ i965_scaling_processing(
+@@ -4970,7 +4972,6 @@ i965_post_processing(
+             obj_surface = SURFACE(out_surface_id);
+             assert(obj_surface);
+             i965_check_alloc_surface_bo(ctx, obj_surface, 0, VA_FOURCC_NV12, SUBSAMPLE_YUV420);
+-            i965_vpp_clear_surface(ctx, pp_context, obj_surface, 0);
+ 
+             dst_surface.base = (struct object_base *)obj_surface;
+             dst_surface.type = I965_SURFACE_TYPE_SURFACE;
+@@ -6215,6 +6216,14 @@ i965_proc_picture(VADriverContextP ctx,
+         dst_rect.height = obj_surface->orig_height;
+     }
+ 
++    /* Make sure we won't need the blitter clear. */
++    if (dst_rect.x != 0 || dst_rect.y != 0 ||
++        dst_rect.width != obj_surface->orig_width ||
++        dst_rect.height != obj_surface->orig_height) {
++      status = VA_STATUS_ERROR_UNIMPLEMENTED;
++      goto error;
++    }
++
+     if (IS_GEN7(i965->intel.device_info) ||
+         IS_GEN8(i965->intel.device_info) ||
+         IS_GEN9(i965->intel.device_info) ||
+@@ -6228,10 +6237,6 @@ i965_proc_picture(VADriverContextP ctx,
+                                         SUBSAMPLE_YUV420);
+         }
+ 
+-        i965_vpp_clear_surface(ctx, &proc_context->pp_context,
+-                               obj_surface,
+-                               pipeline_param->output_background_color);
+-
+         intel_batchbuffer_flush(hw_context->batch);
+ 
+         saved_filter_flag = i965pp_context->filter_flags;
+@@ -6273,7 +6278,6 @@ i965_proc_picture(VADriverContextP ctx,
+     }
+ 
+     dst_surface.type = I965_SURFACE_TYPE_SURFACE;
+-    i965_vpp_clear_surface(ctx, &proc_context->pp_context, obj_surface, pipeline_param->output_background_color);
+ 
+     // load/save doesn't support different origin offset for src and dst surface
+     if (src_rect.width == dst_rect.width &&
+diff --git a/src/i965_render.c b/src/i965_render.c
+index cc56e35..b681662 100644
+--- a/src/i965_render.c
++++ b/src/i965_render.c
+@@ -1531,6 +1531,8 @@ i965_render_startup(VADriverContextP ctx)
+ static void
+ i965_clear_dest_region(VADriverContextP ctx)
+ {
++    /* We should never get here, since this is an X11 entry point */
++#if 0
+     struct i965_driver_data *i965 = i965_driver_data(ctx);
+     struct intel_batchbuffer *batch = i965->batch;
+     struct i965_render_state *render_state = &i965->render_state;
+@@ -1577,6 +1579,7 @@ i965_clear_dest_region(VADriverContextP ctx)
+     OUT_BATCH(batch, 0x0);
+     ADVANCE_BATCH(batch);
+     intel_batchbuffer_end_atomic(batch);
++#endif
+ }
+ 
+ static void
+-- 
+2.21.0
+

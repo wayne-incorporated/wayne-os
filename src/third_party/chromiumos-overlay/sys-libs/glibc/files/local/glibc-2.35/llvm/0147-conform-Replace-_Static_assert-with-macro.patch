@@ -1,0 +1,70 @@
+From 38cc2284f1903be992fad0d5dee08e4615641ccb Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 29 Mar 2022 16:06:13 -0300
+Subject: [PATCH 147/163] conform: Replace _Static_assert with macro
+
+clang does not allow non integral constant expression in
+_Static_assert.  Replace with a macro that uses name bit-field
+where an invalid constant expression sets its size to 0, resulting
+in a error.
+---
+ conform/conformtest.py | 21 ++++++++++++++++-----
+ 1 file changed, 16 insertions(+), 5 deletions(-)
+
+diff --git a/conform/conformtest.py b/conform/conformtest.py
+index ce39c447f3..1474001c7e 100644
+--- a/conform/conformtest.py
++++ b/conform/conformtest.py
+@@ -157,9 +157,9 @@ class ConstantTest(object):
+                     '%s'
+                     '# define conformtest_%d_value (%s)\n'
+                     '#endif\n'
+-                    '_Static_assert (((%s < 0) == conformtest_%d_negative) '
++                    'STATIC_ASSERT (((%s < 0) == conformtest_%d_negative) '
+                     '&& (%s == conformtest_%d_value), '
+-                    '"value match inside and outside #if");\n'
++                    'value_match_inside_and_outside_if);\n'
+                     % (self.symbol, self.num, sym_bits_def_neg, self.num,
+                        sym_bits_or_neg, self.num, sym_bits_def_pos, self.num,
+                        sym_bits_or_pos, self.symbol, self.num, self.symbol,
+@@ -179,8 +179,8 @@ class ConstantTest(object):
+                 'Type of symbol %s' % self.symbol,
+                 text))
+         if self.op is not None:
+-            text = ('_Static_assert (%(symbol)s %(op)s %(value)s, '
+-                    '"value constraint");\n'
++            text = ('STATIC_ASSERT (%(symbol)s %(op)s %(value)s, '
++                    'value_constraint);\n'
+                     % vars(self))
+             self.subtests.append(CompileSubTest(
+                 'Value of symbol %s' % self.symbol,
+@@ -552,6 +552,16 @@ class HeaderTests(object):
+         self.skipped += 1
+         sys.stdout.flush()
+ 
++    def common_definitions(self):
++        """Add any required common definition for the compilation tests."""
++        text = ('#define __STR(pre,post) pre ## post\n'
++                '#define _STR(pre,post) __STR(pre, post)\n'
++                '#define STATIC_ASSERT(cond, msg) \\\n'
++                '  typedef struct {\\\n'
++                '    int _STR (static_assertion_failed_, msg) : !!(cond);\\\n'
++                '  } _STR (static_assertion_failed_, __COUNTER__)\n')
++        return text
++
+     def compile_test(self, name, text):
+         """Run a compilation test; return True if it passes."""
+         self.total += 1
+@@ -565,7 +575,8 @@ class HeaderTests(object):
+         c_file = os.path.join(self.temp_dir, 'test.c')
+         o_file = os.path.join(self.temp_dir, 'test.o')
+         with open(c_file, 'w') as c_file_out:
+-            c_file_out.write('#include <%s>\n%s' % (self.header, text))
++            c_file_out.write('#include <%s>\n%s\n%s' %
++                    (self.header, self.common_definitions(), text))
+         cmd = ('%s %s -O0 -c %s -o %s' % (self.cc, self.cflags, c_file, o_file))
+         try:
+             subprocess.check_call(cmd, shell=True)
+-- 
+2.37.2
+

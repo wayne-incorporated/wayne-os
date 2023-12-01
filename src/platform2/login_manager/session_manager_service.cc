@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,21 +16,22 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include <base/bind.h>
-#include <base/callback.h>
-#include <base/callback_helpers.h>
 #include <base/command_line.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback.h>
+#include <base/functional/callback_helpers.h>
 #include <base/logging.h>
 #include <base/notreached.h>
-#include <base/optional.h>
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_util.h>
 #include <base/time/time.h>
+#include <brillo/files/file_util.h>
 #include <brillo/message_loops/message_loop.h>
 #include <chromeos/dbus/service_constants.h>
 #include <chromeos/switches/chrome_switches.h>
@@ -88,7 +89,7 @@ constexpr int kStopAllVmsTimeoutMs = 120000;
 // Long kill time out. Used instead of the default one when chrome feature
 // 'SessionManagerLongKillTimeout' is enabled. Note that this must be less than
 // the 20-second kill timeout granted to session_manager in ui.conf.
-constexpr base::TimeDelta kLongKillTimeout = base::TimeDelta::FromSeconds(12);
+constexpr base::TimeDelta kLongKillTimeout = base::Seconds(12);
 
 // A flag file of whether to dump chrome crashes on dev/test image.
 constexpr char kCollectChromeFile[] =
@@ -119,6 +120,8 @@ const char* ExitCodeToString(SessionManagerService::ExitCode code) {
       return "child exiting too fast";
     case SessionManagerService::MUST_WIPE_DEVICE:
       return "must wipe device";
+    case SessionManagerService::DEVICE_SHUTTING_DOWN:
+      return "device shutting down";
   }
   NOTREACHED() << "Invalid exit code " << code;
   return "unknown";
@@ -137,14 +140,14 @@ void SessionManagerService::TestApi::ScheduleChildExit(pid_t pid, int status) {
   }
   brillo::MessageLoop::current()->PostTask(
       FROM_HERE,
-      base::Bind(base::IgnoreResult(&SessionManagerService::HandleExit),
-                 session_manager_service_, info));
+      base::BindOnce(base::IgnoreResult(&SessionManagerService::HandleExit),
+                     session_manager_service_, info));
 }
 
 SessionManagerService::SessionManagerService(
     std::unique_ptr<BrowserJobInterface> child_job,
     uid_t uid,
-    base::Optional<base::FilePath> ns_path,
+    std::optional<base::FilePath> ns_path,
     base::TimeDelta kill_timeout,
     bool enable_browser_abort_on_hang,
     base::TimeDelta hang_detection_interval,
@@ -160,7 +163,7 @@ SessionManagerService::SessionManagerService(
       nss_(NssUtil::Create()),
       owner_key_(nss_->GetOwnerKeyFilePath(), nss_.get()),
       key_gen_(uid, utils),
-      state_key_generator_(utils, metrics),
+      device_identifier_generator_(utils, metrics),
       vpd_process_(utils),
       android_container_(std::make_unique<AndroidOciWrapper>(
           utils, base::FilePath(kContainerInstallDirectory))),
@@ -192,9 +195,9 @@ bool SessionManagerService::Initialize() {
       vm_tools::concierge::kVmConciergeServiceName,
       dbus::ObjectPath(vm_tools::concierge::kVmConciergeServicePath));
 
-  vm_concierge_dbus_proxy_->SetNameOwnerChangedCallback(base::Bind(
+  vm_concierge_dbus_proxy_->SetNameOwnerChangedCallback(base::BindRepeating(
       &SessionManagerService::VmConciergeOwnerChanged, base::Unretained(this)));
-  vm_concierge_dbus_proxy_->WaitForServiceToBeAvailable(base::Bind(
+  vm_concierge_dbus_proxy_->WaitForServiceToBeAvailable(base::BindOnce(
       &SessionManagerService::VmConciergeAvailable, base::Unretained(this)));
 
   dbus::ObjectProxy* system_clock_proxy = bus_->GetObjectProxy(
@@ -216,20 +219,24 @@ bool SessionManagerService::Initialize() {
   dbus::ObjectProxy* liveness_proxy =
       bus_->GetObjectProxy(chromeos::kLivenessServiceName,
                            dbus::ObjectPath(chromeos::kLivenessServicePath));
-  liveness_checker_.reset(new LivenessCheckerImpl(this, liveness_proxy,
-                                                  enable_browser_abort_on_hang_,
-                                                  liveness_checking_interval_));
+  liveness_checker_.reset(new LivenessCheckerImpl(
+      this, liveness_proxy, enable_browser_abort_on_hang_,
+      liveness_checking_interval_, login_metrics_));
 
 #if USE_ARC_ADB_SIDELOADING
   boot_lockbox_dbus_proxy_ = bus_->GetObjectProxy(
-      cryptohome::kBootLockboxServiceName,
-      dbus::ObjectPath(cryptohome::kBootLockboxServicePath));
+      bootlockbox::kBootLockboxServiceName,
+      dbus::ObjectPath(bootlockbox::kBootLockboxServicePath));
 
   ArcSideloadStatusInterface* arc_sideload_status =
       new ArcSideloadStatus(boot_lockbox_dbus_proxy_);
 #else
   ArcSideloadStatusInterface* arc_sideload_status = new ArcSideloadStatusStub();
 #endif
+
+  fwmp_dbus_proxy_ = bus_->GetObjectProxy(
+      user_data_auth::kUserDataAuthServiceName,
+      dbus::ObjectPath(user_data_auth::kUserDataAuthServicePath));
 
   chrome_features_service_client_ =
       std::make_unique<ChromeFeaturesServiceClient>(bus_->GetObjectProxy(
@@ -241,12 +248,12 @@ bool SessionManagerService::Initialize() {
   impl_ = std::make_unique<SessionManagerImpl>(
       this /* delegate */,
       std::make_unique<InitDaemonControllerImpl>(init_dbus_proxy), bus_,
-      &key_gen_, &state_key_generator_,
+      &key_gen_, &device_identifier_generator_,
       this /* manager, i.e. ProcessManagerServiceInterface */, login_metrics_,
       nss_.get(), chrome_mount_ns_path_, system_, &crossystem_, &vpd_process_,
       &owner_key_, android_container_.get(), &install_attributes_reader_,
       powerd_dbus_proxy_, system_clock_proxy, debugd_dbus_proxy_,
-      arc_sideload_status);
+      fwmp_dbus_proxy_, arc_sideload_status);
   if (!InitializeImpl())
     return false;
 
@@ -286,10 +293,13 @@ void SessionManagerService::ScheduleShutdown() {
 }
 
 void SessionManagerService::RunBrowser() {
+  DCHECK(!abort_timer_.IsRunning());
   browser_->RunInBackground();
-  // Call |ClearBrowserDataMigrationArgs()| here to ensure that the migration
+  // Call |ClearBrowserDataMigrationArgs()| and
+  // |ClearBrowserDataBackwardMigrationArgs()| here to ensure that the migration
   // happens only once.
   browser_->ClearBrowserDataMigrationArgs();
+  browser_->ClearBrowserDataBackwardMigrationArgs();
 
   DLOG(INFO) << "Browser is " << browser_->CurrentPid();
   liveness_checker_->Start();
@@ -298,8 +308,8 @@ void SessionManagerService::RunBrowser() {
   if (chrome_features_service_client_) {
     chrome_features_service_client_->IsFeatureEnabled(
         kFeatureNamelSessionManagerLongKillTimeout,
-        base::Bind(&SessionManagerService::OnLongKillTimeoutEnabled,
-                   base::Unretained(this)));
+        base::BindOnce(&SessionManagerService::OnLongKillTimeoutEnabled,
+                       base::Unretained(this)));
 
     chrome_features_service_client_->IsFeatureEnabled(
         kFeatureNameSessionManagerLivenessCheck,
@@ -312,9 +322,37 @@ void SessionManagerService::RunBrowser() {
 }
 
 void SessionManagerService::AbortBrowserForHang() {
+  if (abort_timer_.IsRunning()) {
+    LOG(WARNING) << "Aborting the browser is in progress.";
+    return;
+  }
+
   LOG(INFO) << "Browser did not respond to DBus liveness check.";
   WriteBrowserPidFile(aborted_browser_pid_path_);
-  browser_->AbortAndKillAll(GetKillTimeout());
+  browser_->Kill(SIGABRT, "Browser aborted");
+  // Set a timer to trigger SIGKILL on timeout.
+  // In common case, we expect HandleExit will run the post-process of the
+  // termination of SIGABRT above before this timer, and it will be cancelled
+  // in HandleExit.
+  abort_timer_.Start(FROM_HERE, GetKillTimeout(),
+                     base::BindOnce(&SessionManagerService::OnAbortTimedOut,
+                                    base::Unretained(this)));
+}
+
+void SessionManagerService::OnAbortTimedOut() {
+  // The browser process is not terminated yet by the SIGABRT.
+  // Send SIGKILL to all the Chrome processes as a last resort.
+  browser_->KillEverything(SIGKILL, "Timed out on aborting");
+  abort_timer_.Start(FROM_HERE, base::Seconds(1),
+                     base::BindOnce(&SessionManagerService::OnSigkillTimedOut,
+                                    base::Unretained(this)));
+}
+
+void SessionManagerService::OnSigkillTimedOut() {
+  pid_t pid = browser_->CurrentPid();
+  // Timer should be cancelled on browser process termination.
+  DCHECK_GE(pid, 0);
+  LOG(ERROR) << "Browser process " << pid << "'s group still not gone ";
 }
 
 void SessionManagerService::SetBrowserTestArgs(
@@ -361,24 +399,40 @@ void SessionManagerService::SetFeatureFlagsForUser(
 }
 
 void SessionManagerService::SetBrowserDataMigrationArgsForUser(
+    const std::string& userhash, const std::string& mode) {
+  browser_->SetBrowserDataMigrationArgsForUser(userhash, mode);
+}
+
+void SessionManagerService::SetBrowserDataBackwardMigrationArgsForUser(
     const std::string& userhash) {
-  // Setting this to true ensures that |ClearBrowserDataMigrationArgs()| is
-  // called after |BrowserJob::RunInBackground()| is called in |RunBrowser()|.
-  browser_->SetBrowserDataMigrationArgsForUser(userhash);
+  browser_->SetBrowserDataBackwardMigrationArgsForUser(userhash);
 }
 
 bool SessionManagerService::IsBrowser(pid_t pid) {
   return (browser_->CurrentPid() > 0 && pid == browser_->CurrentPid());
 }
 
+std::optional<pid_t> SessionManagerService::GetBrowserPid() const {
+  if (browser_->CurrentPid() <= 0) {
+    return std::nullopt;
+  }
+  return browser_->CurrentPid();
+}
+
 base::TimeTicks SessionManagerService::GetLastBrowserRestartTime() {
   return last_browser_restart_time_;
+}
+
+void SessionManagerService::SetMultiUserSessionStarted() {
+  browser_->SetMultiUserSessionStarted();
 }
 
 bool SessionManagerService::HandleExit(const siginfo_t& status) {
   if (!IsBrowser(status.si_pid))
     return false;
 
+  // The browser process is terminated. Stop the aborting process.
+  abort_timer_.Stop();
   LOG(INFO) << "Browser process " << status.si_pid << " exited with "
             << GetExitDescription(status);
 
@@ -491,8 +545,9 @@ void SessionManagerService::SetUpHandlers() {
                                      android_container_.get()});
   for (int i = 0; i < kNumSignals; ++i) {
     signal_handler_.RegisterHandler(
-        kSignals[i], base::Bind(&SessionManagerService::OnTerminationSignal,
-                                base::Unretained(this)));
+        kSignals[i],
+        base::BindRepeating(&SessionManagerService::OnTerminationSignal,
+                            base::Unretained(this)));
   }
 }
 
@@ -557,9 +612,9 @@ void SessionManagerService::AllowGracefulExitOrRunForever() {
   if (exit_on_child_done_) {
     LOG(INFO) << "SessionManagerService set to exit on child done";
     brillo::MessageLoop::current()->PostTask(
-        FROM_HERE,
-        base::Bind(base::IgnoreResult(&SessionManagerService::ScheduleShutdown),
-                   this));
+        FROM_HERE, base::BindOnce(base::IgnoreResult(
+                                      &SessionManagerService::ScheduleShutdown),
+                                  this));
   } else {
     DLOG(INFO) << "OK, running forever...";
   }
@@ -586,8 +641,9 @@ void SessionManagerService::SetExitAndScheduleShutdown(ExitCode code) {
   impl_->AnnounceSessionStopped();
 
   brillo::MessageLoop::current()->PostTask(
-      FROM_HERE, base::Bind(&brillo::MessageLoop::BreakLoop,
-                            base::Unretained(brillo::MessageLoop::current())));
+      FROM_HERE,
+      base::BindOnce(&brillo::MessageLoop::BreakLoop,
+                     base::Unretained(brillo::MessageLoop::current())));
   LOG(INFO) << "SessionManagerService quitting run loop";
 }
 
@@ -601,8 +657,9 @@ void SessionManagerService::CleanupChildrenBeforeExit(ExitCode code) {
       code == ExitCode::SUCCESS
           ? ArcContainerStopReason::SESSION_MANAGER_SHUTDOWN
           : ArcContainerStopReason::BROWSER_SHUTDOWN);
-  DLOG(INFO) << "Waiting up to "
-             << SessionManagerImpl::kBrowserTimeout.InSeconds()
+
+  const base::TimeDelta browser_timeout = GetKillTimeout();
+  DLOG(INFO) << "Waiting up to " << browser_timeout.InSeconds()
              << " seconds for browser process group to exit";
 
   // We're going to wait several times for various processes to exit, but we
@@ -611,12 +668,11 @@ void SessionManagerService::CleanupChildrenBeforeExit(ExitCode code) {
   // timeouts by that time.
   const base::TimeTicks timeout_start = base::TimeTicks::Now();
 
-  if (!browser_->WaitForExit(SessionManagerImpl::kBrowserTimeout)) {
+  if (!browser_->WaitForExit(browser_timeout)) {
     LOG(WARNING) << "Browser process did not exit "
-                 << SessionManagerImpl::kBrowserTimeout.InSeconds()
-                 << " seconds after SIGTERM.";
+                 << browser_timeout.InSeconds() << " seconds after SIGTERM.";
     WriteBrowserPidFile(shutdown_browser_pid_path_);
-    browser_->AbortAndKillAll(GetKillTimeout());
+    browser_->AbortAndKillAll(browser_timeout);
   }
   if (code == SessionManagerService::SUCCESS) {
     // Only record shutdown time for normal exit.
@@ -658,15 +714,16 @@ void SessionManagerService::MaybeStopAllVms() {
   // for the VMs to exit before restarting chrome.
   dbus::MethodCall method_call(vm_tools::concierge::kVmConciergeInterface,
                                vm_tools::concierge::kStopAllVmsMethod);
-  vm_concierge_dbus_proxy_->CallMethod(&method_call, kStopAllVmsTimeoutMs,
-                                       base::Bind(&HandleStopAllVmsResponse));
+  vm_concierge_dbus_proxy_->CallMethod(
+      &method_call, kStopAllVmsTimeoutMs,
+      base::BindOnce(&HandleStopAllVmsResponse));
 }
 
 void SessionManagerService::WriteBrowserPidFile(base::FilePath path) {
   // This is safe from symlink attacks because /run/chrome is guaranteed to be a
   // root-owned directory (/run is in the rootfs, /run/chrome is created by
   // session_manager as a directory).
-  if (!base::DeleteFile(path)) {
+  if (!brillo::DeleteFile(path)) {
     PLOG(ERROR) << "Failed to delete " << path.value();
     return;
   }
@@ -704,7 +761,7 @@ void SessionManagerService::WriteBrowserPidFile(base::FilePath path) {
 }
 
 void SessionManagerService::OnLongKillTimeoutEnabled(
-    base::Optional<bool> enabled) {
+    std::optional<bool> enabled) {
   if (!enabled.has_value()) {
     LOG(ERROR) << "Failed to check kSessionManagerLongKillTimeout feature.";
     use_long_kill_timeout_ = false;
@@ -715,7 +772,7 @@ void SessionManagerService::OnLongKillTimeoutEnabled(
 }
 
 void SessionManagerService::OnLivenessCheckEnabled(
-    base::Optional<bool> enabled) {
+    std::optional<bool> enabled) {
   if (!enabled.has_value()) {
     LOG(ERROR) << "Failed to check SessionManagerLivenessCheck feature.";
     return;

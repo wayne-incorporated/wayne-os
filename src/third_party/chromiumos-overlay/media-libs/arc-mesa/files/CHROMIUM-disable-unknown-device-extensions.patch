@@ -1,0 +1,55 @@
+From 8ae30f072cbbb4c099b04efda468ca849489b19f Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Tue, 26 Mar 2019 10:40:30 -0700
+Subject: [PATCH 2/2] HACK: disable unknown device extensions
+
+Fixes dEQP-VK.api.info.device#extensions
+
+Change-Id: Ia68434e59a6405ca544bd1eb76931f3bca6bced3
+---
+ src/amd/vulkan/radv_extensions.py  | 2 +-
+ src/intel/vulkan/anv_extensions.py | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/amd/vulkan/radv_extensions.py b/src/amd/vulkan/radv_extensions.py
+index 0ec6981d13b6..b28660575032 100644
+--- a/src/amd/vulkan/radv_extensions.py
++++ b/src/amd/vulkan/radv_extensions.py
+@@ -59,7 +59,7 @@ EXTENSIONS = [
+     Extension('VK_KHR_device_group',                      1, True),
+     Extension('VK_KHR_device_group_creation',             1, True),
+     Extension('VK_KHR_draw_indirect_count',               1, True),
+-    Extension('VK_KHR_driver_properties',                 1, True),
++    Extension('VK_KHR_driver_properties',                 1, False),
+     Extension('VK_KHR_external_fence',                    1, 'device->rad_info.has_syncobj_wait_for_submit'),
+     Extension('VK_KHR_external_fence_capabilities',       1, True),
+     Extension('VK_KHR_external_fence_fd',                 1, 'device->rad_info.has_syncobj_wait_for_submit'),
+diff --git a/src/intel/vulkan/anv_extensions.py b/src/intel/vulkan/anv_extensions.py
+index abe361d82342..5853b8848f7f 100644
+--- a/src/intel/vulkan/anv_extensions.py
++++ b/src/intel/vulkan/anv_extensions.py
+@@ -71,18 +71,18 @@ MAX_API_VERSION = None # Computed later
+ EXTENSIONS = [
+     Extension('VK_ANDROID_external_memory_android_hardware_buffer', 3, 'ANDROID'),
+     Extension('VK_ANDROID_native_buffer',                 5, 'ANDROID'),
+-    Extension('VK_KHR_8bit_storage',                      1, 'device->info.gen >= 8'),
++    Extension('VK_KHR_8bit_storage',                      1, False),
+     Extension('VK_KHR_16bit_storage',                     1, 'device->info.gen >= 8'),
+     Extension('VK_KHR_bind_memory2',                      1, True),
+     Extension('VK_KHR_create_renderpass2',                1, True),
+     Extension('VK_KHR_dedicated_allocation',              1, True),
+-    Extension('VK_KHR_depth_stencil_resolve',             1, True),
++    Extension('VK_KHR_depth_stencil_resolve',             1, False),
+     Extension('VK_KHR_descriptor_update_template',        1, True),
+     Extension('VK_KHR_device_group',                      1, True),
+     Extension('VK_KHR_device_group_creation',             1, True),
+     Extension('VK_KHR_display',                          23, 'VK_USE_PLATFORM_DISPLAY_KHR'),
+     Extension('VK_KHR_draw_indirect_count',               1, True),
+-    Extension('VK_KHR_driver_properties',                 1, True),
++    Extension('VK_KHR_driver_properties',                 1, False),
+     Extension('VK_KHR_external_fence',                    1,
+               'device->has_syncobj_wait'),
+     Extension('VK_KHR_external_fence_capabilities',       1, True),
+-- 
+2.20.1
+

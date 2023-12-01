@@ -1,0 +1,434 @@
+commit 60433c63acb71935111304d71e41b7ee982398f8
+Author: James Y Knight <jyknight@google.com>
+Date:   Thu Jul 16 10:01:52 2020 -0400
+
+    Remove TwoAddressInstructionPass::sink3AddrInstruction.
+    
+    This function has a bug which will incorrectly reschedule instructions
+    after an INLINEASM_BR (which can branch). (The bug may also allow
+    scheduling past a throwing-CALL, I'm not certain.)
+    
+    I could fix that bug, but, as the removed FIXME notes, it's better to
+    attempt rescheduling before converting to 3-addr form, as that may
+    remove the need to convert in the first place. In fact, the code to do
+    such reordering was added to this pass only a few months later, in
+    2011, via the addition of the function rescheduleMIBelowKill. That
+    code does not contain the same bug.
+    
+    The removal of the sink3AddrInstruction function is not a no-op: in
+    some cases it would move an instruction post-conversion, when
+    rescheduleMIBelowKill would not move the instruction pre-converison.
+    However, this does not appear to be important: the machine instruction
+    scheduler can reorder the after-conversion instructions, in any case.
+    
+    This patch fixes a kernel panic 4.4 LTS x86_64 Linux kernels, when
+    built with clang after 4b0aa5724feaa89a9538dcab97e018110b0e4bc3.
+    
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1085
+    
+    Differential Revision: https://reviews.llvm.org/D83708
+
+diff --git a/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp b/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp
+index de336abe607..615ff4b8789 100644
+--- a/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp
++++ b/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp
+@@ -70,7 +70,6 @@ STATISTIC(NumTwoAddressInstrs, "Number of two-address instructions");
+ STATISTIC(NumCommuted        , "Number of instructions commuted to coalesce");
+ STATISTIC(NumAggrCommuted    , "Number of instructions aggressively commuted");
+ STATISTIC(NumConvertedTo3Addr, "Number of instructions promoted to 3-address");
+-STATISTIC(Num3AddrSunk,        "Number of 3-address instructions sunk");
+ STATISTIC(NumReSchedUps,       "Number of instructions re-scheduled up");
+ STATISTIC(NumReSchedDowns,     "Number of instructions re-scheduled down");
+ 
+@@ -109,10 +108,6 @@ class TwoAddressInstructionPass : public MachineFunctionPass {
+   // Set of already processed instructions in the current block.
+   SmallPtrSet<MachineInstr*, 8> Processed;
+ 
+-  // Set of instructions converted to three-address by target and then sunk
+-  // down current basic block.
+-  SmallPtrSet<MachineInstr*, 8> SunkInstrs;
+-
+   // A map from virtual registers to physical registers which are likely targets
+   // to be coalesced to due to copies from physical registers to virtual
+   // registers. e.g. v1024 = move r0.
+@@ -123,9 +118,6 @@ class TwoAddressInstructionPass : public MachineFunctionPass {
+   // registers. e.g. r1 = move v1024.
+   DenseMap<unsigned, unsigned> DstRegMap;
+ 
+-  bool sink3AddrInstruction(MachineInstr *MI, unsigned Reg,
+-                            MachineBasicBlock::iterator OldPos);
+-
+   bool isRevCopyChain(unsigned FromReg, unsigned ToReg, int Maxlen);
+ 
+   bool noUseAfterLastDef(unsigned Reg, unsigned Dist, unsigned &LastDef);
+@@ -209,136 +201,6 @@ INITIALIZE_PASS_END(TwoAddressInstructionPass, DEBUG_TYPE,
+ 
+ static bool isPlainlyKilled(MachineInstr *MI, unsigned Reg, LiveIntervals *LIS);
+ 
+-/// A two-address instruction has been converted to a three-address instruction
+-/// to avoid clobbering a register. Try to sink it past the instruction that
+-/// would kill the above mentioned register to reduce register pressure.
+-bool TwoAddressInstructionPass::
+-sink3AddrInstruction(MachineInstr *MI, unsigned SavedReg,
+-                     MachineBasicBlock::iterator OldPos) {
+-  // FIXME: Shouldn't we be trying to do this before we three-addressify the
+-  // instruction?  After this transformation is done, we no longer need
+-  // the instruction to be in three-address form.
+-
+-  // Check if it's safe to move this instruction.
+-  bool SeenStore = true; // Be conservative.
+-  if (!MI->isSafeToMove(AA, SeenStore))
+-    return false;
+-
+-  unsigned DefReg = 0;
+-  SmallSet<unsigned, 4> UseRegs;
+-
+-  for (const MachineOperand &MO : MI->operands()) {
+-    if (!MO.isReg())
+-      continue;
+-    Register MOReg = MO.getReg();
+-    if (!MOReg)
+-      continue;
+-    if (MO.isUse() && MOReg != SavedReg)
+-      UseRegs.insert(MO.getReg());
+-    if (!MO.isDef())
+-      continue;
+-    if (MO.isImplicit())
+-      // Don't try to move it if it implicitly defines a register.
+-      return false;
+-    if (DefReg)
+-      // For now, don't move any instructions that define multiple registers.
+-      return false;
+-    DefReg = MO.getReg();
+-  }
+-
+-  // Find the instruction that kills SavedReg.
+-  MachineInstr *KillMI = nullptr;
+-  if (LIS) {
+-    LiveInterval &LI = LIS->getInterval(SavedReg);
+-    assert(LI.end() != LI.begin() &&
+-           "Reg should not have empty live interval.");
+-
+-    SlotIndex MBBEndIdx = LIS->getMBBEndIdx(MBB).getPrevSlot();
+-    LiveInterval::const_iterator I = LI.find(MBBEndIdx);
+-    if (I != LI.end() && I->start < MBBEndIdx)
+-      return false;
+-
+-    --I;
+-    KillMI = LIS->getInstructionFromIndex(I->end);
+-  }
+-  if (!KillMI) {
+-    for (MachineOperand &UseMO : MRI->use_nodbg_operands(SavedReg)) {
+-      if (!UseMO.isKill())
+-        continue;
+-      KillMI = UseMO.getParent();
+-      break;
+-    }
+-  }
+-
+-  // If we find the instruction that kills SavedReg, and it is in an
+-  // appropriate location, we can try to sink the current instruction
+-  // past it.
+-  if (!KillMI || KillMI->getParent() != MBB || KillMI == MI ||
+-      MachineBasicBlock::iterator(KillMI) == OldPos || KillMI->isTerminator())
+-    return false;
+-
+-  // If any of the definitions are used by another instruction between the
+-  // position and the kill use, then it's not safe to sink it.
+-  //
+-  // FIXME: This can be sped up if there is an easy way to query whether an
+-  // instruction is before or after another instruction. Then we can use
+-  // MachineRegisterInfo def / use instead.
+-  MachineOperand *KillMO = nullptr;
+-  MachineBasicBlock::iterator KillPos = KillMI;
+-  ++KillPos;
+-
+-  unsigned NumVisited = 0;
+-  for (MachineInstr &OtherMI : make_range(std::next(OldPos), KillPos)) {
+-    // Debug instructions cannot be counted against the limit.
+-    if (OtherMI.isDebugInstr())
+-      continue;
+-    if (NumVisited > 30)  // FIXME: Arbitrary limit to reduce compile time cost.
+-      return false;
+-    ++NumVisited;
+-    for (unsigned i = 0, e = OtherMI.getNumOperands(); i != e; ++i) {
+-      MachineOperand &MO = OtherMI.getOperand(i);
+-      if (!MO.isReg())
+-        continue;
+-      Register MOReg = MO.getReg();
+-      if (!MOReg)
+-        continue;
+-      if (DefReg == MOReg)
+-        return false;
+-
+-      if (MO.isKill() || (LIS && isPlainlyKilled(&OtherMI, MOReg, LIS))) {
+-        if (&OtherMI == KillMI && MOReg == SavedReg)
+-          // Save the operand that kills the register. We want to unset the kill
+-          // marker if we can sink MI past it.
+-          KillMO = &MO;
+-        else if (UseRegs.count(MOReg))
+-          // One of the uses is killed before the destination.
+-          return false;
+-      }
+-    }
+-  }
+-  assert(KillMO && "Didn't find kill");
+-
+-  if (!LIS) {
+-    // Update kill and LV information.
+-    KillMO->setIsKill(false);
+-    KillMO = MI->findRegisterUseOperand(SavedReg, false, TRI);
+-    KillMO->setIsKill(true);
+-
+-    if (LV)
+-      LV->replaceKillInstruction(SavedReg, *KillMI, *MI);
+-  }
+-
+-  // Move instruction to its destination.
+-  MBB->remove(MI);
+-  MBB->insert(KillPos, MI);
+-
+-  if (LIS)
+-    LIS->handleMove(*MI);
+-
+-  ++Num3AddrSunk;
+-  return true;
+-}
+-
+ /// Return the MachineInstr* if it is the single def of the Reg in current BB.
+ static MachineInstr *getSingleDef(unsigned Reg, MachineBasicBlock *BB,
+                                   const MachineRegisterInfo *MRI) {
+@@ -740,26 +602,15 @@ TwoAddressInstructionPass::convertInstTo3Addr(MachineBasicBlock::iterator &mi,
+ 
+   LLVM_DEBUG(dbgs() << "2addr: CONVERTING 2-ADDR: " << *mi);
+   LLVM_DEBUG(dbgs() << "2addr:         TO 3-ADDR: " << *NewMI);
+-  bool Sunk = false;
+ 
+   if (LIS)
+     LIS->ReplaceMachineInstrInMaps(*mi, *NewMI);
+ 
+-  if (NewMI->findRegisterUseOperand(RegB, false, TRI))
+-    // FIXME: Temporary workaround. If the new instruction doesn't
+-    // uses RegB, convertToThreeAddress must have created more
+-    // then one instruction.
+-    Sunk = sink3AddrInstruction(NewMI, RegB, mi);
+-
+   MBB->erase(mi); // Nuke the old inst.
+ 
+-  if (!Sunk) {
+-    DistanceMap.insert(std::make_pair(NewMI, Dist));
+-    mi = NewMI;
+-    nmi = std::next(mi);
+-  }
+-  else
+-    SunkInstrs.insert(NewMI);
++  DistanceMap.insert(std::make_pair(NewMI, Dist));
++  mi = NewMI;
++  nmi = std::next(mi);
+ 
+   // Update source and destination register maps.
+   SrcRegMap.erase(RegA);
+@@ -1700,13 +1551,11 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &Func) {
+     SrcRegMap.clear();
+     DstRegMap.clear();
+     Processed.clear();
+-    SunkInstrs.clear();
+     for (MachineBasicBlock::iterator mi = MBB->begin(), me = MBB->end();
+          mi != me; ) {
+       MachineBasicBlock::iterator nmi = std::next(mi);
+-      // Don't revisit an instruction previously converted by target. It may
+-      // contain undef register operands (%noreg), which are not handled.
+-      if (mi->isDebugInstr() || SunkInstrs.count(&*mi)) {
++      // Skip debug instructions.
++      if (mi->isDebugInstr()) {
+         mi = nmi;
+         continue;
+       }
+diff --git a/llvm/test/CodeGen/X86/callbr-asm-sink.ll b/llvm/test/CodeGen/X86/callbr-asm-sink.ll
+new file mode 100644
+index 00000000000..758ac37f8ba
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/callbr-asm-sink.ll
+@@ -0,0 +1,35 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py
++; RUN: llc < %s -mtriple=x86_64-unknown-linux-gnu | FileCheck %s
++
++;; Verify that the machine instructions generated from the first
++;; getelementptr don't get sunk below the callbr. (Reduced from a bug
++;; report.)
++
++%struct1 = type { i8*, i32 }
++
++define void @klist_dec_and_del(%struct1*) {
++; CHECK-LABEL: klist_dec_and_del:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:    leaq 8(%rdi), %rax
++; CHECK-NEXT:    #APP
++; CHECK-NEXT:    # 8(%rdi) .Ltmp0
++; CHECK-NEXT:    #NO_APP
++; CHECK-NEXT:  # %bb.2:
++; CHECK-NEXT:    retq
++; CHECK-NEXT:  .Ltmp0: # Block address taken
++; CHECK-NEXT:  .LBB0_1:
++; CHECK-NEXT:    movq $0, -8(%rax)
++; CHECK-NEXT:    retq
++  %2 = getelementptr inbounds %struct1, %struct1* %0, i64 0, i32 1
++  callbr void asm sideeffect "# $0 $1", "*m,X,~{memory},~{dirflag},~{fpsr},~{flags}"(i32* %2, i8* blockaddress(@klist_dec_and_del, %3))
++          to label %6 [label %3]
++
++3:
++  %4 = getelementptr i32, i32* %2, i64 -2
++  %5 = bitcast i32* %4 to i8**
++  store i8* null, i8** %5, align 8
++  br label %6
++
++6:
++  ret void
++}
+diff --git a/llvm/test/CodeGen/X86/masked-iv-unsafe.ll b/llvm/test/CodeGen/X86/masked-iv-unsafe.ll
+index 76f2ad22b44..e4c82faa90d 100644
+--- a/llvm/test/CodeGen/X86/masked-iv-unsafe.ll
++++ b/llvm/test/CodeGen/X86/masked-iv-unsafe.ll
+@@ -402,9 +402,9 @@ return:
+ define void @another_count_down_signed(double* %d, i64 %n) nounwind {
+ ; CHECK-LABEL: another_count_down_signed:
+ ; CHECK:       # %bb.0: # %entry
+-; CHECK-NEXT:    movq %rsi, %rax
+-; CHECK-NEXT:    shlq $24, %rax
+-; CHECK-NEXT:    leaq -10(%rsi), %rcx
++; CHECK-NEXT:    leaq -10(%rsi), %rax
++; CHECK-NEXT:    movq %rsi, %rcx
++; CHECK-NEXT:    shlq $24, %rcx
+ ; CHECK-NEXT:    shlq $8, %rsi
+ ; CHECK-NEXT:    movsd {{.*#+}} xmm0 = mem[0],zero
+ ; CHECK-NEXT:    movsd {{.*#+}} xmm1 = mem[0],zero
+@@ -417,17 +417,17 @@ define void @another_count_down_signed(double* %d, i64 %n) nounwind {
+ ; CHECK-NEXT:    movsd {{.*#+}} xmm3 = mem[0],zero
+ ; CHECK-NEXT:    mulsd %xmm0, %xmm3
+ ; CHECK-NEXT:    movsd %xmm3, (%rdi,%rdx,8)
+-; CHECK-NEXT:    movq %rax, %rdx
++; CHECK-NEXT:    movq %rcx, %rdx
+ ; CHECK-NEXT:    sarq $24, %rdx
+ ; CHECK-NEXT:    movsd {{.*#+}} xmm3 = mem[0],zero
+ ; CHECK-NEXT:    mulsd %xmm1, %xmm3
+ ; CHECK-NEXT:    movsd %xmm3, (%rdi,%rdx,8)
+ ; CHECK-NEXT:    movsd {{.*#+}} xmm3 = mem[0],zero
+ ; CHECK-NEXT:    mulsd %xmm2, %xmm3
+-; CHECK-NEXT:    movsd %xmm3, 80(%rdi,%rcx,8)
+-; CHECK-NEXT:    addq $-16777216, %rax # imm = 0xFF000000
++; CHECK-NEXT:    movsd %xmm3, 80(%rdi,%rax,8)
++; CHECK-NEXT:    addq $-16777216, %rcx # imm = 0xFF000000
+ ; CHECK-NEXT:    addq $-256, %rsi
+-; CHECK-NEXT:    decq %rcx
++; CHECK-NEXT:    decq %rax
+ ; CHECK-NEXT:    jne .LBB7_1
+ ; CHECK-NEXT:  # %bb.2: # %return
+ ; CHECK-NEXT:    retq
+diff --git a/llvm/test/CodeGen/X86/reverse_branches.ll b/llvm/test/CodeGen/X86/reverse_branches.ll
+index 170fc6a7628..7a9ff8452d1 100644
+--- a/llvm/test/CodeGen/X86/reverse_branches.ll
++++ b/llvm/test/CodeGen/X86/reverse_branches.ll
+@@ -48,25 +48,25 @@ define i32 @test_branches_order() uwtable ssp {
+ ; CHECK-NEXT:    jg LBB0_7
+ ; CHECK-NEXT:  ## %bb.2: ## %for.cond1.preheader
+ ; CHECK-NEXT:    ## in Loop: Header=BB0_1 Depth=1
+-; CHECK-NEXT:    movl $-1, %r13d
+-; CHECK-NEXT:    movq %r15, %rbx
+-; CHECK-NEXT:    movq %r14, %rbp
++; CHECK-NEXT:    movl $-1, %ebp
++; CHECK-NEXT:    movq %r15, %rdi
++; CHECK-NEXT:    movq %r14, %rbx
+ ; CHECK-NEXT:    .p2align 4, 0x90
+ ; CHECK-NEXT:  LBB0_3: ## %for.cond1
+ ; CHECK-NEXT:    ## Parent Loop BB0_1 Depth=1
+ ; CHECK-NEXT:    ## => This Inner Loop Header: Depth=2
+-; CHECK-NEXT:    incl %r13d
+-; CHECK-NEXT:    cmpl $999, %r13d ## imm = 0x3E7
++; CHECK-NEXT:    incl %ebp
++; CHECK-NEXT:    cmpl $999, %ebp ## imm = 0x3E7
+ ; CHECK-NEXT:    jg LBB0_6
+ ; CHECK-NEXT:  ## %bb.4: ## %for.body3
+ ; CHECK-NEXT:    ## in Loop: Header=BB0_3 Depth=2
+-; CHECK-NEXT:    addq $1002, %rbp ## imm = 0x3EA
+-; CHECK-NEXT:    movq %rbx, %rdi
+-; CHECK-NEXT:    addq $1001, %rbx ## imm = 0x3E9
++; CHECK-NEXT:    addq $1002, %rbx ## imm = 0x3EA
++; CHECK-NEXT:    leaq 1001(%rdi), %r13
+ ; CHECK-NEXT:    movl $1000, %edx ## imm = 0x3E8
+ ; CHECK-NEXT:    movl $120, %esi
+ ; CHECK-NEXT:    callq _memchr
+-; CHECK-NEXT:    cmpq %rax, %rbp
++; CHECK-NEXT:    cmpq %rax, %rbx
++; CHECK-NEXT:    movq %r13, %rdi
+ ; CHECK-NEXT:    je LBB0_3
+ ; CHECK-NEXT:    jmp LBB0_5
+ ; CHECK-NEXT:  LBB0_7: ## %for.end11
+diff --git a/llvm/test/CodeGen/X86/rotate-extract.ll b/llvm/test/CodeGen/X86/rotate-extract.ll
+index 9ef29c7883d..41003c9d335 100644
+--- a/llvm/test/CodeGen/X86/rotate-extract.ll
++++ b/llvm/test/CodeGen/X86/rotate-extract.ll
+@@ -306,9 +306,9 @@ define i32 @extract_add_1_comut(i32 %i) nounwind {
+ define i32 @no_extract_add_1(i32 %i) nounwind {
+ ; X86-LABEL: no_extract_add_1:
+ ; X86:       # %bb.0:
+-; X86-NEXT:    movl {{[0-9]+}}(%esp), %ecx
+-; X86-NEXT:    leal (%ecx,%ecx), %eax
+-; X86-NEXT:    shrl $27, %ecx
++; X86-NEXT:    movl {{[0-9]+}}(%esp), %eax
++; X86-NEXT:    leal (%eax,%eax), %ecx
++; X86-NEXT:    shrl $27, %eax
+ ; X86-NEXT:    orl %ecx, %eax
+ ; X86-NEXT:    retl
+ ;
+diff --git a/llvm/test/CodeGen/X86/twoaddr-lea.ll b/llvm/test/CodeGen/X86/twoaddr-lea.ll
+index 077cf805bcb..716d20d63c4 100644
+--- a/llvm/test/CodeGen/X86/twoaddr-lea.ll
++++ b/llvm/test/CodeGen/X86/twoaddr-lea.ll
+@@ -68,8 +68,9 @@ bb2:
+   br label %bb6
+ 
+ bb3:
+-; CHECK: subl %e[[REG0:[a-z0-9]+]],
+-; CHECK: addq $4, %r[[REG0]]
++; CHECK: LBB3_3:
++; CHECK: addq $4, %r
++; CHECK: subl %e
+   %tmp14 = phi i64 [ %tmp15, %bb5 ], [ 0, %bb1 ]
+   %tmp15 = add nuw i64 %tmp14, 4
+   %tmp16 = trunc i64 %tmp14 to i32
+diff --git a/llvm/test/CodeGen/X86/twoaddr-pass-sink.ll b/llvm/test/CodeGen/X86/twoaddr-pass-sink.ll
+deleted file mode 100644
+index a06eaec894c..00000000000
+--- a/llvm/test/CodeGen/X86/twoaddr-pass-sink.ll
++++ /dev/null
+@@ -1,30 +0,0 @@
+-; REQUIRES: asserts
+-; RUN: llc < %s -mtriple=i686-- -mattr=+sse2 -stats 2>&1 | grep "Number of 3-address instructions sunk"
+-
+-define void @t2(<2 x i64>* %vDct, <2 x i64>* %vYp, i8* %skiplist, <2 x i64> %a1) nounwind  {
+-entry:
+-	%tmp25 = bitcast <2 x i64> %a1 to <8 x i16>		; <<8 x i16>> [#uses=1]
+-	br label %bb
+-bb:		; preds = %bb, %entry
+-	%skiplist_addr.0.rec = phi i32 [ 0, %entry ], [ %indvar.next, %bb ]		; <i32> [#uses=3]
+-	%vYp_addr.0.rec = shl i32 %skiplist_addr.0.rec, 3		; <i32> [#uses=3]
+-	%vDct_addr.0 = getelementptr <2 x i64>, <2 x i64>* %vDct, i32 %vYp_addr.0.rec		; <<2 x i64>*> [#uses=1]
+-	%vYp_addr.0 = getelementptr <2 x i64>, <2 x i64>* %vYp, i32 %vYp_addr.0.rec		; <<2 x i64>*> [#uses=1]
+-	%skiplist_addr.0 = getelementptr i8, i8* %skiplist, i32 %skiplist_addr.0.rec		; <i8*> [#uses=1]
+-	%vDct_addr.0.sum43 = or i32 %vYp_addr.0.rec, 1		; <i32> [#uses=1]
+-	%tmp7 = getelementptr <2 x i64>, <2 x i64>* %vDct, i32 %vDct_addr.0.sum43		; <<2 x i64>*> [#uses=1]
+-	%tmp8 = load <2 x i64>, <2 x i64>* %tmp7, align 16		; <<2 x i64>> [#uses=1]
+-	%tmp11 = load <2 x i64>, <2 x i64>* %vDct_addr.0, align 16		; <<2 x i64>> [#uses=1]
+-	%tmp13 = bitcast <2 x i64> %tmp8 to <8 x i16>		; <<8 x i16>> [#uses=1]
+-	%tmp15 = bitcast <2 x i64> %tmp11 to <8 x i16>		; <<8 x i16>> [#uses=1]
+-	%tmp16 = shufflevector <8 x i16> %tmp15, <8 x i16> %tmp13, <8 x i32> < i32 0, i32 8, i32 1, i32 9, i32 2, i32 10, i32 3, i32 11 >		; <<8 x i16>> [#uses=1]
+-	%tmp26 = mul <8 x i16> %tmp25, %tmp16		; <<8 x i16>> [#uses=1]
+-	%tmp27 = bitcast <8 x i16> %tmp26 to <2 x i64>		; <<2 x i64>> [#uses=1]
+-	store <2 x i64> %tmp27, <2 x i64>* %vYp_addr.0, align 16
+-	%tmp37 = load i8, i8* %skiplist_addr.0, align 1		; <i8> [#uses=1]
+-	%tmp38 = icmp eq i8 %tmp37, 0		; <i1> [#uses=1]
+-	%indvar.next = add i32 %skiplist_addr.0.rec, 1		; <i32> [#uses=1]
+-	br i1 %tmp38, label %return, label %bb
+-return:		; preds = %bb
+-	ret void
+-}

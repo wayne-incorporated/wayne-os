@@ -1,0 +1,92 @@
+From 83435e748f7c2c6bf1c946f2a489cce40b9ea05f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marek=20Ol=C5=A1=C3=A1k?= <marek.olsak@amd.com>
+Date: Thu, 25 Apr 2019 18:44:51 -0400
+Subject: st/mesa: fix 2 crashes in st_tgsi_lower_yuv
+
+src/mesa/state_tracker/st_tgsi_lower_yuv.c:68: void reg_dst(struct
+ tgsi_full_dst_register *, const struct tgsi_full_dst_register *, unsigned
+ int): assertion "dst->Register.WriteMask" failed
+
+The second crash was due to insufficient allocated size for TGSI
+instructions.
+
+Cc: 19.0 19.1 <mesa-stable@lists.freedesktop.org>
+Reviewed-by: Rob Clark <robdclark@gmail.com>
+---
+ src/mesa/state_tracker/st_tgsi_lower_yuv.c | 48 +++++++++++++++++-------------
+ 1 file changed, 28 insertions(+), 20 deletions(-)
+
+diff --git a/src/mesa/state_tracker/st_tgsi_lower_yuv.c b/src/mesa/state_tracker/st_tgsi_lower_yuv.c
+index 6acd173..73437dd 100644
+--- a/src/mesa/state_tracker/st_tgsi_lower_yuv.c
++++ b/src/mesa/state_tracker/st_tgsi_lower_yuv.c
+@@ -269,31 +269,39 @@ yuv_to_rgb(struct tgsi_transform_context *tctx,
+    tctx->emit_instruction(tctx, &inst);
+ 
+    /* DP3 dst.x, tmpA, imm[0] */
+-   inst = dp3_instruction();
+-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_X);
+-   reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
+-   reg_src(&inst.Src[1], &ctx->imm[0], SWIZ(X, Y, Z, W));
+-   tctx->emit_instruction(tctx, &inst);
++   if (dst->Register.WriteMask & TGSI_WRITEMASK_X) {
++      inst = dp3_instruction();
++      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_X);
++      reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
++      reg_src(&inst.Src[1], &ctx->imm[0], SWIZ(X, Y, Z, W));
++      tctx->emit_instruction(tctx, &inst);
++   }
+ 
+    /* DP3 dst.y, tmpA, imm[1] */
+-   inst = dp3_instruction();
+-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Y);
+-   reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
+-   reg_src(&inst.Src[1], &ctx->imm[1], SWIZ(X, Y, Z, W));
+-   tctx->emit_instruction(tctx, &inst);
++   if (dst->Register.WriteMask & TGSI_WRITEMASK_Y) {
++      inst = dp3_instruction();
++      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Y);
++      reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
++      reg_src(&inst.Src[1], &ctx->imm[1], SWIZ(X, Y, Z, W));
++      tctx->emit_instruction(tctx, &inst);
++   }
+ 
+    /* DP3 dst.z, tmpA, imm[2] */
+-   inst = dp3_instruction();
+-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Z);
+-   reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
+-   reg_src(&inst.Src[1], &ctx->imm[2], SWIZ(X, Y, Z, W));
+-   tctx->emit_instruction(tctx, &inst);
++   if (dst->Register.WriteMask & TGSI_WRITEMASK_Z) {
++      inst = dp3_instruction();
++      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_Z);
++      reg_src(&inst.Src[0], &ctx->tmp[A].src, SWIZ(X, Y, Z, W));
++      reg_src(&inst.Src[1], &ctx->imm[2], SWIZ(X, Y, Z, W));
++      tctx->emit_instruction(tctx, &inst);
++   }
+ 
+    /* MOV dst.w, imm[0].x */
+-   inst = mov_instruction();
+-   reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_W);
+-   reg_src(&inst.Src[0], &ctx->imm[3], SWIZ(_, _, _, W));
+-   tctx->emit_instruction(tctx, &inst);
++   if (dst->Register.WriteMask & TGSI_WRITEMASK_W) {
++      inst = mov_instruction();
++      reg_dst(&inst.Dst[0], dst, TGSI_WRITEMASK_W);
++      reg_src(&inst.Src[0], &ctx->imm[3], SWIZ(_, _, _, W));
++      tctx->emit_instruction(tctx, &inst);
++   }
+ }
+ 
+ static void
+@@ -434,7 +442,7 @@ st_tgsi_lower_yuv(const struct tgsi_token *tokens, unsigned free_slots,
+    /* TODO better job of figuring out how many extra tokens we need..
+     * this is a pain about tgsi_transform :-/
+     */
+-   newlen = tgsi_num_tokens(tokens) + 120;
++   newlen = tgsi_num_tokens(tokens) + 300;
+    newtoks = tgsi_alloc_tokens(newlen);
+    if (!newtoks)
+       return NULL;
+-- 
+cgit v1.1

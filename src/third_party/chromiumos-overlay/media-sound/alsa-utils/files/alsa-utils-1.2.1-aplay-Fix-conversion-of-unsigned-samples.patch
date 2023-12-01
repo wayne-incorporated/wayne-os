@@ -1,0 +1,54 @@
+From 0ea7bfea83d97fefd18845948350322017a865c2 Mon Sep 17 00:00:00 2001
+From: Takashi Iwai <tiwai@suse.de>
+Date: Tue, 24 Aug 2021 09:00:40 +0200
+Subject: [PATCH 1/6] aplay: Fix conversion of unsigned samples in peak
+ calculation
+
+The XOR with the mask has to be applied before calculating abs value.
+
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+---
+ aplay/aplay.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/aplay/aplay.c b/aplay/aplay.c
+index cc51dcb..91af244 100644
+--- a/aplay/aplay.c
++++ b/aplay/aplay.c
+@@ -1828,7 +1828,8 @@ static void compute_max_peak(u_char *data, size_t samples)
+ 				sval = le16toh(*valp);
+ 			else
+ 				sval = be16toh(*valp);
+-			sval = abs(sval) ^ mask;
++			sval ^= mask;
++			sval = abs(sval);
+ 			if (max_peak[c] < sval)
+ 				max_peak[c] = sval;
+ 			valp++;
+@@ -1848,11 +1849,12 @@ static void compute_max_peak(u_char *data, size_t samples)
+ 			} else {
+ 				val = (valp[0]<<16) | (valp[1]<<8) | valp[2];
+ 			}
++			val ^= mask;
+ 			/* Correct signed bit in 32-bit value */
+ 			if (val & (1<<(bits_per_sample-1))) {
+ 				val |= 0xff<<24;	/* Negate upper bits too */
+ 			}
+-			val = abs(val) ^ mask;
++			val = abs(val);
+ 			if (max_peak[c] < val)
+ 				max_peak[c] = val;
+ 			valp += 3;
+@@ -1871,7 +1873,8 @@ static void compute_max_peak(u_char *data, size_t samples)
+ 				val = le32toh(*valp);
+ 			else
+ 				val = be32toh(*valp);
+-			val = abs(val) ^ mask;
++			val ^= mask;
++			val = abs(val);
+ 			if (max_peak[c] < val)
+ 				max_peak[c] = val;
+ 			valp++;
+-- 
+2.33.0.259.gc128427fd7-goog
+

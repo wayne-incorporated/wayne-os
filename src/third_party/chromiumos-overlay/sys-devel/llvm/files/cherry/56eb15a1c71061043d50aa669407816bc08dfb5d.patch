@@ -1,0 +1,133 @@
+commit 56eb15a1c71061043d50aa669407816bc08dfb5d
+Author: Mark de Wever <koraq@xs4all.nl>
+Date:   2020-02-22
+
+    [Sema] Fix pointer-to-int-cast diagnostic for _Bool
+    
+    The diagnostic added in D72231 also shows a diagnostic when casting to a
+    _Bool. This is unwanted. This patch removes the diagnostic for _Bool types.
+    
+    Differential Revision: https://reviews.llvm.org/D74860
+
+diff --git clang/lib/Sema/SemaCast.cpp clang/lib/Sema/SemaCast.cpp
+index a89cc4be53aa409ff023763ef95cff21235cf03f..2b3b60e6bde4666f7cc32522ceb997a079c1c50c 100644
+--- a/clang/lib/Sema/SemaCast.cpp
++++ b/clang/lib/Sema/SemaCast.cpp
+@@ -2759,17 +2759,18 @@ void CastOperation::CheckCStyleCast() {
+       Self.Diag(SrcExpr.get()->getBeginLoc(),
+                 diag::err_cast_pointer_to_non_pointer_int)
+           << DestType << SrcExpr.get()->getSourceRange();
+       SrcExpr = ExprError();
+       return;
+     }
+ 
+     if ((Self.Context.getTypeSize(SrcType) >
+-         Self.Context.getTypeSize(DestType))) {
++         Self.Context.getTypeSize(DestType)) &&
++        !DestType->isBooleanType()) {
+       // C 6.3.2.3p6: Any pointer type may be converted to an integer type.
+       // Except as previously specified, the result is implementation-defined.
+       // If the result cannot be represented in the integer type, the behavior
+       // is undefined. The result need not be in the range of values of any
+       // integer type.
+       unsigned Diag = Self.getLangOpts().MicrosoftExt
+                           ? diag::ext_ms_pointer_to_int_cast
+                           : SrcType->isVoidPointerType()
+diff --git clang/test/Sema/MicrosoftExtensions.c clang/test/Sema/MicrosoftExtensions.c
+index 6e784bfe6102db0d2c7e0a0216f859aa14db9738..8e7087a57991d11a1cb0f7accad08befae2d5908 100644
+--- a/clang/test/Sema/MicrosoftExtensions.c
++++ b/clang/test/Sema/MicrosoftExtensions.c
+@@ -94,17 +94,17 @@ enum : long long {  // expected-warning{{enumeration types with a fixed underlyi
+ 
+ void pointer_to_integral_type_conv(char* ptr) {
+    char ch = (char)ptr; // expected-warning{{cast to smaller integer type 'char' from 'char *' is a Microsoft extension}}
+    short sh = (short)ptr; // expected-warning{{cast to smaller integer type 'short' from 'char *' is a Microsoft extension}}
+    ch = (char)ptr; // expected-warning{{cast to smaller integer type 'char' from 'char *' is a Microsoft extension}}
+    sh = (short)ptr; // expected-warning{{cast to smaller integer type 'short' from 'char *' is a Microsoft extension}}
+ 
+    // This is valid ISO C.
+-   _Bool b = (_Bool)ptr; // expected-warning{{cast to smaller integer type '_Bool' from 'char *' is a Microsoft extension}}
++   _Bool b = (_Bool)ptr;
+ }
+ 
+ typedef struct {
+   UNKNOWN u; // expected-error {{unknown type name 'UNKNOWN'}}
+ } AA;
+ 
+ typedef struct {
+   AA; // expected-warning {{anonymous structs are a Microsoft extension}}
+diff --git clang/test/Sema/cast.c clang/test/Sema/cast.c
+index f16064d78dd993aa6265525a8841cbe12ee9eed2..0c4fc7d129fc7abb9009244cf03597090a73daa0 100644
+--- a/clang/test/Sema/cast.c
++++ b/clang/test/Sema/cast.c
+@@ -146,40 +146,40 @@ void testCDouble(CDouble v) {
+   (void) (Double) v;
+   (void) (CInt) v;
+   (void) (CLong) v;
+   (void) (CFloat) v;
+   (void) (CDouble) v;
+ }
+ 
+ void testVoidPtr(VoidPtr v) {
+-  (void) (Bool) v; // expected-warning{{cast to smaller integer type 'Bool' (aka '_Bool') from 'VoidPtr' (aka 'void *')}}
++  (void)(Bool) v;
+   (void) (Int) v; // expected-warning{{cast to smaller integer type 'Int' (aka 'int') from 'VoidPtr' (aka 'void *')}}
+   (void) (Long) v;
+   (void) (VoidPtr) v;
+   (void) (CharPtr) v;
+   // Test that casts to void* can be controlled separately
+   // from other -Wpointer-to-int-cast warnings.
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wvoid-pointer-to-int-cast"
+-  (void) (Bool) v; // no-warning
++  (void)(Int) v; // no-warning
+ #pragma clang diagnostic pop
+ }
+ 
+ void testCharPtr(CharPtr v) {
+-  (void) (Bool) v; // expected-warning{{cast to smaller integer type 'Bool' (aka '_Bool') from 'CharPtr' (aka 'char *')}}
++  (void)(Bool) v;
+   (void) (Int) v; // expected-warning{{cast to smaller integer type 'Int' (aka 'int') from 'CharPtr' (aka 'char *')}}
+   (void) (Long) v;
+   (void) (VoidPtr) v;
+   (void) (CharPtr) v;
+   // Test that casts to void* can be controlled separately
+   // from other -Wpointer-to-int-cast warnings.
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wvoid-pointer-to-int-cast"
+-  (void) (Bool) v; // expected-warning{{cast to smaller integer type 'Bool' (aka '_Bool') from 'CharPtr' (aka 'char *')}}
++  (void)(Int) v; // expected-warning{{cast to smaller integer type 'Int' (aka 'int') from 'CharPtr' (aka 'char *')}}
+ #pragma clang diagnostic pop
+ }
+ 
+ typedef enum { x_a, x_b } X;
+ void *intToPointerCast2(X x) {
+   return (void*)x;
+ }
+ 
+diff --git clang/test/SemaCXX/cstyle-cast.cpp clang/test/SemaCXX/cstyle-cast.cpp
+index 2327d7b51d97c2732bb097ad1597049c3dd433a3..32a6e205f769db98b083c6d14e03bbaca7e66f61 100644
+--- a/clang/test/SemaCXX/cstyle-cast.cpp
++++ b/clang/test/SemaCXX/cstyle-cast.cpp
+@@ -173,16 +173,21 @@ typedef void (*fnptr)();
+ void integral_conversion()
+ {
+   void *vp = (void*)(testval);
+   long l = (long)(vp);
+   (void)(float*)(l);
+   fnptr fnp = (fnptr)(l);
+   (void)(char)(fnp); // expected-error {{cast from pointer to smaller type 'char' loses information}}
+   (void)(long)(fnp);
++
++  (void)(bool)((void*)0);
++  (void)(bool)((int*)0);
++  (void)(char)((void*)0); // expected-error {{cast from pointer to smaller type 'char' loses information}}
++  (void)(char)((int*)0);  // expected-error {{cast from pointer to smaller type 'char' loses information}}
+ }
+ 
+ void pointer_conversion()
+ {
+   int *p1 = 0;
+   float *p2 = (float*)(p1);
+   structure *p3 = (structure*)(p2);
+   typedef int **ppint;

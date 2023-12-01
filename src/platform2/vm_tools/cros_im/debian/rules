@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+export DH_VERBOSE=1
+DEB_BUILD_ARCH ?= $(shell dpkg-architecture -qDEB_BUILD_ARCH)
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- -Dwl_protocol_dir=protocols
+
+override_dh_auto_test:
+ifeq (,$(filter armhf,$(DEB_BUILD_ARCH)))
+	dh_auto_test
+else
+# TODO(b/257867792): Resolve errors and run tests on armhf.
+	echo "Skipping tests due to Weston errors on armhf."
+endif
+
+# Exclude qtbase-abi in ${shlib:Depends}. This is a virtual package that is not
+# compatible with Ubuntu users, and is not needed since cros-im already depends
+# on libqt5core5a.
+override_dh_shlibdeps:
+	dh_shlibdeps -- -xqtbase-abi

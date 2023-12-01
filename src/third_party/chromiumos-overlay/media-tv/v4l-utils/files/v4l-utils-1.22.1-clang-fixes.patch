@@ -1,0 +1,62 @@
+v4l-utils: fix clang compilation error
+
+remove unused include.
+
+In file included from v4l2-test-time32-64.cpp:20:
+In file included from ./v4l2-compliance.h:24:
+In file included from /usr/bin/../include/c++/v1/map:531:
+/usr/bin/../include/c++/v1/__config:1292:50: error: builtin feature check macro requires a parenthesized identifier
+\#if __cplusplus > 201402L && __has_cpp_attribute(fallthrough)
+                                                 ^
+../../include/compiler.h:8:21: note: expanded from macro 'fallthrough'
+\#define fallthrough [[clang::fallthrough]]
+                    ^
+In file included from v4l2-test-time32-64.cpp:20:
+In file included from ./v4l2-compliance.h:24:
+In file included from /usr/bin/../include/c++/v1/map:531:
+/usr/bin/../include/c++/v1/__config:1292:50: error: missing ')' after '['
+\#if __cplusplus > 201402L && __has_cpp_attribute(fallthrough)
+                                                 ^~~~~~~~~~~
+../../include/compiler.h:8:22: note: expanded from macro 'fallthrough'
+\#define fallthrough [[clang::fallthrough]]
+                    ~^
+/usr/bin/../include/c++/v1/__config:1292:49: note: to match this '('
+\#if __cplusplus > 201402L && __has_cpp_attribute(fallthrough)
+                                                ^
+/usr/bin/../include/c++/v1/__config:1294:34: error: builtin feature check macro requires a parenthesized identifier
+\#elif __has_cpp_attribute(clang::fallthrough)
+                                 ^
+../../include/compiler.h:8:21: note: expanded from macro 'fallthrough'
+\#define fallthrough [[clang::fallthrough]]
+                    ^
+In file included from v4l2-test-time32-64.cpp:20:
+In file included from ./v4l2-compliance.h:24:
+In file included from /usr/bin/../include/c++/v1/map:531:
+/usr/bin/../include/c++/v1/__config:1294:34: error: missing ')' after '['
+\#elif __has_cpp_attribute(clang::fallthrough)
+                                 ^~~~~~~~~~~
+../../include/compiler.h:8:22: note: expanded from macro 'fallthrough'
+\#define fallthrough [[clang::fallthrough]]
+                    ~^
+/usr/bin/../include/c++/v1/__config:1294:26: note: to match this '('
+\#elif __has_cpp_attribute(clang::fallthrough)
+                         ^
+4 errors generated.
+---
+ utils/v4l2-compliance/v4l2-test-time32-64.cpp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/utils/v4l2-compliance/v4l2-test-time32-64.cpp b/utils/v4l2-compliance/v4l2-test-time32-64.cpp
+index 1c515ca..7b66693 100644
+--- a/utils/v4l2-compliance/v4l2-test-time32-64.cpp
++++ b/utils/v4l2-compliance/v4l2-test-time32-64.cpp
+@@ -16,7 +16,6 @@
+ 
+ #include <sys/types.h>
+ 
+-#include "compiler.h"
+ #include "v4l2-compliance.h"
+ 
+ typedef __s32		old_time32_t;
+-- 
+2.36.0.rc0.470.gd361397f0d-goog

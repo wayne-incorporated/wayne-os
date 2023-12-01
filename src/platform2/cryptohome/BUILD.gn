@@ -1,0 +1,610 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Stop linter from complaining XXX_unittest.cc naming.
+# TODO(cylai): rename all the unittest files and enable this linting option.
+# gnlint: disable=GnLintSourceFileNames
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":cryptohome",
+    ":cryptohome-namespace-mounter",
+    ":cryptohome-path",
+    ":cryptohomed",
+    ":encrypted-reboot-vault",
+    ":homedirs_initializer",
+    ":lockbox-cache",
+    ":mount-encrypted",
+    ":mount_encrypted_lib",
+    ":stateful-recovery",
+    ":stateful_recovery_lib",
+    "libs:install_data_migrator_headers",
+    "libs:install_platform_headers",
+    "libs:libcryptohome_data_migrator",
+    "libs:libcryptohome_data_migrator_pc",
+    "libs:libcryptohome_platform",
+    "libs:libcryptohome_platform_pc",
+  ]
+  if (use.test) {
+    deps += [
+      ":cryptohome_testrunner",
+      ":error_location_check",
+      ":fake_platform_unittest",
+      ":mount_encrypted_unittests",
+      ":stateful_recovery_unittests",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":cryptohome_cryptolib_blob_to_hex_fuzzer",
+      ":cryptohome_recovery_id_fuzzer",
+      ":cryptohome_user_secret_stash_parser_fuzzer",
+      ":cryptohome_userdataauth_fuzzer",
+    ]
+  }
+}
+
+config("target_defaults") {
+  configs = [ "libs:target_defaults" ]
+
+  # Currently we don't have a good conclusion for the testing code.
+  # Only check the consumable attributes on non-test build.
+  if (!use.test) {
+    cflags = [ "-Wconsumed" ]
+  }
+}
+
+config("local_print_proto_include") {
+  # This config is used when any build target used the print_proto.
+  include_dirs = [ "${target_gen_dir}/.." ]
+}
+
+action("print_proto_library") {
+  dbus_proto_path = "${sysroot}/usr/include/chromeos/dbus/cryptohome"
+  script = "../libhwsec-foundation/utility/proto_print.py"
+  inputs = [
+    "${dbus_proto_path}/auth_factor.proto",
+    "${dbus_proto_path}/fido.proto",
+    "${dbus_proto_path}/key.proto",
+    "${dbus_proto_path}/rpc.proto",
+    "${dbus_proto_path}/UserDataAuth.proto",
+  ]
+  outputs = [
+    "${target_gen_dir}/common/print_auth_factor_proto.cc",
+    "${target_gen_dir}/common/print_fido_proto.cc",
+    "${target_gen_dir}/common/print_key_proto.cc",
+    "${target_gen_dir}/common/print_rpc_proto.cc",
+    "${target_gen_dir}/common/print_UserDataAuth_proto.cc",
+  ]
+  args = [
+           "--package-dir",
+           "cryptohome",
+           "--subdir",
+           "common",
+           "--proto-include",
+           "cryptohome/proto_bindings",
+           "--output-dir",
+           "${target_gen_dir}/common",
+         ] + inputs
+}
+
+# Main programs.
+executable("cryptohome") {
+  sources = [ "cryptohome.cc" ]
+  sources += get_target_outputs(":print_proto_library")
+  configs += [
+    ":local_print_proto_include",
+    ":target_defaults",
+  ]
+  libs = [
+    "chaps",
+    "keyutils",
+    "policy",
+    "pthread",
+  ]
+  deps = [
+    ":print_proto_library",
+    "libs:cryptohome-proto",
+    "libs:libcrostpm",
+    "libs:libcryptohome",
+  ]
+
+  pkg_deps = [
+    "dbus-1",
+    "libecryptfs",
+    "libmetrics",
+    "libuser_data_auth-client",
+  ]
+}
+
+executable("cryptohome-path") {
+  sources = [ "cryptohome-path.cc" ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+executable("cryptohomed") {
+  sources = [ "cryptohomed.cc" ]
+  configs += [ ":target_defaults" ]
+  libs = [
+    "chaps",
+    "hwsec-profiling",
+    "keyutils",
+    "policy",
+    "pthread",
+  ]
+  deps = [
+    "libs:libcrostpm",
+    "libs:libcryptohome",
+  ]
+  pkg_deps = [
+    "dbus-1",
+    "libbootlockbox-client",
+    "libecryptfs",
+    "libmetrics",
+  ]
+}
+
+# This executable is used to mount cryptohomes.
+executable("cryptohome-namespace-mounter") {
+  sources = [ "cryptohome_namespace_mounter/cryptohome_namespace_mounter.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "libs:libcryptohome",
+    "libs:namespace-mounter-ipc-proto",
+  ]
+}
+
+executable("lockbox-cache") {
+  sources = [
+    "dircrypto_util.cc",
+    "lockbox-cache-main.cc",
+    "lockbox-cache.cc",
+    "lockbox.cc",
+    "platform.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  libs = [
+    "keyutils",
+    "secure_erase_file",
+  ]
+  deps = [
+    "libs:cryptohome-proto",
+    "libs:libcrostpm",
+  ]
+  pkg_deps = [
+    "libcrossystem",
+    "libecryptfs",
+    "libmetrics",
+  ]
+}
+
+static_library("mount_encrypted_lib") {
+  sources = [
+    "mount_encrypted/encrypted_fs.cc",
+    "mount_encrypted/encryption_key.cc",
+    "mount_encrypted/mount_encrypted_metrics.cc",
+    "mount_encrypted/tpm.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  defines = [ "CHROMEOS_ENVIRONMENT=1" ]
+  deps = [ "libs:cryptohome-proto" ]
+  pkg_deps = [ "vboot_host" ]
+
+  if (use.tpm2) {
+    sources += [ "mount_encrypted/tpm2.cc" ]
+
+    # This selects TPM2 code in vboot_host headers.
+    defines += [ "TPM2_MODE=1" ]
+  } else {
+    sources += [ "mount_encrypted/tpm1.cc" ]
+  }
+}
+
+executable("encrypted-reboot-vault") {
+  sources = [
+    "encrypted_reboot_vault/encrypted_reboot_vault.cc",
+    "encrypted_reboot_vault/encrypted_reboot_vault_main.cc",
+  ]
+  deps = [ "libs:libcrostpm" ]
+}
+
+executable("mount-encrypted") {
+  sources = [ "mount_encrypted/mount_encrypted.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    ":mount_encrypted_lib",
+    "libs:libcrostpm",
+  ]
+}
+executable("homedirs_initializer") {
+  sources = [ "homedirs_initializer.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "libs:libcrostpm",
+    "libs:libcryptohome",
+  ]
+}
+
+static_library("stateful_recovery_lib") {
+  sources = [ "stateful_recovery/stateful_recovery.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ "libs:libcryptohome" ]
+  pkg_deps = [ "libuser_data_auth-client" ]
+}
+
+executable("stateful-recovery") {
+  sources = [ "stateful_recovery/main.cc" ]
+  libs = [ "policy" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":stateful_recovery_lib" ]
+  pkg_deps = [ "dbus-1" ]
+}
+
+if (use.test || use.fuzzer) {
+  static_library("fake_platform-static") {
+    sources = [
+      "fake_platform.cc",
+      "fake_platform/fake_fake_mount_mapping_redirect_factory.cc",
+      "fake_platform/fake_mount_mapper.cc",
+      "fake_platform/real_fake_mount_mapping_redirect_factory.cc",
+      "fake_platform/test_file_path.cc",
+      "mock_platform.cc",
+    ]
+    configs += [ "//common-mk:test" ]
+    libs = [ "hwsec-foundation" ]
+    deps = [ "libs:libcryptohome_platform" ]
+    pkg_deps = [
+      "libbrillo",
+      "libbrillo-test",
+      "libchrome",
+    ]
+  }
+}
+
+if (use.test) {
+  static_library("test_utils-static") {
+    sources = [
+      "challenge_credentials/challenge_credentials_test_utils.cc",
+      "challenge_credentials/signature_sealing_test_utils.cc",
+      "cleanup/mock_disk_cleanup.cc",
+      "cleanup/mock_disk_cleanup_routines.cc",
+      "cryptorecovery/fake_recovery_mediator_crypto.cc",
+      "cryptorecovery/inclusion_proof_test_util.cc",
+      "data_migrator/fake_migration_helper_delegate.cc",
+      "mock_cryptohome_key_loader.cc",
+      "mock_cryptohome_keys_manager.cc",
+      "mock_firmware_management_parameters.cc",
+      "mock_install_attributes.cc",
+      "mock_key_challenge_service.cc",
+      "mock_lockbox.cc",
+      "mock_pkcs11_init.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":local_print_proto_include",
+      ":target_defaults",
+    ]
+    libs = [
+      "chaps",
+      "hwsec_test",
+      "keyutils",
+      "policy",
+      "pthread",
+    ]
+
+    deps = [
+      "libs:libcrostpm",
+      "libs:libcryptohome",
+      "libs:libfido",
+    ]
+
+    pkg_deps = [
+      "dbus-1",
+      "libattestation-client",
+      "libattestation-client-test",
+      "libbrillo-test",
+      "libchrome-test",
+      "libecryptfs",
+      "libmetrics",
+      "libuser_data_auth-client",
+      "libuser_data_auth-client-test",
+    ]
+  }
+
+  executable("cryptohome_testrunner") {
+    sources = [
+      "auth_blocks/auth_block_state_unittest.cc",
+      "auth_blocks/auth_block_utility_impl_unittest.cc",
+      "auth_blocks/biometrics_auth_block_service_test.cc",
+      "auth_blocks/biometrics_command_processor_impl_test.cc",
+      "auth_blocks/challenge_credential_auth_block_test.cc",
+      "auth_blocks/cryptohome_recovery_auth_block_unittest.cc",
+      "auth_blocks/double_wrapped_compat_auth_block_test.cc",
+      "auth_blocks/fingerprint_auth_block_test.cc",
+      "auth_blocks/fp_service_unittest.cc",
+      "auth_blocks/mock_auth_block_utility.cc",
+      "auth_blocks/pin_weaver_auth_block_unittest.cc",
+      "auth_blocks/revocation_unittest.cc",
+      "auth_blocks/scrypt_auth_block_test.cc",
+      "auth_blocks/tpm_bound_to_pcr_auth_block_test.cc",
+      "auth_blocks/tpm_ecc_auth_block_test.cc",
+      "auth_blocks/tpm_not_bound_to_pcr_auth_block_test.cc",
+      "auth_factor/auth_factor_label_unittest.cc",
+      "auth_factor/auth_factor_manager_unittest.cc",
+      "auth_factor/auth_factor_map_unittest.cc",
+      "auth_factor/auth_factor_metadata_unittest.cc",
+      "auth_factor/auth_factor_utils_unittest.cc",
+      "auth_factor/flatbuffer_unittest.cc",
+      "auth_factor/protobuf_unittest.cc",
+      "auth_factor/types/cryptohome_recovery_unittest.cc",
+      "auth_factor/types/fingerprint_unittest.cc",
+      "auth_factor/types/kiosk_unittest.cc",
+      "auth_factor/types/legacy_fingerprint_unittest.cc",
+      "auth_factor/types/manager_unittest.cc",
+      "auth_factor/types/password_unittest.cc",
+      "auth_factor/types/pin_unittest.cc",
+      "auth_factor/types/smart_card_unittest.cc",
+      "auth_factor/verifiers/scrypt_unittest.cc",
+      "auth_factor/with_driver_unittest.cc",
+      "auth_factor_vault_keyset_converter_unittest.cc",
+      "auth_input_utils_unittest.cc",
+      "auth_session_flatbuffer_unittest.cc",
+      "auth_session_keyset_management_unittest.cc",
+      "auth_session_manager_unittest.cc",
+      "auth_session_protobuf_unittest.cc",
+      "auth_session_tpm_simulator_unittest.cc",
+      "auth_session_unittest.cc",
+      "challenge_credentials/challenge_credentials_helper_impl_unittest.cc",
+      "challenge_credentials/fido_utils_unittest.cc",
+      "cleanup/disk_cleanup_routines_unittest.cc",
+      "cleanup/disk_cleanup_unittest.cc",
+      "cleanup/low_disk_space_handler_unittest.cc",
+      "cleanup/user_oldest_activity_timestamp_manager_unittest.cc",
+      "crc_unittest.cc",
+      "credential_verifier_unittest.cc",
+      "crypto_unittest.cc",
+      "cryptohome_key_loader_unittest.cc",
+      "cryptohome_keys_manager_unittest.cc",
+      "cryptorecovery/inclusion_proof_unittest.cc",
+      "cryptorecovery/recovery_crypto_hsm_cbor_serialization_unittest.cc",
+      "cryptorecovery/recovery_crypto_unittest.cc",
+      "data_migrator/migration_helper_unittest.cc",
+      "error/converter_test.cc",
+      "error/cryptohome_crypto_error_test.cc",
+      "error/cryptohome_error_test.cc",
+      "error/cryptohome_le_cred_error_test.cc",
+      "error/cryptohome_mount_error_test.cc",
+      "error/cryptohome_tpm_error_test.cc",
+      "error/reporting_test.cc",
+      "error/reporting_tpm1_test.cc",
+      "error/reporting_tpm2_test.cc",
+      "fido/make_credential_response_test.cc",
+      "filesystem_layout_unittest.cc",
+      "fingerprint_manager_unittest.cc",
+      "firmware_management_parameters_unittest.cc",
+      "flatbuffer_file_unittest.cc",
+      "install_attributes_unittest.cc",
+      "key_objects_unittest.cc",
+      "keyset_management_unittest.cc",
+      "le_credential_manager_impl_unittest.cc",
+      "lockbox-cache-unittest.cc",
+      "lockbox_unittest.cc",
+      "persistent_lookup_table_unittest.cc",
+      "platform_unittest.cc",
+      "sign_in_hash_tree_unittest.cc",
+      "signature_sealing/structures_proto_test.cc",
+      "storage/arc_disk_quota_unittest.cc",
+      "storage/cryptohome_vault_test.cc",
+      "storage/dircrypto_migration_helper_delegate_test.cc",
+      "storage/encrypted_container/dmcrypt_container_test.cc",
+      "storage/encrypted_container/ecryptfs_container_test.cc",
+      "storage/encrypted_container/ephemeral_container_test.cc",
+      "storage/encrypted_container/fscrypt_container_test.cc",
+      "storage/encrypted_container/logical_volume_backing_device_test.cc",
+      "storage/encrypted_container/loopback_device_test.cc",
+      "storage/encrypted_container/ramdisk_device_test.cc",
+      "storage/ephemeral_policy_util_unittest.cc",
+      "storage/homedirs_unittest.cc",
+      "storage/mount_stack_unittest.cc",
+      "storage/mount_unittest.cc",
+      "storage/out_of_process_mount_helper_test.cc",
+      "user_secret_stash/migrator_unittest.cc",
+      "user_secret_stash/storage_unittest.cc",
+      "user_secret_stash/user_secret_stash_unittest.cc",
+      "user_session/real_user_session_unittest.cc",
+      "user_session/user_session_map_unittest.cc",
+      "userdataauth_auth_session_unittest.cc",
+      "userdataauth_unittest.cc",
+      "vault_keyset_unittest.cc",
+    ]
+    sources += get_target_outputs(":print_proto_library")
+    configs += [
+      "//common-mk:test",
+      ":local_print_proto_include",
+      ":target_defaults",
+    ]
+    libs = [
+      "chaps",
+      "hwsec_test",
+      "keyutils",
+      "policy",
+      "pthread",
+    ]
+
+    deps = [
+      ":fake_platform-static",
+      ":print_proto_library",
+      ":test_utils-static",
+      "libs:cryptohome-proto",
+      "libs:libcrostpm",
+      "libs:libcryptohome",
+      "libs:libfido",
+      "//common-mk/testrunner",
+    ]
+
+    pkg_deps = [
+      "dbus-1",
+      "libbrillo-test",
+      "libchrome-test",
+      "libecryptfs",
+      "libmetrics",
+      "libuser_data_auth-client",
+      "libuser_data_auth-client-test",
+    ]
+  }
+
+  executable("fake_platform_unittest") {
+    sources = [
+      "fake_platform/fake_mount_mapper_unittest.cc",
+      "fake_platform/real_fake_mount_mapping_redirect_factory_unittest.cc",
+      "fake_platform/test_file_path_unittest.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":fake_platform-static",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+    ]
+  }
+
+  executable("mount_encrypted_unittests") {
+    sources = [
+      "mount_encrypted/encrypted_fs_unittest.cc",
+      "mount_encrypted/encryption_key_unittest.cc",
+      "mount_encrypted/tlcl_stub.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":fake_platform-static",
+      ":mount_encrypted_lib",
+      "libs:libcrostpm",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+    ]
+
+    if (use.tpm2) {
+      defines = [ "TPM2_MODE=1" ]
+    }
+  }
+
+  executable("stateful_recovery_unittests") {
+    sources = [ "stateful_recovery/stateful_recovery_unittest.cc" ]
+    libs = [ "policy" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":fake_platform-static",
+      ":stateful_recovery_lib",
+      "libs:cryptohome-proto",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+      "libuser_data_auth-client",
+      "libuser_data_auth-client-test",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  static_library("fuzz-helpers") {
+    sources = [ "fuzzers/fuzzed_platform.cc" ]
+    configs += [ ":target_defaults" ]
+    libs = [ "hwsec-foundation" ]
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+    ]
+    deps = [ "libs:libcryptohome_platform" ]
+  }
+
+  executable("cryptohome_cryptolib_blob_to_hex_fuzzer") {
+    sources = [ "fuzzers/cryptolib_blob_to_hex_fuzzer.cc" ]
+    libs = [ "hwsec-foundation" ]
+    configs += [ "//common-mk/common_fuzzer" ]
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+    ]
+  }
+
+  executable("cryptohome_recovery_id_fuzzer") {
+    sources = [ "fuzzers/recovery_id_fuzzer.cc" ]
+    libs = [ "hwsec" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [
+      ":fake_platform-static",
+      ":fuzz-helpers",
+      "libs:libcrosplatform",
+      "libs:libcrostpm",
+      "libs:libcryptohome",
+    ]
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("cryptohome_userdataauth_fuzzer") {
+    sources = [ "fuzzers/userdataauth_fuzzer.cc" ]
+    libs = [ "hwsec" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [
+      ":fake_platform-static",
+      ":fuzz-helpers",
+      "libs:libcrosplatform",
+      "libs:libcrostpm",
+      "libs:libcryptohome",
+    ]
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("cryptohome_user_secret_stash_parser_fuzzer") {
+    sources = [ "fuzzers/user_secret_stash_parser_fuzzer.cc" ]
+    libs = [ "hwsec-foundation" ]
+    configs += [ "//common-mk/common_fuzzer" ]
+    deps = [
+      ":fuzz-helpers",
+      "libs:libcrosplatform",
+      "libs:libcryptohome",
+    ]
+  }
+}
+
+action("error_location_check") {
+  outputs = [ "${target_gen_dir}/error_checked" ]
+
+  # gn requires an output to determine if we need to run the script.
+  deps = [ ":cryptohomed" ]
+
+  # If any source that contributes to cryptohomed changed, we might need to
+  # check again.
+
+  script = "error/tool/location_db.py"
+  args = [ "--check" ]
+}

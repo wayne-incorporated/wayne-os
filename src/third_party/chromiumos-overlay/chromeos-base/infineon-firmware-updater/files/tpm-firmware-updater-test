@@ -1,0 +1,465 @@
+#!/bin/sh
+#
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# Tests for tpm-firmware-updater.
+
+# Exit code definitions for tpm-firmware-updater.
+EXIT_CODE_SUCCESS=0
+EXIT_CODE_ERROR=1
+EXIT_CODE_NO_UPDATE=3
+EXIT_CODE_UPDATE_FAILED=4
+EXIT_CODE_LOW_BATTERY=5
+EXIT_CODE_NOT_UPDATABLE=6
+EXIT_CODE_SUCCESS_COLD_REBOOT=8
+EXIT_CODE_BAD_RETRY=9
+
+# Helpers to maintain key-value mappings in backing files. Used to mock various
+# system utilities.
+kv_file() {
+  local kind="$1"
+  local file="${SHUNIT_TMPDIR}/kv/${kind}"
+  mkdir -p "$(dirname "${file}")"
+  touch "${file}"
+  echo "${file}"
+}
+
+kv_set() {
+  local kind="$1"
+  local key="$(echo "$2" | tr -d -c '[:alnum:]_')"
+  local value="$(echo "$3" | tr -d '=\n')"
+
+  # Flag bad values to the developer.
+  assertEquals "Invalid value for key '${key}: $3" "$3" "${value}"
+
+  local file="$(kv_file "${kind}")"
+  (
+    awk -F '=' -v "key=${key}" '$1 != key { print $0 }' "${file}"
+    echo "${key}=${value}"
+  ) > "${file}.tmp"
+  mv "${file}.tmp" "${file}"
+}
+
+kv_is_set() {
+  local kind="$1"
+  local key="$2"
+
+  ! awk -F '=' -v "key=${key}" '$1 == key { exit 1 }' "$(kv_file "${kind}")"
+}
+
+kv_get() {
+  local kind="$1"
+  local key="$2"
+
+  awk -F '=' -v "key=${key}" '$1 == key { print $2 }' "$(kv_file "${kind}")"
+}
+
+kv_list() {
+  local kind="$1"
+
+  cat "$(kv_file "${kind}")"
+}
+
+# The following functions mock system utilities.
+mock_crossystem() {
+  case "$1" in
+    *=*)
+      kv_set crossystem "${1%=*}" "${1#*=}"
+      ;;
+    *)
+      kv_get crossystem "${1}"
+      ;;
+  esac
+}
+
+mock_tpmc() {
+  local cmd="$1"
+  kv_set tpmc_invocations "${cmd}" "1"
+  case "${cmd}" in
+    getownership)
+      kv_list tpmc_getownership | sed -e 's/=/: /'
+      ;;
+    *)
+      kv_list "tpmc_${cmd}" | tr '=' ' '
+      ;;
+  esac
+  return $(kv_get "tpmc_exit_status" "${cmd}")
+}
+
+mock_vpd() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -g)
+        shift
+        kv_get vpd "$1"
+        ;;
+      -s)
+        shift
+        kv_set vpd "${1%=*}" "${1#*=}"
+        ;;
+    esac
+    shift
+  done
+}
+
+mock_dump_power_status() {
+  kv_list power_status | tr '=' ' '
+}
+
+mock_infineon_firmware_updater() {
+  # Parse the updater command line to simplify verification.
+  local key
+  local value
+  local separator
+  for word in "$@"; do
+    case "${word}" in
+      -*)
+        key="$(printf "${word#-}" | tr -c '[:alnum:]' '_')"
+        value=
+        separator=
+        ;;
+      *)
+        value="${value}${separator}${word}"
+        separator=' '
+        ;;
+    esac
+    kv_set updater "${key}" "${value}"
+  done
+
+  return "$(kv_get updater status)"
+}
+
+mock_tpm_firmware_locate_update() {
+  # Run the actual script, but with empty PATH to catch unwanted dependencies.
+  (
+    . "$(dirname $0)/tpm-firmware-locate-update"
+    PATH="" main "$@"
+  )
+}
+
+# Helper to undo the PATH clearing for invoking mocks and utilities.
+with_real_path() {
+  (PATH="${ORIG_PATH}" "$@")
+}
+
+launch_updater() {
+  # We run the updater with an empty PATH in an effort to catch accidental
+  # dependencies. This helps forcing concise decisions when adding
+  # dependencies on utilities that are not necessarily available in all
+  # environments that execute this script. It runs in these environments:
+  #  1. Regular booted OS image.
+  #  2. During recovery within a chroot to the OS image to be installed.
+  #  3. In factory images, which are modified regular OS images.
+
+  # Mock out system utilities.
+  local mock_utils="
+    crossystem
+    dump_power_status
+    infineon-firmware-updater
+    tpm-firmware-locate-update
+    tpmc
+    vpd
+  "
+  for util in ${mock_utils}; do
+    local mock_cmd="mock_$(printf "${util}" | tr -c '[:alnum:]' '_')"
+    alias "${util}=with_real_path ${mock_cmd}"
+  done
+
+  # Make intentional dependencies available via aliases.
+  local allowed_utils="
+    basename
+    cat
+    cut
+    grep
+    head
+    ls
+    mktemp
+    sort
+    stdbuf
+    sha256sum
+    tr
+  "
+  for util in ${allowed_utils}; do
+    alias "${util}=with_real_path ${util}"
+  done
+
+  ORIG_PATH="${PATH}"
+  . "$(dirname $0)/tpm-firmware-updater"
+
+  status=0
+  PATH="" main >/dev/null || status=$?
+  echo "${status}"
+}
+
+run_updater() {
+  local expected_status="$1"
+  local status="$(launch_updater)"
+  assertEquals "status" "${expected_status}" "${status}"
+
+  # Parse VPD parameters into key value pairs for simpler verification.
+  local pair
+  for pair in $(kv_get vpd tpm_firmware_update_params | tr "," "\n"); do
+    kv_set vpd_param "${pair%:*}" "${pair#*:}"
+  done
+}
+
+setUp() {
+  # SHUNIT_TMPDIR persists across tests. We want to start fresh, so blow away
+  # its contents.
+  rm -rf "${SHUNIT_TMPDIR}/"*
+
+  # Set up defaults for mocked commands.
+  kv_set crossystem mainfw_type "normal"
+
+  kv_set tpmc_getversion tpm_family "312e3200"
+  kv_set tpmc_getversion spec_level "0000000200000003"
+  kv_set tpmc_getversion vendor "49465800"
+  kv_set tpmc_getversion tpm_model "ffffffff"
+  kv_set tpmc_getversion firmware_version "0000000000000420"
+  kv_set tpmc_getversion vendor_specific "0420036f0074706d3338ffffff"
+
+  kv_set tpmc_ifxfieldupgradeinfo max_data_size "1180"
+  kv_set tpmc_ifxfieldupgradeinfo bootloader_package_id "00050100"
+  kv_set tpmc_ifxfieldupgradeinfo bootloader_version "00000136"
+  kv_set tpmc_ifxfieldupgradeinfo bootloader_stale_version "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo fw0_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo fw0_version "0000036f"
+  kv_set tpmc_ifxfieldupgradeinfo fw0_stale_version "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo fw1_package_id "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo fw1_version "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo fw1_stale_version "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo status "36a5"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_package_id "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_version "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_stale_version "00000000"
+  kv_set tpmc_ifxfieldupgradeinfo field_upgrade_counter "64"
+
+  kv_set tpmc_getownership Owned "no"
+
+  kv_set tpmc_exit_status checkownerauth 1
+
+  kv_set power_status line_power_connected "1"
+  kv_set power_status battery_present "1"
+  kv_set power_status battery_percent "100.00"
+  kv_set power_status battery_display_percent "100.00"
+  kv_set power_status battery_charge "3.45"
+  kv_set power_status battery_charge_full "3.45"
+  kv_set power_status battery_charge_full_design "3.49"
+  kv_set power_status battery_current "0.00"
+  kv_set power_status battery_energy "37.24"
+  kv_set power_status battery_energy_rate "0.00"
+  kv_set power_status battery_voltage "12.34"
+  kv_set power_status battery_discharging "0"
+
+  kv_set updater status "0"
+
+  # Environment variables controlling updater behavior.
+  TPM_FIRMWARE_DIR="${SHUNIT_TMPDIR}/firmware"
+  TPM_DEVICE_NODE="/dev/zero"
+  unset FACTORY_SHIM_CONSENT
+
+  # Set up a couple fake firmware images with different versions.
+  mkdir -p "${TPM_FIRMWARE_DIR}/ifx"
+  (
+    cd "${TPM_FIRMWARE_DIR}/ifx"
+
+    echo "0000036f_000003f2" > TPM12_4.32.879.0_to_TPM12_4.34.1010.2.BIN
+    ln -s TPM12_4.32.879.0_to_TPM12_4.34.1010.2.BIN \
+      00010100_0000036f_000003f2.bin
+
+    echo "0000036f_000003f3" > TPM12_4.32.879.0_to_TPM12_4.34.1011.2.BIN
+    ln -s TPM12_4.32.879.0_to_TPM12_4.34.1011.2.BIN \
+      00010100_0000036f_000003f3.bin
+
+    echo "0000036e_000003f3" > TPM12_4.32.878.0_to_TPM12_4.34.1011.2.BIN
+    ln -s TPM12_4.32.878.0_to_TPM12_4.34.1011.2.BIN \
+      00010100_0000036e_000003f3.bin
+  )
+}
+
+test_success_first_boot() {
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertEquals "auth mechanism" "tpm12-takeownership" "$(kv_get updater update)"
+  assertEquals "firmware image" \
+    "${TPM_FIRMWARE_DIR}/ifx/00010100_0000036f_000003f3.bin" \
+    "$(kv_get updater firmware)"
+  assertEquals "vpd mode" "complete" "$(kv_get vpd_param mode)"
+  assertEquals "clear tpm request" "1" \
+    "$(kv_get crossystem clear_tpm_owner_request)"
+}
+
+test_success_dry_run() {
+  kv_set vpd tpm_firmware_update_params "dryrun:1"
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertTrue "flag set" "kv_is_set updater dry_run"
+  assertEquals "vpd dryrun" "1" "$(kv_get vpd_param dryrun)"
+}
+
+test_success_owner_auth() {
+  kv_set tpmc_getownership Owned "yes"
+  kv_set tpmc_exit_status checkownerauth 0
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertEquals "auth mechanism" "tpm12-ownerauth" "$(kv_get updater update)"
+}
+
+test_success_developer() {
+  kv_set crossystem mainfw_type "developer"
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertEquals "auth mechanism" "tpm12-takeownership" "$(kv_get updater update)"
+}
+
+test_success_recovery() {
+  kv_set crossystem mainfw_type "recovery"
+  kv_set vpd tpm_firmware_update_params "mode:recovery"
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertEquals "auth mechanism" "tpm12-PP" "$(kv_get updater update)"
+  assertEquals "firmware image" \
+    "${TPM_FIRMWARE_DIR}/ifx/00010100_0000036f_000003f3.bin" \
+    "$(kv_get updater firmware)"
+  assertEquals "vpd mode" "complete" "$(kv_get vpd_param mode)"
+  assertEquals "tpm reset" "1" "$(kv_get tpmc_invocations clear)"
+}
+
+test_recovery_dry_run() {
+  kv_set crossystem mainfw_type "recovery"
+  kv_set tpmc_ifxfieldupgradeinfo status "5a3c"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_version "000003f2"
+  kv_set vpd tpm_firmware_update_params "mode:recovery,dryrun:1"
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertTrue "flag set" "kv_is_set updater dry_run"
+}
+
+test_no_tpm() {
+  local TPM_DEVICE_NODE="/dev/no-tpm-here"
+  run_updater "${EXIT_CODE_ERROR}"
+}
+
+test_not_ifx() {
+  kv_set tpmc_getversion vendor "00000000"
+  run_updater "${EXIT_CODE_NO_UPDATE}"
+}
+
+test_no_update() {
+  kv_set tpmc_ifxfieldupgradeinfo fw0_version "00001000"
+  kv_set tpmc_getversion vendor_specific "042010000074706d3338ffffff"
+  run_updater "${EXIT_CODE_NO_UPDATE}"
+}
+
+test_owned() {
+  kv_set tpmc_getownership Owned "yes"
+  run_updater "${EXIT_CODE_NOT_UPDATABLE}"
+}
+
+test_no_battery() {
+  kv_set power_status battery_present "0"
+  run_updater "${EXIT_CODE_SUCCESS}"
+}
+
+test_low_battery() {
+  kv_set power_status battery_display_percent "1.00"
+  run_updater "${EXIT_CODE_LOW_BATTERY}"
+}
+
+test_firmware_correct_retry() {
+  kv_set crossystem mainfw_type "recovery"
+  kv_set tpmc_ifxfieldupgradeinfo status "5a3c"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_version "000003f2"
+  local image_hash="$(
+      sha256sum "${TPM_FIRMWARE_DIR}/ifx/00010100_0000036f_000003f2.bin" |
+      cut -d ' ' -f 1)"
+  kv_set vpd tpm_firmware_update_params "mode:recovery,image:${image_hash}"
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertEquals "firmware image" \
+    "${TPM_FIRMWARE_DIR}/ifx/00010100_0000036f_000003f2.bin" \
+    "$(kv_get updater firmware)"
+}
+
+test_firmware_hash_mismatch() {
+  kv_set crossystem mainfw_type "recovery"
+  kv_set tpmc_ifxfieldupgradeinfo status "5a3c"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_version "000003f2"
+  kv_set vpd tpm_firmware_update_params "mode:recovery,image:badhash"
+  run_updater "${EXIT_CODE_BAD_RETRY}"
+}
+
+test_firmware_stale_version() {
+  kv_set tpmc_ifxfieldupgradeinfo fw0_stale_version "ffffeeee"
+  kv_set tpmc_ifxfieldupgradeinfo fw0_package_id "bad"
+  kv_set tpmc_ifxfieldupgradeinfo fw0_version "bad"
+  kv_set tpmc_ifxfieldupgradeinfo fw1_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo fw1_version "0000036e"
+  kv_set tpmc_getversion vendor_specific ""
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertEquals "firmware image" \
+    "${TPM_FIRMWARE_DIR}/ifx/00010100_0000036e_000003f3.bin" \
+    "$(kv_get updater firmware)"
+}
+
+test_firmware_bootloader_mode() {
+  kv_set crossystem mainfw_type "recovery"
+  kv_set tpmc_ifxfieldupgradeinfo status "5a3c"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_version "000003f3"
+  kv_set vpd tpm_firmware_update_params "mode:recovery"
+  run_updater "${EXIT_CODE_SUCCESS}"
+}
+
+test_attempts_too_many_attempts() {
+  kv_set crossystem mainfw_type "recovery"
+  kv_set tpmc_ifxfieldupgradeinfo status "5a3c"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_version "000003f3"
+  kv_set vpd tpm_firmware_update_params "mode:recovery,attempts:5"
+  run_updater "${EXIT_CODE_BAD_RETRY}"
+}
+
+test_attempts_too_many_updates() {
+  kv_set tpmc_ifxfieldupgradeinfo field_upgrade_counter "32"
+  run_updater "${EXIT_CODE_BAD_RETRY}"
+}
+
+test_attempts_reset_on_first_attempt() {
+  kv_set vpd tpm_firmware_update_params "attempts:10"
+  run_updater "${EXIT_CODE_SUCCESS}"
+  assertEquals "attempt reset" "1" "$(kv_get vpd_param attempts)"
+}
+
+test_ignore_error_on_complete() {
+  touch "${TPM_FIRMWARE_DIR}/ifx/.ignore_error_on_complete"
+  run_updater "${EXIT_CODE_SUCCESS_COLD_REBOOT}"
+  assertTrue "flag set" "kv_is_set updater ignore_error_on_complete"
+}
+
+test_updater_failure() {
+  kv_set updater status 1
+  run_updater "${EXIT_CODE_UPDATE_FAILED}"
+  assertEquals "attempt recorded" "1" "$(kv_get vpd_param attempts)"
+  local image_hash="$(
+      sha256sum "${TPM_FIRMWARE_DIR}/ifx/00010100_0000036f_000003f3.bin" |
+      cut -d ' ' -f 1)"
+  assertEquals "hash recorded" "${image_hash}" "$(kv_get vpd_param image)"
+}
+
+test_updater_failure_repeated() {
+  kv_set crossystem mainfw_type "recovery"
+  kv_set tpmc_ifxfieldupgradeinfo status "5a3c"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_package_id "00010100"
+  kv_set tpmc_ifxfieldupgradeinfo process_fw_version "000003f3"
+  kv_set vpd tpm_firmware_update_params "attempts:1"
+  kv_set updater status 1
+  run_updater "${EXIT_CODE_UPDATE_FAILED}"
+  assertEquals "attempt recorded" "2" "$(kv_get vpd_param attempts)"
+}
+
+test_success_factory() {
+  kv_set vpd tpm_firmware_update_params ""
+  FACTORY_SHIM_CONSENT="1"
+  run_updater "${EXIT_CODE_SUCCESS}"
+}
+
+. "${SYSROOT}/usr/bin/shunit2"

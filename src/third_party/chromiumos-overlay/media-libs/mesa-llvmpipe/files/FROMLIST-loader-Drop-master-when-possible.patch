@@ -1,0 +1,31 @@
+From addfa96a48bf238c0c9481a655f9783969984661 Mon Sep 17 00:00:00 2001
+From: Lepton Wu <lepton@chromium.org>
+Date: Wed, 22 Feb 2023 15:40:52 -0800
+Subject: [PATCH] loader: Drop master when possible.
+
+For most case, mesa uses renderer nodes so anyway we don't have master.
+Just drop master privilege in case we have it since mesa doesn't need it.
+
+Change-Id: Idebe3d5b206f5180282bdb809eeba6fed8c40408
+Signed-off-by: Lepton Wu <lepton@chromium.org>
+---
+ src/loader/loader.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index 03944f9877ad..b12dde99d664 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -100,6 +100,9 @@ loader_open_device(const char *device_name)
+       log_(_LOADER_WARNING, "failed to open %s: %s\n",
+            device_name, strerror(errno));
+    }
++
++   if (drmIsMaster(fd)) drmDropMaster(fd);
++
+    return fd;
+ }
+ 
+-- 
+GitLab
+

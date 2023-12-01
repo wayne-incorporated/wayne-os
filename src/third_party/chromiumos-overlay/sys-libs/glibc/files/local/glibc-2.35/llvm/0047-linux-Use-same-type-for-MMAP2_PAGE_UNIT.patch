@@ -1,0 +1,67 @@
+From 4cb7819c0cf1735691c9ddcc0c63daf899922fc9 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 08:07:37 -0300
+Subject: [PATCH 047/163] linux: Use same type for MMAP2_PAGE_UNIT
+
+---
+ sysdeps/unix/sysv/linux/arc/mmap_internal.h  | 2 +-
+ sysdeps/unix/sysv/linux/ia64/mmap_internal.h | 2 +-
+ sysdeps/unix/sysv/linux/m68k/mmap_internal.h | 2 +-
+ sysdeps/unix/sysv/linux/mmap_internal.h      | 2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/sysdeps/unix/sysv/linux/arc/mmap_internal.h b/sysdeps/unix/sysv/linux/arc/mmap_internal.h
+index d8bbcab0a1..59e8260b5c 100644
+--- a/sysdeps/unix/sysv/linux/arc/mmap_internal.h
++++ b/sysdeps/unix/sysv/linux/arc/mmap_internal.h
+@@ -20,7 +20,7 @@
+ #define MMAP_ARC_INTERNAL_H
+ 
+ /* 8K is default but determine the shift dynamically with getpagesize.  */
+-#define MMAP2_PAGE_UNIT -1
++#define MMAP2_PAGE_UNIT -1ULL
+ 
+ #include_next <mmap_internal.h>
+ 
+diff --git a/sysdeps/unix/sysv/linux/ia64/mmap_internal.h b/sysdeps/unix/sysv/linux/ia64/mmap_internal.h
+index 0c0a0ced99..465d589281 100644
+--- a/sysdeps/unix/sysv/linux/ia64/mmap_internal.h
++++ b/sysdeps/unix/sysv/linux/ia64/mmap_internal.h
+@@ -22,7 +22,7 @@
+ /* Linux allows PAGE_SHIFT in range of [12-16] and expect
+    mmap2 offset to be provided in based on the configured pagesize.
+    Determine the shift dynamically with getpagesize.  */
+-#define MMAP2_PAGE_UNIT -1
++#define MMAP2_PAGE_UNIT -1ULL
+ 
+ #include_next <mmap_internal.h>
+ 
+diff --git a/sysdeps/unix/sysv/linux/m68k/mmap_internal.h b/sysdeps/unix/sysv/linux/m68k/mmap_internal.h
+index 8e6f1ed84c..9330edfc05 100644
+--- a/sysdeps/unix/sysv/linux/m68k/mmap_internal.h
++++ b/sysdeps/unix/sysv/linux/m68k/mmap_internal.h
+@@ -22,7 +22,7 @@
+ /* ColdFire and Sun 3 kernels have PAGE_SHIFT set to 13 and expect
+    mmap2 offset to be provided in 8K pages.  Determine the shift
+    dynamically with getpagesize.  */
+-#define MMAP2_PAGE_UNIT -1
++#define MMAP2_PAGE_UNIT -1ULL
+ 
+ #include_next <mmap_internal.h>
+ 
+diff --git a/sysdeps/unix/sysv/linux/mmap_internal.h b/sysdeps/unix/sysv/linux/mmap_internal.h
+index aebf97d064..2d118b0d8a 100644
+--- a/sysdeps/unix/sysv/linux/mmap_internal.h
++++ b/sysdeps/unix/sysv/linux/mmap_internal.h
+@@ -28,7 +28,7 @@
+ # define MMAP2_PAGE_UNIT 4096ULL
+ #endif
+ 
+-#if MMAP2_PAGE_UNIT == -1
++#if MMAP2_PAGE_UNIT == -1ULL
+ static uint64_t page_unit;
+ # define MMAP_CHECK_PAGE_UNIT()			\
+   if (page_unit == 0)				\
+-- 
+2.37.2
+

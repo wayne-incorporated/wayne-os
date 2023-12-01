@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,18 @@
 #include <utility>
 #include <vector>
 
-#include <base/bind.h>
 #include <base/check.h>
+#include <base/containers/fixed_flat_map.h>
+#include <base/containers/flat_map.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback_helpers.h>
 #include <base/logging.h>
 #include <base/memory/ptr_util.h>
 #include <base/strings/string_util.h>
 #include <base/strings/stringprintf.h>
+#include <base/types/expected.h>
 #include <chromeos/dbus/service_constants.h>
 #include <chromeos/switches/chrome_switches.h>
 #include <crypto/rsa_private_key.h>
@@ -26,14 +30,19 @@
 
 #include "bindings/chrome_device_policy.pb.h"
 #include "bindings/device_management_backend.pb.h"
+#include "crypto/signature_verifier.h"
 #include "login_manager/blob_util.h"
+#include "login_manager/crossystem.h"
 #include "login_manager/dbus_util.h"
 #include "login_manager/feature_flags_util.h"
 #include "login_manager/key_generator.h"
 #include "login_manager/login_metrics.h"
+#include "login_manager/nss_util.h"
 #include "login_manager/owner_key_loss_mitigator.h"
 #include "login_manager/policy_key.h"
+#include "login_manager/policy_service_util.h"
 #include "login_manager/policy_store.h"
+#include "login_manager/system_utils.h"
 
 namespace em = enterprise_management;
 
@@ -41,7 +50,23 @@ namespace login_manager {
 using crypto::RSAPrivateKey;
 using google::protobuf::RepeatedPtrField;
 
+constexpr char DevicePolicyService::kChromadMigrationSkipOobePreservePath[] =
+    "/mnt/stateful_partition/unencrypted/preserve/chromad_migration_skip_oobe";
+
 namespace {
+
+// Note: The keys in the map must be in the sorted order for the code to
+// compile!
+constexpr auto attrs_to_ownership =
+    base::MakeFixedFlatMapSorted<base::StringPiece,
+                                 LoginMetrics::OwnershipState>(
+        {{"", LoginMetrics::OwnershipState::kConsumer},
+         {InstallAttributesReader::kDeviceModeConsumerKiosk,
+          LoginMetrics::OwnershipState::kConsumerKiosk},
+         {InstallAttributesReader::kDeviceModeEnterprise,
+          LoginMetrics::OwnershipState::kEnterprise},
+         {InstallAttributesReader::kDeviceModeLegacyRetail,
+          LoginMetrics::OwnershipState::kLegacyRetail}});
 
 // Returns true if |policy| was not pushed by an enterprise.
 bool IsConsumerPolicy(const em::PolicyFetchResponse& policy) {
@@ -51,7 +76,7 @@ bool IsConsumerPolicy(const em::PolicyFetchResponse& policy) {
     return false;
   }
 
-  // Look at management_mode first.  Refer to PolicyData::management_mode docs
+  // Look at management_mode first. Refer to PolicyData::management_mode docs
   // for details.
   if (poldata.has_management_mode())
     return poldata.management_mode() == em::PolicyData::LOCAL_OWNER;
@@ -59,29 +84,26 @@ bool IsConsumerPolicy(const em::PolicyFetchResponse& policy) {
 }
 
 void HandleVpdUpdateCompletion(bool ignore_error,
-                               const PolicyService::Completion& completion,
+                               PolicyService::Completion completion,
                                bool success) {
   if (completion.is_null()) {
     return;
   }
 
   if (success || ignore_error) {
-    completion.Run(brillo::ErrorPtr());
+    std::move(completion).Run(brillo::ErrorPtr());
     return;
   }
 
   LOG(ERROR) << "Failed to update VPD";
-  completion.Run(
-      CreateError(dbus_error::kVpdUpdateFailed, "Failed to update VPD"));
+  std::move(completion)
+      .Run(CreateError(dbus_error::kVpdUpdateFailed, "Failed to update VPD"));
 }
 
 }  // namespace
 
-// Note: Rollback (go/rollback-data-restore) saves and restores device policy
-// files. Any change in format or location of those files that is not backwards
-// compatible might break rollback.
 // static
-const char DevicePolicyService::kPolicyDir[] = "/var/lib/whitelist";
+const char DevicePolicyService::kPolicyDir[] = "/var/lib/devicesettings";
 // static
 const char DevicePolicyService::kDevicePolicyType[] = "google/chromeos/device";
 // static
@@ -99,35 +121,27 @@ std::unique_ptr<DevicePolicyService> DevicePolicyService::Create(
     LoginMetrics* metrics,
     OwnerKeyLossMitigator* mitigator,
     NssUtil* nss,
+    SystemUtils* system,
     Crossystem* crossystem,
     VpdProcess* vpd_process,
     InstallAttributesReader* install_attributes_reader) {
   return base::WrapUnique(new DevicePolicyService(
-      base::FilePath(kPolicyDir), owner_key, metrics, mitigator, nss,
+      base::FilePath(kPolicyDir), owner_key, metrics, mitigator, nss, system,
       crossystem, vpd_process, install_attributes_reader));
 }
 
-bool DevicePolicyService::CheckAndHandleOwnerLogin(
-    const std::string& current_user,
-    PK11SlotDescriptor* desc,
-    bool* is_owner,
-    brillo::ErrorPtr* error) {
-  // Record metrics around consumer usage of user allowlisting.
-  const em::PolicyFetchResponse& policy = GetChromeStore()->Get();
-  if (IsConsumerPolicy(policy))
-    metrics_->SendConsumerAllowsNewUsers(PolicyAllowsNewUsers(policy));
-
+bool DevicePolicyService::HandleOwnerLogin(const std::string& current_user,
+                                           PK11SlotDescriptor* desc,
+                                           brillo::ErrorPtr* error) {
   // If the current user is the owner, and isn't allowlisted or set as the owner
   // in the settings blob, then do so.
   brillo::ErrorPtr key_error;
   std::unique_ptr<RSAPrivateKey> signing_key =
       GetOwnerKeyForGivenUser(key()->public_key_der(), desc, &key_error);
 
-  // Now, the flip side... if we believe the current user to be the owner based
-  // on the user field in policy, and they DON'T have the private half of the
+  // Now, the flip side... if the owner DOESN'T have the private half of the
   // public key, we must mitigate.
-  *is_owner = GivenUserIsOwner(policy, current_user);
-  if (*is_owner && !signing_key.get()) {
+  if (!signing_key.get()) {
     if (!mitigator_->Mitigate(current_user, desc->ns_mnt_path)) {
       *error = std::move(key_error);
       DCHECK(*error);
@@ -135,6 +149,10 @@ bool DevicePolicyService::CheckAndHandleOwnerLogin(
     }
   }
   return true;
+}
+
+bool DevicePolicyService::UserIsOwner(const std::string& current_user) {
+  return GivenUserIsOwner(GetChromeStore()->Get(), current_user);
 }
 
 bool DevicePolicyService::ValidateAndStoreOwnerKey(
@@ -164,8 +182,8 @@ bool DevicePolicyService::ValidateAndStoreOwnerKey(
   // TODO(cmasone): Remove this as well once the browser can tolerate it:
   // http://crbug.com/472132
   if (StoreOwnerProperties(current_user, signing_key.get())) {
-    PostPersistKeyTask();
-    PostPersistPolicyTask(MakeChromePolicyNamespace(), Completion());
+    PersistKey();
+    PersistPolicy(MakeChromePolicyNamespace(), Completion());
   } else {
     LOG(WARNING) << "Could not immediately store owner properties in policy";
   }
@@ -178,12 +196,14 @@ DevicePolicyService::DevicePolicyService(
     LoginMetrics* metrics,
     OwnerKeyLossMitigator* mitigator,
     NssUtil* nss,
+    SystemUtils* system,
     Crossystem* crossystem,
     VpdProcess* vpd_process,
     InstallAttributesReader* install_attributes_reader)
     : PolicyService(policy_dir, policy_key, metrics, true),
       mitigator_(mitigator),
       nss_(nss),
+      system_(system),
       crossystem_(crossystem),
       vpd_process_(vpd_process),
       install_attributes_reader_(install_attributes_reader) {}
@@ -211,61 +231,38 @@ bool DevicePolicyService::Initialize() {
     key_success = key()->PopulateFromBuffer(
         StringToBlob(GetChromeStore()->Get().new_public_key()));
     if (key_success)
-      PostPersistKeyTask();
+      PersistKey();
   }
 
-  ReportPolicyFileMetrics(key_success, policy_success);
+  if (install_attributes_reader_->IsLocked()) {
+    ReportDevicePolicyFileMetrics(key_success, key()->IsPopulated(),
+                                  policy_success,
+                                  GetChromeStore()->Get().has_policy_data());
+  }
   return key_success;
 }
 
 bool DevicePolicyService::Store(const PolicyNamespace& ns,
                                 const std::vector<uint8_t>& policy_blob,
                                 int key_flags,
-                                SignatureCheck signature_check,
-                                const Completion& completion) {
-  bool result = PolicyService::Store(ns, policy_blob, key_flags,
-                                     signature_check, completion);
-
-  if (result && ns == MakeChromePolicyNamespace()) {
+                                Completion completion) {
+  if (ns == MakeChromePolicyNamespace()) {
     // Flush the settings cache, the next read will decode the new settings.
+    // This has to be done before Store operation is started because Store()
+    // persists the policy and triggers notification to SessionManagerImpl.
+    // The later gets the new settings to pass to DeviceLocalAccount and at
+    // that point the old settings_ have to be reset.
+    //
+    // The operations leading to notification to SessionManagerImpl are
+    // synchronous, so when PolicyService::Store finishes, the new settings_
+    // are already populated. Which makes it safe against possible requests
+    // to GetSettings() that could come from other places.
+    // TODO(b/274098828): Come up with a better way to handle the settings_
+    // object so that its state change is cleaner.
     settings_.reset();
   }
-
-  return result;
-}
-
-void DevicePolicyService::ReportPolicyFileMetrics(bool key_success,
-                                                  bool policy_success) {
-  LoginMetrics::PolicyFilesStatus status;
-  if (!key_success) {  // Key load failed.
-    status.owner_key_file_state = LoginMetrics::MALFORMED;
-  } else {
-    if (key()->IsPopulated()) {
-      if (nss_->CheckPublicKeyBlob(key()->public_key_der()))
-        status.owner_key_file_state = LoginMetrics::GOOD;
-      else
-        status.owner_key_file_state = LoginMetrics::MALFORMED;
-    } else {
-      status.owner_key_file_state = LoginMetrics::NOT_PRESENT;
-    }
-  }
-
-  if (!policy_success) {
-    status.policy_file_state = LoginMetrics::MALFORMED;
-  } else {
-    std::string serialized;
-    if (!GetChromeStore()->Get().SerializeToString(&serialized))
-      status.policy_file_state = LoginMetrics::MALFORMED;
-    else if (serialized == "")
-      status.policy_file_state = LoginMetrics::NOT_PRESENT;
-    else
-      status.policy_file_state = LoginMetrics::GOOD;
-  }
-
-  if (GetChromeStore()->DefunctPrefsFilePresent())
-    status.defunct_prefs_file_state = LoginMetrics::GOOD;
-
-  metrics_->SendPolicyFilesStatus(status);
+  return PolicyService::Store(ns, policy_blob, key_flags,
+                              std::move(completion));
 }
 
 std::vector<std::string> DevicePolicyService::GetFeatureFlags() {
@@ -459,44 +456,44 @@ std::unique_ptr<RSAPrivateKey> DevicePolicyService::GetOwnerKeyForGivenUser(
 }
 
 void DevicePolicyService::PersistPolicy(const PolicyNamespace& ns,
-                                        const Completion& completion) {
+                                        Completion completion) {
   // Run base method for everything other than Chrome device policy.
   if (ns != MakeChromePolicyNamespace()) {
-    PolicyService::PersistPolicy(ns, completion);
+    PolicyService::PersistPolicy(ns, std::move(completion));
     return;
   }
 
   if (!GetOrCreateStore(ns)->Persist()) {
-    OnPolicyPersisted(completion, dbus_error::kSigEncodeFail);
+    OnPolicyPersisted(std::move(completion), dbus_error::kSigEncodeFail);
     return;
   }
 
   if (!MayUpdateSystemSettings()) {
-    OnPolicyPersisted(completion, dbus_error::kNone);
+    OnPolicyPersisted(std::move(completion), dbus_error::kNone);
     return;
   }
 
-  if (UpdateSystemSettings(completion)) {
+  auto split_callback = base::SplitOnceCallback(std::move(completion));
+  if (UpdateSystemSettings(std::move(split_callback.first))) {
     // |vpd_process_| will run |completion| when it's done, so pass a null
     // completion to OnPolicyPersisted().
     OnPolicyPersisted(Completion(), dbus_error::kNone);
   } else {
-    OnPolicyPersisted(completion, dbus_error::kVpdUpdateFailed);
+    OnPolicyPersisted(std::move(split_callback.second),
+                      dbus_error::kVpdUpdateFailed);
   }
 }
 
 bool DevicePolicyService::MayUpdateSystemSettings() {
-  // Check if device ownership is established or if device is enrolled to Active
-  // Directory (Chromad).
-  if (!key()->IsPopulated() &&
-      GetEnterpriseMode() != InstallAttributesReader::kDeviceModeEnterpriseAD) {
+  // Check if device ownership is established.
+  if (!key()->IsPopulated()) {
     return false;
   }
 
-  // Check whether device is running on Chrome OS firmware.
+  // Check whether device is running on ChromeOS firmware.
   char buffer[Crossystem::kVbMaxStringProperty];
-  if (!crossystem_->VbGetSystemPropertyString(Crossystem::kMainfwType, buffer,
-                                              sizeof(buffer)) ||
+  if (crossystem_->VbGetSystemPropertyString(Crossystem::kMainfwType, buffer,
+                                             sizeof(buffer)) != 0 ||
       strcmp(Crossystem::kMainfwTypeNonchrome, buffer) == 0) {
     return false;
   }
@@ -504,7 +501,7 @@ bool DevicePolicyService::MayUpdateSystemSettings() {
   return true;
 }
 
-bool DevicePolicyService::UpdateSystemSettings(const Completion& completion) {
+bool DevicePolicyService::UpdateSystemSettings(Completion completion) {
   const int block_devmode_setting =
       GetSettings().system_settings().block_devmode();
   int block_devmode_value =
@@ -523,8 +520,8 @@ bool DevicePolicyService::UpdateSystemSettings(const Completion& completion) {
     }
   }
 
-  // Clear nvram_cleared if block_devmode has the correct state now.  (This is
-  // OK as long as block_devmode is the only consumer of nvram_cleared.  Once
+  // Clear nvram_cleared if block_devmode has the correct state now. (This is
+  // OK as long as block_devmode is the only consumer of nvram_cleared. Once
   // other use cases crop up, clearing has to be done in cooperation.)
   if (block_devmode_value == block_devmode_setting) {
     const int nvram_cleared_value =
@@ -548,18 +545,24 @@ bool DevicePolicyService::UpdateSystemSettings(const Completion& completion) {
   // Check if device is enrolled. The flag for enrolled device is written to VPD
   // but will never get deleted. Existence of the flag is one of the triggers
   // for FRE check during OOBE.
-  const std::string& mode = GetEnterpriseMode();
-  if (mode != InstallAttributesReader::kDeviceModeEnterprise &&
-      mode != InstallAttributesReader::kDeviceModeEnterpriseAD &&
-      mode != InstallAttributesReader::kDeviceModeConsumer) {
+  if (!install_attributes_reader_->IsLocked()) {
     // Probably the first sign in, install attributes file is not created yet.
     if (!completion.is_null())
-      completion.Run(brillo::ErrorPtr());
+      std::move(completion).Run(brillo::ErrorPtr());
 
     return true;
   }
-  bool is_enrolled = (mode == InstallAttributesReader::kDeviceModeEnterprise ||
-                      mode == InstallAttributesReader::kDeviceModeEnterpriseAD);
+
+  // If the install attributes are finalized (OOBE completed), try to delete the
+  // Chromad migration skip OOBE flag. This insures that the file gets deleted
+  // when it's no longer needed.
+  //
+  // TODO(b/263367348): Delete this `RemoveFile()` call, when all supported
+  // devices are guaranteed to not have this file persisted.
+  system_->RemoveFile(base::FilePath(kChromadMigrationSkipOobePreservePath));
+
+  bool is_enrolled =
+      GetEnterpriseMode() == InstallAttributesReader::kDeviceModeEnterprise;
 
   // It's impossible for block_devmode to be true and the device to not be
   // enrolled. If we end up in this situation, log the error and don't update
@@ -570,7 +573,7 @@ bool DevicePolicyService::UpdateSystemSettings(const Completion& completion) {
     // Return true to be on the safe side here since not allowing to continue
     // would make the device unusable.
     if (!completion.is_null())
-      completion.Run(brillo::ErrorPtr());
+      std::move(completion).Run(brillo::ErrorPtr());
 
     return true;
   }
@@ -578,40 +581,39 @@ bool DevicePolicyService::UpdateSystemSettings(const Completion& completion) {
   updates.push_back(std::make_pair(Crossystem::kCheckEnrollment,
                                    std::to_string(is_enrolled)));
 
-  // Note that VPD update errors will be ignored if the device is not enrolled
-  // or if device is enrolled to Active Directory (Chromad).
-  // TODO(crbug.com/1060640): Revisit ignoring VPD update errors for Chromad
-  // after better solution is found.
-  bool ignore_errors =
-      !is_enrolled || mode == InstallAttributesReader::kDeviceModeEnterpriseAD;
+  // Note that VPD update errors will be ignored if the device is not enrolled.
+  bool ignore_errors = !is_enrolled;
   return vpd_process_->RunInBackground(
       updates, false,
-      base::Bind(&HandleVpdUpdateCompletion, ignore_errors, completion));
+      base::BindOnce(&HandleVpdUpdateCompletion, ignore_errors,
+                     std::move(completion)));
 }
 
-void DevicePolicyService::ClearForcedReEnrollmentFlags(
-    const Completion& completion) {
-  LOG(WARNING) << "Clear enrollment requested";
+void DevicePolicyService::ClearBlockDevmode(Completion completion) {
+  LOG(WARNING) << "Clear block_devmode requested";
   // The block_devmode system property needs to be set to 0 as well to unblock
   // dev mode. It is stored independently from VPD and firmware management
   // parameters.
   if (crossystem_->VbSetSystemPropertyInt(Crossystem::kBlockDevmode, 0) != 0) {
-    completion.Run(
-        CreateError(dbus_error::kSystemPropertyUpdateFailed,
-                    "Failed to set block_devmode system property to 0."));
+    std::move(completion)
+        .Run(CreateError(dbus_error::kSystemPropertyUpdateFailed,
+                         "Failed to set block_devmode system property to 0."));
     return;
   }
+  auto split_callback = base::SplitOnceCallback(std::move(completion));
   if (!vpd_process_->RunInBackground(
-          {{Crossystem::kBlockDevmode, "0"},
-           {Crossystem::kCheckEnrollment, "0"}},
-          false, base::Bind(&HandleVpdUpdateCompletion, false, completion))) {
-    completion.Run(CreateError(dbus_error::kVpdUpdateFailed,
-                               "Failed to run VPD update in the background."));
+          {{Crossystem::kBlockDevmode, "0"}}, false,
+          base::BindOnce(&HandleVpdUpdateCompletion, false,
+                         std::move(split_callback.first)))) {
+    std::move(split_callback.second)
+        .Run(CreateError(dbus_error::kVpdUpdateFailed,
+                         "Failed to run VPD update in the background."));
   }
 }
 
 bool DevicePolicyService::ValidateRemoteDeviceWipeCommand(
-    const std::vector<uint8_t>& in_signed_command) {
+    const std::vector<uint8_t>& in_signed_command,
+    em::PolicyFetchRequest::SignatureType signature_type) {
   // Parse the SignedData that was sent over the DBus call.
   em::SignedData signed_data;
   if (!signed_data.ParseFromArray(in_signed_command.data(),
@@ -625,8 +627,16 @@ bool DevicePolicyService::ValidateRemoteDeviceWipeCommand(
   // uses (signature verification & policy_type checking).
 
   // Verify the command signature.
+  base::expected<crypto::SignatureVerifier::SignatureAlgorithm, std::string>
+      mapped_signature_type = MapSignatureType(signature_type);
+  if (!mapped_signature_type.has_value()) {
+    LOG(ERROR) << "Invalid command signature type: " << signature_type;
+    return false;
+  }
+
   if (!key()->Verify(StringToBlob(signed_data.data()),
-                     StringToBlob(signed_data.signature()))) {
+                     StringToBlob(signed_data.signature()),
+                     mapped_signature_type.value())) {
     LOG(ERROR) << "Invalid command signature.";
     return false;
   }
@@ -663,7 +673,7 @@ bool DevicePolicyService::ValidateRemoteDeviceWipeCommand(
 
   // Note: the code here doesn't protect against replay attacks, but that is not
   // an issue for remote powerwash since after execution the device ID will no
-  // longer match.  In case more commands are to be added in the future, replay
+  // longer match. In case more commands are to be added in the future, replay
   // protection must be considered and added if deemed necessary.
 
   return true;
@@ -686,6 +696,42 @@ std::string DevicePolicyService::GetDeviceId() {
 const std::string& DevicePolicyService::GetEnterpriseMode() {
   return install_attributes_reader_->GetAttribute(
       InstallAttributesReader::kAttrMode);
+}
+
+void DevicePolicyService::ReportDevicePolicyFileMetrics(bool key_success,
+                                                        bool key_populated,
+                                                        bool policy_success,
+                                                        bool policy_populated) {
+  LoginMetrics::DevicePolicyFilesStatus status;
+  if (!key_success) {  // Key load failed.
+    status.owner_key_file_state = LoginMetrics::PolicyFileState::kMalformed;
+  } else {
+    if (key_populated) {
+      status.owner_key_file_state = LoginMetrics::PolicyFileState::kGood;
+    } else {
+      status.owner_key_file_state = LoginMetrics::PolicyFileState::kNotPresent;
+    }
+  }
+
+  if (!policy_success) {
+    status.policy_file_state = LoginMetrics::PolicyFileState::kMalformed;
+  } else {
+    if (policy_populated) {
+      status.policy_file_state = LoginMetrics::PolicyFileState::kGood;
+    } else {
+      status.policy_file_state = LoginMetrics::PolicyFileState::kNotPresent;
+    }
+  }
+
+  std::string install_attributes_mode = GetEnterpriseMode();
+  auto it = attrs_to_ownership.find(install_attributes_mode);
+  if (it != attrs_to_ownership.end()) {
+    status.ownership_state = it->second;
+  } else {
+    status.ownership_state = LoginMetrics::OwnershipState::kOther;
+  }
+
+  metrics_->SendDevicePolicyFilesMetrics(status);
 }
 
 bool DevicePolicyService::IsChromeStoreResilientForTesting() {

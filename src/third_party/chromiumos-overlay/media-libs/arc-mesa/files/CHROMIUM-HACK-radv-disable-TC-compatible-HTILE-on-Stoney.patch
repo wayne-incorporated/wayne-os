@@ -1,0 +1,55 @@
+From 1988c184401418f94ab30d5847ba58b2f4088c85 Mon Sep 17 00:00:00 2001
+From: Bas Nieuwenhuizen <basni@chromium.org>
+Date: Fri, 5 Oct 2018 01:58:43 +0200
+Subject: [PATCH] HACK: radv: disable TC compatible HTILE on Stoney.
+
+This is likely a bigger hammer than needed, though perf impact
+should be minimal (<1%) in most applications.
+
+I'm pretty confident that all the failures are in this feature,
+just not sure why the feature fails.
+
+For the first group I haven't found anything yet, for the
+second it seems to be a stride issue for textures with small
+width where we get different stride requirements when this
+feature is enabled.
+
+BUG=b:113330262
+TEST=run tests on deq-vk outside of ARC++.
+
+Change-Id: I0be3b921dd59a6baefc5499c71f7cea27fe2e9f9
+Reviewed-on: https://chromium-review.googlesource.com/c/1263438
+Reviewed-by: Gurchetan Singh <gurchetansingh@chromium.org>
+Reviewed-by: Ilja H. Friedel <ihf@chromium.org>
+Tested-by: Bas Nieuwenhuizen <basni@chromium.org>
+Commit-Queue: Bas Nieuwenhuizen <basni@chromium.org>
+(cherry picked from commit 1ebabc5ffa6d9c6b2a749a04cbe27d505c389306)
+Signed-off-by: Gurchetan Singh <gurchetansingh@chromium.org>
+---
+ src/amd/vulkan/radv_image.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/amd/vulkan/radv_image.c b/src/amd/vulkan/radv_image.c
+index fc8c6a2ebfe0..e9ec8df9bf1d 100644
+--- a/src/amd/vulkan/radv_image.c
++++ b/src/amd/vulkan/radv_image.c
+@@ -68,6 +68,16 @@ static bool
+ radv_use_tc_compat_htile_for_image(struct radv_device *device,
+ 				   const VkImageCreateInfo *pCreateInfo)
+ {
++	/* Disable texture compatible HTILE on Stoney. We have the following
++	 * failing tests:
++	 * dEQP-VK.glsl.builtin_var.fragdepth.*_list_d32_sfloat_multisample_8
++	 * dEQP-VK.pipeline.render_to_image.*_unorm_d32_sfloat_s8_uint
++	 *
++	 * TODO: find underlying cause, this should work theoretically.
++	 */
++	if (device->physical_device->rad_info.family == CHIP_STONEY)
++		return false;
++
+ 	/* TC-compat HTILE is only available for GFX8+. */
+ 	if (device->physical_device->rad_info.chip_class < VI)
+ 		return false;
+-- 
+2.20.1
+

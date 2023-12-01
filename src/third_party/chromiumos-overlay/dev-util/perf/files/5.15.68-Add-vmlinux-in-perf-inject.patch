@@ -1,0 +1,71 @@
+From b3a018fc31fea05ffd034952b4b6e9e1eb0812bc Mon Sep 17 00:00:00 2001
+From: James Clark <james.clark@arm.com>
+Date: Mon, 18 Oct 2021 14:48:43 +0100
+Subject: [PATCH 3/3] perf inject: Add vmlinux and ignore-vmlinux arguments
+
+Other perf tools allow specifying the path to vmlinux. 'perf inject'
+didn't have this argument which made some auxtrace workflows difficult.
+
+Also add --ignore-vmlinux for consistency with other tools.
+
+Suggested-by: Denis Nikitin <denik@chromium.org>
+Signed-off-by: James Clark <james.clark@arm.com>
+Tested-by: Denis Nikitin <denik@chromium.org>
+Cc: Alexander Shishkin <alexander.shishkin@linux.intel.com>
+Cc: Jiri Olsa <jolsa@redhat.com>
+Cc: Mark Rutland <mark.rutland@arm.com>
+Cc: Namhyung Kim <namhyung@kernel.org>
+Link: https://lore.kernel.org/r/20211018134844.2627174-4-james.clark@arm.com
+[ Added the perf-inject man page entries for these options, as noted by Denis ]
+Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+---
+ tools/perf/Documentation/perf-inject.txt | 7 +++++++
+ tools/perf/builtin-inject.c              | 7 +++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/tools/perf/Documentation/perf-inject.txt b/tools/perf/Documentation/perf-inject.txt
+index 91108fe3ad5f..0570a1ccd344 100644
+--- a/tools/perf/Documentation/perf-inject.txt
++++ b/tools/perf/Documentation/perf-inject.txt
+@@ -45,6 +45,13 @@ OPTIONS
+ 	tasks slept. sched_switch contains a callchain where a task slept and
+ 	sched_stat contains a timeslice how long a task slept.
+ 
++-k::
++--vmlinux=<file>::
++        vmlinux pathname
++
++--ignore-vmlinux::
++	Ignore vmlinux files.
++
+ --kallsyms=<file>::
+ 	kallsyms pathname
+ 
+diff --git a/tools/perf/builtin-inject.c b/tools/perf/builtin-inject.c
+index ac6c570029e3..bc5259db5fd9 100644
+--- a/tools/perf/builtin-inject.c
++++ b/tools/perf/builtin-inject.c
+@@ -940,6 +940,10 @@ int cmd_inject(int argc, const char **argv)
+ #endif
+ 		OPT_INCR('v', "verbose", &verbose,
+ 			 "be more verbose (show build ids, etc)"),
++		OPT_STRING('k', "vmlinux", &symbol_conf.vmlinux_name,
++			   "file", "vmlinux pathname"),
++		OPT_BOOLEAN(0, "ignore-vmlinux", &symbol_conf.ignore_vmlinux,
++			    "don't load vmlinux even if found"),
+ 		OPT_STRING(0, "kallsyms", &symbol_conf.kallsyms_name, "file",
+ 			   "kallsyms pathname"),
+ 		OPT_BOOLEAN('f', "force", &data.force, "don't complain, do it"),
+@@ -974,6 +978,9 @@ int cmd_inject(int argc, const char **argv)
+ 		return -1;
+ 	}
+ 
++	if (symbol__validate_sym_arguments())
++		return -1;
++
+ 	if (inject.in_place_update) {
+ 		if (!strcmp(inject.input_name, "-")) {
+ 			pr_err("Input file name required for in-place updating\n");
+-- 
+2.34.0.rc0.344.g81b53c2807-goog
+

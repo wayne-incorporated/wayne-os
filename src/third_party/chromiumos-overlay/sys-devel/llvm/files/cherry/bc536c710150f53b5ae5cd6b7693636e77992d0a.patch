@@ -1,0 +1,287 @@
+commit bc536c710150f53b5ae5cd6b7693636e77992d0a
+Author: Dawid Jurczak <dawid_jurek@vp.pl>
+Date:   Fri Jul 23 11:51:59 2021 +0200
+
+    Revert "[DSE] Transform memset + malloc --> calloc (PR25892)"
+    
+    This reverts commit 43234b1595125ba2b5c23e7b28f5a67041c77673.
+    
+    Reason: We should detect that we are implementing 'calloc' and bail out.
+
+diff --git a/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp b/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp
+index a631fbe93673..d22b3f409585 100644
+--- a/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp
++++ b/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp
+@@ -56,7 +56,6 @@
+ #include "llvm/IR/DataLayout.h"
+ #include "llvm/IR/Dominators.h"
+ #include "llvm/IR/Function.h"
+-#include "llvm/IR/IRBuilder.h"
+ #include "llvm/IR/InstIterator.h"
+ #include "llvm/IR/InstrTypes.h"
+ #include "llvm/IR/Instruction.h"
+@@ -79,7 +78,6 @@
+ #include "llvm/Support/raw_ostream.h"
+ #include "llvm/Transforms/Scalar.h"
+ #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
+-#include "llvm/Transforms/Utils/BuildLibCalls.h"
+ #include "llvm/Transforms/Utils/Local.h"
+ #include <algorithm>
+ #include <cassert>
+@@ -507,12 +505,7 @@ memoryIsNotModifiedBetween(Instruction *FirstI, Instruction *SecondI,
+   BasicBlock::iterator SecondBBI(SecondI);
+   BasicBlock *FirstBB = FirstI->getParent();
+   BasicBlock *SecondBB = SecondI->getParent();
+-  MemoryLocation MemLoc;
+-  if (auto *MemSet = dyn_cast<MemSetInst>(SecondI))
+-    MemLoc = MemoryLocation::getForDest(MemSet);
+-  else
+-    MemLoc = MemoryLocation::get(SecondI);
+-
++  MemoryLocation MemLoc = MemoryLocation::get(SecondI);
+   auto *MemLocPtr = const_cast<Value *>(MemLoc.Ptr);
+ 
+   // Start checking the SecondBB.
+@@ -826,17 +819,14 @@ bool isNoopIntrinsic(Instruction *I) {
+ }
+ 
+ // Check if we can ignore \p D for DSE.
+-bool canSkipDef(MemoryDef *D, bool DefVisibleToCaller,
+-                const TargetLibraryInfo &TLI) {
++bool canSkipDef(MemoryDef *D, bool DefVisibleToCaller) {
+   Instruction *DI = D->getMemoryInst();
+   // Calls that only access inaccessible memory cannot read or write any memory
+   // locations we consider for elimination.
+   if (auto *CB = dyn_cast<CallBase>(DI))
+-    if (CB->onlyAccessesInaccessibleMemory()) {
+-      if (isAllocLikeFn(DI, &TLI))
+-        return false;
++    if (CB->onlyAccessesInaccessibleMemory())
+       return true;
+-    }
++
+   // We can eliminate stores to locations not visible to the caller across
+   // throwing instructions.
+   if (DI->mayThrow() && !DefVisibleToCaller)
+@@ -851,7 +841,7 @@ bool canSkipDef(MemoryDef *D, bool DefVisibleToCaller,
+     return true;
+ 
+   // Skip intrinsics that do not really read or modify memory.
+-  if (isNoopIntrinsic(DI))
++  if (isNoopIntrinsic(D->getMemoryInst()))
+     return true;
+ 
+   return false;
+@@ -1399,7 +1389,7 @@ struct DSEState {
+       MemoryDef *CurrentDef = cast<MemoryDef>(Current);
+       Instruction *CurrentI = CurrentDef->getMemoryInst();
+ 
+-      if (canSkipDef(CurrentDef, !isInvisibleToCallerBeforeRet(DefUO), TLI))
++      if (canSkipDef(CurrentDef, !isInvisibleToCallerBeforeRet(DefUO)))
+         continue;
+ 
+       // Before we try to remove anything, check for any extra throwing
+@@ -1826,55 +1816,13 @@ struct DSEState {
+ 
+     if (StoredConstant && StoredConstant->isNullValue()) {
+       auto *DefUOInst = dyn_cast<Instruction>(DefUO);
+-      if (DefUOInst) {
+-        if (isCallocLikeFn(DefUOInst, &TLI)) {
+-          auto *UnderlyingDef =
+-              cast<MemoryDef>(MSSA.getMemoryAccess(DefUOInst));
+-          // If UnderlyingDef is the clobbering access of Def, no instructions
+-          // between them can modify the memory location.
+-          auto *ClobberDef =
+-              MSSA.getSkipSelfWalker()->getClobberingMemoryAccess(Def);
+-          return UnderlyingDef == ClobberDef;
+-        }
+-
+-        if (MemSet) {
+-          if (F.hasFnAttribute(Attribute::SanitizeMemory))
+-            return false;
+-          auto *Malloc = const_cast<CallInst *>(dyn_cast<CallInst>(DefUOInst));
+-          if (!Malloc)
+-            return false;
+-          auto *InnerCallee = Malloc->getCalledFunction();
+-          if (!InnerCallee)
+-            return false;
+-          LibFunc Func;
+-          if (!TLI.getLibFunc(*InnerCallee, Func) || !TLI.has(Func) ||
+-              Func != LibFunc_malloc)
+-            return false;
+-          if (Malloc->getOperand(0) == MemSet->getLength()) {
+-            if (DT.dominates(Malloc, MemSet) &&
+-                memoryIsNotModifiedBetween(Malloc, MemSet, BatchAA, DL, &DT)) {
+-              IRBuilder<> IRB(Malloc);
+-              const auto &DL = Malloc->getModule()->getDataLayout();
+-              AttributeList EmptyList;
+-              if (auto *Calloc = emitCalloc(
+-                      ConstantInt::get(IRB.getIntPtrTy(DL), 1),
+-                      Malloc->getArgOperand(0), EmptyList, IRB, TLI)) {
+-                MemorySSAUpdater Updater(&MSSA);
+-                auto *LastDef = cast<MemoryDef>(
+-                    Updater.getMemorySSA()->getMemoryAccess(Malloc));
+-                auto *NewAccess = Updater.createMemoryAccessAfter(
+-                    cast<Instruction>(Calloc), LastDef, LastDef);
+-                auto *NewAccessMD = cast<MemoryDef>(NewAccess);
+-                Updater.insertDef(NewAccessMD, /*RenameUses=*/true);
+-                Updater.removeMemoryAccess(Malloc);
+-                Malloc->replaceAllUsesWith(Calloc);
+-                Malloc->eraseFromParent();
+-                return true;
+-              }
+-              return false;
+-            }
+-          }
+-        }
++      if (DefUOInst && isCallocLikeFn(DefUOInst, &TLI)) {
++        auto *UnderlyingDef = cast<MemoryDef>(MSSA.getMemoryAccess(DefUOInst));
++        // If UnderlyingDef is the clobbering access of Def, no instructions
++        // between them can modify the memory location.
++        auto *ClobberDef =
++            MSSA.getSkipSelfWalker()->getClobberingMemoryAccess(Def);
++        return UnderlyingDef == ClobberDef;
+       }
+     }
+ 
+diff --git a/llvm/test/Transforms/DeadStoreElimination/noop-stores.ll b/llvm/test/Transforms/DeadStoreElimination/noop-stores.ll
+index 083ecc2b4a1a..184653982a6a 100644
+--- a/llvm/test/Transforms/DeadStoreElimination/noop-stores.ll
++++ b/llvm/test/Transforms/DeadStoreElimination/noop-stores.ll
+@@ -1,6 +1,6 @@
+ ; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+ ; RUN: opt < %s -basic-aa -dse -S | FileCheck %s
+-; RUN: opt < %s -aa-pipeline=basic-aa -passes='dse,verify<memoryssa>' -S | FileCheck %s
++; RUN: opt < %s -aa-pipeline=basic-aa -passes=dse -S | FileCheck %s
+ target datalayout = "E-p:64:64:64-a0:0:8-f32:32:32-f64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:32:64-v64:64:64-v128:128:128"
+ 
+ declare i8* @calloc(i64, i64)
+@@ -309,128 +309,6 @@ entry:
+   ret void
+ }
+ 
+-declare noalias i8* @malloc(i64)
+-declare noalias i8* @_Znwm(i64)
+-declare void @clobber_memory(float*)
+-
+-; based on pr25892_lite
+-define i8* @zero_memset_after_malloc(i64 %size) {
+-; CHECK-LABEL: @zero_memset_after_malloc(
+-; CHECK-NEXT:    [[CALL:%.*]] = call i8* @calloc(i64 1, i64 [[SIZE:%.*]])
+-; CHECK-NEXT:    ret i8* [[CALL]]
+-;
+-  %call = call i8* @malloc(i64 %size) inaccessiblememonly
+-  call void @llvm.memset.p0i8.i64(i8* %call, i8 0, i64 %size, i1 false)
+-  ret i8* %call
+-}
+-
+-; based on pr25892_lite
+-define i8* @zero_memset_after_malloc_with_intermediate_clobbering(i64 %size) {
+-; CHECK-LABEL: @zero_memset_after_malloc_with_intermediate_clobbering(
+-; CHECK-NEXT:    [[CALL:%.*]] = call i8* @malloc(i64 [[SIZE:%.*]])
+-; CHECK-NEXT:    [[BC:%.*]] = bitcast i8* [[CALL]] to float*
+-; CHECK-NEXT:    call void @clobber_memory(float* [[BC]])
+-; CHECK-NEXT:    call void @llvm.memset.p0i8.i64(i8* [[CALL]], i8 0, i64 [[SIZE]], i1 false)
+-; CHECK-NEXT:    ret i8* [[CALL]]
+-;
+-  %call = call i8* @malloc(i64 %size) inaccessiblememonly
+-  %bc = bitcast i8* %call to float*
+-  call void @clobber_memory(float* %bc)
+-  call void @llvm.memset.p0i8.i64(i8* %call, i8 0, i64 %size, i1 false)
+-  ret i8* %call
+-}
+-
+-; based on pr25892_lite
+-define i8* @zero_memset_after_malloc_with_different_sizes(i64 %size) {
+-; CHECK-LABEL: @zero_memset_after_malloc_with_different_sizes(
+-; CHECK-NEXT:    [[CALL:%.*]] = call i8* @malloc(i64 [[SIZE:%.*]])
+-; CHECK-NEXT:    [[SIZE2:%.*]] = add nsw i64 [[SIZE]], -1
+-; CHECK-NEXT:    call void @llvm.memset.p0i8.i64(i8* [[CALL]], i8 0, i64 [[SIZE2]], i1 false)
+-; CHECK-NEXT:    ret i8* [[CALL]]
+-;
+-  %call = call i8* @malloc(i64 %size) inaccessiblememonly
+-  %size2 = add nsw i64 %size, -1
+-  call void @llvm.memset.p0i8.i64(i8* %call, i8 0, i64 %size2, i1 false)
+-  ret i8* %call
+-}
+-
+-; based on pr25892_lite
+-define i8* @zero_memset_after_new(i64 %size) {
+-; CHECK-LABEL: @zero_memset_after_new(
+-; CHECK-NEXT:    [[CALL:%.*]] = call i8* @_Znwm(i64 [[SIZE:%.*]])
+-; CHECK-NEXT:    call void @llvm.memset.p0i8.i64(i8* [[CALL]], i8 0, i64 [[SIZE]], i1 false)
+-; CHECK-NEXT:    ret i8* [[CALL]]
+-;
+-  %call = call i8* @_Znwm(i64 %size)
+-  call void @llvm.memset.p0i8.i64(i8* %call, i8 0, i64 %size, i1 false)
+-  ret i8* %call
+-}
+-
+-; This should not create a calloc and should not crash the compiler.
+-define i8* @notmalloc_memset(i64 %size, i8*(i64)* %notmalloc) {
+-; CHECK-LABEL: @notmalloc_memset(
+-; CHECK-NEXT:    [[CALL1:%.*]] = call i8* [[NOTMALLOC:%.*]](i64 [[SIZE:%.*]])
+-; CHECK-NEXT:    call void @llvm.memset.p0i8.i64(i8* [[CALL1]], i8 0, i64 [[SIZE]], i1 false)
+-; CHECK-NEXT:    ret i8* [[CALL1]]
+-;
+-  %call1 = call i8* %notmalloc(i64 %size)
+-  call void @llvm.memset.p0i8.i64(i8* %call1, i8 0, i64 %size, i1 false)
+-  ret i8* %call1
+-}
+-
+-define float* @pr25892(i64 %size) {
+-; CHECK-LABEL: @pr25892(
+-; CHECK:       entry:
+-; CHECK-NEXT:    [[CALL:%.*]] = call i8* @calloc(i64 1, i64 [[SIZE:%.*]])
+-; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i8* [[CALL]], null
+-; CHECK-NEXT:    br i1 [[CMP]], label [[CLEANUP:%.*]], label [[IF_END:%.*]]
+-; CHECK:       if.end:
+-; CHECK-NEXT:    [[BC:%.*]] = bitcast i8* [[CALL]] to float*
+-; CHECK-NEXT:    br label [[CLEANUP]]
+-; CHECK:       cleanup:
+-; CHECK-NEXT:    [[RETVAL_0:%.*]] = phi float* [ [[BC]], [[IF_END]] ], [ null, [[ENTRY:%.*]] ]
+-; CHECK-NEXT:    ret float* [[RETVAL_0]]
+-;
+-entry:
+-  %call = call i8* @malloc(i64 %size) inaccessiblememonly
+-  %cmp = icmp eq i8* %call, null
+-  br i1 %cmp, label %cleanup, label %if.end
+-if.end:
+-  %bc = bitcast i8* %call to float*
+-  call void @llvm.memset.p0i8.i64(i8* %call, i8 0, i64 %size, i1 false)
+-  br label %cleanup
+-cleanup:
+-  %retval.0 = phi float* [ %bc, %if.end ], [ null, %entry ]
+-  ret float* %retval.0
+-}
+-
+-; CHECK-LABEL: @pr25892_with_extra_store(
+-; CHECK:       entry:
+-; CHECK-NEXT:    [[CALL:%.*]] = call i8* @calloc(i64 1, i64 [[SIZE:%.*]])
+-; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i8* [[CALL]], null
+-; CHECK-NEXT:    br i1 [[CMP]], label [[CLEANUP:%.*]], label [[IF_END:%.*]]
+-; CHECK:       if.end:
+-; CHECK-NEXT:    [[BC:%.*]] = bitcast i8* [[CALL]] to float*
+-; CHECK-NEXT:    br label [[CLEANUP]]
+-; CHECK:       cleanup:
+-; CHECK-NEXT:    [[RETVAL_0:%.*]] = phi float* [ [[BC]], [[IF_END]] ], [ null, [[ENTRY:%.*]] ]
+-; CHECK-NEXT:    ret float* [[RETVAL_0]]
+-;
+-define float* @pr25892_with_extra_store(i64 %size) {
+-entry:
+-  %call = call i8* @malloc(i64 %size) inaccessiblememonly
+-  %cmp = icmp eq i8* %call, null
+-  br i1 %cmp, label %cleanup, label %if.end
+-if.end:
+-  %bc = bitcast i8* %call to float*
+-  call void @llvm.memset.p0i8.i64(i8* %call, i8 0, i64 %size, i1 false)
+-  store i8 0, i8* %call, align 1
+-  br label %cleanup
+-cleanup:
+-  %retval.0 = phi float* [ %bc, %if.end ], [ null, %entry ]
+-  ret float* %retval.0
+-}
+-
+ ; PR50143
+ define i8* @store_zero_after_calloc_inaccessiblememonly() {
+ ; CHECK-LABEL: @store_zero_after_calloc_inaccessiblememonly(

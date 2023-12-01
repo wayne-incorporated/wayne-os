@@ -1,0 +1,17 @@
+Add TotalPageCount to PWG-Raster header
+
+This change patches pdftoraster to emit the TotalPageCount field into
+outputted PWG-Raster headers.
+
+--- a/filter/pdftoraster.cxx
++++ b/filter/pdftoraster.cxx
+@@ -2026,6 +2026,9 @@ int main(int argc, char *argv[]) {
+   catalog = doc->getCatalog();
+   npages = doc->getNumPages();
+ 
++  /* add TotalPageCount to header [PWG 5102.4-2012 4.3.2.7] */
++  header.cupsInteger[CUPS_RASTER_PWG_TotalPageCount] = npages;
++
+   /* fix NumCopies, Collate ccording to PDFTOPDFComments */
+   header.NumCopies = deviceCopies;
+   header.Collate = deviceCollate ? CUPS_TRUE : CUPS_FALSE;

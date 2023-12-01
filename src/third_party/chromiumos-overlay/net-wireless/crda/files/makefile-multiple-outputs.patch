@@ -1,0 +1,24 @@
+Write the CC rule such that it only tries to produce a single output file (the
+.so). When including the .h files in the compiler invocation, this suggests we
+should be producing pre-compiled headers too, which doesn't make sense in this
+context, and Clang happens not to like.
+
+Submitted a similar patch upstream:
+https://lore.kernel.org/linux-wireless/20191105225751.1233-1-briannorris@chromium.org/T/#u
+but this project is pretty much at the end of its life, as it's not needed for
+kernels >=4.15.
+
+--- a/Makefile
++++ b/Makefile
+@@ -113,9 +113,9 @@ keys.c: utils/key2pub.py $(wildcard $(PUBKEY_DIR)/*.pem)
+ 	$(NQ) '  Trusted pubkeys:' $(wildcard $(PUBKEY_DIR)/*.pem)
+ 	$(Q)./utils/key2pub.py $(wildcard $(PUBKEY_DIR)/*.pem) $@
+ 
+-$(LIBREG): regdb.h reglib.h reglib.c
++$(LIBREG): reglib.c regdb.h reglib.h
+ 	$(NQ) '  CC  ' $@
+-	$(Q)$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ -shared -Wl,-soname,$(LIBREG) $^ $(filter-out -lreg,$(LDLIBS))
++	$(Q)$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ -shared -Wl,-soname,$(LIBREG) $< $(filter-out -lreg,$(LDLIBS))
+ 
+ install-libreg-headers:
+ 	$(NQ) '  INSTALL  libreg-headers'

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -56,7 +56,8 @@ class DeviceLocalAccountManagerTest : public ::testing::Test {
 
     fake_account_policy_path_ =
         temp_dir_.GetPath()
-            .Append(brillo::cryptohome::home::SanitizeUserName(fake_account_))
+            .Append(*brillo::cryptohome::home::SanitizeUserName(
+                brillo::cryptohome::home::Username(fake_account_)))
             .Append(DeviceLocalAccountManager::kPolicyDir)
             .Append(PolicyService::kChromePolicyFileName);
 
@@ -77,7 +78,7 @@ class DeviceLocalAccountManagerTest : public ::testing::Test {
   void SetupKey() {
     EXPECT_CALL(key_, PopulateFromDiskIfPossible()).Times(0);
     EXPECT_CALL(key_, IsPopulated()).WillRepeatedly(Return(true));
-    EXPECT_CALL(key_, Verify(_, _)).WillRepeatedly(Return(true));
+    EXPECT_CALL(key_, Verify(_, _, _)).WillRepeatedly(Return(true));
   }
 
  protected:
@@ -109,17 +110,10 @@ TEST_F(DeviceLocalAccountManagerTest, GetPolicyServiceSucceeds) {
 
   // Also check  if policy is stored at the proper path.
   ASSERT_TRUE(service->Store(MakeChromePolicyNamespace(), GetTestPolicyBlob(),
-                             PolicyService::KEY_NONE, SignatureCheck::kEnabled,
+                             PolicyService::KEY_NONE,
                              MockPolicyService::CreateExpectSuccessCallback()));
   fake_loop_.Run();
   EXPECT_TRUE(base::PathExists(fake_account_policy_path_));
-}
-
-// PolicyServices are created on demand. PersistAllPolicy() should not try to
-// to access uninitialized PolicyServices, see crbug.com/818302.
-TEST_F(DeviceLocalAccountManagerTest, PersistUninitializedAccounts) {
-  SetupAccount();
-  manager_->PersistAllPolicy();
 }
 
 TEST_F(DeviceLocalAccountManagerTest, PurgeStaleAccounts) {

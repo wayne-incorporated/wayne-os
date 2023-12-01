@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 #include <base/check_op.h>
 #include <base/files/file_enumerator.h>
 #include <base/files/file_path.h>
+#include <base/logging.h>
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_util.h>
 
@@ -94,7 +95,7 @@ void AndroidOciWrapper::EnsureJobExit(base::TimeDelta timeout) {
     // the process is still there. We killed |pid| just now so we won't need
     // more than 1s to reap it, but I'll give it 5s because this failure is not
     // recoverable until next reboot.
-    if (!system_utils_->ProcessIsGone(pid, base::TimeDelta::FromSeconds(5)))
+    if (!system_utils_->ProcessIsGone(pid, base::Seconds(5)))
       LOG(ERROR) << "Container process " << pid << " is still here";
   }
 
@@ -102,7 +103,7 @@ void AndroidOciWrapper::EnsureJobExit(base::TimeDelta timeout) {
 }
 
 bool AndroidOciWrapper::StartContainer(const std::vector<std::string>& env,
-                                       const ExitCallback& exit_callback) {
+                                       ExitCallback exit_callback) {
   pid_t pid = system_utils_->fork();
 
   if (pid < 0) {
@@ -124,8 +125,7 @@ bool AndroidOciWrapper::StartContainer(const std::vector<std::string>& env,
   LOG(INFO) << "run_oci PID: " << pid;
 
   int status = -1;
-  pid_t result =
-      system_utils_->Wait(pid, base::TimeDelta::FromSeconds(90), &status);
+  pid_t result = system_utils_->Wait(pid, base::Seconds(90), &status);
   if (result != pid) {
     if (result)
       PLOG(ERROR) << "Failed to wait on run_oci exit";
@@ -180,7 +180,7 @@ bool AndroidOciWrapper::StartContainer(const std::vector<std::string>& env,
 
   LOG(INFO) << "Container PID: " << container_pid_;
 
-  exit_callback_ = exit_callback;
+  exit_callback_ = std::move(exit_callback);
   // Set CRASH initially. So if ARC is stopped without RequestJobExit() call,
   // it will be handled as CRASH.
   exit_reason_ = ArcContainerStopReason::CRASH;
@@ -291,7 +291,7 @@ void AndroidOciWrapper::CleanUpContainer() {
   container_pid_ = 0;
 
   if (!old_callback.is_null())
-    old_callback.Run(pid, exit_reason_);
+    std::move(old_callback).Run(pid, exit_reason_);
 }
 
 bool AndroidOciWrapper::CloseOpenedFiles() {

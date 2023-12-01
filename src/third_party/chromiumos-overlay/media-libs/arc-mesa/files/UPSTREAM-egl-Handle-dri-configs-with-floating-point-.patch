@@ -1,0 +1,145 @@
+From ebc6a7f0cbe4bb761f05a87d97799adeffa4ceb5 Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Thu, 24 Jan 2019 16:55:33 -0800
+Subject: [PATCH 08/12] UPSTREAM: egl: Handle dri configs with floating point
+ pixel data
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In the case that __DRI_ATTRIB_FLOAT_BIT is set in the dri config, set
+EGL_COLOR_COMPONENT_TYPE_FLOAT_EXT in the egl config. Add a field to the
+platform driver visual to indicate if it has components that are in floating
+point form.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Adam Jackson <ajax@redhat.com>
+Reviewed-by: Marek Olšák <marek.olsak@amd.com>
+Reviewed-by: Emil Velikov <emil.velikov@collabora.com>
+(cherry picked from commit 482ed4347d2c672423fcc4659cb20aee19dad7fd)
+
+Change-Id: I12fa58a09b9763d7f9d183ab9c85f12a0bb5b080
+---
+ src/egl/drivers/dri2/egl_dri2.c     | 14 ++++++++++++++
+ src/egl/drivers/dri2/egl_dri2.h     |  5 +++++
+ src/egl/drivers/dri2/platform_drm.c | 12 ++++++++++--
+ src/gbm/backends/dri/gbm_driint.h   |  1 +
+ 4 files changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
+index d84b5668975..26a99cdb5c0 100644
+--- a/src/egl/drivers/dri2/egl_dri2.c
++++ b/src/egl/drivers/dri2/egl_dri2.c
+@@ -202,6 +202,17 @@ dri2_get_shifts_and_sizes(const __DRIcoreExtension *core,
+    core->getConfigAttrib(config, __DRI_ATTRIB_ALPHA_SIZE, &sizes[3]);
+ }
+ 
++void
++dri2_get_render_type_float(const __DRIcoreExtension *core,
++                           const __DRIconfig *config,
++                           bool *is_float)
++{
++   unsigned int render_type;
++
++   core->getConfigAttrib(config, __DRI_ATTRIB_RENDER_TYPE, &render_type);
++   *is_float = (render_type & __DRI_ATTRIB_FLOAT_BIT) ? true : false;
++}
++
+ struct dri2_egl_config *
+ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+                 EGLint surface_type, const EGLint *attr_list,
+@@ -229,6 +240,9 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+                                                      &value); ++i) {
+       switch (attrib) {
+       case __DRI_ATTRIB_RENDER_TYPE:
++         if (value & __DRI_ATTRIB_FLOAT_BIT)
++            _eglSetConfigKey(&base, EGL_COLOR_COMPONENT_TYPE_EXT,
++                             EGL_COLOR_COMPONENT_TYPE_FLOAT_EXT);
+          if (value & __DRI_ATTRIB_RGBA_BIT)
+             value = EGL_RGB_BUFFER;
+          else if (value & __DRI_ATTRIB_LUMINANCE_BIT)
+diff --git a/src/egl/drivers/dri2/egl_dri2.h b/src/egl/drivers/dri2/egl_dri2.h
+index 4a601dabe2b..6efd0963fe7 100644
+--- a/src/egl/drivers/dri2/egl_dri2.h
++++ b/src/egl/drivers/dri2/egl_dri2.h
+@@ -407,6 +407,11 @@ dri2_get_shifts_and_sizes(const __DRIcoreExtension *core,
+ 		          const __DRIconfig *config, int *shifts,
+ 			  unsigned int *sizes);
+ 
++void
++dri2_get_render_type_float(const __DRIcoreExtension *core,
++                           const __DRIconfig *config,
++                           bool *is_float);
++
+ struct dri2_egl_config *
+ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+                 EGLint surface_type, const EGLint *attr_list,
+diff --git a/src/egl/drivers/dri2/platform_drm.c b/src/egl/drivers/dri2/platform_drm.c
+index c0952ac8f1f..d9761d055b3 100644
+--- a/src/egl/drivers/dri2/platform_drm.c
++++ b/src/egl/drivers/dri2/platform_drm.c
+@@ -98,6 +98,7 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
+    const struct gbm_dri_visual *visual = NULL;
+    int shifts[4];
+    unsigned int sizes[4];
++   bool is_float;
+    int i;
+ 
+    /* Check that the EGLConfig being used to render to the surface is
+@@ -107,6 +108,8 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
+     */
+    dri2_get_shifts_and_sizes(dri2_dpy->core, config, shifts, sizes);
+ 
++   dri2_get_render_type_float(dri2_dpy->core, config, &is_float);
++
+    for (i = 0; i < dri2_dpy->gbm_dri->num_visuals; i++) {
+       visual = &dri2_dpy->gbm_dri->visual_table[i];
+       if (visual->gbm_format == surface->format)
+@@ -123,7 +126,8 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
+        sizes[0] != visual->rgba_sizes.red ||
+        sizes[1] != visual->rgba_sizes.green ||
+        sizes[2] != visual->rgba_sizes.blue ||
+-       (sizes[3] > 0 && sizes[3] != visual->rgba_sizes.alpha)) {
++       (sizes[3] > 0 && sizes[3] != visual->rgba_sizes.alpha) ||
++       is_float != visual->is_float) {
+       return false;
+    }
+ 
+@@ -632,9 +636,12 @@ drm_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
+       const __DRIconfig *config = dri2_dpy->driver_configs[i];
+       int shifts[4];
+       unsigned int sizes[4];
++      bool is_float;
+ 
+       dri2_get_shifts_and_sizes(dri2_dpy->core, config, shifts, sizes);
+ 
++      dri2_get_render_type_float(dri2_dpy->core, config, &is_float);
++
+       for (unsigned j = 0; j < num_visuals; j++) {
+          struct dri2_egl_config *dri2_conf;
+ 
+@@ -645,7 +652,8 @@ drm_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
+              visuals[j].rgba_sizes.red != sizes[0] ||
+              visuals[j].rgba_sizes.green != sizes[1] ||
+              visuals[j].rgba_sizes.blue != sizes[2] ||
+-             visuals[j].rgba_sizes.alpha != sizes[3])
++             visuals[j].rgba_sizes.alpha != sizes[3] ||
++             visuals[j].is_float != is_float)
+             continue;
+ 
+          const EGLint attr_list[] = {
+diff --git a/src/gbm/backends/dri/gbm_driint.h b/src/gbm/backends/dri/gbm_driint.h
+index 75299bdb846..a8bfa39e522 100644
+--- a/src/gbm/backends/dri/gbm_driint.h
++++ b/src/gbm/backends/dri/gbm_driint.h
+@@ -55,6 +55,7 @@ struct gbm_dri_visual {
+       unsigned int blue;
+       unsigned int alpha;
+    } rgba_sizes;
++   bool is_float;
+ };
+ 
+ struct gbm_dri_device {
+-- 
+2.21.0
+

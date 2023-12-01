@@ -1,0 +1,58 @@
+From e19ca28a361a1270f7120a683bb4a88596c30bbd Mon Sep 17 00:00:00 2001
+From: Roman Sorokin <rsorokin@chromium.org>
+Date: Wed, 17 Apr 2019 10:11:06 +0200
+Subject: [PATCH] lib: gpo: Cope with Site GPO's list failure
+
+It is temporary workaround until Samba/OpenLDAP bugs are
+fixed (see https://crbug.com/953613)
+---
+ libgpo/gpo_ldap.c | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/libgpo/gpo_ldap.c b/libgpo/gpo_ldap.c
+index fec00053b49..16d25632691 100644
+--- a/libgpo/gpo_ldap.c
++++ b/libgpo/gpo_ldap.c
+@@ -870,7 +870,14 @@ static ADS_STATUS ads_get_gpo_list_internal(ADS_STRUCT *ads,
+ 						 ads->config.ldap_server_name,
+ 						 &site_dn);
+ 		if (!ADS_ERR_OK(status)) {
+-			return status;
++			/*
++			 * Explicitly proceed here because of Site GPO's/Openldap bug.
++			 * See https://crbug.com/953613
++			 */
++			DEBUG(10,("ads_get_gpo_list: SITE search failed with %s. "
++				"Proceed anyway\n",
++				ads_errstr(status)));
++			goto local_gpo_list;
+ 		}
+ 
+ 		DEBUG(10,("ads_get_gpo_list: query SITE: [%s] for GPOs\n",
+@@ -893,7 +900,14 @@ static ADS_STATUS ads_get_gpo_list_internal(ADS_STRUCT *ads,
+ 							add_only_forced_gpos,
+ 							token);
+ 			if (!ADS_ERR_OK(status)) {
+-				return status;
++				/*
++				* Explicitly proceed here because of Site GPO's/Openldap bug.
++				* See https://crbug.com/953613
++				*/
++				DEBUG(10,("ads_get_gpo_list: query SITE: [%s] for GPOs "
++					"failed with %s. Proceed anyway\n",
++					site_dn, ads_errstr(status)));
++				goto local_gpo_list;
+ 			}
+ 
+ 			if (flags & GPO_LIST_FLAG_SITEONLY) {
+@@ -904,6 +918,7 @@ static ADS_STATUS ads_get_gpo_list_internal(ADS_STRUCT *ads,
+ 		}
+ 	}
+ 
++ local_gpo_list:
+ 	/* (L)ocal */
+ 	status = add_local_policy_to_gpo_list(mem_ctx, gpo_list,
+ 					      GP_LINK_LOCAL);
+-- 
+2.21.0.392.gf8f6787159e-goog
+

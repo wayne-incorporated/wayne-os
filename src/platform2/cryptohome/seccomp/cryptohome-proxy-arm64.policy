@@ -1,0 +1,70 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+gettid: 1
+epoll_pwait: 1
+recvmsg: 1
+epoll_ctl: 1
+read: 1
+sendmsg: 1
+write: 1
+mmap: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+openat: 1
+mprotect: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+close: 1
+fstat: 1
+ppoll: 1
+sendto: 1
+futex: 1
+geteuid: 1
+rt_sigprocmask: 1
+getuid: 1
+getgid: 1
+getegid: 1
+brk: 1
+newfstatat: 1
+munmap: 1
+rt_sigaction: 1
+pipe2: 1
+signalfd4: 1
+fcntl: 1
+faccessat: 1
+faccessat2: 1
+socket: arg0 == AF_UNIX
+connect: 1
+set_robust_list: 1
+statfs: 1
+epoll_create1: 1
+getsockname: 1
+getpid: 1
+execve: 1
+set_tid_address: 1
+prlimit64: 1
+getresuid: 1
+getresgid: 1
+clone: 1
+setpriority: 1
+prctl: arg0 == PR_SET_NAME
+madvise: 1
+exit: 1
+lseek: 1
+exit_group: 1
+restart_syscall: 1
+rt_sigreturn: 1
+gettimeofday: 1
+clock_gettime: 1
+nanosleep: 1
+clock_nanosleep: 1
+flock: 1
+
+sched_getattr: 1
+sched_setattr: 1
+getrandom: 1
+
+# tgkill is used by abort() and CHECK()/LOG(FATAL).
+tgkill: arg2 == SIGABRT
+fstatfs: 1

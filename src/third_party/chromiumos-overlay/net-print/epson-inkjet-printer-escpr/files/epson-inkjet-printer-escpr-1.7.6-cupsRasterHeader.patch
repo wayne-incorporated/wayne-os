@@ -1,0 +1,67 @@
+ PR/epson-inkjet-printer-escpr/src/filter.c  |  9 +++++++++
+ PR/epson-inkjet-printer-escpr/src/wrapper.c | 22 ++++++++++++++--------
+ 2 files changed, 23 insertions(+), 8 deletions(-)
+
+diff --git a/PR/epson-inkjet-printer-escpr/src/filter.c b/PR/epson-inkjet-printer-escpr/src/filter.c
+index 9cc3c4b3..8ae09134 100644
+--- a/PR/epson-inkjet-printer-escpr/src/filter.c
++++ b/PR/epson-inkjet-printer-escpr/src/filter.c
+@@ -333,9 +333,18 @@ main (int argc, char *argv[])
+ 	band_line = 1;
+ 
+ 	if (strcmp (fopt.ink, "COLOR") == 0)
++	{
+ 		byte_par_pixel = 3;
++	}
++	else if (strcmp (fopt.ink, "MONO") == 0)
++	{
++		byte_par_pixel = 1;
++	}
+ 	else
++	{
++		fprintf(stderr, "ERROR: [escpr] raster data is handled as 8bpp, unknown option\n");
+ 		byte_par_pixel = 1;
++	}
+ 
+ ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+ 	epsInitLib();
+diff --git a/PR/epson-inkjet-printer-escpr/src/wrapper.c b/PR/epson-inkjet-printer-escpr/src/wrapper.c
+index 2c1ef8b9..295316c8 100644
+--- a/PR/epson-inkjet-printer-escpr/src/wrapper.c
++++ b/PR/epson-inkjet-printer-escpr/src/wrapper.c
+@@ -188,6 +188,19 @@ main (int argc, char *argv[])
+ 		int ret;
+ 		ret = cupsRasterReadHeader (ras, &header);
+ 
++		if (header.cupsBitsPerPixel == 24 && header.cupsColorSpace == 1)
++		{
++			strcpy (fopt.ink, "COLOR");
++		}
++		else if (header.cupsBitsPerPixel == 8 && header.cupsColorSpace == 0)
++		{
++			strcpy (fopt.ink, "MONO");
++		}
++		else
++		{
++			strcpy (fopt.ink, "NOT_SUPPORTED");
++		}
++
+ 		if (ret == 0 || cancel_flg) //データをすべて読み終わった
+ 		{
+ 
+@@ -396,14 +409,7 @@ get_option_for_ppd (const char *printer, filter_option_t *filter_opt_p)
+ 	}
+ 
+ 	/* ink */
+-	if (filter_opt_p->ink[0] == '\0')
+-	{
+-		opt = get_default_choice (ppd_p, "Ink");
+-		if (!opt)
+-			return 1;
+-
+-		strcpy (filter_opt_p->ink, opt);
+-	}
++	// Don't touch Ink key.
+ 
+ 	/* MediaType */
+ 	if (filter_opt_p->quality[0] == '\0')

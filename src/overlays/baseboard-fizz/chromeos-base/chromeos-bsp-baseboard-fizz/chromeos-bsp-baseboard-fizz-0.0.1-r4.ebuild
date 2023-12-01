@@ -1,0 +1,1 @@
+chromeos-bsp-baseboard-fizz-0.0.1.ebuild

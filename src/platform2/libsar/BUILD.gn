@@ -1,0 +1,88 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_headers",
+    ":libsar",
+    ":libsar_pkg_config",
+    ":libsar_test_support",
+    ":libsar_test_support_pkg_config",
+  ]
+  if (use.test) {
+    deps += [ ":libsar_testrunner" ]
+  }
+}
+
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+  ]
+}
+
+shared_library("libsar") {
+  sources = [
+    "sar_config_reader.cc",
+    "sar_config_reader_delegate_impl.cc",
+  ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "lib"
+}
+
+generate_pkg_config("libsar_pkg_config") {
+  name = "libsar"
+  description = "Library to support SAR sensor like Semtech SX93xx components for ChromiumOS"
+  version = "0.1"
+  libs = [ "-lsar" ]
+  install = true
+}
+
+generate_pkg_config("libsar_test_support_pkg_config") {
+  name = "libsar_test_support"
+  description = "Test helper library to support SAR sensor for ChromiumOS"
+  version = "0.1"
+  libs = [ "-lsar_test_support" ]
+  install = true
+}
+
+shared_library("libsar_test_support") {
+  sources = [ "test_fakes.cc" ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "lib"
+  deps = [ ":libsar" ]
+}
+
+install_config("install_headers") {
+  sources = [
+    "sar_config_reader.h",
+    "sar_config_reader_delegate_impl.h",
+    "test_fakes.h",
+  ]
+  install_path = "/usr/include/chromeos/sar_config_reader"
+}
+
+if (use.test) {
+  pkg_config("libsar_testrunner_pkg_deps") {
+    pkg_deps = [ "libbrillo-test" ]
+  }
+
+  executable("libsar_testrunner") {
+    sources = [ "sar_config_reader_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":libsar_testrunner_pkg_deps",
+      ":target_defaults_pkg_deps",
+    ]
+    run_test = true
+    deps = [
+      ":libsar",
+      ":libsar_test_support",
+      "//common-mk/testrunner",
+    ]
+  }
+}

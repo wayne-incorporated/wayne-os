@@ -1,0 +1,396 @@
+From 4155069acee2ca62c534d210b130699497a7da31 Mon Sep 17 00:00:00 2001
+From: Paul Stewart <pstew@chromium.org>
+Date: Mon, 31 May 2021 13:22:06 +0000
+Subject: [PATCH 04/19] Allow lease file to be set on command line
+
+Currently, dhcpcd names its lease files using the interface name
+as the unique part of the name.  There are a couple reasons why
+this may not work well: firstly if "eth0" can have different MAC
+addresses (multiple USB-Ethernet dongles for example) leases for
+one interface aren't valid for the other.  Secondly, when using
+a wireless interface, it would be convenient to hold multiple
+leases in parallel for each SSID one is connected to.
+
+This change adds a suffix to each interface argument (dhcpcd can
+accept multiple interface arguments) that specifies the identifier
+to use to save lease files with.  By default, the behavior is
+identical.
+
+The second CL (https://gerrit.chromium.org/gerrit/22170) for fixing
+pid file formating bug originally introduced by this CL is not needed
+anymore since this bug doesn't exist/apply in the updated implementation.
+
+BUG=chromium-os:25717
+TEST=Re-run dhcpcd with and without an identifier suffix.
+
+Note: the implementation has been changed during upgrade to 7.2.5, the
+original one has been reviewed at:
+Reviewed-on: https://gerrit.chromium.org/gerrit/21991
+Reviewed-on: https://gerrit.chromium.org/gerrit/22170
+---
+ src/dhcp-common.c | 10 +++++-
+ src/dhcp.h        |  2 +-
+ src/dhcpcd.8.in   |  8 ++++-
+ src/dhcpcd.c      | 24 ++++++++------
+ src/dhcpcd.h      |  2 ++
+ src/if-options.c  |  2 +-
+ src/if.c          | 82 ++++++++++++++++++++++++++++++++++++++---------
+ src/if.h          |  8 +++++
+ 8 files changed, 108 insertions(+), 30 deletions(-)
+
+diff --git a/src/dhcp-common.c b/src/dhcp-common.c
+index c562ada7..866c3ccb 100644
+--- a/src/dhcp-common.c
++++ b/src/dhcp-common.c
+@@ -838,6 +838,14 @@ dhcp_set_leasefile(char *leasefile, size_t len, int family,
+ 		return 0;
+ 	}
+ 
++	if (strlen(ifp->lease_identifier) > 0) {
++		/* Only supports lease identifier for IPv4 for now. */
++		if (family == AF_INET) {
++			return snprintf(leasefile, len, LEASEFILE,
++					ifp->lease_identifier, "");
++		}
++	}
++
+ 	switch (family) {
+ 	case AF_INET:
+ 	case AF_INET6:
+@@ -1070,7 +1078,7 @@ dhcp_read_lease_fd(int fd, void **lease)
+ 	size_t sz;
+ 	void *buf;
+ 	ssize_t len;
+-	
++
+ 	if (fstat(fd, &st) != 0)
+ 		goto out;
+ 	if (!S_ISREG(st.st_mode)) {
+diff --git a/src/dhcp.h b/src/dhcp.h
+index e54671e1..becf27c2 100644
+--- a/src/dhcp.h
++++ b/src/dhcp.h
+@@ -230,7 +230,7 @@ struct dhcp_state {
+ 	struct ipv4_addr *addr;
+ 	uint8_t added;
+ 
+-	char leasefile[sizeof(LEASEFILE) + IF_NAMESIZE + (IF_SSIDLEN * 4)];
++	char leasefile[PATH_MAX];
+ 	struct timespec started;
+ 	unsigned char *clientid;
+ 	struct authstate auth;
+diff --git a/src/dhcpcd.8.in b/src/dhcpcd.8.in
+index 8d47dd7f..607df76b 100644
+--- a/src/dhcpcd.8.in
++++ b/src/dhcpcd.8.in
+@@ -201,6 +201,12 @@ changes the routes to use the interface with the same route and the lowest
+ metric.
+ See options below for controlling which interfaces we allow and deny through
+ the use of patterns.
++.Pp
++If an interface name is suffixed by an equal-sign, the text following the
++equal sign will be used instead of the interface name as the unique identifier
++for the DHCP lease file.  Doing so allows the caller to specify different
++lease files for the same interface (e.g, when switching the same wireless
++interface between different 802.11 networks).
+ .Ss Hooking into events
+ .Nm
+ runs
+@@ -821,7 +827,7 @@ Control socket to per interface daemon.
+ .Xr dhcpcd-run-hooks 8 ,
+ .Xr resolvconf 8
+ .Sh STANDARDS
+-RFC\ 951, RFC\ 1534, RFC\ 2104, RFC\ 2131, RFC\ 2132, RFC\ 2563, RFC\ 2855, 
++RFC\ 951, RFC\ 1534, RFC\ 2104, RFC\ 2131, RFC\ 2132, RFC\ 2563, RFC\ 2855,
+ RFC\ 3004, RFC\ 3118, RFC\ 3203, RFC\ 3315, RFC\ 3361, RFC\ 3633, RFC\ 3396,
+ RFC\ 3397, RFC\ 3442, RFC\ 3495, RFC\ 3925, RFC\ 3927, RFC\ 4039, RFC\ 4075,
+ RFC\ 4242, RFC\ 4361, RFC\ 4390, RFC\ 4702, RFC\ 4074, RFC\ 4861, RFC\ 4833,
+diff --git a/src/dhcpcd.c b/src/dhcpcd.c
+index 67dc3d64..7e778338 100644
+--- a/src/dhcpcd.c
++++ b/src/dhcpcd.c
+@@ -1531,6 +1531,7 @@ main(int argc, char **argv)
+ 	int sig = 0;
+ 	const char *siga = NULL;
+ #endif
++	char ifn[IF_NAMESIZE];
+ 
+ 	/* Test for --help and --version */
+ 	if (argc > 1) {
+@@ -1727,12 +1728,11 @@ printpidfile:
+ 		 *  instance for that interface. */
+ 		if (optind == argc - 1 && !(ctx.options & DHCPCD_MASTER)) {
+ 			const char *per;
+-			const char *ifname;
++			const char *ifname = if_namepart(ifn, *ctx.ifv);
+ 
+-			ifname = *ctx.ifv;
+-			if (ifname == NULL || strlen(ifname) > IF_NAMESIZE) {
+-				errno = ifname == NULL ? EINVAL : E2BIG;
+-				logerr("%s: ", ifname);
++			if (ifname == NULL) {
++				errno = EINVAL;
++				logerrx("missing or invalid interface name");
+ 				goto exit_failure;
+ 			}
+ 			/* Allow a dhcpcd interface per address family */
+@@ -1811,7 +1811,7 @@ printpidfile:
+ 				goto exit_failure;
+ 			}
+ 			if (optind != argc)
+-				strlcpy(ctx.pidfile, argv[optind],
++				strlcpy(ctx.pidfile, if_namepart(ifn, argv[optind]),
+ 				    sizeof(ctx.pidfile));
+ 			ifp->ctx = &ctx;
+ 			TAILQ_INSERT_HEAD(ctx.ifaces, ifp, next);
+@@ -1857,7 +1857,8 @@ printpidfile:
+ 	{
+ #endif
+ 		if (!(ctx.options & DHCPCD_MASTER))
+-			ctx.control_fd = control_open(argv[optind]);
++			ctx.control_fd = control_open(
++				if_namepart(ifn, argv[optind]));
+ 		if (ctx.control_fd == -1)
+ 			ctx.control_fd = control_open(NULL);
+ 		if (ctx.control_fd != -1) {
+@@ -1937,7 +1938,9 @@ printpidfile:
+ 	}
+ #else
+ 	if (control_start(&ctx,
+-	    ctx.options & DHCPCD_MASTER ? NULL : argv[optind]) == -1)
++			  ctx.options & DHCPCD_MASTER
++			  ? NULL : if_namepart(ifn, argv[optind]))
++	    == -1)
+ 	{
+ 		logerr("%s: control_start", __func__);
+ 		goto exit_failure;
+@@ -1949,7 +1952,8 @@ printpidfile:
+ 
+ #ifdef HAVE_SETPROCTITLE
+ 	setproctitle("%s%s%s",
+-	    ctx.options & DHCPCD_MASTER ? "[master]" : argv[optind],
++	    ctx.options & DHCPCD_MASTER ? "[master]"
++					: if_namepart(ifn, argv[optind]),
+ 	    ctx.options & DHCPCD_IPV4 ? " [ip4]" : "",
+ 	    ctx.options & DHCPCD_IPV6 ? " [ip6]" : "");
+ #endif
+@@ -1983,7 +1987,7 @@ printpidfile:
+ 		if ((ifp = if_find(ctx.ifaces, ctx.ifv[i])) == NULL ||
+ 		    !ifp->active)
+ 			logerrx("%s: interface not found or invalid",
+-			    ctx.ifv[i]);
++				if_namepart(ifn, ctx.ifv[i]));
+ 	}
+ 	TAILQ_FOREACH(ifp, ctx.ifaces, next) {
+ 		if (ifp->active == IF_ACTIVE_USER)
+diff --git a/src/dhcpcd.h b/src/dhcpcd.h
+index 3e35a3de..5adafc68 100644
+--- a/src/dhcpcd.h
++++ b/src/dhcpcd.h
+@@ -44,6 +44,7 @@
+ #define IF_SSIDLEN	32
+ #define PROFILE_LEN	64
+ #define SECRET_LEN	64
++#define LEASE_IDENTIFIER_LEN (PATH_MAX - sizeof(LEASEFILE))
+ 
+ #define IF_INACTIVE	0
+ #define IF_ACTIVE	1
+@@ -88,6 +89,7 @@ struct interface {
+ 	bool wireless;
+ 	uint8_t ssid[IF_SSIDLEN];
+ 	unsigned int ssid_len;
++        char lease_identifier[LEASE_IDENTIFIER_LEN];
+ 
+ 	char profile[PROFILE_LEN];
+ 	struct if_options *options;
+diff --git a/src/if-options.c b/src/if-options.c
+index 80d1efda..1ced9642 100644
+--- a/src/if-options.c
++++ b/src/if-options.c
+@@ -2512,7 +2512,7 @@ read_config(struct dhcpcd_ctx *ctx,
+ 				skip = 1;
+ 				continue;
+ 			}
+-			if (ifname && strcmp(line, ifname) == 0)
++			if (ifname && if_namecmp(line, ifname, NULL) == 0)
+ 				skip = 0;
+ 			else
+ 				skip = 1;
+diff --git a/src/if.c b/src/if.c
+index 28597dc2..643fc546 100644
+--- a/src/if.c
++++ b/src/if.c
+@@ -72,6 +72,21 @@
+ #include "ipv6nd.h"
+ #include "logerr.h"
+ 
++/* This utility function is used to work around case for lease file encoded in
++ * interface name after '='.  If the lease part is not present the 'name'
++ * argument is returned, otherwise the interface part is copied to the 'buf' and
++ * it is returned. */
++const char* if_namepart(char *buf, const char *name)
++{
++	const char *p;
++
++	if (name == NULL || (p = strchr(name, '=')) == NULL)
++		return name;
++
++	strlcpy(buf, name, MIN(IF_NAMESIZE, (size_t)(p - name + 1)));
++	return buf;
++}
++
+ void
+ if_free(struct interface *ifp)
+ {
+@@ -295,6 +310,25 @@ if_valid_hwaddr(const uint8_t *hwaddr, size_t hwlen)
+ 	return false;
+ }
+ 
++/* This utility function is used to work around case for lease file encoded in
++ * interface name after '='.  It assumes proper name in first arg and possibly
++ * "extended" name as a second one.  As a side-effect when the name matches and
++ * there is lease file encoded it is returned in the last optional argument. */
++int if_namecmp(const char *if_name, const char *ext_name, const char **lease)
++{
++	const char *p = strchr(ext_name, '=');
++	int ret;
++
++	if (p) {
++		ret = strncmp(if_name, ext_name, (size_t)(p - ext_name));
++		if (ret == 0 && lease)
++			*lease = p + 1;
++		return ret;
++	}
++
++	return strcmp(if_name, ext_name);
++}
++
+ struct if_head *
+ if_discover(struct dhcpcd_ctx *ctx, struct ifaddrs **ifaddrs,
+     int argc, char * const *argv)
+@@ -305,6 +339,9 @@ if_discover(struct dhcpcd_ctx *ctx, struct ifaddrs **ifaddrs,
+ 	struct if_head *ifs;
+ 	struct interface *ifp;
+ 	struct if_spec spec;
++	char ifn[IF_NAMESIZE];
++	const char *lease_id = NULL;
++
+ #ifdef AF_LINK
+ 	const struct sockaddr_dl *sdl;
+ #ifdef SIOCGIFPRIORITY
+@@ -363,7 +400,8 @@ if_discover(struct dhcpcd_ctx *ctx, struct ifaddrs **ifaddrs,
+ 
+ 		if (argc > 0) {
+ 			for (i = 0; i < argc; i++) {
+-				if (strcmp(argv[i], spec.devname) == 0)
++				if (if_namecmp(spec.devname, argv[i],
++					       &lease_id) == 0)
+ 					break;
+ 			}
+ 			active = (i == argc) ? IF_INACTIVE : IF_ACTIVE_USER;
+@@ -371,7 +409,8 @@ if_discover(struct dhcpcd_ctx *ctx, struct ifaddrs **ifaddrs,
+ 			/* -1 means we're discovering against a specific
+ 			 * interface, but we still need the below rules
+ 			 * to apply. */
+-			if (argc == -1 && strcmp(argv[0], spec.devname) != 0)
++			if (argc == -1 && if_namecmp(spec.devname, argv[0],
++						     &lease_id) != 0)
+ 				continue;
+ 			active = ctx->options & DHCPCD_INACTIVE ?
+ 			    IF_INACTIVE: IF_ACTIVE_USER;
+@@ -383,7 +422,8 @@ if_discover(struct dhcpcd_ctx *ctx, struct ifaddrs **ifaddrs,
+ 		if (i < ctx->ifdc)
+ 			active = IF_INACTIVE;
+ 		for (i = 0; i < ctx->ifc; i++)
+-			if (fnmatch(ctx->ifv[i], spec.devname, 0) == 0)
++			if (fnmatch(if_namepart(ifn, ctx->ifv[i]),
++				    spec.devname, 0) == 0)
+ 				break;
+ 		if (ctx->ifc && i == ctx->ifc)
+ 			active = IF_INACTIVE;
+@@ -420,6 +460,9 @@ if_discover(struct dhcpcd_ctx *ctx, struct ifaddrs **ifaddrs,
+ 		}
+ 		ifp->ctx = ctx;
+ 		strlcpy(ifp->name, spec.devname, sizeof(ifp->name));
++		if (lease_id)
++			strlcpy(ifp->lease_identifier, lease_id,
++				LEASE_IDENTIFIER_LEN);
+ 		ifp->flags = ifa->ifa_flags;
+ 
+ 		if (ifa->ifa_addr != NULL) {
+@@ -599,16 +642,21 @@ if_nametospec(const char *ifname, struct if_spec *spec)
+ {
+ 	char *ep;
+ 	int e;
++	size_t len;
++
++	if (ifname == NULL || *ifname == '\0')
++		goto invalid;
++
++	ep = strchr(ifname, '=');
++	len = ep ? (size_t)(ep - ifname) : strlen(ifname);
++	len += 1; /* for ending NUL */
++
++	if (len > sizeof(spec->ifname) || len > sizeof(spec->drvname))
++		goto invalid;
++
++	strlcpy(spec->ifname, ifname, len);
++	strlcpy(spec->drvname, ifname, len);
+ 
+-	if (ifname == NULL || *ifname == '\0' ||
+-	    strlcpy(spec->ifname, ifname, sizeof(spec->ifname)) >=
+-	    sizeof(spec->ifname) ||
+-	    strlcpy(spec->drvname, ifname, sizeof(spec->drvname)) >=
+-	    sizeof(spec->drvname))
+-	{
+-		errno = EINVAL;
+-		return -1;
+-	}
+ 	ep = strchr(spec->drvname, ':');
+ 	if (ep) {
+ 		spec->lun = (int)strtoi(ep + 1, NULL, 10, 0, INT_MAX, &e);
+@@ -624,16 +672,18 @@ if_nametospec(const char *ifname, struct if_spec *spec)
+ 	strlcpy(spec->devname, spec->drvname, sizeof(spec->devname));
+ 	while (ep > spec->drvname && isdigit((int)*ep))
+ 		ep--;
+-	if (*ep++ == ':') {
+-		errno = EINVAL;
+-		return -1;
+-	}
++	if (*ep++ == ':')
++		goto invalid;
+ 	spec->ppa = (int)strtoi(ep, NULL, 10, 0, INT_MAX, &e);
+ 	if (e != 0)
+ 		spec->ppa = -1;
+ 	*ep = '\0';
+ 
+ 	return 0;
++
++invalid:
++	errno = EINVAL;
++	return -1;
+ }
+ 
+ static struct interface *
+diff --git a/src/if.h b/src/if.h
+index 91bba49b..fe5c4e23 100644
+--- a/src/if.h
++++ b/src/if.h
+@@ -111,6 +111,14 @@ int if_getifaddrs(struct ifaddrs **);
+ #define	getifaddrs	if_getifaddrs
+ #endif
+ 
++/* Basically this is strcmp but 2nd name can be suffixed with '=' and lease
++ * name after it - this suffix is skipped for comparison. */
++int if_namecmp(const char *if_name, const char *ext_name, const char **lease);
++/* This utility returns just an interface name from "extended" name.  If the
++ * name is not "extended" it is returned otherwise initial part is copied to buf
++ * and it is returned. */
++const char* if_namepart(char *buf, const char *ext_name);
++
+ int if_getflags(struct interface *ifp);
+ int if_setflag(struct interface *ifp, short flag);
+ #define if_up(ifp) if_setflag((ifp), (IFF_UP | IFF_RUNNING))
+-- 
+2.33.0.800.g4c38ced690-goog
+

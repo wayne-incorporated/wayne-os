@@ -1,0 +1,48 @@
+From badf86d6d1976eaf67b3231762e45c821f82cd21 Mon Sep 17 00:00:00 2001
+From: Li-Yu Yu <aaronyu@google.com>
+Date: Thu, 28 Apr 2022 17:18:56 +0800
+Subject: [PATCH 1/1] sof-ctl: Fix -Wformat,-Wsometimes-uninitialized
+
+* Use %z specifier for size types to avoid format
+  specifier warnings on arm32
+* in ctl_dump(), size_t n may be used initialized
+  if ctl_data->out_fd > 0 and !ctl_data->binary.
+
+Signed-off-by: Li-Yu Yu <aaronyu@google.com>
+---
+ ctl/ctl.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/ctl/ctl.c b/ctl/ctl.c
+index 7cbeeaf84..be2f397a1 100644
+--- a/ctl/ctl.c
++++ b/ctl/ctl.c
+@@ -197,7 +197,7 @@ static void hex_data_dump(struct ctl_data *ctl_data)
+ 	/* Print out in 16bit hex format */
+ 	for (i = 0; i < n; i++) {
+ 		if (!(i % 8))
+-			fprintf(stdout, "%08lx ",
++			fprintf(stdout, "%08zx ",
+ 				i * sizeof(uint16_t));
+ 		fprintf(stdout, "%04x ", config[i]);
+ 		if ((i % 8) == 7)
+@@ -405,7 +405,7 @@ static void ctl_dump(struct ctl_data *ctl_data)
+ {
+ 	FILE *fh;
+ 	int offset = 0;
+-	size_t n;/* in bytes */
++	size_t n = 0;/* in bytes */
+
+ 	if (ctl_data->out_fd > 0) {
+ 		if (ctl_data->binary) {
+@@ -436,7 +436,7 @@ static void ctl_dump(struct ctl_data *ctl_data)
+ 			csv_data_dump(ctl_data, fh);
+ 		}
+
+-		fprintf(stdout, "%ld bytes written to file.\n", n);
++		fprintf(stdout, "%zd bytes written to file.\n", n);
+ 		fclose(fh);
+ 	} else {
+ 		/* dump to stdout */
+--
+2.36.0.rc2.479.g8af0fa9b8e-goog

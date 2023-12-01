@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,8 @@ class MockInstallAttributesReader : public InstallAttributesReader {
     attributes_ = attributes;
     initialized_ = true;
   }
+
+  void SetLocked(bool is_locked) { initialized_ = is_locked; }
 };
 
 #endif  // LOGIN_MANAGER_MOCK_INSTALL_ATTRIBUTES_READER_H_

@@ -1,0 +1,37 @@
+From 0b6107597008b5383e071a166497d6bdb21b1611 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 26 Jul 2022 08:42:50 -0300
+Subject: [PATCH 017/163] i386: Use fldt instead of fld on e_logl.S
+
+Clang cannot assemble fldt in the AT&T dialect mode.
+
+(cherry picked from commit 1ed5869c4cbc86b4bbf386f89f1dd9ce98dcf5c1)
+---
+ sysdeps/i386/i686/fpu/e_logl.S | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/i386/i686/fpu/e_logl.S b/sysdeps/i386/i686/fpu/e_logl.S
+index 63183ac544..b308c2ea13 100644
+--- a/sysdeps/i386/i686/fpu/e_logl.S
++++ b/sysdeps/i386/i686/fpu/e_logl.S
+@@ -43,7 +43,7 @@ ENTRY(__ieee754_logl)
+ 	fsubl	MO(one)		// x-1 : x : log(2)
+ 5:	fld	%st		// x-1 : x-1 : x : log(2)
+ 	fabs			// |x-1| : x-1 : x : log(2)
+-	fld	MO(limit)	// 0.29 : |x-1| : x-1 : x : log(2)
++	fldl	MO(limit)	// 0.29 : |x-1| : x-1 : x : log(2)
+ 	fcomip	%st(1)		// |x-1| : x-1 : x : log(2)
+ 	fstp	%st(0)		// x-1 : x : log(2)
+ 	jc	2f
+@@ -76,7 +76,7 @@ ENTRY(__logl_finite)
+ 	fsubl	MO(one)		// x-1 : x : log(2)
+ 	fld	%st		// x-1 : x-1 : x : log(2)
+ 	fabs			// |x-1| : x-1 : x : log(2)
+-	fld	MO(limit)	// 0.29 : |x-1| : x-1 : x : log(2)
++	fldl	MO(limit)	// 0.29 : |x-1| : x-1 : x : log(2)
+ 	fcomip	%st(1)		// |x-1| : x-1 : x : log(2)
+ 	fstp	%st(0)		// x-1 : x : log(2)
+ 	jc	2b
+-- 
+2.37.2
+

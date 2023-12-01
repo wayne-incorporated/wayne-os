@@ -1,0 +1,157 @@
+From 4d286d5ab38636f83cf394876cdf6f1355398148 Mon Sep 17 00:00:00 2001
+From: Dan Callaghan <dcallagh@google.com>
+Date: Tue, 10 May 2022 16:03:32 +1000
+Subject: [PATCH] avoid unprefixed ld in configure checks
+
+During the GCC build process itself, using ./gcc/xgcc, invoking
+$CC -print-prog-name=ld does not actually find the linker because the
+intermediate compiler has not been installed so does not yet know how to
+find its helper programs. The check should just be using $LD instead.
+
+This check originates in libtool.m4.
+---
+ gcc/configure                  | 2 +-
+ libcc1/configure               | 2 +-
+ libffi/configure               | 2 +-
+ libhsail-rt/configure          | 2 +-
+ libitm/configure               | 2 +-
+ liboffloadmic/configure        | 2 +-
+ liboffloadmic/plugin/configure | 2 +-
+ libsanitizer/configure         | 2 +-
+ libstdc++-v3/configure         | 2 +-
+ libvtv/configure               | 2 +-
+ 10 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/gcc/configure b/gcc/configure
+index 5624b8a2fc1..6dd969a53a0 100755
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -19745,7 +19745,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/libcc1/configure b/libcc1/configure
+index 64fdc445163..2af5d0ae6c5 100755
+--- a/libcc1/configure
++++ b/libcc1/configure
+@@ -11899,7 +11899,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/libffi/configure b/libffi/configure
+index f0051505d10..8e7b1713616 100755
+--- a/libffi/configure
++++ b/libffi/configure
+@@ -12274,7 +12274,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/libhsail-rt/configure b/libhsail-rt/configure
+index 49d529c8f5f..d604fa1c33f 100755
+--- a/libhsail-rt/configure
++++ b/libhsail-rt/configure
+@@ -11952,7 +11952,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/libitm/configure b/libitm/configure
+index 97db1bc8845..45e8cda956f 100755
+--- a/libitm/configure
++++ b/libitm/configure
+@@ -12777,7 +12777,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/liboffloadmic/configure b/liboffloadmic/configure
+index cd011799a6c..e30e6cfc1f5 100644
+--- a/liboffloadmic/configure
++++ b/liboffloadmic/configure
+@@ -12143,7 +12143,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/liboffloadmic/plugin/configure b/liboffloadmic/plugin/configure
+index cf485223f41..5c793a1a459 100644
+--- a/liboffloadmic/plugin/configure
++++ b/liboffloadmic/plugin/configure
+@@ -11790,7 +11790,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/libsanitizer/configure b/libsanitizer/configure
+index 0c56bdf2d7d..8e4ffe317c3 100755
+--- a/libsanitizer/configure
++++ b/libsanitizer/configure
+@@ -13074,7 +13074,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/libstdc++-v3/configure b/libstdc++-v3/configure
+index 9f9c5a2419a..3055385abed 100755
+--- a/libstdc++-v3/configure
++++ b/libstdc++-v3/configure
+@@ -12772,7 +12772,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+diff --git a/libvtv/configure b/libvtv/configure
+index fc969525da0..0702d7de7f8 100755
+--- a/libvtv/configure
++++ b/libvtv/configure
+@@ -12975,7 +12975,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
+         wlarc='${wl}'
+ 
+         # ancient GNU ld didn't support --whole-archive et. al.
+-        if eval "`$CC -print-prog-name=ld` --help 2>&1" |
++        if eval "$LD --help 2>&1" |
+ 	  $GREP 'no-whole-archive' > /dev/null; then
+           whole_archive_flag_spec_CXX="$wlarc"'--whole-archive$convenience '"$wlarc"'--no-whole-archive'
+         else
+-- 
+2.36.0.512.ge40c2bad7a-goog
+

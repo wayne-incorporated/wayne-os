@@ -1,0 +1,75 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/install_seccomp_policy.gni")
+import("//common-mk/mojom_bindings_generator.gni")
+
+group("all") {
+  deps = [
+    ":cros_camera_diagnostics_service",
+    ":install_cros_camera_diagnostics_conf",
+    ":install_cros_camera_diagnostics_mojo",
+    ":install_cros_camera_diagnostics_policy",
+    ":install_minijail_conf",
+  ]
+}
+
+generate_mojom_bindings("cros_camera_diagnostics_mojom") {
+  sources = [ "//camera/mojo/camera_diagnostics.mojom" ]
+  mojo_root = "${platform2_root}"
+}
+
+executable("cros_camera_diagnostics_service") {
+  sources = [
+    "camera_diagnostics.cc",
+    "camera_diagnostics.h",
+    "camera_diagnostics_impl.cc",
+    "camera_diagnostics_impl.h",
+    "camera_diagnostics_main.cc",
+    "diagnostics_service_provider.cc",
+    "diagnostics_service_provider.h",
+  ]
+  configs += [ "//camera/build:cros_camera_common" ]
+  pkg_deps = [
+    "libbrillo",
+
+    # libchrome is used by nearly all components.
+    "libchrome",
+    "libcros_camera",
+    "libcros_camera_android_deps",
+    "libmojo",
+    "mojo_service_manager",
+
+    # For event tracing helpers.
+    "perfetto",
+  ]
+  libs = [
+    "dl",
+    "rt",
+  ]
+  deps = [ ":cros_camera_diagnostics_mojom" ]
+  install_path = "bin"
+}
+
+install_config("install_cros_camera_diagnostics_conf") {
+  sources = [ "init/cros-camera-diagnostics.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_cros_camera_diagnostics_mojo") {
+  sources = [ "mojo/cros_camera_diagnostics_mojo.jsonc" ]
+  install_path = "/etc/mojo/service_manager/policy"
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "minijail/cros-camera-diagnostics.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_seccomp_policy("install_cros_camera_diagnostics_policy") {
+  arch = getenv("ARCH")
+  sources = [ "seccomp_filter/cros-camera-diagnostics-${arch}.policy" ]
+  outputs = [ "cros-camera-diagnostics.policy" ]
+  install_path = "/usr/share/policy"
+}

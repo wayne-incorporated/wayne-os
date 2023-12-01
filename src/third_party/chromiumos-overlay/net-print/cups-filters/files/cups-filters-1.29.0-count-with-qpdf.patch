@@ -1,0 +1,42 @@
+From 4895ed297886d62f93bee11667764ce2c45ad521 Mon Sep 17 00:00:00 2001
+From: Sean Kau <skau@chromium.org>
+Date: Fri, 29 Jan 2021 15:03:37 -0800
+Subject: [PATCH] Swap to qpdf to determine page count.
+
+---
+ filter/foomatic-rip/pdf.c | 9 +++------
+ 1 file changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/filter/foomatic-rip/pdf.c b/filter/foomatic-rip/pdf.c
+index 83baf4d0..e5afb4a0 100644
+--- a/filter/foomatic-rip/pdf.c
++++ b/filter/foomatic-rip/pdf.c
+@@ -47,14 +47,11 @@ int pdf_count_pages(const char *filename)
+     size_t bytes;
+     char *p;
+ 
+-    snprintf(gscommand, CMDLINE_MAX, "%s -dNODISPLAY -dNOSAFER -dNOPAUSE -q -c "
+-	     "'/pdffile (%s) (r) file runpdfbegin (PageCount: ) print "
+-	     "pdfpagecount = quit'",
+-	     gspath, filename);
++    snprintf(gscommand, CMDLINE_MAX, "qpdf --show-npages %s", filename);
+ 
+     FILE *pd = popen(gscommand, "r");
+     if (!pd)
+-      rip_die(EXIT_STARVED, "Failed to execute ghostscript to determine number of input pages!\n");
++      rip_die(EXIT_STARVED, "Failed to execute QPDF to determine number of input pages!\n");
+ 
+     bytes = fread_or_die(output, 1, sizeof(output), pd);
+     pclose(pd);
+@@ -62,7 +59,7 @@ int pdf_count_pages(const char *filename)
+     p = output;
+     pagecount = -1;
+     while (bytes > 0) {
+-      if (sscanf(p, "PageCount: %d", &pagecount) >= 1)
++      if (sscanf(p, "%d", &pagecount) >= 1)
+ 	break;
+       p = memchr(p, '\n', bytes);
+       if (p == NULL)
+-- 
+2.30.0.365.g02bc693789-goog
+

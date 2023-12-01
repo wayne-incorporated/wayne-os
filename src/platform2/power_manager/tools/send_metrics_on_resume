@@ -1,0 +1,395 @@
+#!/bin/sh
+
+# Copyright 2012 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This script collects power-management-related UMA metrics when the device is
+# coming out of suspend or, if the machine shut down while in suspend, at boot
+# time.  It is run as root by Upstart and by powerd_suspend.
+#
+# Usage:
+#   -b -- indicates that this script is invoked at boot time.
+
+# Directory where temporary state files are written by the root user.
+root_run_dir=/run/power_manager/root
+
+# Directory where persistent state files are written by the root user.
+root_spool_dir=/var/spool/power_manager/root
+
+# Send a message to /var/log/messages.
+# Arguments:
+#  $@ - String(s) that you want in the message. If you are having issues with
+#  this function, you should read up on how $@ works, since it might be your
+#  problem.
+log_msg() {
+    logger -t "send_metrics_on_resume[${PPID}]" "$@"
+}
+
+LAST_RESUME_TIMINGS_FILE=${root_run_dir}/last_resume_timings
+# Save a message which can be parsed by autotests to determine resume timings.
+# Messages are being saved here so that we only parse the log file in one
+# location.
+# Arguments:
+#  $1 - metric name
+#  $2 - metric value (typically time in ms)
+log_metric() {
+    echo "${1}=${2}" >> "${LAST_RESUME_TIMINGS_FILE}"
+}
+
+# Creates a file based on /var/log/messages containing messages from the most
+# recent resume onwards.  This speeds up greps and also makes it possible
+# to extract counts (like bitfix) from the most recent suspend.
+# To protect against race conditions, loop and make sure a line
+# indicating resume has completed is present.
+#
+# Prints the name of the temp file created.
+split_recent_messages() {
+  local suspend_start="Going to suspend-to-"
+  local tempdir
+  tempdir=$(mktemp --tmpdir -d send_metrics_on_resume.XXXXXXXXXX)
+  local retries=25
+
+  while true; do
+    # count can change if the log gets rotated mid run
+    local count
+    count=$(grep -c "${suspend_start}" /var/log/messages)
+
+    csplit -s -f "${tempdir}/recent_messages" /var/log/messages \
+      "%${suspend_start}%" "{$((count-1))}"
+    # Resume finished is logged by powerd_suspend when it is done
+    if grep -q "Resume finished" "${tempdir}/recent_messages00"; then
+      break;
+    fi
+    retries=$((retries-1))
+    if [ $retries -eq 0 ]; then
+      log_msg "Could not find end of resume indicator splitting messages"
+      break # Skip cleanup and sleep steps and exit loop
+    fi
+    rm "${tempdir}/recent_messages00"
+    sleep 0.2
+  done
+  echo "${tempdir}/recent_messages00"
+}
+
+# Cleanup files created by split_recent_messages
+# Arguments:
+#   $1 - Result returned by split_recent_messages()
+cleanup_recent_messages() {
+  [ -n "$1" ] || return
+  local recent_messages="$1"
+
+  /bin/rm "$recent_messages"
+  /bin/rmdir "$(dirname "$recent_messages")"
+}
+
+# Sends to UMA the total time since going in suspend:
+#   Power.TimeInSuspendAtBoot
+#   Power.TimeInSuspendAtResume
+# Arguments:
+#   $1 - wake-up event: Boot or Resume
+send_time_in_suspend() {
+  [ -n "$1" ] || return
+  local time_in_suspend_name=Power.TimeInSuspendAt$1
+
+  # On suspend, powerd_suspend stores the current RTC value to a file.
+  local f_suspend_at=${root_spool_dir}/suspend-to-ram-time
+  [ -r $f_suspend_at ] || return
+
+  local resume_at
+  resume_at=$(/bin/cat /sys/class/rtc/rtc0/since_epoch)
+  local suspend_at
+  suspend_at=$(/bin/cat $f_suspend_at)
+  /bin/rm -f $f_suspend_at &
+  [ "$resume_at" -gt "$suspend_at" ] || return
+
+  # Converts seconds to minutes rounding to the nearest whole minute.
+  local time_in_suspend=$(((resume_at - suspend_at + 30) / 60))
+  /usr/bin/metrics_client "$time_in_suspend_name" $time_in_suspend 1 10000 50 &
+}
+
+# Prints the firmware (just BIOS, not including EC) resume time in
+# milliseconds.
+calculate_firmware_resume_time() {
+  # Max CPU frequency, in KHz
+  local cpu_freq
+  cpu_freq=$(cat "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")
+  # shellcheck disable=SC2016
+  AWK_PROG='
+    /TSC at resume: / {
+      sub(".*TSC at resume: ", "")
+      tsc_at_resume = $0
+    }
+    END {
+      if (tsc_at_resume != 0) {
+        printf "%d", int(tsc_at_resume / '$cpu_freq')
+      }
+    }
+  '
+  dmesg | awk "$AWK_PROG"
+}
+
+# Prints the timestamp of the last occurrence of a specified string in
+# the recent messages, or nothing otherwise.
+# Arguments:
+#   $1 - string to look for
+#   $2 - Path to messages for most recent suspend onward.
+get_last_message_timestamp() {
+  [ -z "$1" ] && return
+  [ -z "$2" ] && return
+  /bin/grep -E "$1" "$2" \
+    | /usr/bin/tail -n1 \
+    | /bin/sed 's/.*\[\s*\([0-9.]*\)].*/\1/'
+}
+
+# Find a message timestamp based on passed in patterns.  Return the latest
+# timestamp found or nothing.  If an earlier pattern matches, later patterns
+# are not checked.
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward
+#   $@ - Collection of patterns to search for
+get_timestamp() {
+  local filename="${1}"
+  shift 1
+  [ -z "${filename}" ] && return
+  [ -z "${1}" ] && return
+  for pattern in "${@}"; do
+    local timestamp
+    timestamp=$(get_last_message_timestamp "${pattern}" "${filename}")
+    if [ -n "${timestamp}" ]; then
+      echo "${timestamp}"
+      return
+    fi
+  done
+}
+
+# Find a message related to the start of suspend and parse out its timestamp. It
+# returns the time stamp of the message it found or nothing.
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+get_start_suspend_time() {
+  [ -n "${1}" ] || return
+  get_timestamp "${1}" "Freezing user space"
+}
+
+
+# Find the message related to the end of the suspend and parse out timestamp.
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+get_end_suspend_time() {
+  [ -n "${1}" ] || return
+  get_timestamp "${1}" \
+    "s3c_pm_enter" \
+    "CPU . is now offline" \
+    "CPU.: shutdown" \
+    "CPU. killed" \
+    "Entering suspend state" \
+    "sleep: irq wakeup masks:" \
+    "PM: suspend-to-idle" \
+    "PM: noirq suspend of devices complete after"
+}
+
+# Find the message related to the start of resume and parse its timestamp.
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+get_start_resume_time() {
+  [ -n "${1}" ] || return
+  get_timestamp "${1}" \
+    "PMC wake status" \
+    "Disabling VMX on cpu 0" \
+    "Back to C!" \
+    "Low-level resume complete" \
+    "Suspended for" \
+    "PM: resume from suspend-to-idle" \
+    "TSC at resume" \
+    "post sleep, preparing to return" \
+    "Enabling non-boot CPUs ..." \
+    "Resume caused by"
+}
+
+# Find a message related to the end of resume and parse out its timestamp. It
+# returns the time stamp of the message it found or nothing.
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+get_end_resume_time() {
+  [ -n "${1}" ] || return
+  get_timestamp "${1}" "Restarting tasks"
+}
+
+# Find a message related to when all CPUs are ready and parse out its timestamp.
+# It returns the time stamp of the message it found or nothing.
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+get_cpu_ready_time() {
+  [ -n "${1}" ] || return
+  get_timestamp "${1}" \
+    'CPU[0-9]+ is up' \
+    "Booted secondary processor" \
+    "PM: resume from suspend-to-idle"
+}
+
+# Sends to UMA the time it took to suspend and resume:
+#   Power.KernelResumeTimeOnAC
+#   Power.KernelResumeTimeOnBattery
+#   Power.KernelSuspendTimeOnAC
+#   Power.KernelSuspendTimeOnBattery
+#   Power.FirmwareResumeTimeOnAC
+#   Power.FirmwareResumeTimeOnBattery
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+send_suspend_resume_time() {
+  [ -n "$1" ] || return
+  local recent_messages="$1"
+
+  # On suspend, powerd_suspend stores the power status to a file.
+  local power_status_on_suspend=${root_run_dir}/power-status-on-suspend
+  [ -r $power_status_on_suspend ] || return
+
+  # Greps the timestamps.
+  local start_suspend_time
+  local end_suspend_time
+  local start_resume_time
+  local end_resume_time
+  local cpu_ready_time
+  start_suspend_time=$(get_start_suspend_time "$recent_messages")
+  end_suspend_time=$(get_end_suspend_time "$recent_messages")
+  start_resume_time=$(get_start_resume_time "$recent_messages")
+  end_resume_time=$(get_end_resume_time "$recent_messages")
+  cpu_ready_time=$(get_cpu_ready_time "$recent_messages")
+  log_metric start_suspend_time "$start_suspend_time"
+  log_metric end_suspend_time "$end_suspend_time"
+  log_metric start_resume_time "$start_resume_time"
+  log_metric end_resume_time "$end_resume_time"
+  log_metric cpu_ready_time "$cpu_ready_time"
+
+  [ -z "$start_suspend_time" ] && log_msg "Unable to get start_suspend_time"
+  [ -z "$start_resume_time" ] && log_msg "Unable to get start_resume_time"
+  [ -z "$end_resume_time" ] && log_msg "Unable to get end_resume_time"
+
+  # Calculates the time intervals in milliseconds.
+  [ -n "$start_suspend_time" ] && [ -n "$start_resume_time" ] &&
+    local kernel_suspend_time
+    kernel_suspend_time=$(echo "$start_suspend_time" "$start_resume_time" |
+    /usr/bin/awk '{ if (NF == 2 && $1 < $2) print int(($2 - $1) * 1000) }')
+  [ -n "$start_resume_time" ] && [ -n "$end_resume_time" ] &&
+    local kernel_resume_time
+    kernel_resume_time=$(echo "$start_resume_time" "$end_resume_time" |
+    /usr/bin/awk '{ if (NF == 2 && $1 < $2) print int(($2 - $1) * 1000) }')
+  local firmware_resume_time
+  firmware_resume_time=$(calculate_firmware_resume_time)
+
+  [ -z "$firmware_resume_time" ] && log_msg "Unable to get firmware_resume_time"
+
+  # Sends the metrics. Uses the pre-suspend AC status for both suspend
+  # and resume since this is the mode that most software is configured
+  # at at resume time.
+  local ac_status
+  ac_status=$(/bin/cat $power_status_on_suspend)
+  [ -n "$kernel_suspend_time" ] && /usr/bin/metrics_client \
+    Power.KernelSuspendTime"$ac_status" "$kernel_suspend_time" 1 10000 50 &
+  [ -n "$kernel_resume_time" ] && /usr/bin/metrics_client \
+    Power.KernelResumeTime"$ac_status" "$kernel_resume_time" 1 10000 50 &
+  [ -n "$firmware_resume_time" ] && /usr/bin/metrics_client \
+    Power.FirmwareResumeTime"$ac_status" "$firmware_resume_time" 1 10000 50 &
+
+  # Cleanup.
+  /bin/rm -f $power_status_on_suspend
+}
+
+# Find the number of bitfixed chunks
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+get_bitfix_chunks() {
+  [ -n "$1" ] || return
+  grep -c 'bitfix_recover_chunk: Attempting recovery' "$1"
+}
+
+# Find the total number of actual fixes
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+get_bitfix_fixes() {
+  [ -n "$1" ] || return
+  grep -c '\.\.\.fixed 0x[0-9a-f]* from 0x[0-9a-f]* to 0x[0-9a-f]*' "$1"
+}
+
+# Sends to UMA stats about bitfixes on the most recent suspend/resume:
+#   Power.BitfixChunks - Number of 8K chunks fixed
+#   Power.BitfixFixes - Number of words fixed
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward.
+send_bitfix_metrics() {
+  [ -n "$1" ] || return
+  local recent_messages="$1"
+  local enable_file="/sys/module/bitfix_snow/parameters/bitfix_enabled"
+
+  # Get information about bitfix and send it on.
+  if [ "$(cat $enable_file 2>/dev/null)" = "Y" ]; then
+    local bitfix_chunks
+    bitfix_chunks=$(get_bitfix_chunks "$recent_messages")
+    local bitfix_fixes
+    bitfix_fixes=$(get_bitfix_fixes "$recent_messages")
+    /usr/bin/metrics_client -e Power.BitfixChunks "$bitfix_chunks" 100 &
+    /usr/bin/metrics_client -e Power.BitfixFixes "$bitfix_fixes" 500 &
+  fi
+}
+
+# Sends to UMA stats about tps65090 retries
+#   Platform.Tps65090Retries.FetN - Number of retries for Fet N.  N may be
+#       between 1 and 7.
+# As current code is structured you'll see between 1 and 5 tries, but we'll
+# claim 6 as the max just in case.
+#
+# We want to run this at bootup and after suspend/resume.  On bootup we'll run
+# against dmesg and after suspend/resume we'll work on the recent messages.
+#
+# Messages in the log look like this (register is in hex):
+#   regulator regulator.46: reg 0xf enable ok after 2 tries
+#
+# Arguments:
+#   $1 - Path to messages for most recent suspend onward; if "" we'll use dmesg
+send_tpschrome_retries() {
+  local recent_messages="$1"
+
+  # shellcheck disable=SC2016
+  local retries_script='
+    /regulator\.[0-9]+: reg 0x[0-9a-f]+ enable ok after [0-9]+ tries/ {
+      sub(".*regulator\.[0-9]+: reg ", "");
+      if ($1 == "0xf")
+        fet_num = 1;                       # 0xf is FET1
+      else
+        fet_num = substr($1, 3) - 10 + 2;  # 0x10 - 0x15 are FET2 - FET7
+      printf("Platform.Tps65090Retries.Fet%d_%d\n", fet_num, $5);
+    }
+  '
+  local result results
+  if [ -n "${recent_messages}" ]; then
+    results=$(awk -- "${retries_script}" "${recent_messages}")
+  else
+    results=$(dmesg | awk -- "${retries_script}")
+  fi
+  for result in $results; do
+    metric=$(echo "${result}" | cut -d'_' -f1)
+    value=$(echo "${result}" | cut -d'_' -f2)
+    /usr/bin/metrics_client "${metric}" "${value}" 1 6 7 &
+  done
+}
+
+main() {
+  local event="Resume"
+  [ "$1" = "-b" ] && event="Boot"
+  rm -f "${LAST_RESUME_TIMINGS_FILE}"
+  send_time_in_suspend $event
+  if [ $event = "Resume" ]; then
+    local recent_messages
+    recent_messages=$(split_recent_messages)
+    send_suspend_resume_time "$recent_messages"
+    send_bitfix_metrics "$recent_messages"
+    send_tpschrome_retries "$recent_messages"
+
+    cleanup_recent_messages "$recent_messages"
+  else
+    send_tpschrome_retries
+  fi
+}
+
+main "$@"

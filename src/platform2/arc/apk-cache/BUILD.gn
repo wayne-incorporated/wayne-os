@@ -1,0 +1,159 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":apk-cache-cleaner",
+    ":apk-cache-ctl",
+    ":install_apk_cache_cleaner_jailed",
+    ":install_init",
+  ]
+  if (use.seccomp) {
+    deps += [ ":install_policy" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":apk_cache_database_fuzzer" ]
+  }
+  if (use.test) {
+    deps += [
+      ":apk-cache-cleaner_testrunner",
+      ":apk-cache-ctl_testrunner",
+    ]
+  }
+}
+
+pkg_config("libapk-cache-common_config") {
+  pkg_deps = [
+    "libchrome",
+    "sqlite3",
+  ]
+}
+
+static_library("libapk-cache") {
+  sources = [
+    "apk_cache_database.cc",
+    "apk_cache_utils.cc",
+  ]
+  configs += [ ":libapk-cache-common_config" ]
+}
+
+static_library("libapk-cache-cleaner") {
+  sources = [
+    "cache_cleaner.cc",
+    "cache_cleaner_db.cc",
+    "cache_cleaner_utils.cc",
+  ]
+  configs += [ ":libapk-cache-common_config" ]
+}
+
+static_library("libapk-cache-ctl") {
+  sources = [ "apk_cache_ctl_ls.cc" ]
+  configs += [ ":libapk-cache-common_config" ]
+}
+
+pkg_config("apk-cache-common_config") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+executable("apk-cache-cleaner") {
+  sources = [ "cache_cleaner_main.cc" ]
+  configs += [ ":apk-cache-common_config" ]
+  install_path = "sbin"
+  deps = [
+    ":libapk-cache",
+    ":libapk-cache-cleaner",
+  ]
+}
+
+executable("apk-cache-ctl") {
+  sources = [ "apk_cache_ctl_main.cc" ]
+  configs += [ ":apk-cache-common_config" ]
+  install_path = "bin"
+  deps = [
+    ":libapk-cache",
+    ":libapk-cache-ctl",
+  ]
+}
+
+install_config("install_init") {
+  sources = [ "init/apk-cache-cleaner.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_apk_cache_cleaner_jailed") {
+  sources = [ "apk-cache-cleaner-jailed" ]
+  install_path = "sbin"
+  type = "executable"
+}
+
+if (use.seccomp) {
+  install_config("install_policy") {
+    sources =
+        [ "seccomp/apk-cache-cleaner-seccomp-" + getenv("ARCH") + ".policy" ]
+    install_path = "/usr/share/policy"
+    outputs = [ "apk-cache-cleaner-seccomp.policy" ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("apk_cache_database_fuzzer") {
+    sources = [ "apk_cache_database_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":apk-cache-common_config",
+    ]
+    deps = [ ":libapk-cache" ]
+  }
+}
+
+if (use.test) {
+  pkg_config("apk-cache-common_testrunner_config") {
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+      "libchrome-test",
+      "sqlite3",
+    ]
+  }
+  executable("apk-cache-cleaner_testrunner") {
+    sources = [
+      "apk_cache_database_test.cc",
+      "apk_cache_database_test_utils.cc",
+      "cache_cleaner_db_test.cc",
+      "cache_cleaner_test.cc",
+      "cache_cleaner_utils_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":apk-cache-common_testrunner_config",
+    ]
+    run_test = true
+    deps = [
+      ":libapk-cache",
+      ":libapk-cache-cleaner",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+  executable("apk-cache-ctl_testrunner") {
+    sources = [
+      "apk_cache_ctl_test.cc",
+      "apk_cache_database_test_utils.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":apk-cache-common_testrunner_config",
+    ]
+    run_test = true
+    deps = [
+      ":libapk-cache",
+      ":libapk-cache-ctl",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}

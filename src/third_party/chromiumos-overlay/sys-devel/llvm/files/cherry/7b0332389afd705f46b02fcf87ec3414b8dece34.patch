@@ -1,0 +1,177 @@
+commit 7b0332389afd705f46b02fcf87ec3414b8dece34
+Author: Nico Weber <thakis@chromium.org>
+Date:   Fri Sep 4 10:13:28 2020 -0400
+
+    Revert "Canonicalize declaration pointers when forming APValues."
+    
+    This reverts commit e6393ee813178e9d3306b8e3c6949a4f32f8a2cb.
+    It breaks Wunreachable for weak attributes, see
+    http://lists.llvm.org/pipermail/cfe-commits/Week-of-Mon-20200831/336645.html
+
+diff --git a/clang/include/clang/AST/APValue.h b/clang/include/clang/AST/APValue.h
+index 485e6c2602c..87e4bd7f84c 100644
+--- a/clang/include/clang/AST/APValue.h
++++ b/clang/include/clang/AST/APValue.h
+@@ -174,7 +174,6 @@ public:
+       return !(LHS == RHS);
+     }
+     friend llvm::hash_code hash_value(const LValueBase &Base);
+-    friend struct llvm::DenseMapInfo<LValueBase>;
+ 
+   private:
+     PtrTy Ptr;
+@@ -202,7 +201,8 @@ public:
+ 
+   public:
+     LValuePathEntry() : Value() {}
+-    LValuePathEntry(BaseOrMemberType BaseOrMember);
++    LValuePathEntry(BaseOrMemberType BaseOrMember)
++        : Value{reinterpret_cast<uintptr_t>(BaseOrMember.getOpaqueValue())} {}
+     static LValuePathEntry ArrayIndex(uint64_t Index) {
+       LValuePathEntry Result;
+       Result.Value = Index;
+diff --git a/clang/lib/AST/APValue.cpp b/clang/lib/AST/APValue.cpp
+index 7531229654c..2a8834b4db0 100644
+--- a/clang/lib/AST/APValue.cpp
++++ b/clang/lib/AST/APValue.cpp
+@@ -38,7 +38,7 @@ static_assert(
+     "Type is insufficiently aligned");
+ 
+ APValue::LValueBase::LValueBase(const ValueDecl *P, unsigned I, unsigned V)
+-    : Ptr(P ? cast<ValueDecl>(P->getCanonicalDecl()) : nullptr), Local{I, V} {}
++    : Ptr(P), Local{I, V} {}
+ APValue::LValueBase::LValueBase(const Expr *P, unsigned I, unsigned V)
+     : Ptr(P), Local{I, V} {}
+ 
+@@ -82,19 +82,13 @@ bool operator==(const APValue::LValueBase &LHS,
+                 const APValue::LValueBase &RHS) {
+   if (LHS.Ptr != RHS.Ptr)
+     return false;
+-  if (LHS.is<TypeInfoLValue>() || LHS.is<DynamicAllocLValue>())
++  if (LHS.is<TypeInfoLValue>())
+     return true;
+   return LHS.Local.CallIndex == RHS.Local.CallIndex &&
+          LHS.Local.Version == RHS.Local.Version;
+ }
+ }
+ 
+-APValue::LValuePathEntry::LValuePathEntry(BaseOrMemberType BaseOrMember) {
+-  if (const Decl *D = BaseOrMember.getPointer())
+-    BaseOrMember.setPointer(D->getCanonicalDecl());
+-  Value = reinterpret_cast<uintptr_t>(BaseOrMember.getOpaqueValue());
+-}
+-
+ namespace {
+   struct LVBase {
+     APValue::LValueBase Base;
+@@ -119,16 +113,14 @@ APValue::LValueBase::operator bool () const {
+ 
+ clang::APValue::LValueBase
+ llvm::DenseMapInfo<clang::APValue::LValueBase>::getEmptyKey() {
+-  clang::APValue::LValueBase B;
+-  B.Ptr = DenseMapInfo<const ValueDecl*>::getEmptyKey();
+-  return B;
++  return clang::APValue::LValueBase(
++      DenseMapInfo<const ValueDecl*>::getEmptyKey());
+ }
+ 
+ clang::APValue::LValueBase
+ llvm::DenseMapInfo<clang::APValue::LValueBase>::getTombstoneKey() {
+-  clang::APValue::LValueBase B;
+-  B.Ptr = DenseMapInfo<const ValueDecl*>::getTombstoneKey();
+-  return B;
++  return clang::APValue::LValueBase(
++      DenseMapInfo<const ValueDecl*>::getTombstoneKey());
+ }
+ 
+ namespace clang {
+@@ -765,10 +757,8 @@ void APValue::MakeMemberPointer(const ValueDecl *Member, bool IsDerivedMember,
+   assert(isAbsent() && "Bad state change");
+   MemberPointerData *MPD = new ((void*)(char*)Data.buffer) MemberPointerData;
+   Kind = MemberPointer;
+-  MPD->MemberAndIsDerivedMember.setPointer(
+-      Member ? cast<ValueDecl>(Member->getCanonicalDecl()) : nullptr);
++  MPD->MemberAndIsDerivedMember.setPointer(Member);
+   MPD->MemberAndIsDerivedMember.setInt(IsDerivedMember);
+   MPD->resizePath(Path.size());
+-  for (unsigned I = 0; I != Path.size(); ++I)
+-    MPD->getPath()[I] = Path[I]->getCanonicalDecl();
++  memcpy(MPD->getPath(), Path.data(), Path.size()*sizeof(const CXXRecordDecl*));
+ }
+diff --git a/clang/lib/AST/ExprConstant.cpp b/clang/lib/AST/ExprConstant.cpp
+index 8e43b62662e..e8f132dd480 100644
+--- a/clang/lib/AST/ExprConstant.cpp
++++ b/clang/lib/AST/ExprConstant.cpp
+@@ -1978,11 +1978,18 @@ static bool HasSameBase(const LValue &A, const LValue &B) {
+     return false;
+ 
+   if (A.getLValueBase().getOpaqueValue() !=
+-      B.getLValueBase().getOpaqueValue())
+-    return false;
++      B.getLValueBase().getOpaqueValue()) {
++    const Decl *ADecl = GetLValueBaseDecl(A);
++    if (!ADecl)
++      return false;
++    const Decl *BDecl = GetLValueBaseDecl(B);
++    if (!BDecl || ADecl->getCanonicalDecl() != BDecl->getCanonicalDecl())
++      return false;
++  }
+ 
+-  return A.getLValueCallIndex() == B.getLValueCallIndex() &&
+-         A.getLValueVersion() == B.getLValueVersion();
++  return IsGlobalLValue(A.getLValueBase()) ||
++         (A.getLValueCallIndex() == B.getLValueCallIndex() &&
++          A.getLValueVersion() == B.getLValueVersion());
+ }
+ 
+ static void NoteLValueLocation(EvalInfo &Info, APValue::LValueBase Base) {
+@@ -3101,8 +3108,7 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
+ 
+   // If we're currently evaluating the initializer of this declaration, use that
+   // in-flight value.
+-  if (declaresSameEntity(Info.EvaluatingDecl.dyn_cast<const ValueDecl *>(),
+-                         VD)) {
++  if (Info.EvaluatingDecl.dyn_cast<const ValueDecl*>() == VD) {
+     Result = Info.EvaluatingDeclValue;
+     return true;
+   }
+diff --git a/clang/test/CXX/dcl.dcl/dcl.spec/dcl.constexpr/p9.cpp b/clang/test/CXX/dcl.dcl/dcl.spec/dcl.constexpr/p9.cpp
+index 3720b277af7..8d51dbde717 100644
+--- a/clang/test/CXX/dcl.dcl/dcl.spec/dcl.constexpr/p9.cpp
++++ b/clang/test/CXX/dcl.dcl/dcl.spec/dcl.constexpr/p9.cpp
+@@ -24,10 +24,11 @@ constexpr double &ni3; // expected-error {{declaration of reference variable 'ni
+ 
+ constexpr int nc1 = i; // expected-error {{constexpr variable 'nc1' must be initialized by a constant expression}} expected-note {{read of non-const variable 'i' is not allowed in a constant expression}}
+ constexpr C nc2 = C(); // expected-error {{cannot have non-literal type 'const C'}}
+-int &f(); // expected-note 2{{declared here}}
++int &f(); // expected-note {{declared here}}
+ constexpr int &nc3 = f(); // expected-error {{constexpr variable 'nc3' must be initialized by a constant expression}} expected-note {{non-constexpr function 'f' cannot be used in a constant expression}}
+ constexpr int nc4(i); // expected-error {{constexpr variable 'nc4' must be initialized by a constant expression}} expected-note {{read of non-const variable 'i' is not allowed in a constant expression}}
+ constexpr C nc5((C())); // expected-error {{cannot have non-literal type 'const C'}}
++int &f(); // expected-note {{here}}
+ constexpr int &nc6(f()); // expected-error {{constexpr variable 'nc6' must be initialized by a constant expression}} expected-note {{non-constexpr function 'f'}}
+ 
+ struct pixel {
+diff --git a/clang/test/OpenMP/ordered_messages.cpp b/clang/test/OpenMP/ordered_messages.cpp
+index 8a3a86443eb..f6b9dbd6d27 100644
+--- a/clang/test/OpenMP/ordered_messages.cpp
++++ b/clang/test/OpenMP/ordered_messages.cpp
+@@ -16,9 +16,6 @@ void xxx(int argc) {
+ }
+ 
+ int foo();
+-#if __cplusplus >= 201103L
+-// expected-note@-2 {{declared here}}
+-#endif
+ 
+ template <class T>
+ T foo() {
+@@ -179,7 +176,7 @@ T foo() {
+ 
+ int foo() {
+ #if __cplusplus >= 201103L
+-// expected-note@-2 {{declared here}}
++// expected-note@-2 2 {{declared here}}
+ #endif
+ int k;
+   #pragma omp for ordered

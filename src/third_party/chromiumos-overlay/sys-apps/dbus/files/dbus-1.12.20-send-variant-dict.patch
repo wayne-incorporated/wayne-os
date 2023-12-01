@@ -1,0 +1,82 @@
+From a4a02bb89f781bbc58dab22644a6b1427685111b Mon Sep 17 00:00:00 2001
+From: Elly Jones <ellyjones@chromium.org>
+Date: Thu, 1 Dec 2011 13:41:52 -0500
+Subject: [PATCH] dbus-send: support variant values in dictionaries.
+
+Since dbus-send does not support nested containers, add a special case to allow
+for variants as dictionary values.
+
+BUG=chromium-os:20843
+TEST=Adhoc
+dbus-send --system / foo.bar.baz dict:string:variant:abc,int32:3
+
+Change-Id: Ia50215c8ec31bed67a8b8f07422812ea04a2f469
+Signed-off-by: Elly Jones <ellyjones@chromium.org>
+Reviewed-on: https://gerrit.chromium.org/gerrit/12323
+Reviewed-by: Eric Shienbrood <ers@chromium.org>
+---
+ tools/dbus-send.c | 34 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/tools/dbus-send.c b/tools/dbus-send.c
+index 892e20bd..905d8e8e 100644
+--- a/tools/dbus-send.c
++++ b/tools/dbus-send.c
+@@ -244,6 +244,8 @@ append_array (DBusMessageIter *iter, int type, const char *value)
+   free (buffer);
+ }
+ 
++static int type_from_name(const char *name);
++
+ static void
+ append_dict (DBusMessageIter *iter, int keytype, int valtype, const char *value)
+ {
+@@ -269,7 +271,31 @@ append_dict (DBusMessageIter *iter, int keytype, int valtype, const char *value)
+ 	  fprintf (stderr, "%s: Malformed dictionary\n", appname);
+ 	  exit (1);
+ 	}
+-      append_arg (&subiter, valtype, val);
++      if (valtype == DBUS_TYPE_VARIANT)
++        {
++	  char sig[2];
++	  char *c = strchr(val, ':');
++	  if (!c)
++	    {
++	      fprintf (stderr, "Missing type in variant dict\n");
++	      exit (1);
++	    }
++	  *(c++) = '\0';
++	  sig[0] = type_from_name(val);
++	  sig[1] = '\0';
++	  DBusMessageIter subsubiter;
++	  handle_oom (dbus_message_iter_open_container (&subiter,
++							DBUS_TYPE_VARIANT,
++							sig,
++							&subsubiter));
++	  append_arg(&subsubiter, sig[0], c);
++	  handle_oom (dbus_message_iter_close_container (&subiter,
++							 &subsubiter));
++	}
++      else
++        {
++	  append_arg (&subiter, valtype, val);
++	}
+ 
+       handle_oom (dbus_message_iter_close_container (iter, &subiter));
+       val = strtok (NULL, ",");
+@@ -642,7 +668,11 @@ main (int argc, char *argv[])
+ 	      exit (1);
+ 	    }
+ 	  *(c++) = 0;
+-	  secondary_type = type_from_name (arg);
++	  if (!strcmp(arg, "variant"))
++	    /* Hack: support variant values for dictionaries. */
++	    secondary_type = DBUS_TYPE_VARIANT;
++	  else
++	    secondary_type = type_from_name (arg);
+ 	  sig[0] = DBUS_DICT_ENTRY_BEGIN_CHAR;
+ 	  sig[1] = type2;
+ 	  sig[2] = secondary_type;
+-- 
+2.30.1
+

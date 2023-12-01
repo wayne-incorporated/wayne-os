@@ -1,0 +1,257 @@
+commit 06fc5a7714621324b121fb3ee03ac15eb018cf99
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Tue Aug 9 21:17:05 2022 -0700
+
+    Driver: Refactor and support per target dirs in baremetal
+    
+    Refactor baremetal driver code to reduce the bespoke
+    additions and base class overrides.
+    This lets us use the per target runtimes like other clang
+    targets. E.g. clang -target armv7m-cros-none-eabi will now
+    be able to use the runtimes installed at
+    <resource_dir>/lib/armv7m-cros-none-eabi instead of the hardcoded
+    path <resource_dir>/lib/baremetal.
+    The older code paths should still continue to work as before if
+    <resource_dir>/lib/<tuple> does not exist.
+    
+    Reviewed By: MaskRay, barannikov88
+    
+    Differential Revision: https://reviews.llvm.org/D131225
+
+diff --git a/clang/include/clang/Driver/ToolChain.h b/clang/include/clang/Driver/ToolChain.h
+index f20ab164531b..8915c3b80413 100644
+--- a/clang/include/clang/Driver/ToolChain.h
++++ b/clang/include/clang/Driver/ToolChain.h
+@@ -532,7 +532,7 @@ public:
+ 
+   /// Add an additional -fdebug-prefix-map entry.
+   virtual std::string GetGlobalDebugPathRemapping() const { return {}; }
+-  
++
+   // Return the DWARF version to emit, in the absence of arguments
+   // to the contrary.
+   virtual unsigned GetDefaultDwarfVersion() const { return 5; }
+@@ -575,6 +575,9 @@ public:
+   /// isThreadModelSupported() - Does this target support a thread model?
+   virtual bool isThreadModelSupported(const StringRef Model) const;
+ 
++  /// isBareMetal - Is this a bare metal target.
++  virtual bool isBareMetal() const { return false; }
++
+   virtual std::string getMultiarchTriple(const Driver &D,
+                                          const llvm::Triple &TargetTriple,
+                                          StringRef SysRoot) const {
+diff --git a/clang/lib/Driver/ToolChain.cpp b/clang/lib/Driver/ToolChain.cpp
+index 7a4319ea680f..bc86e5be655f 100644
+--- a/clang/lib/Driver/ToolChain.cpp
++++ b/clang/lib/Driver/ToolChain.cpp
+@@ -422,6 +422,9 @@ static StringRef getArchNameForCompilerRTLib(const ToolChain &TC,
+   const llvm::Triple &Triple = TC.getTriple();
+   bool IsWindows = Triple.isOSWindows();
+ 
++  if (TC.isBareMetal())
++    return Triple.getArchName();
++
+   if (TC.getArch() == llvm::Triple::arm || TC.getArch() == llvm::Triple::armeb)
+     return (arm::getARMFloatABI(TC, Args) == arm::FloatABI::Hard && !IsWindows)
+                ? "armhf"
+@@ -459,7 +462,10 @@ StringRef ToolChain::getOSLibName() const {
+ 
+ std::string ToolChain::getCompilerRTPath() const {
+   SmallString<128> Path(getDriver().ResourceDir);
+-  if (Triple.isOSUnknown()) {
++  if (isBareMetal()) {
++    llvm::sys::path::append(Path, "lib", getOSLibName());
++    Path += SelectedMultilib.gccSuffix();
++  } else if (Triple.isOSUnknown()) {
+     llvm::sys::path::append(Path, "lib");
+   } else {
+     llvm::sys::path::append(Path, "lib", getOSLibName());
+diff --git a/clang/lib/Driver/ToolChains/BareMetal.cpp b/clang/lib/Driver/ToolChains/BareMetal.cpp
+index 5f1638a159d5..75b06d5e7d0d 100644
+--- a/clang/lib/Driver/ToolChains/BareMetal.cpp
++++ b/clang/lib/Driver/ToolChains/BareMetal.cpp
+@@ -92,7 +92,7 @@ static bool findRISCVMultilibs(const Driver &D,
+ }
+ 
+ BareMetal::BareMetal(const Driver &D, const llvm::Triple &Triple,
+-                           const ArgList &Args)
++                     const ArgList &Args)
+     : ToolChain(D, Triple, Args) {
+   getProgramPaths().push_back(getDriver().getInstalledDir());
+   if (getDriver().getInstalledDir() != getDriver().Dir)
+@@ -173,21 +173,6 @@ Tool *BareMetal::buildLinker() const {
+   return new tools::baremetal::Linker(*this);
+ }
+ 
+-std::string BareMetal::getCompilerRTPath() const { return getRuntimesDir(); }
+-
+-std::string BareMetal::buildCompilerRTBasename(const llvm::opt::ArgList &,
+-                                               StringRef, FileType,
+-                                               bool) const {
+-  return ("libclang_rt.builtins-" + getTriple().getArchName() + ".a").str();
+-}
+-
+-std::string BareMetal::getRuntimesDir() const {
+-  SmallString<128> Dir(getDriver().ResourceDir);
+-  llvm::sys::path::append(Dir, "lib", "baremetal");
+-  Dir += SelectedMultilib.gccSuffix();
+-  return std::string(Dir.str());
+-}
+-
+ std::string BareMetal::computeSysRoot() const {
+   if (!getDriver().SysRoot.empty())
+     return getDriver().SysRoot + SelectedMultilib.osSuffix();
+@@ -226,8 +211,8 @@ void BareMetal::addClangTargetOptions(const ArgList &DriverArgs,
+   CC1Args.push_back("-nostdsysteminc");
+ }
+ 
+-void BareMetal::AddClangCXXStdlibIncludeArgs(
+-    const ArgList &DriverArgs, ArgStringList &CC1Args) const {
++void BareMetal::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
++                                             ArgStringList &CC1Args) const {
+   if (DriverArgs.hasArg(options::OPT_nostdinc) ||
+       DriverArgs.hasArg(options::OPT_nostdlibinc) ||
+       DriverArgs.hasArg(options::OPT_nostdincxx))
+@@ -292,10 +277,14 @@ void BareMetal::AddLinkRuntimeLib(const ArgList &Args,
+                                   ArgStringList &CmdArgs) const {
+   ToolChain::RuntimeLibType RLT = GetRuntimeLibType(Args);
+   switch (RLT) {
+-  case ToolChain::RLT_CompilerRT:
+-    CmdArgs.push_back(
+-        Args.MakeArgString("-lclang_rt.builtins-" + getTriple().getArchName()));
++  case ToolChain::RLT_CompilerRT: {
++    const std::string FileName = getCompilerRT(Args, "builtins");
++    llvm::StringRef BaseName = llvm::sys::path::filename(FileName);
++    BaseName.consume_front("lib");
++    BaseName.consume_back(".a");
++    CmdArgs.push_back(Args.MakeArgString("-l" + BaseName));
+     return;
++  }
+   case ToolChain::RLT_Libgcc:
+     CmdArgs.push_back("-lgcc");
+     return;
+@@ -310,7 +299,7 @@ void baremetal::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+                                      const char *LinkingOutput) const {
+   ArgStringList CmdArgs;
+ 
+-  auto &TC = static_cast<const toolchains::BareMetal&>(getToolChain());
++  auto &TC = static_cast<const toolchains::BareMetal &>(getToolChain());
+ 
+   AddLinkerInputs(TC, Inputs, Args, CmdArgs, JA);
+ 
+@@ -322,10 +311,17 @@ void baremetal::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+ 
+   TC.AddFilePathLibArgs(Args, CmdArgs);
+ 
+-  CmdArgs.push_back(Args.MakeArgString("-L" + TC.getRuntimesDir()));
++  for (const auto &LibPath : TC.getLibraryPaths())
++    CmdArgs.push_back(Args.MakeArgString(llvm::Twine("-L", LibPath)));
++
++  const std::string FileName = TC.getCompilerRT(Args, "builtins");
++  llvm::SmallString<128> PathBuf{FileName};
++  llvm::sys::path::remove_filename(PathBuf);
++  CmdArgs.push_back(Args.MakeArgString("-L" + PathBuf));
+ 
+   if (TC.ShouldLinkCXXStdlib(Args))
+     TC.AddCXXStdlibLibArgs(Args, CmdArgs);
++
+   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
+     CmdArgs.push_back("-lc");
+     CmdArgs.push_back("-lm");
+diff --git a/clang/lib/Driver/ToolChains/BareMetal.h b/clang/lib/Driver/ToolChains/BareMetal.h
+index dc718e09ad43..2a16a5beb08d 100644
+--- a/clang/lib/Driver/ToolChains/BareMetal.h
++++ b/clang/lib/Driver/ToolChains/BareMetal.h
+@@ -1,4 +1,4 @@
+-//===--- BareMetal.h - Bare Metal Tool and ToolChain -------------*- C++ -*-===//
++//===--- BareMetal.h - Bare Metal Tool and ToolChain ------------*- C++-*-===//
+ //
+ // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ // See https://llvm.org/LICENSE.txt for license information.
+@@ -33,13 +33,9 @@ public:
+ protected:
+   Tool *buildLinker() const override;
+ 
+-  std::string buildCompilerRTBasename(const llvm::opt::ArgList &Args,
+-                                      StringRef Component,
+-                                      FileType Type = ToolChain::FT_Static,
+-                                      bool AddArch = true) const override;
+-
+ public:
+   bool useIntegratedAs() const override { return true; }
++  bool isBareMetal() const override { return true; }
+   bool isCrossCompiling() const override { return true; }
+   bool isPICDefault() const override { return false; }
+   bool isPIEDefault(const llvm::opt::ArgList &Args) const override {
+@@ -50,8 +46,6 @@ public:
+ 
+   StringRef getOSLibName() const override { return "baremetal"; }
+ 
+-  std::string getCompilerRTPath() const override;
+-
+   RuntimeLibType GetDefaultRuntimeLibType() const override {
+     return ToolChain::RLT_CompilerRT;
+   }
+@@ -61,12 +55,13 @@ public:
+ 
+   const char *getDefaultLinker() const override { return "ld.lld"; }
+ 
+-  std::string getRuntimesDir() const;
+-  void AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+-                                 llvm::opt::ArgStringList &CC1Args) const override;
+-  void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
+-                             llvm::opt::ArgStringList &CC1Args,
+-                             Action::OffloadKind DeviceOffloadKind) const override;
++  void
++  AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
++                            llvm::opt::ArgStringList &CC1Args) const override;
++  void
++  addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
++                        llvm::opt::ArgStringList &CC1Args,
++                        Action::OffloadKind DeviceOffloadKind) const override;
+   void AddClangCXXStdlibIncludeArgs(
+       const llvm::opt::ArgList &DriverArgs,
+       llvm::opt::ArgStringList &CC1Args) const override;
+diff --git a/clang/test/Driver/Inputs/resource_dir_with_per_target_subdir/lib/armv7m-vendor-none-eabi/libclang_rt.builtins.a b/clang/test/Driver/Inputs/resource_dir_with_per_target_subdir/lib/armv7m-vendor-none-eabi/libclang_rt.builtins.a
+new file mode 100644
+index 000000000000..e69de29bb2d1
+diff --git a/clang/test/Driver/baremetal.cpp b/clang/test/Driver/baremetal.cpp
+index 7c11fe67155a..53c666d3a91a 100644
+--- a/clang/test/Driver/baremetal.cpp
++++ b/clang/test/Driver/baremetal.cpp
+@@ -31,6 +31,20 @@
+ // RUN:   | FileCheck --check-prefix=CHECK-V6M-LIBINC %s
+ // CHECK-V6M-LIBINC-NOT: "-internal-isystem"
+ 
++// RUN: %clang -no-canonical-prefixes -rtlib=compiler-rt %s -### -o %t.o 2>&1 \
++// RUN:     -target armv7m-vendor-none-eabi \
++// RUN:     --sysroot=%S/Inputs/baremetal_arm \
++// RUN:     -resource-dir=%S/Inputs/resource_dir_with_per_target_subdir \
++// RUN:   | FileCheck --check-prefix=CHECK-ARMV7M-PER-TARGET %s
++// CHECK-ARMV7M-PER-TARGET: "-resource-dir" "[[RESOURCE_DIR:[^"]+]]"
++// CHECK-ARMV7M-PER-TARGET: "-isysroot" "[[SYSROOT:[^"]*]]"
++// CHECK-ARMV7M-PER-TARGET: "-x" "c++" "{{.*}}baremetal.cpp"
++// CHECK-ARMV7M-PER-TARGET: "{{[^"]*}}ld{{(\.(lld|bfd|gold))?}}{{(\.exe)?}}" "{{.*}}.o" "-Bstatic"
++// CHECK-ARMV7M-PER-TARGET: "-L[[SYSROOT:[^"]+]]{{[/\\]+}}lib"
++// CHECK-ARMV7M-PER-TARGET: "-L[[RESOURCE_DIR:[^"]+]]{{[/\\]+}}lib{{[/\\]+}}armv7m-vendor-none-eabi
++// CHECK-ARMV7M-PER-TARGET: "-lc" "-lm" "-lclang_rt.builtins"
++// CHECK-ARMV7M-PER-TARGET: "-o" "{{.*}}.o"
++
+ // RUN: %clangxx -no-canonical-prefixes %s -### -o %t.o 2>&1 \
+ // RUN:     -target armv6m-none-eabi \
+ // RUN:     --sysroot=%S/Inputs/baremetal_arm \
+diff --git a/clang/test/Driver/print-libgcc-file-name-clangrt.c b/clang/test/Driver/print-libgcc-file-name-clangrt.c
+index ac921ec38b12..5084c9966474 100644
+--- a/clang/test/Driver/print-libgcc-file-name-clangrt.c
++++ b/clang/test/Driver/print-libgcc-file-name-clangrt.c
+@@ -48,3 +48,9 @@
+ // RUN:     -resource-dir=%S/Inputs/resource_dir_with_arch_subdir \
+ // RUN:   | FileCheck --check-prefix=CHECK-CLANGRT-ARM-BAREMETAL %s
+ // CHECK-CLANGRT-ARM-BAREMETAL: libclang_rt.builtins-armv7m.a
++
++// RUN: %clang -rtlib=compiler-rt -print-libgcc-file-name 2>&1 \
++// RUN:     --target=armv7m-vendor-none-eabi \
++// RUN:     -resource-dir=%S/Inputs/resource_dir_with_per_target_subdir \
++// RUN:   | FileCheck --check-prefix=CHECK-CLANGRT-ARM-BAREMETAL-PER-TARGET %s
++// CHECK-CLANGRT-ARM-BAREMETAL-PER-TARGET: libclang_rt.builtins.a

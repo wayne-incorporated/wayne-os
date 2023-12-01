@@ -1,0 +1,600 @@
+commit fad7e491a0770ac4336934030ac67d77e7af5520
+Author: Jan Korous <jkorous@apple.com>
+Date:   Fri Jan 28 15:08:45 2022 -0800
+
+    Revert "Add BITINT_MAXWIDTH support"
+    
+    This reverts commit 86797fdb6f51d32f285e48b6d3e0fc5b8b852734.
+    
+    Differential Revision: https://reviews.llvm.org/D117238
+
+diff --git a/clang/docs/ReleaseNotes.rst b/clang/docs/ReleaseNotes.rst
+index 4b444bece68a..f081ff0313e0 100644
+--- a/clang/docs/ReleaseNotes.rst
++++ b/clang/docs/ReleaseNotes.rst
+@@ -174,12 +174,7 @@ C Language Changes in Clang
+   ``_BitInt(N)`` is supported as an extension in older C modes and in all C++
+   modes. Note: the ABI for ``_BitInt(N)`` is still in the process of being
+   stabilized, so this type should not yet be used in interfaces that require
+-  ABI stability. The maximum width supported by Clang can be obtained from the
+-  ``BITINT_MAXWIDTH`` macro in ``<limits.h>``. Currently, Clang supports bit
+-  widths <= 128 because backends are not yet able to cope with some math
+-  operations (like division) on wider integer types. See
+-  `PR44994 <https://github.com/llvm/llvm-project/issues/44994>`_ for more
+-  information.
++  ABI stability.
+ - When using ``asm goto`` with outputs whose constraint modifier is ``"+"``, we
+   now change the numbering of the labels to occur after hidden tied inputs for
+   better compatibility with GCC.  For better portability between different
+diff --git a/clang/include/clang/Basic/TargetInfo.h b/clang/include/clang/Basic/TargetInfo.h
+index a49342a34f3e..642c8500364b 100644
+--- a/clang/include/clang/Basic/TargetInfo.h
++++ b/clang/include/clang/Basic/TargetInfo.h
+@@ -590,17 +590,6 @@ public:
+     return false;
+   }
+ 
+-  // Different targets may support a different maximum width for the _BitInt
+-  // type, depending on what operations are supported.
+-  virtual size_t getMaxBitIntWidth() const {
+-    // FIXME: this value should be llvm::IntegerType::MAX_INT_BITS, which is
+-    // maximum bit width that LLVM claims its IR can support. However, most
+-    // backends currently have a bug where they only support division
+-    // operations on types that are <= 128 bits and crash otherwise. We're
+-    // setting the max supported value to 128 to be conservative.
+-    return 128;
+-  }
+-
+   /// Determine whether _Float16 is supported on this target.
+   virtual bool hasLegalHalfType() const { return HasLegalHalfType; }
+ 
+diff --git a/clang/lib/Frontend/InitPreprocessor.cpp b/clang/lib/Frontend/InitPreprocessor.cpp
+index e259ab47c558..a9023a7a1171 100644
+--- a/clang/lib/Frontend/InitPreprocessor.cpp
++++ b/clang/lib/Frontend/InitPreprocessor.cpp
+@@ -25,7 +25,6 @@
+ #include "clang/Serialization/ASTReader.h"
+ #include "llvm/ADT/APFloat.h"
+ #include "llvm/IR/DataLayout.h"
+-#include "llvm/IR/DerivedTypes.h"
+ using namespace clang;
+ 
+ static bool MacroBodyEndsInBackslash(StringRef MacroBody) {
+@@ -915,13 +914,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
+   Builder.defineMacro("__LONG_WIDTH__", Twine(TI.getLongWidth()));
+   Builder.defineMacro("__LLONG_WIDTH__", Twine(TI.getLongLongWidth()));
+ 
+-  size_t BitIntMaxWidth = TI.getMaxBitIntWidth();
+-  assert(BitIntMaxWidth <= llvm::IntegerType::MAX_INT_BITS &&
+-         "Target defined a max bit width larger than LLVM can support!");
+-  assert(BitIntMaxWidth >= TI.getLongLongWidth() &&
+-         "Target defined a max bit width smaller than the C standard allows!");
+-  Builder.defineMacro("__BITINT_MAXWIDTH__", Twine(BitIntMaxWidth));
+-
+   DefineTypeSize("__SCHAR_MAX__", TargetInfo::SignedChar, TI, Builder);
+   DefineTypeSize("__SHRT_MAX__", TargetInfo::SignedShort, TI, Builder);
+   DefineTypeSize("__INT_MAX__", TargetInfo::SignedInt, TI, Builder);
+diff --git a/clang/lib/Headers/limits.h b/clang/lib/Headers/limits.h
+index cfd23a219ee5..c2d3a7cf4353 100644
+--- a/clang/lib/Headers/limits.h
++++ b/clang/lib/Headers/limits.h
+@@ -78,8 +78,6 @@
+ #define LONG_WIDTH   __LONG_WIDTH__
+ #define ULLONG_WIDTH __LLONG_WIDTH__
+ #define LLONG_WIDTH  __LLONG_WIDTH__
+-
+-#define BITINT_MAXWIDTH __BITINT_MAXWIDTH__
+ #endif
+ 
+ #ifdef __CHAR_UNSIGNED__  /* -funsigned-char */
+diff --git a/clang/lib/Sema/SemaType.cpp b/clang/lib/Sema/SemaType.cpp
+index 218594d4b457..959f4903b030 100644
+--- a/clang/lib/Sema/SemaType.cpp
++++ b/clang/lib/Sema/SemaType.cpp
+@@ -2257,7 +2257,7 @@ QualType Sema::BuildBitIntType(bool IsUnsigned, Expr *BitWidth,
+   if (ICE.isInvalid())
+     return QualType();
+ 
+-  size_t NumBits = Bits.getZExtValue();
++  int64_t NumBits = Bits.getSExtValue();
+   if (!IsUnsigned && NumBits < 2) {
+     Diag(Loc, diag::err_bit_int_bad_size) << 0;
+     return QualType();
+@@ -2268,10 +2268,9 @@ QualType Sema::BuildBitIntType(bool IsUnsigned, Expr *BitWidth,
+     return QualType();
+   }
+ 
+-  const TargetInfo &TI = getASTContext().getTargetInfo();
+-  if (NumBits > TI.getMaxBitIntWidth()) {
++  if (NumBits > llvm::IntegerType::MAX_INT_BITS) {
+     Diag(Loc, diag::err_bit_int_max_size)
+-        << IsUnsigned << TI.getMaxBitIntWidth();
++        << IsUnsigned << llvm::IntegerType::MAX_INT_BITS;
+     return QualType();
+   }
+ 
+diff --git a/clang/test/CodeGen/ext-int-cc.c b/clang/test/CodeGen/ext-int-cc.c
+index 517e3cd2f858..1603d5ec0fb0 100644
+--- a/clang/test/CodeGen/ext-int-cc.c
++++ b/clang/test/CodeGen/ext-int-cc.c
+@@ -28,64 +28,65 @@
+ // RUN: %clang_cc1 -disable-noundef-analysis -triple arm64_32-apple-ios -target-abi darwinpcs -O3 -disable-llvm-passes -emit-llvm -o - %s | FileCheck %s --check-prefixes=AARCH64DARWIN
+ // RUN: %clang_cc1 -disable-noundef-analysis -triple arm -O3 -disable-llvm-passes -emit-llvm -o - %s | FileCheck %s --check-prefixes=ARM
+ 
+-// Make sure 128 and 64 bit versions are passed like integers.
+-void ParamPassing(_BitInt(128) b, _BitInt(64) c) {}
+-// LIN64: define{{.*}} void @ParamPassing(i64 %{{.+}}, i64 %{{.+}}, i64 %{{.+}})
+-// WIN64: define dso_local void @ParamPassing(i128* %{{.+}}, i64 %{{.+}})
+-// LIN32: define{{.*}} void @ParamPassing(i128* %{{.+}}, i64 %{{.+}})
+-// WIN32: define dso_local void @ParamPassing(i128* %{{.+}}, i64 %{{.+}})
+-// NACL: define{{.*}} void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// NVPTX64: define{{.*}} void @ParamPassing(i128 %{{.+}}, i64 %{{.+}})
+-// NVPTX: define{{.*}} void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// SPARCV9: define{{.*}} void @ParamPassing(i128 %{{.+}}, i64 %{{.+}})
+-// SPARC: define{{.*}} void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// MIPS64: define{{.*}} void @ParamPassing(i128 signext  %{{.+}}, i64 signext %{{.+}})
+-// MIPS: define{{.*}} void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 signext %{{.+}})
+-// SPIR64: define{{.*}} spir_func void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// SPIR: define{{.*}} spir_func void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// HEX: define{{.*}} void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// LANAI: define{{.*}} void @ParamPassing(i128* byval(i128) align 4 %{{.+}}, i64 %{{.+}})
+-// R600: define{{.*}} void @ParamPassing(i128 addrspace(5)* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// ARC: define{{.*}} void @ParamPassing(i128* byval(i128) align 4 %{{.+}}, i64 inreg %{{.+}})
+-// XCORE: define{{.*}} void @ParamPassing(i128* byval(i128) align 4 %{{.+}}, i64 %{{.+}})
+-// RISCV64: define{{.*}} void @ParamPassing(i128 %{{.+}}, i64 %{{.+}})
+-// RISCV32: define{{.*}} void @ParamPassing(i128* %{{.+}}, i64 %{{.+}})
+-// WASM: define{{.*}} void @ParamPassing(i128 %{{.+}}, i64 %{{.+}})
+-// SYSTEMZ: define{{.*}} void @ParamPassing(i128* %{{.+}}, i64 %{{.+}})
+-// PPC64: define{{.*}} void @ParamPassing(i128 %{{.+}}, i64 %{{.+}})
+-// PPC32: define{{.*}} void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+-// AARCH64: define{{.*}} void @ParamPassing(i128 %{{.+}}, i64 %{{.+}})
+-// AARCH64DARWIN: define{{.*}} void @ParamPassing(i128 %{{.+}}, i64 %{{.+}})
+-// ARM: define{{.*}} arm_aapcscc void @ParamPassing(i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// Make sure 128 and 64 bit versions are passed like integers, and that >128
++// is passed indirectly.
++void ParamPassing(_BitInt(129) a, _BitInt(128) b, _BitInt(64) c) {}
++// LIN64: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i64 %{{.+}}, i64 %{{.+}}, i64 %{{.+}})
++// WIN64: define dso_local void @ParamPassing(i129* %{{.+}}, i128* %{{.+}}, i64 %{{.+}})
++// LIN32: define{{.*}} void @ParamPassing(i129* %{{.+}}, i128* %{{.+}}, i64 %{{.+}})
++// WIN32: define dso_local void @ParamPassing(i129* %{{.+}}, i128* %{{.+}}, i64 %{{.+}})
++// NACL: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// NVPTX64: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128 %{{.+}}, i64 %{{.+}})
++// NVPTX: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// SPARCV9: define{{.*}} void @ParamPassing(i129* %{{.+}}, i128 %{{.+}}, i64 %{{.+}})
++// SPARC: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// MIPS64: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128 signext  %{{.+}}, i64 signext %{{.+}})
++// MIPS: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 signext %{{.+}})
++// SPIR64: define{{.*}} spir_func void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// SPIR: define{{.*}} spir_func void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// HEX: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// LANAI: define{{.*}} void @ParamPassing(i129* byval(i129) align 4 %{{.+}}, i128* byval(i128) align 4 %{{.+}}, i64 %{{.+}})
++// R600: define{{.*}} void @ParamPassing(i129 addrspace(5)* byval(i129) align 8 %{{.+}}, i128 addrspace(5)* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// ARC: define{{.*}} void @ParamPassing(i129* byval(i129) align 4 %{{.+}}, i128* byval(i128) align 4 %{{.+}}, i64 inreg %{{.+}})
++// XCORE: define{{.*}} void @ParamPassing(i129* byval(i129) align 4 %{{.+}}, i128* byval(i128) align 4 %{{.+}}, i64 %{{.+}})
++// RISCV64: define{{.*}} void @ParamPassing(i129* %{{.+}}, i128 %{{.+}}, i64 %{{.+}})
++// RISCV32: define{{.*}} void @ParamPassing(i129* %{{.+}}, i128* %{{.+}}, i64 %{{.+}})
++// WASM: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128 %{{.+}}, i64 %{{.+}})
++// SYSTEMZ: define{{.*}} void @ParamPassing(i129* %{{.+}}, i128* %{{.+}}, i64 %{{.+}})
++// PPC64: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128 %{{.+}}, i64 %{{.+}})
++// PPC32: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
++// AARCH64: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128 %{{.+}}, i64 %{{.+}})
++// AARCH64DARWIN: define{{.*}} void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128 %{{.+}}, i64 %{{.+}})
++// ARM: define{{.*}} arm_aapcscc void @ParamPassing(i129* byval(i129) align 8 %{{.+}}, i128* byval(i128) align 8 %{{.+}}, i64 %{{.+}})
+ 
+-void ParamPassing2(_BitInt(127) b, _BitInt(63) c) {}
+-// LIN64: define{{.*}} void @ParamPassing2(i64 %{{.+}}, i64 %{{.+}}, i64 %{{.+}})
+-// WIN64: define dso_local void @ParamPassing2(i127* %{{.+}}, i63 %{{.+}})
+-// LIN32: define{{.*}} void @ParamPassing2(i127* %{{.+}}, i63 %{{.+}})
+-// WIN32: define dso_local void @ParamPassing2(i127* %{{.+}}, i63 %{{.+}})
+-// NACL: define{{.*}} void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// NVPTX64: define{{.*}} void @ParamPassing2(i127 %{{.+}}, i63 %{{.+}})
+-// NVPTX: define{{.*}} void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// SPARCV9: define{{.*}} void @ParamPassing2(i127 %{{.+}}, i63 signext %{{.+}})
+-// SPARC: define{{.*}} void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// MIPS64: define{{.*}} void @ParamPassing2(i127 signext  %{{.+}}, i63 signext %{{.+}})
+-// MIPS: define{{.*}} void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 signext %{{.+}})
+-// SPIR64: define{{.*}} spir_func void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// SPIR: define{{.*}} spir_func void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// HEX: define{{.*}} void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// LANAI: define{{.*}} void @ParamPassing2(i127* byval(i127) align 4 %{{.+}}, i63 %{{.+}})
+-// R600: define{{.*}} void @ParamPassing2(i127 addrspace(5)* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// ARC: define{{.*}} void @ParamPassing2(i127* byval(i127) align 4 %{{.+}}, i63 inreg %{{.+}})
+-// XCORE: define{{.*}} void @ParamPassing2(i127* byval(i127) align 4 %{{.+}}, i63 %{{.+}})
+-// RISCV64: define{{.*}} void @ParamPassing2(i127 %{{.+}}, i63 signext %{{.+}})
+-// RISCV32: define{{.*}} void @ParamPassing2(i127* %{{.+}}, i63 %{{.+}})
+-// WASM: define{{.*}} void @ParamPassing2(i127 %{{.+}}, i63 %{{.+}})
+-// SYSTEMZ: define{{.*}} void @ParamPassing2(i127* %{{.+}}, i63 signext %{{.+}})
+-// PPC64: define{{.*}} void @ParamPassing2(i127 %{{.+}}, i63 signext %{{.+}})
+-// PPC32: define{{.*}} void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+-// AARCH64: define{{.*}} void @ParamPassing2(i127 %{{.+}}, i63 %{{.+}})
+-// AARCH64DARWIN: define{{.*}} void @ParamPassing2(i127 %{{.+}}, i63 %{{.+}})
+-// ARM: define{{.*}} arm_aapcscc void @ParamPassing2(i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++void ParamPassing2(_BitInt(129) a, _BitInt(127) b, _BitInt(63) c) {}
++// LIN64: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i64 %{{.+}}, i64 %{{.+}}, i64 %{{.+}})
++// WIN64: define dso_local void @ParamPassing2(i129* %{{.+}}, i127* %{{.+}}, i63 %{{.+}})
++// LIN32: define{{.*}} void @ParamPassing2(i129* %{{.+}}, i127* %{{.+}}, i63 %{{.+}})
++// WIN32: define dso_local void @ParamPassing2(i129* %{{.+}}, i127* %{{.+}}, i63 %{{.+}})
++// NACL: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// NVPTX64: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127 %{{.+}}, i63 %{{.+}})
++// NVPTX: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// SPARCV9: define{{.*}} void @ParamPassing2(i129* %{{.+}}, i127 %{{.+}}, i63 signext %{{.+}})
++// SPARC: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// MIPS64: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127 signext  %{{.+}}, i63 signext %{{.+}})
++// MIPS: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 signext %{{.+}})
++// SPIR64: define{{.*}} spir_func void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// SPIR: define{{.*}} spir_func void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// HEX: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// LANAI: define{{.*}} void @ParamPassing2(i129* byval(i129) align 4 %{{.+}}, i127* byval(i127) align 4 %{{.+}}, i63 %{{.+}})
++// R600: define{{.*}} void @ParamPassing2(i129 addrspace(5)* byval(i129) align 8 %{{.+}}, i127 addrspace(5)* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// ARC: define{{.*}} void @ParamPassing2(i129* byval(i129) align 4 %{{.+}}, i127* byval(i127) align 4 %{{.+}}, i63 inreg %{{.+}})
++// XCORE: define{{.*}} void @ParamPassing2(i129* byval(i129) align 4 %{{.+}}, i127* byval(i127) align 4 %{{.+}}, i63 %{{.+}})
++// RISCV64: define{{.*}} void @ParamPassing2(i129* %{{.+}}, i127 %{{.+}}, i63 signext %{{.+}})
++// RISCV32: define{{.*}} void @ParamPassing2(i129* %{{.+}}, i127* %{{.+}}, i63 %{{.+}})
++// WASM: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127 %{{.+}}, i63 %{{.+}})
++// SYSTEMZ: define{{.*}} void @ParamPassing2(i129* %{{.+}}, i127* %{{.+}}, i63 signext %{{.+}})
++// PPC64: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127 %{{.+}}, i63 signext %{{.+}})
++// PPC32: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
++// AARCH64: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127 %{{.+}}, i63 %{{.+}})
++// AARCH64DARWIN: define{{.*}} void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127 %{{.+}}, i63 %{{.+}})
++// ARM: define{{.*}} arm_aapcscc void @ParamPassing2(i129* byval(i129) align 8 %{{.+}}, i127* byval(i127) align 8 %{{.+}}, i63 %{{.+}})
+ 
+ // Make sure we follow the signext rules for promotable integer types.
+ void ParamPassing3(_BitInt(15) a, _BitInt(31) b) {}
+@@ -117,41 +118,6 @@ void ParamPassing3(_BitInt(15) a, _BitInt(31) b) {}
+ // AARCH64DARWIN: define{{.*}} void @ParamPassing3(i15 signext %{{.+}}, i31 signext %{{.+}})
+ // ARM: define{{.*}} arm_aapcscc void @ParamPassing3(i15 signext %{{.+}}, i31 signext %{{.+}})
+ 
+-#if __BITINT_MAXWIDTH__ > 128
+-// When supported, bit-precise types that are >128 are passed indirectly. Note,
+-// FileCheck doesn't pay attention to the preprocessor, so all of these tests
+-// are negated. This will give an error when a target does support larger
+-// _BitInt widths to alert us to enable the test.
+-void ParamPassing4(_BitInt(129) a) {}
+-// LIN64-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// WIN64-NOT: define dso_local void @ParamPassing4(i129* %{{.+}})
+-// LIN32-NOT: define{{.*}} void @ParamPassing4(i129* %{{.+}})
+-// WIN32-NOT: define dso_local void @ParamPassing4(i129* %{{.+}})
+-// NACL-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// NVPTX64-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// NVPTX-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// SPARCV9-NOT: define{{.*}} void @ParamPassing4(i129* %{{.+}})
+-// SPARC-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// MIPS64-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// MIPS-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// SPIR64-NOT: define{{.*}} spir_func void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// SPIR-NOT: define{{.*}} spir_func void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// HEX-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// LANAI-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 4 %{{.+}})
+-// R600-NOT: define{{.*}} void @ParamPassing4(i129 addrspace(5)* byval(i129) align 8 %{{.+}})
+-// ARC-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 4 %{{.+}})
+-// XCORE-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 4 %{{.+}})
+-// RISCV64-NOT: define{{.*}} void @ParamPassing4(i129* %{{.+}})
+-// RISCV32-NOT: define{{.*}} void @ParamPassing4(i129* %{{.+}})
+-// WASM-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// SYSTEMZ-NOT: define{{.*}} void @ParamPassing4(i129* %{{.+}})
+-// PPC64-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// PPC32-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// AARCH64-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// AARCH64DARWIN-NOT: define{{.*}} void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-// ARM-NOT: define{{.*}} arm_aapcscc void @ParamPassing4(i129* byval(i129) align 8 %{{.+}})
+-#endif
+-
+ _BitInt(63) ReturnPassing(){}
+ // LIN64: define{{.*}} i64 @ReturnPassing(
+ // WIN64: define dso_local i63 @ReturnPassing(
+@@ -270,40 +236,38 @@ _BitInt(128) ReturnPassing4(){}
+ // AARCH64DARWIN: define{{.*}} i128 @ReturnPassing4(
+ // ARM: define{{.*}} arm_aapcscc void @ReturnPassing4(i128* noalias sret
+ 
+-#if __BITINT_MAXWIDTH__ > 128
+ _BitInt(129) ReturnPassing5(){}
+-// LIN64-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// WIN64-NOT: define dso_local void @ReturnPassing5(i129* noalias sret
+-// LIN32-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// WIN32-NOT: define dso_local void @ReturnPassing5(i129* noalias sret
+-// NACL-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// NVPTX64-NOT: define{{.*}} i129 @ReturnPassing5(
+-// NVPTX-NOT: define{{.*}} i129 @ReturnPassing5(
+-// SPARCV9-NOT: define{{.*}} i129 @ReturnPassing5(
+-// SPARC-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// MIPS64-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// MIPS-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// SPIR64-NOT: define{{.*}} spir_func void @ReturnPassing5(i129* noalias sret
+-// SPIR-NOT: define{{.*}} spir_func void @ReturnPassing5(i129* noalias sret
+-// HEX-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// LANAI-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// R600-NOT: define{{.*}} void @ReturnPassing5(i129 addrspace(5)* noalias sret
+-// ARC-NOT: define{{.*}} void @ReturnPassing5(i129* inreg noalias sret
+-// XCORE-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// RISCV64-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// RISCV32-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// WASM-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// SYSTEMZ-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// PPC64-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// PPC32-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// AARCH64-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// AARCH64DARWIN-NOT: define{{.*}} void @ReturnPassing5(i129* noalias sret
+-// ARM-NOT: define{{.*}} arm_aapcscc void @ReturnPassing5(i129* noalias sret
++// LIN64: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// WIN64: define dso_local void @ReturnPassing5(i129* noalias sret
++// LIN32: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// WIN32: define dso_local void @ReturnPassing5(i129* noalias sret
++// NACL: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// NVPTX64: define{{.*}} i129 @ReturnPassing5(
++// NVPTX: define{{.*}} i129 @ReturnPassing5(
++// SPARCV9: define{{.*}} i129 @ReturnPassing5(
++// SPARC: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// MIPS64: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// MIPS: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// SPIR64: define{{.*}} spir_func void @ReturnPassing5(i129* noalias sret
++// SPIR: define{{.*}} spir_func void @ReturnPassing5(i129* noalias sret
++// HEX: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// LANAI: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// R600: define{{.*}} void @ReturnPassing5(i129 addrspace(5)* noalias sret
++// ARC: define{{.*}} void @ReturnPassing5(i129* inreg noalias sret
++// XCORE: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// RISCV64: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// RISCV32: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// WASM: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// SYSTEMZ: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// PPC64: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// PPC32: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// AARCH64: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// AARCH64DARWIN: define{{.*}} void @ReturnPassing5(i129* noalias sret
++// ARM: define{{.*}} arm_aapcscc void @ReturnPassing5(i129* noalias sret
+ 
+ // SparcV9 is odd in that it has a return-size limit of 256, not 128 or 64
+ // like other platforms, so test to make sure this behavior will still work.
+ _BitInt(256) ReturnPassing6() {}
+-// SPARCV9-NOT: define{{.*}} i256 @ReturnPassing6(
++// SPARCV9: define{{.*}} i256 @ReturnPassing6(
+ _BitInt(257) ReturnPassing7() {}
+-// SPARCV9-NOT: define{{.*}} void @ReturnPassing7(i257* noalias sret
+-#endif
++// SPARCV9: define{{.*}} void @ReturnPassing7(i257* noalias sret
+diff --git a/clang/test/CodeGen/ext-int.c b/clang/test/CodeGen/ext-int.c
+index 295fa11cf57a..fbc627d22cb2 100644
+--- a/clang/test/CodeGen/ext-int.c
++++ b/clang/test/CodeGen/ext-int.c
+@@ -13,7 +13,7 @@ void GenericTest(_BitInt(3) a, unsigned _BitInt(3) b, _BitInt(4) c) {
+   // CHECK: store i32 3
+ }
+ 
+-void VLATest(_BitInt(3) A, _BitInt(99) B, _BitInt(123) C) {
++void VLATest(_BitInt(3) A, _BitInt(99) B, _BitInt(123456) C) {
+   // CHECK: define {{.*}}void @VLATest
+   int AR1[A];
+   // CHECK: %[[A:.+]] = zext i3 %{{.+}} to i[[INDXSIZE:[0-9]+]]
+@@ -22,13 +22,13 @@ void VLATest(_BitInt(3) A, _BitInt(99) B, _BitInt(123) C) {
+   // CHECK: %[[B:.+]] = trunc i99 %{{.+}} to i[[INDXSIZE]]
+   // CHECK: %[[VLA2:.+]] = alloca i32, i[[INDXSIZE]] %[[B]]
+   int AR3[C];
+-  // CHECK: %[[C:.+]] = trunc i123 %{{.+}} to i[[INDXSIZE]]
++  // CHECK: %[[C:.+]] = trunc i123456 %{{.+}} to i[[INDXSIZE]]
+   // CHECK: %[[VLA3:.+]] = alloca i32, i[[INDXSIZE]] %[[C]]
+ }
+ 
+ struct S {
+   _BitInt(17) A;
+-  _BitInt(128) B;
++  _BitInt(8388600) B;
+   _BitInt(17) C;
+ };
+ 
+@@ -41,9 +41,9 @@ void OffsetOfTest() {
+   // LIN32: store i32 4, i32* %{{.+}}
+   // WINCHECK32: store i32 8, i32* %{{.+}}
+   int C = __builtin_offsetof(struct S,C);
+-  // CHECK64: store i32 24, i32* %{{.+}}
+-  // LIN32: store i32 20, i32* %{{.+}}
+-  // WIN32: store i32 24, i32* %{{.+}}
++  // CHECK64: store i32 1048584, i32* %{{.+}}
++  // LIN32: store i32 1048580, i32* %{{.+}}
++  // WIN32: store i32 1048584, i32* %{{.+}}
+ }
+ 
+ void Size1ExtIntParam(unsigned _BitInt(1) A) {
+diff --git a/clang/test/CodeGenCXX/ext-int.cpp b/clang/test/CodeGenCXX/ext-int.cpp
+index cc61977fc95e..99b441eeb709 100644
+--- a/clang/test/CodeGenCXX/ext-int.cpp
++++ b/clang/test/CodeGenCXX/ext-int.cpp
+@@ -272,6 +272,71 @@ void TakesVarargs(int i, ...) {
+   // WIN32: %[[LOADV3:.+]] = load i16, i16* %[[BC3]]
+   // WIN32: store i16 %[[LOADV3]], i16*
+ 
++
++  _BitInt(129) D = __builtin_va_arg(args, _BitInt(129));
++  // LIN64: %[[AD4:.+]] = getelementptr inbounds [1 x %struct.__va_list_tag], [1 x %struct.__va_list_tag]* %[[ARGS]]
++  // LIN64: %[[OFA_P4:.+]] = getelementptr inbounds %struct.__va_list_tag, %struct.__va_list_tag* %[[AD4]], i32 0, i32 2
++  // LIN64: %[[OFA4:.+]] = load i8*, i8** %[[OFA_P4]]
++  // LIN64: %[[BC4:.+]] = bitcast i8* %[[OFA4]] to i129*
++  // LIN64: %[[OFANEXT4:.+]] = getelementptr i8, i8* %[[OFA4]], i32 24
++  // LIN64: store i8* %[[OFANEXT4]], i8** %[[OFA_P4]]
++  // LIN64: %[[LOAD4:.+]] = load i129, i129* %[[BC4]]
++  // LIN64: store i129 %[[LOAD4]], i129*
++
++  // LIN32: %[[CUR4:.+]] = load i8*, i8** %[[ARGS]]
++  // LIN32: %[[NEXT4:.+]] = getelementptr inbounds i8, i8* %[[CUR4]], i32 20
++  // LIN32: store i8* %[[NEXT4]], i8** %[[ARGS]]
++  // LIN32: %[[BC4:.+]] = bitcast i8* %[[CUR4]] to i129*
++  // LIN32: %[[LOADV4:.+]] = load i129, i129* %[[BC4]]
++  // LIN32: store i129 %[[LOADV4]], i129*
++
++  // WIN64: %[[CUR4:.+]] = load i8*, i8** %[[ARGS]]
++  // WIN64: %[[NEXT4:.+]] = getelementptr inbounds i8, i8* %[[CUR4]], i64 8
++  // WIN64: store i8* %[[NEXT4]], i8** %[[ARGS]]
++  // WIN64: %[[BC4:.+]] = bitcast i8* %[[CUR4]] to i129**
++  // WIN64: %[[LOADP4:.+]] = load i129*, i129** %[[BC4]]
++  // WIN64: %[[LOADV4:.+]] = load i129, i129* %[[LOADP4]]
++  // WIN64: store i129 %[[LOADV4]], i129*
++
++  // WIN32: %[[CUR4:.+]] = load i8*, i8** %[[ARGS]]
++  // WIN32: %[[NEXT4:.+]] = getelementptr inbounds i8, i8* %[[CUR4]], i32 24
++  // WIN32: store i8* %[[NEXT4]], i8** %[[ARGS]]
++  // WIN32: %[[BC4:.+]] = bitcast i8* %[[CUR4]] to i129*
++  // WIN32: %[[LOADV4:.+]] = load i129, i129* %[[BC4]]
++  // WIN32: store i129 %[[LOADV4]], i129*
++
++  _BitInt(8388600) E = __builtin_va_arg(args, _BitInt(8388600));
++  // LIN64: %[[AD5:.+]] = getelementptr inbounds [1 x %struct.__va_list_tag], [1 x %struct.__va_list_tag]* %[[ARGS]]
++  // LIN64: %[[OFA_P5:.+]] = getelementptr inbounds %struct.__va_list_tag, %struct.__va_list_tag* %[[AD5]], i32 0, i32 2
++  // LIN64: %[[OFA5:.+]] = load i8*, i8** %[[OFA_P5]]
++  // LIN64: %[[BC5:.+]] = bitcast i8* %[[OFA5]] to i8388600*
++  // LIN64: %[[OFANEXT5:.+]] = getelementptr i8, i8* %[[OFA5]], i32 1048576
++  // LIN64: store i8* %[[OFANEXT5]], i8** %[[OFA_P5]]
++  // LIN64: %[[LOAD5:.+]] = load i8388600, i8388600* %[[BC5]]
++  // LIN64: store i8388600 %[[LOAD5]], i8388600*
++
++  // LIN32: %[[CUR5:.+]] = load i8*, i8** %[[ARGS]]
++  // LIN32: %[[NEXT5:.+]] = getelementptr inbounds i8, i8* %[[CUR5]], i32 1048576
++  // LIN32: store i8* %[[NEXT5]], i8** %[[ARGS]]
++  // LIN32: %[[BC5:.+]] = bitcast i8* %[[CUR5]] to i8388600*
++  // LIN32: %[[LOADV5:.+]] = load i8388600, i8388600* %[[BC5]]
++  // LIN32: store i8388600 %[[LOADV5]], i8388600*
++
++  // WIN64: %[[CUR5:.+]] = load i8*, i8** %[[ARGS]]
++  // WIN64: %[[NEXT5:.+]] = getelementptr inbounds i8, i8* %[[CUR5]], i64 8
++  // WIN64: store i8* %[[NEXT5]], i8** %[[ARGS]]
++  // WIN64: %[[BC5:.+]] = bitcast i8* %[[CUR5]] to i8388600**
++  // WIN64: %[[LOADP5:.+]] = load i8388600*, i8388600** %[[BC5]]
++  // WIN64: %[[LOADV5:.+]] = load i8388600, i8388600* %[[LOADP5]]
++  // WIN64: store i8388600 %[[LOADV5]], i8388600*
++
++  // WIN32: %[[CUR5:.+]] = load i8*, i8** %[[ARGS]]
++  // WIN32: %[[NEXT5:.+]] = getelementptr inbounds i8, i8* %[[CUR5]], i32 1048576
++  // WIN32: store i8* %[[NEXT5]], i8** %[[ARGS]]
++  // WIN32: %[[BC5:.+]] = bitcast i8* %[[CUR5]] to i8388600*
++  // WIN32: %[[LOADV5:.+]] = load i8388600, i8388600* %[[BC5]]
++  // WIN32: store i8388600 %[[LOADV5]], i8388600*
++
+   __builtin_va_end(args);
+   // LIN64: %[[ENDAD:.+]] = getelementptr inbounds [1 x %struct.__va_list_tag], [1 x %struct.__va_list_tag]* %[[ARGS]]
+   // LIN64: %[[ENDAD1:.+]] = bitcast %struct.__va_list_tag* %[[ENDAD]] to i8*
+@@ -340,7 +405,7 @@ void ExplicitCasts() {
+ 
+ struct S {
+   _BitInt(17) A;
+-  _BitInt(128) B;
++  _BitInt(8388600) B;
+   _BitInt(17) C;
+ };
+ 
+@@ -355,9 +420,9 @@ void OffsetOfTest() {
+   // LIN32: store i{{.+}} 4, i{{.+}}* %{{.+}}
+   // WIN: store i{{.+}} 8, i{{.+}}* %{{.+}}
+   auto C = __builtin_offsetof(S,C);
+-  // LIN64: store i{{.+}} 24, i{{.+}}* %{{.+}}
+-  // LIN32: store i{{.+}} 20, i{{.+}}* %{{.+}}
+-  // WIN: store i{{.+}} 24, i{{.+}}* %{{.+}}
++  // LIN64: store i{{.+}} 1048584, i{{.+}}* %{{.+}}
++  // LIN32: store i{{.+}} 1048580, i{{.+}}* %{{.+}}
++  // WIN: store i{{.+}} 1048584, i{{.+}}* %{{.+}}
+ }
+ 
+ 
+diff --git a/clang/test/Headers/limits.cpp b/clang/test/Headers/limits.cpp
+index 730a73982631..36a952315157 100644
+--- a/clang/test/Headers/limits.cpp
++++ b/clang/test/Headers/limits.cpp
+@@ -74,11 +74,8 @@ _Static_assert(ULLONG_WIDTH >= 64);
+ _Static_assert(ULLONG_WIDTH / CHAR_BIT == sizeof(unsigned long long));
+ _Static_assert(LLONG_WIDTH == ULLONG_WIDTH);
+ _Static_assert(LLONG_WIDTH / CHAR_BIT == sizeof(signed long long));
+-
+-_Static_assert(BITINT_MAXWIDTH >= ULLONG_WIDTH);
+ #else
+ /* None of these are defined. */
+ int BOOL_WIDTH, CHAR_WIDTH, SCHAR_WIDTH, UCHAR_WIDTH, USHRT_WIDTH, SHRT_WIDTH,
+-    UINT_WIDTH, INT_WIDTH, ULONG_WIDTH, LONG_WIDTH, ULLONG_WIDTH, LLONG_WIDTH,
+-    BITINT_MAXWIDTH;
++    UINT_WIDTH, INT_WIDTH, ULONG_WIDTH, LONG_WIDTH, ULLONG_WIDTH, LLONG_WIDTH;
+ #endif
+diff --git a/clang/test/Preprocessor/init-aarch64.c b/clang/test/Preprocessor/init-aarch64.c
+index f6809d8d9b48..598b3c75507c 100644
+--- a/clang/test/Preprocessor/init-aarch64.c
++++ b/clang/test/Preprocessor/init-aarch64.c
+@@ -40,7 +40,6 @@
+ // AARCH64-NEXT: #define __ATOMIC_SEQ_CST 5
+ // AARCH64:      #define __BIGGEST_ALIGNMENT__ 16
+ // AARCH64_BE-NEXT: #define __BIG_ENDIAN__ 1
+-// AARCH64-NEXT: #define __BITINT_MAXWIDTH__ 128
+ // AARCH64-NEXT: #define __BOOL_WIDTH__ 8
+ // AARCH64_BE-NEXT: #define __BYTE_ORDER__ __ORDER_BIG_ENDIAN__
+ // AARCH64_LE-NEXT: #define __BYTE_ORDER__ __ORDER_LITTLE_ENDIAN__
+diff --git a/clang/test/Preprocessor/init.c b/clang/test/Preprocessor/init.c
+index dd645bf6003c..f11f600beed1 100644
+--- a/clang/test/Preprocessor/init.c
++++ b/clang/test/Preprocessor/init.c
+@@ -1520,7 +1520,6 @@
+ // WEBASSEMBLY-NEXT:#define __ATOMIC_RELEASE 3
+ // WEBASSEMBLY-NEXT:#define __ATOMIC_SEQ_CST 5
+ // WEBASSEMBLY-NEXT:#define __BIGGEST_ALIGNMENT__ 16
+-// WEBASSEMBLY-NEXT:#define __BITINT_MAXWIDTH__ 128
+ // WEBASSEMBLY-NEXT:#define __BOOL_WIDTH__ 8
+ // WEBASSEMBLY-NEXT:#define __BYTE_ORDER__ __ORDER_LITTLE_ENDIAN__
+ // WEBASSEMBLY-NEXT:#define __CHAR16_TYPE__ unsigned short
+diff --git a/clang/test/Sema/builtins-overflow.c b/clang/test/Sema/builtins-overflow.c
+index f41fddd2cafb..348a3a030643 100644
+--- a/clang/test/Sema/builtins-overflow.c
++++ b/clang/test/Sema/builtins-overflow.c
+@@ -26,7 +26,6 @@ void test(void) {
+     _BitInt(128) result;
+     _Bool status = __builtin_mul_overflow(x, y, &result); // expect ok
+   }
+-#if __BITINT_MAXWIDTH__ > 128
+   {
+     unsigned _BitInt(129) x = 1;
+     unsigned _BitInt(129) y = 1;
+@@ -39,5 +38,4 @@ void test(void) {
+     _BitInt(129) result;
+     _Bool status = __builtin_mul_overflow(x, y, &result); // expected-error {{__builtin_mul_overflow does not support 'signed _BitInt' operands of more than 128 bits}}
+   }
+-#endif
+ }
+diff --git a/clang/test/SemaCXX/ext-int.cpp b/clang/test/SemaCXX/ext-int.cpp
+index 5d4d8966cde2..675aaa7598df 100644
+--- a/clang/test/SemaCXX/ext-int.cpp
++++ b/clang/test/SemaCXX/ext-int.cpp
+@@ -17,7 +17,7 @@ _BitInt(33) Declarations(_BitInt(48) &Param) { // Useable in params and returns.
+   unsigned _BitInt(5) e = 5;
+   _BitInt(5) unsigned f;
+ 
+-  _BitInt(-3) g; // expected-error{{signed _BitInt of bit sizes greater than 128 not supported}}
++  _BitInt(-3) g; // expected-error{{signed _BitInt must have a bit size of at least 2}}
+   _BitInt(0) h; // expected-error{{signed _BitInt must have a bit size of at least 2}}
+   _BitInt(1) i; // expected-error{{signed _BitInt must have a bit size of at least 2}}
+   _BitInt(2) j;;
+@@ -28,13 +28,13 @@ _BitInt(33) Declarations(_BitInt(48) &Param) { // Useable in params and returns.
+   constexpr _BitInt(6) n = 33; // expected-warning{{implicit conversion from 'int' to 'const _BitInt(6)' changes value from 33 to -31}}
+   constexpr _BitInt(7) o = 33;
+ 
+-  // Check imposed max size.
+-  _BitInt(129) p;               // expected-error {{signed _BitInt of bit sizes greater than 128 not supported}}
+-  unsigned _BitInt(0xFFFFFFFFFF) q; // expected-error {{unsigned _BitInt of bit sizes greater than 128 not supported}}
++  // Check LLVM imposed max size.
++  _BitInt(8388609) p;               // expected-error {{signed _BitInt of bit sizes greater than 8388608 not supported}}
++  unsigned _BitInt(0xFFFFFFFFFF) q; // expected-error {{unsigned _BitInt of bit sizes greater than 8388608 not supported}}
+ 
+ // Ensure template params are instantiated correctly.
+-  // expected-error@5{{signed _BitInt of bit sizes greater than 128 not supported}}
+-  // expected-error@6{{unsigned _BitInt of bit sizes greater than 128 not supported}}
++  // expected-error@5{{signed _BitInt must have a bit size of at least 2}}
++  // expected-error@6{{unsigned _BitInt must have a bit size of at least 1}}
+   // expected-note@+1{{in instantiation of template class }}
+   HasExtInt<-1> r;
+   // expected-error@5{{signed _BitInt must have a bit size of at least 2}}
+@@ -186,8 +186,14 @@ void Ops() {
+   static_assert(sizeof(x43_s) == 8, "");
+   static_assert(sizeof(x4_s) == 1, "");
+ 
++  static_assert(sizeof(_BitInt(3340)) == 424, ""); // 424 * 8 == 3392.
++  static_assert(sizeof(_BitInt(1049)) == 136, ""); // 136  *  8 == 1088.
++
+   static_assert(alignof(decltype(x43_s)) == 8, "");
+   static_assert(alignof(decltype(x4_s)) == 1, "");
++
++  static_assert(alignof(_BitInt(3340)) == 8, "");
++  static_assert(alignof(_BitInt(1049)) == 8, "");
+ }
+ 
+ constexpr int func() { return 42;}

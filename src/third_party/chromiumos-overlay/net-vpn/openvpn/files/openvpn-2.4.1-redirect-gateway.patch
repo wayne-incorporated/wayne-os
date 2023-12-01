@@ -1,0 +1,67 @@
+From 088ce6d1ae0a941f31b49cf85c7c57c73bc424d8 Mon Sep 17 00:00:00 2001
+From: Kevin Cernekee <cernekee@chromium.org>
+Date: Sun, 30 Apr 2017 09:39:09 -0700
+Subject: [PATCH 3/4] CHROMIUM: Export --redirect-gateway parameters
+
+Report the flags passed to the --redirect-gateway and
+--redirect-private flags, so that systems that manage routing
+tables have hints about how the routing table should be modified.
+
+Signed-off-by: Paul Stewart <pstew@chromium.org>
+Signed-off-by: Kevin Cernekee <cernekee@chromium.org>
+---
+ src/openvpn/route.c | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/src/openvpn/route.c b/src/openvpn/route.c
+index 08998d5f4dfa..a2d341d83b84 100644
+--- a/src/openvpn/route.c
++++ b/src/openvpn/route.c
+@@ -608,6 +608,36 @@ add_block_local(struct route_list *rl)
+     }
+ }
+ 
++static void
++setenv_redirect_gateway (struct env_set *es, unsigned int flags)
++{
++    struct gc_arena gc = gc_new();
++    if (flags & RG_ENABLE)
++    {
++        struct buffer val = alloc_buf_gc(256, &gc);
++        char *name = "redirect_private";
++
++        if (flags & RG_REROUTE_GW)
++            name = "redirect_gateway";
++        if (flags & RG_LOCAL)
++            buf_printf(&val, "local,");
++        if (flags & RG_AUTO_LOCAL)
++            buf_printf(&val, "autolocal,");
++        if (flags & RG_DEF1)
++            buf_printf(&val, "def1,");
++        if (flags & RG_BYPASS_DHCP)
++            buf_printf(&val, "bypass-dhcp,");
++        if (flags & RG_BYPASS_DNS)
++            buf_printf(&val, "bypass-dns,");
++        if (flags & RG_BLOCK_LOCAL)
++            buf_printf(&val, "block-local,");
++        buf_rmtail(&val, ',');
++
++        setenv_str(es, name, BSTR(&val));
++    }
++    gc_free (&gc);
++}
++
+ bool
+ init_route_list(struct route_list *rl,
+                 const struct route_option_list *opt,
+@@ -682,6 +712,7 @@ init_route_list(struct route_list *rl,
+     {
+         add_block_local(rl);
+         get_bypass_addresses(&rl->spec.bypass, rl->flags);
++        setenv_redirect_gateway(es, rl->flags);
+ #ifdef ENABLE_DEBUG
+         print_bypass_addresses(&rl->spec.bypass);
+ #endif
+-- 
+2.13.0.rc0.306.g87b477812d-goog
+

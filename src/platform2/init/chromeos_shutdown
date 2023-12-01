@@ -1,0 +1,278 @@
+#!/bin/sh
+# Copyright 2013 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Some startup functions are split into a separate library which may be
+# different for different targets (e.g., regular Chrome OS vs. embedded).
+# shellcheck source=encrypted_stateful/startup_utils.sh
+. /usr/share/cros/startup_utils.sh
+
+# Shutdown is best-effort. We don't want to die on errors.
+set +e
+
+bootstat shutdown-start
+
+# Let's send output of this script through the kernel. This means that
+# we can see any relevant output after bootup in console-ramoops.
+# We'll also explicitly set `printk_devkmsg` to on which will prevent
+# rate-limiting.
+#
+# NOTE: this trick generally works more reliably with stderr than stdout.
+# Specifically writes to stdout may fail because programs may detect the
+# "/dev/kmsg" is a file and try to buffer output to stdout. If any individual
+# write is over the 1024 byte limit in the kernel then it will fail. We
+# expect most things we care about to be on stderr, but if an individual
+# program is getting a failure it could likely be handled by piping its
+# stdout to `sed -u -e ''`.
+sysctl -w kernel.printk_devkmsg=on
+exec 1> /dev/kmsg 2> /dev/kmsg
+
+# Set nologin so services (like usb_bouncer) can check that a shutdown is
+# happening.
+touch /run/nologin
+
+# Remount root in case a developer has remounted it rw for some reason.
+mount -n -o remount,ro /
+
+# TODO: swapoff as necessary.
+
+PROCESS_KILLER_LOG=/run/process_killer.log
+
+# Kill any that may prevent us from unmounting the stateful partition
+# or the crypto-home and then unmount. These should be all that we need
+# to unmount for a clean shutdown.
+#
+# We send the output of this script in two places: stdout (which is
+# redirected to /dev/kmsg) and "${PROCESS_KILLER_LOG}".
+#
+# Having ouptut in kmsg is useful because it captures the kills that
+# process_killer does even in the case that we don't have a catastrophic
+# unmount failure. We still care about these non-catastrophic cases because
+# processes _should_ have been killed before this script was even called (this
+# script is a last resort). Thus, having these logs show up in console-ramoops
+# is a good way to call attention to these kills.
+#
+# Another benefit of having process_killer logs in /dev/kmsg is that the
+# system is more likely than normal to crash at reboot/shutdown time as it
+# executes code that isn't exercised as much. Writing to /dev/kmsg shows up in
+# console-ramoops even if the kernel crashes partway through.
+#
+# Having process_killer logs in "${PROCESS_KILLER_LOG}" is also useful because,
+# if we do have an unmount failure, the output of process_killer is very
+# relevant and unmount failure crash reports don't include the kernel messages.
+process_killer --shutdown --log_to_stderr --file_holders \
+  --mount_holders 2>&1 | tee "${PROCESS_KILLER_LOG}" | sed -u -e ""
+
+# CROS_DEBUG equals one if we've booted in developer mode or we've booted a
+# developer image.
+crossystem "cros_debug?1"
+CROS_DEBUG="$((! $?))"
+
+dev_unmount_packages() { true; }
+dev_push_paths_to_preserve() { true; }
+
+collect_shutdown_umount_failure_logs() {
+  (
+    # Get mount table as seen by this process. This list may not be
+    # comprehensive: private mounts inside mount namespaces may not
+    # appear in this list.
+    echo "Active mounts:"
+    cat "/proc/self/mountinfo"
+    # Log information about the dm-crypt device.
+    echo "Device-mapper target state:"
+    dmsetup info -c -o name,open,attr
+    # Log information about loop devices.
+    # Helpful in debugging "bad" loopback devices that shouldn't exist. (e.g.
+    # legacy DLC image associated loopback devices)
+    echo "Loop devices:"
+    losetup -a
+    # Log upstart jobs that are either still running or tracking active
+    # processes: jobs here can stop the stateful partition from getting
+    # unmounted.
+    echo "Active Upstart jobs:"
+    initctl list | grep -e process -e running
+    # Log dbus services still connected to the bus, with a 1 second timeout.
+    echo "Active D-Bus services:"
+    dbus-send --system --dest=org.freedesktop.DBus --type=method_call \
+      --print-reply --reply-timeout=1000 /org/freedesktop/DBus \
+      org.freedesktop.DBus.ListNames
+
+    # Print process tree.
+    echo "Process tree:"
+    ps --deselect --ppid 2 --forest -f -o pid,ppid,state,comm
+    # Parse pids of processes with active mount namespaces. PID is the fourth
+    # field and the first line refers to the root mount namespace.
+    for pid in $(lsns --raw -n -t mnt | cut -f4 -d' ' | tail -n+2); do
+      echo "====== PID: ${pid} Comm: $(cat "/proc/${pid}/comm") ======"
+      # Use findmnt to look inside the mount namespace for any mounts that
+      # refer to the (enc)stateful partition. These mounts may keep the
+      # stateful partition from unmounting cleanly.
+      echo "Open mounts into (enc)stateful:"
+      findmnt --raw -N "${pid}" | grep -e stateful -e mmcblk0p1 -e nvme0n1p1 \
+        -e sda1
+    done
+
+    # Get a list of processes with files open. lsof is verbose: keep it at the
+    # end of the log.
+    echo "Processes with files open:"
+    lsof -n /mnt/stateful_partition /var /home/chronos
+    cat "${PROCESS_KILLER_LOG}"
+  ) >/run/shutdown_umount_failure.log 2>&1
+}
+
+# Attempt multiple retries for each mount point. This prevents transient
+# failures from stopping the unmount process.
+umount_mountpoint() {
+  local mnt="$1"
+  # Check if the mount point exists.
+  if ! mountpoint -q "${mnt}"; then
+    return 0
+  fi
+
+  local rc=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    umount -n "${mnt}"
+    rc="$?"
+    if [ "${rc}" -eq "0" ]; then
+      break
+    fi
+    sleep 0.1
+  done
+  return "${rc}"
+}
+
+if [ "${CROS_DEBUG}" -eq 1 ]; then
+  . /usr/share/cros/dev_utils.sh
+fi
+
+STATEFUL_PARTITION="/mnt/stateful_partition"
+STATEFUL_UPDATE="${STATEFUL_PARTITION}/.update_available"
+
+# target_version should only be created for test lab DUTs.
+TARGET_VERSION="/run/update_target_version"
+UPDATE_TARGET=""
+STATE_DEV=""
+
+if [ "${CROS_DEBUG}" = "1" ] && [ -f "${STATEFUL_UPDATE}" ]; then
+  STATEFUL_UPDATE_ARGS="$(cat "${STATEFUL_UPDATE}")"
+
+  if [ -r "${TARGET_VERSION}" ] && [ ! -L "${TARGET_VERSION}" ]; then
+    # Used later to clear Quota parameters from stateful.
+    UPDATE_TARGET="$(cut -d '.' -f 1 "${TARGET_VERSION}")"
+    STATE_DEV="$(findmnt -n -o SOURCE -M "${STATEFUL_PARTITION}")"
+    rm -f "${TARGET_VERSION}"
+  fi
+
+  if [ "${STATEFUL_UPDATE_ARGS}" = "clobber" ]; then
+    PRESERVE_DIR="${STATEFUL_PARTITION}/unencrypted/preserve"
+
+    # Measure shutdown time up to this point.
+    bootstat before_preserve
+
+    # We preserve a few files. Make sure preservation directory starts empty.
+    rm -rf "${PRESERVE_DIR}/log"
+    # shellcheck disable=SC2174
+    mkdir -p -m 0755 "${PRESERVE_DIR}"
+    cp -a "/var/log" "${PRESERVE_DIR}"
+    dev_push_paths_to_preserve
+
+    # We are about to put this into a directory that will shortly be wiped
+    # out. Keep a timestamp where it will be preserved as well.
+    PRESERVE_METRICS="${PRESERVE_DIR}/log/metrics"
+    bootstat_archive \
+      "${PRESERVE_METRICS}/shutdown.$(date --utc '+%Y%m%d%H%M%S')"
+  fi
+fi
+
+# Signal that the clean shutdown point was reached (or at least as
+# close to that point as we can be before stateful is unmounted).
+# Log to stderr since syslog may not be available at this stage.
+crash_reporter --log_to_stderr --clean_shutdown
+
+# Flush buffers to disk to reflect this part of shutdown in the metrics.
+sync
+
+# Measure shutdown time up to this point.
+bootstat_archive "/var/log/metrics/shutdown.$(date --utc '+%Y%m%d%H%M%S')"
+
+# To be safe, flush buffers to disk again before unmounting. (From
+# https://crbug.com/760007 it seems that a failed umount can get the filesystem
+# into a state that renders a subsequent sync ineffective.)
+sync
+
+# Log all the unmount logic to a temp file and move it over to stateful if any
+# of the steps failed.
+(
+set -x
+
+# Unmount stateful partition for dev packages. Will be a NOP unless we're in
+# dev mode.
+dev_unmount_packages
+
+# Unmount /var/run and /var/lock, which were bind mounted to /run and /run/lock
+# respectively to enable backwards compatibility for accessing /run (tmpfs for
+# runtime data) through /var.
+umount_mountpoint "/var/run"
+umount_mountpoint "/var/lock"
+
+# Unmount /var, /home and encrypted mountpoints, then try to
+# unmount /mnt/stateful_partition.  Log to /mnt/stateful_partition if any of
+# them failed to unmount.
+# Note that the other mounts are submounts of /mnt/stateful_partition on
+# regular images, but not always true on factory images.  To handle both, we
+# should unmount /mnt/stateful_partition only if the others successfully
+# unmounted, otherwise system may fail to log.  See crbug.com/835557.
+umount_var_and_home_chronos
+rc="$?"
+
+# Check if /home is mounted before attempting to umount().
+umount_mountpoint "/home"
+: "$(( rc |= $? ))"
+
+# Unmount /mnt/stateful_partition only if the previous unmounts succeeded.
+if [ "${rc}" -eq 0 ]; then
+  umount_mountpoint "${STATEFUL_PARTITION}"
+fi
+exit "$(( rc | $? ))"
+) >/run/mount_encrypted/umount-encrypted.log 2>&1
+
+# shellcheck disable=SC2181
+if [ "$?" -ne 0 ]; then
+  # Collect information about active mount namespaces and if there are bind
+  # mounts open inside these namespaces into the (enc)stateful partition.
+  collect_shutdown_umount_failure_logs
+  crash_reporter --early --log_to_stderr --umount_failure \
+    --mount_device="stateful"
+  crash_reporter --early --log_to_stderr --preserve_across_clobber \
+    --ephemeral_collect
+  mv /run/mount_encrypted/umount-encrypted.log "${STATEFUL_PARTITION}/"
+  mv /run/shutdown_umount_failure.log "${STATEFUL_PARTITION}/"
+else
+  if [ -n "${UPDATE_TARGET}" ] && [ -n "${STATE_DEV}" ]; then
+    # 10756.0.0 is the first build to turn on ext4 quota.
+    # See https://crrev.com/c/1016226
+    # Older builds will fail to mount stateful if quota is enabled.
+    # This code can be removed when we stop testing pre-R69 FSI updates.
+    if [ "${UPDATE_TARGET}" -lt 10756 ]; then
+      if dumpe2fs -h "${STATE_DEV}" 2>/dev/null | \
+                grep -qe "^Filesystem features:.* quota.*"; then
+        tune2fs -O^quota -Q^usrquota,^grpquota,^prjquota "${STATE_DEV}"
+      fi
+    fi
+  fi
+  rm -f /run/mount_encrypted/umount-encrypted.log
+fi
+
+# Just in case something didn't unmount properly above.
+sync
+
+# Display low battery icon if shutting down due to low battery.
+# SHUTDOWN_REASON is passed in with the runlevel event from power manager.
+# shellcheck disable=SC2154
+if [ "${SHUTDOWN_REASON}" = "low-battery" ]; then
+  display_low_battery_alert
+fi
+
+# Ensure that we always claim success.
+exit 0

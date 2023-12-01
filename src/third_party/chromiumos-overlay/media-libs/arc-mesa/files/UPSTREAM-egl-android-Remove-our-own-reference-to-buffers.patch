@@ -1,0 +1,60 @@
+From f4ba31ff504489b7195c83fa8703ba091406d808 Mon Sep 17 00:00:00 2001
+From: Lepton Wu <lepton@chromium.org>
+Date: Tue, 17 Sep 2019 13:49:17 -0700
+Subject: [PATCH] egl/android: Remove our own reference to buffers.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We currently doesn't maintain it correctly and the buffer gets leaked if
+surface is destroyed before calling swapping buffers.
+
+From Android frameworks/native/libs/nativewindow/include/system/window.h:
+
+  The window holds a reference to the buffer between dequeueBuffer and
+  either queueBuffer or cancelBuffer, so clients only need their own
+  reference if they might use the buffer after queueing or canceling it.
+
+v2: Remove our own reference.
+
+Fixes: 0212db35040 ("egl/android: Cancel any outstanding ANativeBuffer in surface destructor")
+
+Reviewed-by: Chia-I Wu <olvaffe@gmail.com> (v1)
+Reviewed-By: Tapani Pälli <tapani.palli@intel.com>
+Signed-off-by: Lepton Wu <lepton@chromium.org>
+---
+ src/egl/drivers/dri2/platform_android.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 35d40e567dc..6ed0b416cf8 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -240,8 +240,6 @@ droid_window_dequeue_buffer(struct dri2_egl_surface *dri2_surf)
+         close(fence_fd);
+    }
+ 
+-   dri2_surf->buffer->common.incRef(&dri2_surf->buffer->common);
+-
+    /* Record all the buffers created by ANativeWindow and update back buffer
+     * for updating buffer's age in swap_buffers.
+     */
+@@ -298,7 +296,6 @@ droid_window_enqueue_buffer(_EGLDisplay *disp, struct dri2_egl_surface *dri2_sur
+    dri2_surf->window->queueBuffer(dri2_surf->window, dri2_surf->buffer,
+                                   fence_fd);
+ 
+-   dri2_surf->buffer->common.decRef(&dri2_surf->buffer->common);
+    dri2_surf->buffer = NULL;
+    dri2_surf->back = NULL;
+ 
+@@ -321,6 +318,7 @@ droid_window_cancel_buffer(struct dri2_egl_surface *dri2_surf)
+    dri2_surf->out_fence_fd = -1;
+    ret = dri2_surf->window->cancelBuffer(dri2_surf->window,
+                                          dri2_surf->buffer, fence_fd);
++   dri2_surf->buffer = NULL;
+    if (ret < 0) {
+       _eglLog(_EGL_WARNING, "ANativeWindow::cancelBuffer failed");
+       dri2_surf->base.Lost = EGL_TRUE;
+-- 
+2.23.0.866.gb869b98d4c-goog
+

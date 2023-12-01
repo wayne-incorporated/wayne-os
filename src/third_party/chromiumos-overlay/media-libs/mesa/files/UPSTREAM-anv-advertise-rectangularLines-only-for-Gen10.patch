@@ -1,0 +1,34 @@
+From 5efa95223daf270f3740b59c6e5de8f92789a8a1 Mon Sep 17 00:00:00 2001
+From: Chia-I Wu <olvaffe@gmail.com>
+Date: Thu, 17 Mar 2022 11:03:18 -0700
+Subject: [PATCH] anv: advertise rectangularLines only for Gen10+
+
+We use the non-strict algorithm (with parallelograms) prior to Gen10 for
+wide lines.  We can not advertise rectangularLines.
+
+Signed-off-by: Chia-I Wu <olvaffe@gmail.com>
+Fixes: f6e7de41d7b ("anv: Implement VK_EXT_line_rasterization")
+---
+ src/intel/vulkan/anv_device.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/intel/vulkan/anv_device.c b/src/intel/vulkan/anv_device.c
+index 50c690f96bd..d84fe7050f2 100644
+--- a/src/intel/vulkan/anv_device.c
++++ b/src/intel/vulkan/anv_device.c
+@@ -1534,7 +1534,11 @@ void anv_GetPhysicalDeviceFeatures2(
+       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT: {
+          VkPhysicalDeviceLineRasterizationFeaturesEXT *features =
+             (VkPhysicalDeviceLineRasterizationFeaturesEXT *)ext;
+-         features->rectangularLines = true;
++         /* Rectangular lines must use the strict algorithm, which is not
++          * supported for wide lines prior to ICL.  See rasterization_mode for
++          * details and how the HW states are programmed.
++          */
++         features->rectangularLines = pdevice->info.ver >= 10;
+          features->bresenhamLines = true;
+          /* Support for Smooth lines with MSAA was removed on gfx11.  From the
+           * BSpec section "Multisample ModesState" table for "AA Line Support
+-- 
+2.31.0
+

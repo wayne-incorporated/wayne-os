@@ -1,0 +1,18 @@
+Patch 24 is from upstream libmtp git master branch commit:
+https://github.com/libmtp/libmtp/commit/814859ed1b049f9440dbf5d22689f0712f767002
+
+diff --git a/src/ptp-pack.c b/src/ptp-pack.c
+index c76ccd1..b10f8f9 100644
+--- a/src/ptp-pack.c
++++ b/src/ptp-pack.c
+@@ -229,7 +229,9 @@ ptp_pack_string(PTPParams *params, char *string, unsigned char* data, uint16_t o
+ #endif
+ 	{
+ 		unsigned int i;
+-
++		if (convlen > PTP_MAXSTRLEN) {
++			convlen = PTP_MAXSTRLEN;
++		}
+ 		for (i=0;i<convlen;i++) {
+ 			ucs2str[i] = string[i];
+ 		}

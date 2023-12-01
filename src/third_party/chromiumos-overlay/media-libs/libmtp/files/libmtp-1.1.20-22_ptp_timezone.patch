@@ -1,0 +1,53 @@
+diff --git a/src/ptp-pack.c b/src/ptp-pack.c
+index 0616996..c76ccd1 100644
+--- a/src/ptp-pack.c
++++ b/src/ptp-pack.c
+@@ -708,6 +708,7 @@ ptp_unpack_PTPTIME (const char *str) {
+ 	char ptpdate[40];
+ 	char tmp[5];
+ 	size_t  ptpdatelen;
++	size_t tzoffs;
+ 	struct tm tm;
+ 
+ 	if (!str)
+@@ -744,6 +745,31 @@ ptp_unpack_PTPTIME (const char *str) {
+ 	tmp[2] = 0;
+ 	tm.tm_sec = atoi (tmp);
+ 	tm.tm_isdst = -1;
++	/* Check for optional '.s' (tenths of a second) and skip */
++	/* MTP spec v1.1 section 3.2.5 */
++	tzoffs = 15;
++	if (ptpdate[tzoffs] == '.' && ptpdate[tzoffs + 1] != '\0') {
++		tzoffs += 2;
++	}
++	/* Check for 'Z' (UTC time) */
++	if (ptpdate[tzoffs] == 'Z') {
++		return timegm (&tm);
++	}
++	/* Check for timezone offset [+/-HHMM] */
++	if (strlen(ptpdate + tzoffs) == 5) {
++		time_t tz = 0;
++		strncpy (tmp, ptpdate + tzoffs + 1, 2);
++		tmp[2] = 0;
++		tz = atoi (tmp) * 60 * 60;
++		strncpy (tmp, ptpdate + tzoffs + 3, 2);
++		tmp[2] = 0;
++		tz += atoi (tmp) * 60;
++		if (ptpdate[tzoffs] == '-') {
++			return timegm (&tm) + tz;
++		}
++		return timegm (&tm) - tz;
++	}
++	/* Unspecified timezone, use local time */
+ 	return mktime (&tm);
+ }
+ 
+@@ -786,7 +812,7 @@ ptp_unpack_OI (PTPParams *params, unsigned char* data, PTPObjectInfo *oi, unsign
+ 
+ 	ptp_unpack_string(params, data, PTP_oi_filenamelen, len, &filenamelen, &oi->Filename);
+ 	ptp_unpack_string(params, data, PTP_oi_filenamelen+filenamelen*2+1, len, &capturedatelen, &capture_date);
+-	/* subset of ISO 8601, without '.s' tenths of second and
++	/* subset of ISO 8601, with optional '.s' tenths of second and
+ 	 * time zone
+ 	 */
+ 	oi->CaptureDate = ptp_unpack_PTPTIME(capture_date);

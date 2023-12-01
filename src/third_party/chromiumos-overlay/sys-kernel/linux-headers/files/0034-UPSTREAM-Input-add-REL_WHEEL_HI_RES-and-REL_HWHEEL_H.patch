@@ -1,0 +1,53 @@
+From dbf871c7a4ec1988b7963c1e49dd51e3276eedb7 Mon Sep 17 00:00:00 2001
+From: Peter Hutterer <peter.hutterer@who-t.net>
+Date: Wed, 5 Dec 2018 10:42:21 +1000
+Subject: [PATCH] UPSTREAM: Input: add `REL_WHEEL_HI_RES` and
+ `REL_HWHEEL_HI_RES`
+
+This event code represents scroll reports from high-resolution wheels and
+is modelled after the approach Windows uses. The value 120 is one detent
+(wheel click) of movement. Mice with higher-resolution scrolling can send
+fractions of 120 which must be accumulated in userspace. Userspace can either
+wait for a full 120 to accumulate or scroll by fractions of one logical scroll
+movement as the events come in. 120 was picked as magic number because it has
+a high number of integer fractions that can be used by high-resolution wheels.
+
+For more information see
+https://docs.microsoft.com/en-us/previous-versions/windows/hardware/design/dn613912(v=vs.85)
+
+These new axes obsolete REL_WHEEL and REL_HWHEEL. The legacy axes are emulated
+by the kernel but the most accurate (and most granular) data is available
+through the new axes.
+
+Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
+Acked-by: Dmitry Torokhov <dmitry.torokhov@gmail.com>
+(am from https://patchwork.kernel.org/patch/10712855/)
+(also found at https://lkml.kernel.org/r/20181205004228.10714-2-peter.hutterer@who-t.net)
+(cherry picked from commit 52ea899637c746984d657b508da6e3f2686adfca)
+
+BUG=chromium:888172
+TEST=None
+
+Change-Id: I205f0722ab9333834dbac156a0fbff244194e370
+Signed-off-by: Harry Cutts <hcutts@chromium.org>
+Reviewed-on: https://chromium-review.googlesource.com/1465422
+Reviewed-by: Sean Paul <seanpaul@chromium.org>
+Reviewed-by: Dmitry Torokhov <dtor@chromium.org>
+---
+
+diff --git a/include/uapi/linux/input-event-codes.h b/include/uapi/linux/input-event-codes.h
+index 61769d4b7dbac7..3c755b6815c574 100644
+--- a/include/uapi/linux/input-event-codes.h
++++ b/include/uapi/linux/input-event-codes.h
+@@ -706,6 +706,8 @@
+ #define REL_DIAL		0x07
+ #define REL_WHEEL		0x08
+ #define REL_MISC		0x09
++#define REL_WHEEL_HI_RES	0x0b
++#define REL_HWHEEL_HI_RES	0x0c
+ #define REL_MAX			0x0f
+ #define REL_CNT			(REL_MAX+1)
+ 
+-- 
+2.24.1.735.g03f4e72817-goog
+

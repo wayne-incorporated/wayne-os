@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,10 @@
 #include <set>
 #include <string>
 
-#include <base/bind.h>
-#include <base/callback_helpers.h>
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback_helpers.h>
 #include <base/time/time.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -60,7 +60,7 @@ class DeviceIdentifierGeneratorTest : public ::testing::Test {
       : generator_(&system_utils_, &metrics_),
         state_keys_received_(false),
         last_state_key_generation_status_(
-            LoginMetrics::STATE_KEY_STATUS_MISSING_IDENTIFIERS) {
+            LoginMetrics::DEPRECATED_STATE_KEY_STATUS_MISSING_IDENTIFIERS) {
     EXPECT_CALL(metrics_, SendStateKeyGenerationStatus(_))
         .WillRepeatedly(SaveArg<0>(&last_state_key_generation_status_));
   }
@@ -89,8 +89,8 @@ class DeviceIdentifierGeneratorTest : public ::testing::Test {
     state_keys_received_ = false;
     state_keys_.clear();
     generator_.RequestStateKeys(
-        base::Bind(&DeviceIdentifierGeneratorTest::CompletionHandler,
-                   base::Unretained(this)));
+        base::BindOnce(&DeviceIdentifierGeneratorTest::CompletionHandler,
+                       base::Unretained(this)));
     EXPECT_EQ(expect_immediate_callback, state_keys_received_);
   }
 
@@ -101,7 +101,7 @@ class DeviceIdentifierGeneratorTest : public ::testing::Test {
 
   void RequestPsmDeviceActiveSecret(bool expect_immediate_callback) {
     psm_device_secret_received_ = false;
-    generator_.RequestPsmDeviceActiveSecret(base::Bind(
+    generator_.RequestPsmDeviceActiveSecret(base::BindOnce(
         &DeviceIdentifierGeneratorTest::CompletionPsmDeviceKeyHandler,
         base::Unretained(this)));
     EXPECT_EQ(expect_immediate_callback, psm_device_secret_received_);
@@ -143,6 +143,11 @@ TEST_F(DeviceIdentifierGeneratorTest,
   RequestPsmDeviceActiveSecret(false);
   InitMachineInfo();
   EXPECT_TRUE(psm_device_secret_received_);
+
+  // Sending machine info twice is harmless and doesn't fire callbacks.
+  psm_device_secret_received_ = false;
+  InitMachineInfo();
+  EXPECT_FALSE(psm_device_secret_received_);
 }
 
 TEST_F(DeviceIdentifierGeneratorTest, RequestStateKeysLegacy) {
@@ -159,7 +164,7 @@ TEST_F(DeviceIdentifierGeneratorTest, RequestStateKeysLegacy) {
 
 TEST_F(DeviceIdentifierGeneratorTest, TimedStateKeys) {
   InitMachineInfo();
-  system_utils_.forward_time(base::TimeDelta::FromDays(100).InSeconds());
+  system_utils_.forward_time(base::Days(100).InSeconds());
 
   // The correct number of state keys gets returned.
   RequestStateKeys(true);
@@ -176,7 +181,7 @@ TEST_F(DeviceIdentifierGeneratorTest, TimedStateKeys) {
             state_key_set.size());
 
   // Moving forward just a little yields the same keys.
-  system_utils_.forward_time(base::TimeDelta::FromDays(1).InSeconds());
+  system_utils_.forward_time(base::Days(1).InSeconds());
   RequestStateKeys(true);
   EXPECT_EQ(LoginMetrics::STATE_KEY_STATUS_GENERATION_METHOD_HMAC_DEVICE_SECRET,
             last_state_key_generation_status_);
@@ -205,6 +210,11 @@ TEST_F(DeviceIdentifierGeneratorTest, PendingMachineInfo) {
   EXPECT_TRUE(state_keys_received_);
   EXPECT_EQ(DeviceIdentifierGenerator::kDeviceStateKeyFutureQuanta,
             state_keys_.size());
+
+  // Sending machine info twice is harmless and doesn't fire callbacks.
+  state_keys_received_ = false;
+  InitMachineInfo();
+  EXPECT_FALSE(state_keys_received_);
 }
 
 TEST_F(DeviceIdentifierGeneratorTest, PendingMachineInfoFailure) {
@@ -219,7 +229,31 @@ TEST_F(DeviceIdentifierGeneratorTest, PendingMachineInfoFailure) {
 
   // Later requests get answered immediately.
   RequestStateKeys(true);
-  EXPECT_EQ(LoginMetrics::STATE_KEY_STATUS_MISSING_IDENTIFIERS,
+  EXPECT_EQ(LoginMetrics::STATE_KEY_STATUS_MISSING_ALL_IDENTIFIERS,
+            last_state_key_generation_status_);
+  EXPECT_EQ(0, state_keys_.size());
+}
+
+TEST_F(DeviceIdentifierGeneratorTest, MissingMachineSerialNumber) {
+  std::map<std::string, std::string> params;
+  params["root_disk_serial_number"] = "fake-disk-serial-number";
+  ASSERT_FALSE(generator_.InitMachineInfo(params));
+
+  RequestStateKeys(true);
+
+  EXPECT_EQ(LoginMetrics::STATE_KEY_STATUS_MISSING_MACHINE_SERIAL_NUMBER,
+            last_state_key_generation_status_);
+  EXPECT_EQ(0, state_keys_.size());
+}
+
+TEST_F(DeviceIdentifierGeneratorTest, MissingDiskSerialNumber) {
+  std::map<std::string, std::string> params;
+  params["serial_number"] = "fake-machine-serial-number";
+  ASSERT_FALSE(generator_.InitMachineInfo(params));
+
+  RequestStateKeys(true);
+
+  EXPECT_EQ(LoginMetrics::STATE_KEY_STATUS_MISSING_DISK_SERIAL_NUMBER,
             last_state_key_generation_status_);
   EXPECT_EQ(0, state_keys_.size());
 }

@@ -1,0 +1,74 @@
+From 6ccc8a3db86a5e5f851147dfb9a16cf19eecd2fd Mon Sep 17 00:00:00 2001
+From: "Kristian H. Kristensen" <hoegsberg@google.com>
+Date: Mon, 18 Nov 2019 15:44:03 -0800
+Subject: [PATCH] Remove blitter usage
+
+---
+ src/media_drv_gen75_render.c | 2 ++
+ src/media_drv_gen8_render.c  | 2 ++
+ src/media_drv_gen9_render.c  | 2 ++
+ 3 files changed, 6 insertions(+)
+
+diff --git a/src/media_drv_gen75_render.c b/src/media_drv_gen75_render.c
+index a3d60ff..c841d14 100644
+--- a/src/media_drv_gen75_render.c
++++ b/src/media_drv_gen75_render.c
+@@ -478,6 +478,7 @@ i965_render_drawing_rectangle(VADriverContextP ctx)
+ static void
+ i965_clear_dest_region(VADriverContextP ctx)
+ {
++#if 0
+     MEDIA_DRV_CONTEXT *drv_ctx = (MEDIA_DRV_CONTEXT *) (ctx->pDriverData);
+     struct media_render_state *render_state = &drv_ctx->render_state;
+     MEDIA_BATCH_BUFFER *batch = drv_ctx->render_batch;
+@@ -518,6 +519,7 @@ i965_clear_dest_region(VADriverContextP ctx)
+     OUT_BATCH(batch, 0x0);
+     ADVANCE_BATCH(batch);
+     media_batchbuffer_end_atomic(batch);
++#endif
+ }
+ /*
+  * for GEN7
+diff --git a/src/media_drv_gen8_render.c b/src/media_drv_gen8_render.c
+index 42005ea..0db3d61 100644
+--- a/src/media_drv_gen8_render.c
++++ b/src/media_drv_gen8_render.c
+@@ -470,6 +470,7 @@ i965_render_drawing_rectangle(VADriverContextP ctx)
+ static void
+ gen8_clear_dest_region(VADriverContextP ctx)
+ {
++#if 0
+     MEDIA_DRV_CONTEXT *drv_ctx = (MEDIA_DRV_CONTEXT *) (ctx->pDriverData);
+     struct media_render_state *render_state = &drv_ctx->render_state;
+     MEDIA_BATCH_BUFFER *batch = drv_ctx->render_batch;
+@@ -511,6 +512,7 @@ gen8_clear_dest_region(VADriverContextP ctx)
+     OUT_BATCH(batch, 0x0);
+     ADVANCE_BATCH(batch);
+     media_batchbuffer_end_atomic(batch);
++#endif
+ }
+ 
+ 
+diff --git a/src/media_drv_gen9_render.c b/src/media_drv_gen9_render.c
+index 4e71222..5ea1603 100644
+--- a/src/media_drv_gen9_render.c
++++ b/src/media_drv_gen9_render.c
+@@ -509,6 +509,7 @@ i965_render_upload_image_palette(
+ static void
+ gen9_clear_dest_region(VADriverContextP ctx)
+ {
++#if 0
+     MEDIA_DRV_CONTEXT *drv_ctx = (MEDIA_DRV_CONTEXT *) (ctx->pDriverData);
+     struct media_render_state *render_state = &drv_ctx->render_state;
+     MEDIA_BATCH_BUFFER *batch = drv_ctx->render_batch;
+@@ -550,6 +551,7 @@ gen9_clear_dest_region(VADriverContextP ctx)
+     OUT_BATCH(batch, 0x0);
+     ADVANCE_BATCH(batch);
+     media_batchbuffer_end_atomic(batch);
++#endif
+ }
+ 
+ 
+-- 
+2.21.0
+

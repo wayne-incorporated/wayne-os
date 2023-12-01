@@ -1,0 +1,59 @@
+commit b3d5bb3b308f9a41022cdd30542991840b826a6b
+Author: Fangrui Song <i@maskray.me>
+Date:   Fri May 6 07:49:42 2022 -0700
+
+    [ELF] Change (NOLOAD) type mismatch to use SHT_NOBITS instead of SHT_PROGBITS
+    
+    Placing a non-SHT_NOBITS input section in an output section specified with
+    (NOLOAD) is fishy but used by some projects. D118840 changed the output type to
+    SHT_PROGBITS, but using the specified type seems to make more sense and improve
+    GNU ld compatibility: `(NOLOAD)` seems to change the output section type
+    regardless of input.
+    
+    I think we should keep the current type mismatch warning as it does indicate an
+    error-prone usage.
+    
+    Reviewed By: peter.smith
+    
+    Differential Revision: https://reviews.llvm.org/D125074
+
+diff --git a/lld/ELF/OutputSections.cpp b/lld/ELF/OutputSections.cpp
+index ee9162ac6b41..44d3d3c7ca28 100644
+--- a/lld/ELF/OutputSections.cpp
++++ b/lld/ELF/OutputSections.cpp
+@@ -123,7 +123,8 @@ void OutputSection::commitSection(InputSection *isec) {
+                  "\n>>> output section " + name + ": " +
+                  getELFSectionTypeName(config->emachine, type));
+       }
+-      type = SHT_PROGBITS;
++      if (!typeIsSet)
++        type = SHT_PROGBITS;
+     } else {
+       type = isec->type;
+     }
+diff --git a/lld/test/ELF/linkerscript/custom-section-type.s b/lld/test/ELF/linkerscript/custom-section-type.s
+index 21ef9922e25e..68454f4df1c8 100644
+--- a/lld/test/ELF/linkerscript/custom-section-type.s
++++ b/lld/test/ELF/linkerscript/custom-section-type.s
+@@ -37,7 +37,7 @@
+ ## Mismatched progbits and expr are changed to SHT_PROGBITS.
+ # MISMATCH: progbits PROGBITS
+ # MISMATCH: note     NOTE
+-# MISMATCH: expr     PROGBITS
++# MISMATCH: expr     0x42: <unknown>
+ 
+ # RUN: not ld.lld -T %t/unknown1.lds %t/a.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN1
+ # UNKNOWN1: error: {{.*}}.lds:1: symbol not found: foo
+diff --git a/lld/test/ELF/linkerscript/noload.s b/lld/test/ELF/linkerscript/noload.s
+index fbee54b9e5b4..5c9cff33e235 100644
+--- a/lld/test/ELF/linkerscript/noload.s
++++ b/lld/test/ELF/linkerscript/noload.s
+@@ -24,7 +24,7 @@
+ 
+ # WARN:   warning: section type mismatch for .data_noload_a
+ # CHECK2:      Name                 Type     Address          Off               Size
+-# CHECK2:      .data_noload_a       PROGBITS 0000000000000000 [[OFF:[0-9a-f]+]] 001001
++# CHECK2:      .data_noload_a       NOBITS   0000000000000000 [[OFF:[0-9a-f]+]] 001001
+ 
+ #--- asm
+ .section .text,"ax",@progbits

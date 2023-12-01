@@ -1,0 +1,105 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# rseq should be first due to frequency and purpose to decrease nptl latency
+rseq: 1
+
+clock_gettime: 1
+clock_getres: 1
+clock_nanosleep: 1
+gettimeofday: 1
+nanosleep: 1
+ppoll: 1
+
+# Opens /proc/self/stat
+openat: 1
+close: 1
+lseek: 1
+read: 1
+readv: 1
+write: 1
+writev: 1
+readlinkat: 1
+fdatasync: 1
+vmsplice: 1
+
+statx: 1
+fstat: 1
+newfstatat: 1
+# lstat: 1 FIXME
+ftruncate: 1
+
+# Memory management system calls.
+brk: 1
+mmap: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+munmap: 1
+mprotect: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+mremap: arg3 in ~MREMAP_FIXED
+madvise: 1
+
+# Socket system calls.
+socket: arg0 == AF_UNIX
+sendmsg: 1
+recvmsg: 1
+shutdown: 1
+getsockopt: 1
+setsockopt: 1
+getsockname: 1
+# Only accepts incoming connections.
+accept: 1
+bind: 1
+listen: 1
+
+getpid: 1
+gettid: 1
+
+geteuid: 1
+getuid: 1
+getgid: 1
+
+futex: 1
+exit: 1
+exit_group: 1
+# Allow signal to self.
+kill: arg0 == 0
+# Allow raising SIGABRT
+tgkill: arg2 == SIGABRT
+
+# Linux-specific fcntl cmd: F_ADD_SEALS (1033), F_GET_SEALS (1034).
+fcntl: arg1 == F_GETFD || arg1 == F_SETFD || arg1 == F_GETFL || arg1 == F_SETFL || arg1 == 1033 || arg1 == 1034
+# Check /etc/ld.so.preload
+faccessat: 1
+faccessat2: 1
+# ARCH_SETFS
+prctl: 1
+
+clone: 1
+
+eventfd2: 1
+# ioctl: Perfetto temporarily enables TIOCOUTQ for debugging.
+# Remove after upstream removes it.
+ioctl: arg1 == TCGETS || arg1 == TIOCOUTQ
+memfd_create: 1
+
+# Set stack limit for the thread.
+prlimit64: 1
+restart_syscall: 1
+rt_sigaction: 1
+rt_sigprocmask: 1
+rt_sigreturn: 1
+set_robust_list: 1
+set_tid_address: 1
+
+timer_create: 1
+timer_delete: 1
+timer_settime: 1
+timerfd_create: 1
+timerfd_settime: 1
+
+uname: 1
+# Remove the stale socket file.
+unlinkat: 1
+# Need to set socket permissions.
+fchownat: 1
+fchmodat: 1

@@ -1,0 +1,31 @@
+diff --git a/src/trace.c b/src/trace.c
+index 240a17f21bc6..b0eb74e863a2 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -192,7 +192,7 @@ trace (int daemonise,
+ 	}
+ 	if (set_value (dfd, "buffer_size_kb", 8192/num_cpus, &old_buffer_size_kb) < 0)
+ 		goto error;
+-	if (set_value (dfd, "tracing_enabled",
++	if (set_value (dfd, "tracing_on",
+ 		       TRUE, &old_tracing_enabled) < 0)
+ 		goto error;
+ 
+@@ -229,7 +229,7 @@ trace (int daemonise,
+ 	sigaction (SIGINT, &old_sigint, NULL);
+ 
+ 	/* Restore previous tracing settings */
+-	if (set_value (dfd, "tracing_enabled",
++	if (set_value (dfd, "tracing_on",
+ 		       old_tracing_enabled, NULL) < 0)
+ 		goto error;
+ 	if (old_uselib_enabled >= 0)
+@@ -606,6 +606,8 @@ ignore_path (const char *pathname)
+ 		return TRUE;
+ 	if (! strncmp (pathname, "/tmp/", 5))
+ 		return TRUE;
++	if (! strncmp (pathname, "/run/", 5))
++		return TRUE;
+ 	if (! strncmp (pathname, "/var/run/", 9))
+ 		return TRUE;
+ 	if (! strncmp (pathname, "/var/lock/", 10))

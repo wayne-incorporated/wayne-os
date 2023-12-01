@@ -1,0 +1,395 @@
+type cros_cryptohomed, chromeos_domain, domain, mlstrustedsubject;
+
+# cros_cryptohomed domain is enforcing for ARCVM devices, but permissive for
+# other devices due to the 'arc_cts_fails_release' used in this file for non
+# ARCVM devices.
+
+domain_auto_trans(cros_init_scripts, cros_cryptohomed_exec, cros_cryptohomed)
+domain_auto_trans(cros_cryptohomed, cros_unconfined_exec, chromeos)
+domain_auto_trans(cros_cryptohomed, cros_spaced_cli_exec, cros_spaced_cli)
+
+allow domain cros_cryptohomed:key                                     search;
+
+allow cros_cryptohomed cros_coreutils_exec:file                       x_file_perms;
+allow cros_cryptohomed cros_cryptohome_namespace_mounter:process      signal;
+
+# Access rules for user cryptohome directories/files .shadow/, chronos/, root/, user/
+# TODO(betuls): Reevaluate after OOP flags are removed from the cryptohome code.
+allow cros_cryptohomed cros_cryptohomed:fifo_file w_file_perms;
+
+allow cros_cryptohomed {
+  cros_downloads_file
+  cros_home_chronos
+  cros_home_root
+  cros_home_shadow_uid_root_android
+  cros_home_user
+  cros_home_shadow_uid_user
+}:dir mounton;
+#Access rule for devices without ARC (e.g. Flex)
+allow cros_cryptohomed cros_downloads_file:dir relabelfrom;
+allow cros_cryptohomed cros_home_shadow_uid_root_android:dir relabelto;
+
+allow cros_cryptohomed {
+  cros_home_shadow_uid
+  cros_home_shadow_uid_root
+  cros_home_shadow_uid_user }:{ dir file } { relabelfrom relabelto };
+# Access rules for relabelling the mounted, unlabeled root for a newly created
+# ext4 filesystem. Cryptohome creates and mounts ext4 filesystems for dm-crypt
+# containers: cryptohome/storage/encrypted_container/dmcrypt_container.cc:128
+allow cros_cryptohomed unlabeled:{ dir file } relabelfrom;
+create_dir_file(cros_cryptohomed, {
+  cros_downloads_file
+  cros_home
+  cros_home_chronos
+  cros_home_root
+  cros_home_shadow
+  cros_home_shadow_low_entropy_creds
+  cros_home_shadow_uid
+  cros_home_shadow_uid_root
+  cros_home_shadow_uid_root_android
+  cros_home_shadow_uid_user
+  cros_home_user
+  cros_run
+  cros_run_daemon_store
+  cros_run_dbus
+  cros_run_arcvm
+  cros_run_lockbox
+  cros_var_lib
+})
+
+r_dir_file(cros_cryptohomed, {
+  cros_home_shadow_uid_root_shill_logs
+  cros_stateful_partition
+  cros_run_daemon_store
+  cros_run_crosdns
+  cros_var_db
+  cros_run_shill
+})
+
+cros_udp_create(cros_cryptohomed)
+cros_tcp_connect(cros_cryptohomed)
+
+# ioctl is restricted for Chrome OS domains, see chrome_os.te. Give required
+# permissions to cros_cryptohomed.
+allowxperm cros_cryptohomed {
+  cros_home_shadow
+  cros_home_shadow_uid
+  cros_home_shadow_uid_user
+  cros_stateful_partition
+}:dir ioctl cryptohome_fscrypt_ioctls;
+allowxperm cros_cryptohomed cros_home_shadow_uid:file ioctl {
+  cryptohome_fscrypt_ioctls
+  FS_IOC_FIEMAP
+};
+allowxperm cros_cryptohomed unlabeled:{ dir file } ioctl {
+  cryptohome_fscrypt_ioctls
+  FS_IOC_GETFLAGS
+  FS_IOC_SETFLAGS
+};
+
+# cryptohomed creates and relabelto dirs/files in
+# daemon-store directories.
+cros_daemon_store_create(cros_cryptohomed, authpolicyd)
+cros_daemon_store_perms(cros_cryptohomed, authpolicyd, relabelto)
+cros_daemon_store_create(cros_cryptohomed, cdm-oemcrypto)
+cros_daemon_store_perms(cros_cryptohomed, cdm-oemcrypto, relabelto)
+cros_daemon_store_create(cros_cryptohomed, chaps)
+cros_daemon_store_perms(cros_cryptohomed, chaps, relabelto)
+cros_daemon_store_create(cros_cryptohomed, crash)
+cros_daemon_store_perms(cros_cryptohomed, crash, relabelto)
+cros_daemon_store_create(cros_cryptohomed, crosvm)
+cros_daemon_store_perms(cros_cryptohomed, crosvm, relabelto)
+cros_daemon_store_create(cros_cryptohomed, debugd)
+cros_daemon_store_perms(cros_cryptohomed, debugd, relabelto)
+cros_daemon_store_create(cros_cryptohomed, kerberosd)
+cros_daemon_store_perms(cros_cryptohomed, kerberosd, relabelto)
+cros_daemon_store_create(cros_cryptohomed, pvm)
+cros_daemon_store_perms(cros_cryptohomed, pvm, relabelto)
+cros_daemon_store_create(cros_cryptohomed, pvm-dispatcher)
+cros_daemon_store_perms(cros_cryptohomed, pvm-dispatcher, relabelto)
+cros_daemon_store_create(cros_cryptohomed, secagentd)
+cros_daemon_store_perms(cros_cryptohomed, secagentd, relabelto)
+cros_daemon_store_create(cros_cryptohomed, session_manager)
+cros_daemon_store_perms(cros_cryptohomed, session_manager, relabelto)
+cros_daemon_store_create(cros_cryptohomed, shill)
+cros_daemon_store_perms(cros_cryptohomed, shill, relabelto)
+cros_daemon_store_create(cros_cryptohomed, smbfs)
+cros_daemon_store_perms(cros_cryptohomed, smbfs, relabelto)
+cros_daemon_store_create(cros_cryptohomed, smbproviderd)
+cros_daemon_store_perms(cros_cryptohomed, smbproviderd, relabelto)
+cros_daemon_store_create(cros_cryptohomed, usb_bouncer)
+cros_daemon_store_perms(cros_cryptohomed, usb_bouncer, relabelto)
+
+
+allow cros_cryptohomed chromeos_startup_tmp_file:file mounton;
+allow cros_cryptohomed cros_init_scripts:fd use;
+allow cros_cryptohomed cros_init:key {
+  link
+  write
+};
+allow cros_cryptohomed kernel:key {
+  link
+  search
+  write
+};
+allow cros_cryptohomed kernel:system          module_request;
+allow cros_cryptohomed cros_passwd_file:file  r_file_perms;
+allow cros_cryptohomed mei_device:chr_file    rw_file_perms;
+
+allow cros_cryptohomed {
+  cros_init
+  cros_dbus_daemon
+}:unix_stream_socket connectto;
+
+allow cros_cryptohomed {
+  cros_run
+  cros_run_cryptohome
+  proc_drop_caches
+}:file create_file_perms;
+allow cros_cryptohomed cros_system_bus_socket:sock_file write;
+
+create_dir_file( cros_cryptohomed cros_var_lib_devicesettings )
+
+# When running spaced_cli, this allows access to the child's /proc/<PID> dir.
+r_dir_file(cros_cryptohomed, cros_spaced_cli)
+
+has_arc(`
+  create_dir_file(cros_cryptohomed media_rw_data_file)
+  allowxperm cros_cryptohomed media_rw_data_file:{ file dir } ioctl {
+    FS_IOC_FSGETXATTR
+    FS_IOC_FSSETXATTR
+    FS_IOC_GETFLAGS
+    FS_IOC_SETFLAGS
+  };
+  allow cros_cryptohomed media_rw_data_file:dir { relabelfrom relabelto };
+')
+
+r_dir_file(cros_cryptohomed {
+  sysfs_dm
+  sysfs_loop
+  sysfs_tpm
+  sysfs_zram
+  rootfs
+})
+allow cros_cryptohomed tmpfs:file create_file_perms;
+r_dir_file( cros_cryptohomed sysfs )
+
+# cryptohomed capabilities
+allow cros_cryptohomed self:capability {
+  chown
+  fowner
+  ipc_lock
+  sys_admin
+  sys_nice
+};
+allow cros_cryptohomed self:key {
+  setattr
+  write
+};
+
+# Permissions to enable code profiling.
+# Ignoring `cros_stateful_partition` as it is already permitted.
+allow cros_cryptohomed {
+    cros_stateful_partition_unencrypted
+}:dir r_dir_perms;
+
+allow cros_cryptohomed cros_stateful_partition_unencrypted_profraws:dir { rw_dir_perms };
+allow cros_cryptohomed cros_stateful_partition_unencrypted_profraws:file { create rw_file_perms };
+
+allow cros_cryptohomed {
+  cros_stateful_partition
+  cgroup
+}:dir r_dir_perms;
+
+# iocts needed by mkfs.ext4 to format loop dev as ext4.
+allowxperm cros_cryptohomed device:blk_file ioctl {
+  BLKROGET  # 0x125e
+  BLKGETSIZE  # 0x1260
+  BLKSSZGET  # 0x1268
+  BLKGETSIZE64  # 0x1272
+  BLKDISCARD  # 0x1277
+  BLKPBSZGET  # 0x127b
+  BLKDISCARDZEROES  # 0x127c
+  FDGETPRM # 0x204
+};
+
+r_dir_file(cros_cryptohomed, sysfs_fs_ext4_features)
+
+allow cros_cryptohomed tpm_device:chr_file  r_file_perms;
+allow cros_cryptohomed device:blk_file      rw_file_perms;
+allowxperm cros_cryptohomed device:blk_file ioctl {
+  BLKSECDISCARD
+  BLKPBSZGET
+  BLKRAGET
+  LOOP_SET_FD
+  LOOP_CLR_FD
+  LOOP_GET_STATUS
+  LOOP_GET_STATUS64
+  LOOP_SET_STATUS64
+  LOOP_SET_DIRECT_IO
+};
+
+# TODO(b/178237710) Label the directories and files with specific contexts.
+allow cros_cryptohomed cros_run_namespaces:dir      search;
+allow cros_cryptohomed labeledfs:filesystem {
+  quotaget
+  unmount
+};
+
+# TODO(b/178237004) Label the processes with specific contexts.
+allow cros_cryptohomed cros_unconfined_exec:file    x_file_perms;
+allow cros_cryptohomed cros_initctl_exec:file rx_file_perms;
+
+# Dm-crypt cryptohome related labels.
+allow cros_cryptohomed cros_run_udev:dir { read search};
+allow cros_cryptohomed cros_var_lock:dir { getattr search };
+allow cros_cryptohomed cros_var_cache_dlcservice:dir { getattr search };
+allow cros_cryptohomed cros_var_cache_dlcservice:file { getattr };
+allow cros_cryptohomed cros_run_lock:dir { add_name remove_name write };
+allow cros_cryptohomed cros_run_lock:file { append create getattr lock open read unlink };
+allow cros_cryptohomed device:lnk_file { create open read unlink };
+allow cros_cryptohomed device:dir { add_name open read remove_name write};
+allow cros_cryptohomed devpts:dir { open read search };
+allow cros_cryptohomed cros_udevadm_exec:file rx_file_perms;
+allow cros_cryptohomed cros_mke2fs_exec:file rx_file_perms;
+allow cros_cryptohomed usb_device:dir search;
+allow cros_cryptohomed kernel:system ipc_info;
+allow cros_cryptohomed cros_run_udev:sock_file write;
+allow cros_cryptohomed cros_shm:file getattr;
+allow cros_cryptohomed cros_udevd:unix_stream_socket connectto;
+
+# Remove the arc_cts_fails_release macro for ARCVM devices so that
+# cros_cryptohomed is not converted into a permissive domain after being
+# flipped to enforcing.
+is_arc_vm(`
+  allow cros_cryptohomed device:blk_file create_file_perms;
+  allow cros_cryptohomed device:chr_file { ioctl open read getattr write };
+  allow cros_cryptohomed self:capability {
+    dac_override
+    dac_read_search
+    fsetid
+    mknod
+    sys_nice
+  };
+  # TODO(232457984): Relabel properly
+  allow cros_cryptohomed unlabeled:{ dir file } relabelto;
+  allow cros_cryptohomed unlabeled:{ dir file } setattr;
+  create_dir_file(cros_cryptohomed, unlabeled)
+  allow cros_cryptohomed unlabeled:filesystem {
+    mount
+    remount
+    unmount
+  };
+
+  # cryptohomed needs to remove files and directories when removing a user profile.
+  allow cros_cryptohomed { file_type -cros_system_file_type }:dir rmdir;
+  allow cros_cryptohomed { file_type -cros_system_file_type }:{
+    file
+    blk_file
+    chr_file
+    fifo_file
+    lnk_file
+    sock_file
+  } unlink;
+
+  # Permissions to remove ARCVM files when removing a user
+  allow cros_cryptohomed { arc_files unlabeled }:dir { rw_dir_perms rmdir };
+  allow cros_cryptohomed { arc_files unlabeled }:{
+    file
+    blk_file
+    chr_file
+    fifo_file
+    lnk_file
+    sock_file
+  } { rw_file_perms unlink };
+  # Managing dm_task_cookie for setting up/tearing down dm-crypt devices
+  allow cros_cryptohomed self:sem { associate create destroy read unix_read unix_write write };
+',`
+  arc_cts_fails_release(`
+    allow cros_cryptohomed device:blk_file create_file_perms;
+    allow cros_cryptohomed device:chr_file { ioctl open read getattr write };
+    allow cros_cryptohomed self:capability {
+      dac_override
+      dac_read_search
+      fsetid
+      mknod
+      sys_nice
+    };
+    # TODO(232457984): Relabel properly
+    allow cros_cryptohomed unlabeled:{ dir file } relabelto;
+    allow cros_cryptohomed unlabeled:{ dir file } setattr;
+    create_dir_file(cros_cryptohomed, unlabeled)
+    allow cros_cryptohomed unlabeled:filesystem {
+      mount
+      remount
+      unmount
+    };
+
+    # cryptohomed needs to remove files and directories when removing a user profile.
+    allow cros_cryptohomed { file_type -cros_system_file_type }:dir rmdir;
+    allow cros_cryptohomed { file_type -cros_system_file_type }:{
+      file
+      blk_file
+      chr_file
+      fifo_file
+      lnk_file
+      sock_file
+    } unlink;
+
+    # Permissions to remove ARC Container files when removing a user
+    allow cros_cryptohomed arc_files:dir { rw_dir_perms rmdir };
+    allow cros_cryptohomed arc_files:{
+      file
+      blk_file
+      chr_file
+      fifo_file
+      lnk_file
+      sock_file
+    } { rw_file_perms unlink };
+    # Managing dm_task_cookie for setting up/tearing down dm-crypt devices
+    allow cros_cryptohomed self:sem { associate create destroy read unix_read unix_write write };
+  ', (`cros_cryptohomed'))
+')
+
+# On devices with TPMv1, cryptohomed communicates with tcsd.
+cros_tcsd_client(cros_cryptohomed)
+
+log_writer(cros_cryptohomed)
+uma_writer(cros_cryptohomed)
+allow cros_cryptohomed debugfs:dir r_dir_perms;
+
+# To receive file descriptors as D-Bus method call arguments.
+allow cros_cryptohomed cros_vm_concierge:fd use;
+
+filetrans_pattern(cros_cryptohomed, cros_home, cros_home_shadow, dir, ".shadow")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow, cros_home_shadow_low_entropy_creds, dir, "low_entropy_creds")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow, cros_home_shadow_uid, dir)
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid, cros_home_shadow_uid_root, dir, "root")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid, cros_home_shadow_uid_user, dir, "user")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_user, cros_downloads_file, dir, "Downloads")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_user, cros_downloads_file, dir, "MyFiles")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_authpolicyd, dir, "authpolicyd")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_cdm-oemcrypto, dir, "cdm-oemcrypto")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_chaps, dir, "chaps")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_crash, dir, "crash")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_crosvm, dir, "crosvm")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_debugd, dir, "debugd")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_kerberosd, dir, "kerberosd")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_pvm, dir, "pvm")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_pvm-dispatcher, dir, "pvm-dispatcher")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_smbfs, dir, "smbfs")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_smbproviderd, dir, "smbproviderd")
+filetrans_pattern(cros_cryptohomed, cros_home_shadow_uid_root, cros_home_shadow_uid_root_usb_bouncer, dir, "usb_bouncer")
+
+# Ephemeral mount should have the same treatment as normal mount.
+filetrans_pattern({cros_init_scripts cros_cryptohomed}, cros_run, cros_run_cryptohome, dir, "cryptohome")
+filetrans_pattern({cros_init_scripts cros_cryptohomed}, cros_run_cryptohome, cros_ephemeral_mount, dir, "ephemeral_mount")
+
+# Note that this transition is currently ineffective as the ephemeral mount is a new filesystem.
+# Setting the new ephemeral mount to cros_home_shadow_uid is done by cryptohome at the moment.
+filetrans_pattern({cros_init_scripts cros_cryptohomed}, cros_ephemeral_mount, cros_home_shadow_uid, dir)
+
+dev_only(
+auditallow domain cros_home_shadow_uid_root:dir create;
+auditallow domain cros_home_shadow_uid_user:dir create;
+)

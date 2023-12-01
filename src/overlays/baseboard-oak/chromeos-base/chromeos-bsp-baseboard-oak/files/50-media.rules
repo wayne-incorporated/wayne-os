@@ -1,0 +1,14 @@
+ACTION!="add", GOTO="media_end"
+SUBSYSTEM!="video4linux", GOTO="media_end"
+
+ATTR{name}=="mtk-vcodec-dec", SYMLINK+="video-dec0"
+# H.264 encoder
+ATTR{name}=="mtk-vcodec-enc", KERNELS=="18002000.vcodec", SYMLINK+="video-enc0"
+# VP8 encoder
+ATTR{name}=="mtk-vcodec-enc", KERNELS=="19002000.vcodec", SYMLINK+="video-enc1"
+# TODO(b/149437087) Kept for compatibility - remove once kernel < 4.19 is retired for Oak/Hana.
+ATTR{name}=="mtk-venc-vp8", SYMLINK+="video-enc1"
+ATTR{name}=="mtk-mdp:m2m", SYMLINK+="image-proc0"
+ATTR{name}=="mtk-jpeg-dec", SYMLINK+="jpeg-dec"
+
+LABEL="media_end"

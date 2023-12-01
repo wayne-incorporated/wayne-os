@@ -1,0 +1,25 @@
+From 34c1f3a9250654513c1776440729ae0fe22c274b Mon Sep 17 00:00:00 2001
+From: Zubin Mithra <zsm@google.com>
+Date: Thu, 18 May 2023 10:58:13 -0700
+Subject: [PATCH] CHROMIUM: remove warning in __alloc_pages
+
+Change-Id: I47a28bc0dadf32329d76e4aad4628f467f45aa64
+---
+ mm/page_alloc.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 491f10db8324..558ed6cf96a3 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -5395,7 +5395,6 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
+ 	 * so bail out early if the request is out of bound.
+ 	 */
+ 	if (unlikely(order >= MAX_ORDER)) {
+-		WARN_ON_ONCE(!(gfp & __GFP_NOWARN));
+ 		return NULL;
+ 	}
+ 
+-- 
+2.40.1.698.g37aff9b760-goog
+

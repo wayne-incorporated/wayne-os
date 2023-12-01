@@ -1,0 +1,200 @@
+From aefb2e134dd715c2c48a7b826d2d56db51ce63ac Mon Sep 17 00:00:00 2001
+From: Florian Mayer <fmayer@google.com>
+Date: Mon, 31 Jan 2022 13:10:41 -0800
+Subject: [PATCH] [hwasan] work around lifetime issue with setjmp.
+
+setjmp can return twice, but PostDominatorTree is unaware of this. as
+such, it overestimates postdominance, leaving some cases (see attached
+compiler-rt) where memory does not get untagged on return. this causes
+false positives later in the program execution.
+
+this is a crude workaround to unblock use-after-scope for now, in the
+longer term PostDominatorTree should bemade aware of returns_twice
+function, as this may cause problems elsewhere.
+
+Reviewed By: eugenis
+
+Differential Revision: https://reviews.llvm.org/D118647
+---
+ .../TestCases/use-after-scope-setjmp.cpp      | 59 +++++++++++++++++++
+ .../Instrumentation/HWAddressSanitizer.cpp    | 17 +++++-
+ .../use-after-scope-setjmp.ll                 | 43 ++++++++++++++
+ 3 files changed, 117 insertions(+), 2 deletions(-)
+ create mode 100644 compiler-rt/test/hwasan/TestCases/use-after-scope-setjmp.cpp
+ create mode 100644 llvm/test/Instrumentation/HWAddressSanitizer/use-after-scope-setjmp.ll
+
+diff --git a/compiler-rt/test/hwasan/TestCases/use-after-scope-setjmp.cpp b/compiler-rt/test/hwasan/TestCases/use-after-scope-setjmp.cpp
+new file mode 100644
+index 000000000000..396a03d22bb8
+--- /dev/null
++++ b/compiler-rt/test/hwasan/TestCases/use-after-scope-setjmp.cpp
+@@ -0,0 +1,59 @@
++// RUN: %clangxx_hwasan  -mllvm -hwasan-use-stack-safety=0 -mllvm -hwasan-use-after-scope -O2 %s -o %t && \
++// RUN:     %run %t 2>&1
++
++// REQUIRES: aarch64-target-arch
++// REQUIRES: stable-runtime
++
++#include <sanitizer/hwasan_interface.h>
++#include <setjmp.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <sys/types.h>
++#include <unistd.h>
++
++volatile const char *stackbuf = nullptr;
++jmp_buf jbuf;
++
++__attribute__((noinline)) bool jump() {
++  // Fool the compiler so it cannot deduce noreturn.
++  if (getpid() != 0) {
++    longjmp(jbuf, 1);
++    return true;
++  }
++  return false;
++}
++
++bool target() {
++  switch (setjmp(jbuf)) {
++  case 1:
++    return false;
++  default:
++    break;
++  }
++
++  while (true) {
++    char buf[4096];
++    stackbuf = buf;
++    if (!jump()) {
++      break;
++    };
++  }
++  return true;
++}
++
++int main() {
++  target();
++
++  void *untagged = __hwasan_tag_pointer(stackbuf, 0);
++  if (stackbuf == untagged) {
++    // The buffer wasn't tagged in the first place, so the test will not work
++    // as expected.
++    return 2;
++  }
++  if (__hwasan_test_shadow(untagged, 4096) != -1) {
++    return 1;
++  }
++
++  return 0;
++}
+diff --git a/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp
+index 70b39449d243..7b3741d19a1b 100644
+--- a/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp
+@@ -304,6 +304,7 @@ public:
+   static bool isStandardLifetime(const AllocaInfo &AllocaInfo,
+                                  const DominatorTree &DT);
+   bool instrumentStack(
++      bool ShouldDetectUseAfterScope,
+       MapVector<AllocaInst *, AllocaInfo> &AllocasToInstrument,
+       SmallVector<Instruction *, 4> &UnrecognizedLifetimes,
+       DenseMap<AllocaInst *, std::vector<DbgVariableIntrinsic *>> &AllocaDbgMap,
+@@ -1359,6 +1360,7 @@ bool HWAddressSanitizer::isStandardLifetime(const AllocaInfo &AllocaInfo,
+ }
+ 
+ bool HWAddressSanitizer::instrumentStack(
++    bool ShouldDetectUseAfterScope,
+     MapVector<AllocaInst *, AllocaInfo> &AllocasToInstrument,
+     SmallVector<Instruction *, 4> &UnrecognizedLifetimes,
+     DenseMap<AllocaInst *, std::vector<DbgVariableIntrinsic *>> &AllocaDbgMap,
+@@ -1410,7 +1412,7 @@ bool HWAddressSanitizer::instrumentStack(
+     };
+     bool StandardLifetime =
+         UnrecognizedLifetimes.empty() && isStandardLifetime(Info, GetDT());
+-    if (DetectUseAfterScope && StandardLifetime) {
++    if (ShouldDetectUseAfterScope && StandardLifetime) {
+       IntrinsicInst *Start = Info.LifetimeStart[0];
+       IRB.SetInsertPoint(Start->getNextNode());
+       tagAlloca(IRB, AI, Tag, Size);
+@@ -1505,8 +1507,14 @@ bool HWAddressSanitizer::sanitizeFunction(
+   SmallVector<Instruction *, 8> LandingPadVec;
+   SmallVector<Instruction *, 4> UnrecognizedLifetimes;
+   DenseMap<AllocaInst *, std::vector<DbgVariableIntrinsic *>> AllocaDbgMap;
++  bool CallsReturnTwice = false;
+   for (auto &BB : F) {
+     for (auto &Inst : BB) {
++      if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
++        if (CI->canReturnTwice()) {
++          CallsReturnTwice = true;
++        }
++      }
+       if (InstrumentStack) {
+         if (AllocaInst *AI = dyn_cast<AllocaInst>(&Inst)) {
+           if (isInterestingAlloca(*AI))
+@@ -1590,7 +1598,12 @@ bool HWAddressSanitizer::sanitizeFunction(
+   if (!AllocasToInstrument.empty()) {
+     Value *StackTag =
+         ClGenerateTagsWithCalls ? nullptr : getStackBaseTag(EntryIRB);
+-    instrumentStack(AllocasToInstrument, UnrecognizedLifetimes, AllocaDbgMap,
++    // Calls to functions that may return twice (e.g. setjmp) confuse the
++    // postdominator analysis, and will leave us to keep memory tagged after
++    // function return. Work around this by always untagging at every return
++    // statement if return_twice functions are called.
++    instrumentStack(DetectUseAfterScope && !CallsReturnTwice,
++                    AllocasToInstrument, UnrecognizedLifetimes, AllocaDbgMap,
+                     RetVec, StackTag, GetDT, GetPDT);
+   }
+   // Pad and align each of the allocas that we instrumented to stop small
+diff --git a/llvm/test/Instrumentation/HWAddressSanitizer/use-after-scope-setjmp.ll b/llvm/test/Instrumentation/HWAddressSanitizer/use-after-scope-setjmp.ll
+new file mode 100644
+index 000000000000..cf0b5baff5d2
+--- /dev/null
++++ b/llvm/test/Instrumentation/HWAddressSanitizer/use-after-scope-setjmp.ll
+@@ -0,0 +1,43 @@
++; RUN: opt -passes=hwasan -hwasan-use-stack-safety=0 -hwasan-use-after-scope -S < %s | FileCheck %s
++target datalayout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
++target triple = "aarch64-unknown-linux-android29"
++
++@stackbuf = dso_local local_unnamed_addr global i8* null, align 8
++@jbuf = dso_local global [32 x i64] zeroinitializer, align 8
++
++declare void @may_jump()
++
++define dso_local noundef i1 @_Z6targetv() sanitize_hwaddress {
++entry:
++  %buf = alloca [4096 x i8], align 1
++  %call = call i32 @setjmp(i64* noundef getelementptr inbounds ([32 x i64], [32 x i64]* @jbuf, i64 0, i64 0))
++  switch i32 %call, label %while.body [
++    i32 1, label %return
++    i32 2, label %sw.bb1
++  ]
++
++sw.bb1:                                           ; preds = %entry
++  br label %return
++
++while.body:                                       ; preds = %entry
++  %0 = getelementptr inbounds [4096 x i8], [4096 x i8]* %buf, i64 0, i64 0
++  call void @llvm.lifetime.start.p0i8(i64 4096, i8* nonnull %0) #10
++  store i8* %0, i8** @stackbuf, align 8
++  ; may_jump may call longjmp, going back to the switch (and then the return),
++  ; bypassing the lifetime.end. This is why we need to untag on the return,
++  ; rather than the lifetime.end.
++  call void @may_jump()
++  call void @llvm.lifetime.end.p0i8(i64 4096, i8* nonnull %0) #10
++  br label %return
++
++; CHECK-LABEL: return:
++; CHECK: void @llvm.memset.p0i8.i64({{.*}}, i8 0, i64 256, i1 false)
++return:                                           ; preds = %entry, %while.body, %sw.bb1
++  %retval.0 = phi i1 [ true, %while.body ], [ true, %sw.bb1 ], [ false, %entry ]
++  ret i1 %retval.0
++}
++
++declare i32 @setjmp(i64* noundef) returns_twice
++
++declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture)
++declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture)
+-- 
+2.35.0.rc2.247.g8bbb082509-goog
+

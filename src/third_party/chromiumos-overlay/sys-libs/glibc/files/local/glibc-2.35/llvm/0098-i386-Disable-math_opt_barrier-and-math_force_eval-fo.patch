@@ -1,0 +1,26 @@
+From 5c12a7d1b6efed41f17b43cded2eca354d5eee7d Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 26 Jul 2022 08:45:02 -0300
+Subject: [PATCH 098/163] i386: Disable math_opt_barrier and math_force_eval
+ for clang
+
+---
+ sysdeps/x86/fpu/math-barriers.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sysdeps/x86/fpu/math-barriers.h b/sysdeps/x86/fpu/math-barriers.h
+index 4eb658055b..730cccfed6 100644
+--- a/sysdeps/x86/fpu/math-barriers.h
++++ b/sysdeps/x86/fpu/math-barriers.h
+@@ -19,7 +19,7 @@
+ #ifndef X86_MATH_BARRIERS_H
+ #define X86_MATH_BARRIERS_H 1
+ 
+-#ifdef __SSE2_MATH__
++#if defined __SSE2_MATH__ && !defined (__clang__)
+ # define math_opt_barrier(x)						\
+   ({ __typeof(x) __x;							\
+      if (sizeof (x) <= sizeof (double))					\
+-- 
+2.37.2
+

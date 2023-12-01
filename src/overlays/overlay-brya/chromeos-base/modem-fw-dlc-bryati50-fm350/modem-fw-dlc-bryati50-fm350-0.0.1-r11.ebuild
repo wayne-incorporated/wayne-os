@@ -1,0 +1,1 @@
+modem-fw-dlc-bryati50-fm350-0.0.1.ebuild

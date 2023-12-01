@@ -1,0 +1,28 @@
+From b236023e77185e7b5177bf9b6af58016bf77d2f0 Mon Sep 17 00:00:00 2001
+From: Gwendal Grignou <gwendal@gmail.com>
+Date: Tue, 12 Jul 2022 20:56:47 +0000
+Subject: [PATCH] CHROMIUM: test_file: Use Thread Id instead of pid
+
+gettid() allows differentiating files used by different threads.
+
+Signed-off-by: Gwendal Grignou <gwendal@gmail.com>
+---
+ nih/test_files.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/nih/test_files.h b/nih/test_files.h
+index c9bcea8..a8ef3d2 100644
+--- a/nih/test_files.h
++++ b/nih/test_files.h
+@@ -47,7 +47,7 @@
+ 	do { \
+ 		snprintf ((_var), sizeof (_var), "/tmp/%s-%s-%d-%d", \
+ 			  strrchr (__FILE__, '/') ? strrchr (__FILE__, '/') + 1 : __FILE__, \
+-			  __FUNCTION__, __LINE__, getpid ()); \
++			  __FUNCTION__, __LINE__, gettid ()); \
+ 		unlink (_var); \
+ 	} while (0)
+ 
+-- 
+2.37.0.144.g8ac04bfd2-goog
+

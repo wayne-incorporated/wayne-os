@@ -1,0 +1,17 @@
+Add the suggested <locale> header to fix building
+with latest libc++ after https://reviews.llvm.org/D144331.
+
+diff --git a/include/safe-ctype.h b/include/safe-ctype.h
+index 4dcf849..01ee603 100644
+--- a/include/safe-ctype.h
++++ b/include/safe-ctype.h
+@@ -120,6 +120,9 @@ extern const unsigned char  _sch_tolower[256];
+    So we include ctype.h here and then immediately redefine its macros.  */
+ 
+ #include <ctype.h>
++#ifdef __cplusplus
++#include <locale>
++#endif
+ #undef isalpha
+ #define isalpha(c) do_not_use_isalpha_with_safe_ctype
+ #undef isalnum

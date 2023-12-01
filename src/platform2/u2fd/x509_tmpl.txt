@@ -1,0 +1,98 @@
+# This file contains the X509 Certificate template
+# used for attestation in U2F_REGISTER responses in
+# the cr50 & u2fd U2F implementations.
+#
+# The file is in ASN1_generate_nconf format, and
+# can be parsed/converted using openssl asn1parse.
+#
+# Placeholder values are included for serial,
+# public key, and signature.
+#
+# To parse and output a text ASN1 representation:
+# openssl asn1parse -genconf x509_tmpl.txt -i -dump
+#
+# To convert to DER:
+# openssl asn1parse -genconf x509_tmpl.txt -out cert.der
+#
+# To view the converted certificate:
+# openssl x509 -inform der -in cert.der -text
+#
+# To dump a C/C++ representation of the certificate:
+# openssl x509 -inform der -in cert.der -C
+#
+# The certificate output by the above command is
+# included at the bottom of this file.
+
+### CERTIFICATE TEMPLATE START
+
+asn1=SEQUENCE:outer_seq
+
+[outer_seq]
+body		= SEQUENCE:cert_body
+signature_alg	= SEQUENCE:signature_alg
+signature	= FORMAT:HEX, BITSTRING:00  # placeholder value
+
+[cert_body]
+x509_v3		= EXPLICIT:0C, INTEGER:2
+serial		= INTEGER:1  # placeholder value, not set by u2fd
+signature_alg	= SEQUENCE:signature_alg
+issuer		= SEQUENCE:issuer
+validity	= SEQUENCE:validity
+subject		= SEQUENCE:issuer
+pub_key		= SEQUENCE:public_key
+# FIDO U2F certificate transports extension
+u2f_ext		= EXPLICIT:3C, SEQUENCE:u2f_transport
+
+[signature_alg]
+alg		= OID:ecdsa-with-SHA256
+
+[issuer]
+name_wrapper	= SET:issuer_seq
+
+[issuer_seq]
+issuer_name	= SEQUENCE:issuer_name
+
+[issuer_name]
+name_oid	= OID:commonName
+name		= PRINTABLESTRING:U2F
+
+[validity]
+from_date	= GENERALIZEDTIME:20000101000000Z
+to_date		= GENERALIZEDTIME:20991231235959Z
+
+[public_key]
+params		= SEQUENCE:pubkey_params
+pub_key		= FORMAT:HEX, BITSTRING:00  # placeholder value
+
+[pubkey_params]
+type		= OID:id-ecPublicKey
+curve		= OID:prime256v1
+
+[u2f_transport]
+param		= SEQUENCE:u2f_transport_param
+
+[u2f_transport_param]
+# OID defined in "FIDO U2F Authenticator Transports Extension", Section 3.1
+fido_oid	=	OID:1.3.6.1.4.1.45724.2.1.1
+transport	=	FORMAT:HEX,OCT:03020308  # USB-internal
+
+### CERTIFICATE TEMPLATE END
+
+# Partial output from 'openssl x509 -inform der -in cert.der -C'
+#
+# unsigned char the_certificate[164] = {
+#     0x30, 0x81, 0xA1, 0x30, 0x81, 0x8E, 0xA0, 0x03, 0x02, 0x01, 0x02, 0x02,
+#     0x01, 0x00, 0x30, 0x0A, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04,
+#     0x03, 0x02, 0x30, 0x0F, 0x31, 0x0D, 0x30, 0x0B, 0x06, 0x03, 0x55, 0x04,
+#     0x03, 0x13, 0x04, 0x63, 0x72, 0x35, 0x30, 0x30, 0x22, 0x18, 0x0F, 0x32,
+#     0x30, 0x30, 0x30, 0x30, 0x31, 0x30, 0x31, 0x30, 0x30, 0x30, 0x30, 0x30,
+#     0x30, 0x5A, 0x18, 0x0F, 0x32, 0x30, 0x39, 0x39, 0x31, 0x32, 0x33, 0x31,
+#     0x32, 0x33, 0x35, 0x39, 0x35, 0x39, 0x5A, 0x30, 0x0F, 0x31, 0x0D, 0x30,
+#     0x0B, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x04, 0x63, 0x72, 0x35, 0x30,
+#     0x30, 0x19, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02,
+#     0x01, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03,
+#     0x02, 0x00, 0x00, 0xA3, 0x17, 0x30, 0x15, 0x30, 0x13, 0x06, 0x0B, 0x2B,
+#     0x06, 0x01, 0x04, 0x01, 0x82, 0xE5, 0x1C, 0x02, 0x01, 0x01, 0x04, 0x04,
+#     0x03, 0x02, 0x03, 0x08, 0x30, 0x0A, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE,
+#     0x3D, 0x04, 0x03, 0x02, 0x03, 0x02, 0x00, 0x00,
+# };

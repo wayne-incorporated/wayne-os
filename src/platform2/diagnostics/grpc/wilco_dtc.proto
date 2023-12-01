@@ -1,0 +1,136 @@
+// Copyright 2018 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// gRPC API exposed by the wilco_dtc daemon. Normally the consumer
+// of the API is the wilco_dtc_supportd daemon.
+
+syntax = "proto3";
+
+package diagnostics.grpc_api;
+
+option go_package = "chromiumos/wilco_dtc";
+
+service WilcoDtc {
+  // Called when a message is sent by the diagnostics UI extension (hosted by
+  // the browser).
+  rpc HandleMessageFromUi(HandleMessageFromUiRequest)
+      returns (HandleMessageFromUiResponse) {}
+
+  // Called when the wilco_dtc_supportd daemon received EC event.
+  rpc HandleEcNotification(HandleEcNotificationRequest)
+      returns (HandleEcNotificationResponse) {}
+
+  // Called when the wilco_dtc_supportd daemon received power event from powerd
+  // daemon and event of the tracking type occured.
+  rpc HandlePowerNotification(HandlePowerNotificationRequest)
+      returns (HandlePowerNotificationResponse) {}
+
+  // Called when the wilco_dtc_supportd daemon received new configuration data
+  // blob, this happens when the device policy, passing this configuration data
+  // blob, gets updated.
+  // It is only a notification that the configuration data has been changed.
+  // The GetConfigurationData needs to be called to retrieve the actual
+  // configuration data.
+  // NOTE: calling the GetConfigurationData on every startup is highly
+  // recommended to retrieve the up-to-date configuration data.
+  rpc HandleConfigurationDataChanged(HandleConfigurationDataChangedRequest)
+      returns (HandleConfigurationDataChangedResponse) {}
+
+  // Called when the wilco_dtc_supportd daemon received D-Bus signal from
+  // bluetooth daemon that bluetooth data has changed.
+  rpc HandleBluetoothDataChanged(HandleBluetoothDataChangedRequest)
+      returns (HandleBluetoothDataChangedResponse) {}
+}
+
+// Parameters for the HandleMessageFromUi RPC.
+message HandleMessageFromUiRequest {
+  // Message contents, as sent by the diagnostics UI extension. Should be a
+  // valid JSON string.
+  string json_message = 1;
+}
+
+// Return value of the HandleMessageFromUi RPC.
+message HandleMessageFromUiResponse {
+  // Response message contents, as sent by the wilco_dtc daemon.
+  // When set, should be a valid JSON string.
+  string response_json_message = 1;
+}
+
+// Parameters for the HandleEcNotification RPC.
+message HandleEcNotificationRequest {
+  // EC notification type.
+  //
+  // |type| value is located from 0x0000 to 0xFFFF, i.e. only 16 bits used.
+  uint32 type = 1;
+
+  // EC notification payload.
+  //
+  // Originally, EC driver provides |uint16_t| data array which we encode to
+  // |payload| (i.e. |uint8_t| array) using little-endian format.
+  // For example, [0x0102, 0x1314, 0x2526] will be represented as
+  // [0x02, 0x01, 0x14, 0x13, 0x26, 0x25] payload.
+  //
+  // |payload| size does not exceed 12 bytes.
+  bytes payload = 2;
+}
+
+// Return value of the HandleEcNotification RPC.
+message HandleEcNotificationResponse {}
+
+// Parameters for the HandlePowerNotification RPC.
+message HandlePowerNotificationRequest {
+  enum PowerEvent {
+    EVENT_UNSET = 0;
+    // Energy consuming from external power source has been started.
+    AC_INSERT = 1;
+    // Energy consuming from external power source has been stopped.
+    AC_REMOVE = 2;
+    // System has received suspend request.
+    OS_SUSPEND = 3;
+    // System has completed suspend request.
+    OS_RESUME = 4;
+  };
+
+  // Must not be |EVENT_UNSET|.
+  PowerEvent power_event = 1;
+}
+
+// Return value of the HandlePowerNotification RPC.
+message HandlePowerNotificationResponse {}
+
+// Parameters for the HandleConfigurationDataChanged RPC.
+message HandleConfigurationDataChangedRequest {}
+
+// Return value of the HandleConfigurationDataChanged RPC.
+message HandleConfigurationDataChangedResponse {}
+
+// Parameters for the HandleBluetoothDataChanged RPC.
+message HandleBluetoothDataChangedRequest {
+  // Telemetry data of the bluetooth adapter installed in the system.
+  message AdapterData {
+    // Non-empty bluetooth adapter name (e.g. hci0).
+    string adapter_name = 1;
+    // Non-empty bluetooth adapter MAC address.
+    string adapter_mac_address = 2;
+
+    enum CarrierStatus {
+      STATUS_UNSET = 0;
+      STATUS_UP = 1;
+      STATUS_DOWN = 2;
+    }
+
+    // STATUS_UP/STATUS_DOWN carrier status of the device. Must be distinct from
+    // |STATUS_UNSET|.
+    CarrierStatus carrier_status = 3;
+
+    // Number of connected devices.
+    uint32 connected_devices_count = 4;
+  }
+
+  // The data for all bluetooth adapters installed in the system.
+  repeated AdapterData adapters = 1;
+}
+
+// Return value for the HandleBluetoothDataChanged RPC.
+message HandleBluetoothDataChangedResponse {}

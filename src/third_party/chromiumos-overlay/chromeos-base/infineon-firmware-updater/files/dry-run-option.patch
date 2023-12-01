@@ -1,0 +1,128 @@
+Add dry-run option to perform everything but the actual firmware image update.
+
+--- a/TPMFactoryUpd/CommandFlow_TpmUpdate.c
++++ b/TPMFactoryUpd/CommandFlow_TpmUpdate.c
+@@ -272,6 +272,7 @@ CommandFlow_TpmUpdate_UpdateFirmware(
+ 	_Inout_ IfxUpdate* PpTpmUpdate)
+ {
+ 	unsigned int unReturnValue = RC_E_FAIL;
++	BOOL fValue = FALSE;
+ 
+ 	LOGGING_WRITE_LEVEL4(LOGGING_METHOD_ENTRY_STRING);
+ 
+@@ -327,7 +328,17 @@ CommandFlow_TpmUpdate_UpdateFirmware(
+ 		sFirmwareUpdateData.fnUpdateStartedCallback = &CommandFlow_TpmUpdate_UpdateStartedCallback;
+ 		sFirmwareUpdateData.rgbFirmwareImage = PpTpmUpdate->rgbFirmwareImage;
+ 		sFirmwareUpdateData.unFirmwareImageSize = PpTpmUpdate->unFirmwareImageSize;
+-		PpTpmUpdate->unReturnCode = FirmwareUpdate_UpdateImage(&sFirmwareUpdateData);
++		if (TRUE == PropertyStorage_GetBooleanValueByKey(PROPERTY_DRY_RUN, &fValue) && TRUE == fValue)
++		{
++			PpTpmUpdate->unReturnCode = RC_SUCCESS;
++			for (unsigned long long ullProgress = 25; ullProgress <= 100; ullProgress += 25)
++			{
++				Platform_SleepMicroSeconds(2*1000*1000);
++				Response_ProgressCallback(ullProgress);
++			}
++		}
++		else
++			PpTpmUpdate->unReturnCode = FirmwareUpdate_UpdateImage(&sFirmwareUpdateData);
+ 		unReturnValue = RC_SUCCESS;
+ 		if (RC_SUCCESS != PpTpmUpdate->unReturnCode)
+ 			break;
+--- a/TPMFactoryUpd/CommandLineParser.c
++++ b/TPMFactoryUpd/CommandLineParser.c
+@@ -316,6 +316,20 @@ CommandLineParser_Parse(
+ 			break;
+ 		}
+ 
++		// **** -dry-run
++		if (0 == Platform_StringCompare(PwszCommandLineOption, CMD_DRY_RUN, RG_LEN(CMD_DRY_RUN), TRUE))
++		{
++			unReturnValue = CommandLineParser_CheckCommandLineOptions(PwszCommandLineOption);
++			if (RC_SUCCESS != unReturnValue)
++				break;
++
++			// Add dry_run property, ignore return value because CommandLineParser_CheckCommandLineOptions takes care of doubled given options
++			IGNORE_RETURN_VALUE(PropertyStorage_AddKeyBooleanValuePair(PROPERTY_DRY_RUN, TRUE));
++
++			unReturnValue = CommandLineParser_IncrementOptionCount();
++			break;
++		}
++
+ 		unReturnValue = RC_E_BAD_COMMANDLINE;
+ 		ERROR_STORE_FMT(unReturnValue, L"Unknown command line parameter (%ls).", PwszCommandLineOption);
+ 	}
+@@ -642,6 +656,7 @@ CommandLineParser_CheckCommandLineOptions(
+ 		BOOL fClearOwnership = FALSE;
+ 		BOOL fAccessMode = FALSE;
+ 		BOOL fConfigFileOption = FALSE;
++		BOOL fDryRunOption = FALSE;
+ 
+ 		// Read Property storage
+ 		if (TRUE == PropertyStorage_ExistsElement(PROPERTY_HELP))
+@@ -660,6 +675,8 @@ CommandLineParser_CheckCommandLineOptions(
+ 			fAccessMode = TRUE;
+ 		if (TRUE == PropertyStorage_ExistsElement(PROPERTY_CONFIG_FILE_PATH))
+ 			fConfigFileOption = TRUE;
++		if (TRUE == PropertyStorage_ExistsElement(PROPERTY_DRY_RUN))
++			fDryRunOption = TRUE;
+ 
+ 		// **** -help [Help]
+ 		if (0 == Platform_StringCompare(PwszCommand, CMD_HELP, RG_LEN(CMD_HELP), TRUE) ||
+@@ -765,6 +782,15 @@ CommandLineParser_CheckCommandLineOptions(
+ 			break;
+ 		}
+ 
++		// **** -dry-run [DryRun]
++		if (0 == Platform_StringCompare(PwszCommand, CMD_DRY_RUN, RG_LEN(CMD_DRY_RUN), TRUE))
++		{
++			// Command line parameter 'dry-run' can be combined with any parameters, though has meaning only for 'update'
++			if (TRUE == fDryRunOption) // And parameter 'dry-run' should not be given twice
++				unReturnValue = RC_E_BAD_COMMANDLINE;
++			break;
++		}
++
+ 		unReturnValue = RC_E_BAD_COMMANDLINE;
+ 	}
+ 	WHILE_FALSE_END;
+--- a/TPMFactoryUpd/PropertyDefines.h
++++ b/TPMFactoryUpd/PropertyDefines.h
+@@ -66,6 +66,8 @@ extern "C" {
+ #define PROPERTY_CONFIG_TARGET_FIRMWARE_VERSION_LPC	L"TargetFirmwareVersionLPC"
+ /// Define for Firmware Folder Path
+ #define PROPERTY_CONFIG_FIRMWARE_FOLDER_PATH	L"FirmwareFolderPath"
++/// Define for dry run property
++#define PROPERTY_DRY_RUN				L"DryRun"
+ 
+ #ifdef __cplusplus
+ }
+--- a/TPMFactoryUpd/Resource.h
++++ b/TPMFactoryUpd/Resource.h
+@@ -110,6 +110,7 @@
+ #define CMD_TPM12_CLEAROWNERSHIP					L"tpm12-clearownership"
+ #define CMD_ACCESS_MODE								L"access-mode"
+ #define CMD_CONFIG									L"config"
++#define CMD_DRY_RUN									L"dry-run"
+ 
+ // --------------- Help Output ---------------------
+ #define HELP_LINE1		L"Call: TPMFactoryUpd [parameter] [parameter] ..."
+@@ -154,6 +155,8 @@
+ #define HELP_LINE40		L"      with PCH TPM support)"
+ #define HELP_LINE41		L"  3 - Linux TPM driver. The <path> option can be set to define a device path"
+ #define HELP_LINE42		L"      (default value: /dev/tpm0)"
++#define HELP_LINE43		L"\n-%ls" /* use with format CMD_DRY_RUN */
++#define HELP_LINE44		L"  Optional parameter. Do everything except actually updating the image."
+ 
+ //{{NO_DEPENDENCIES}}
+ // Microsoft Visual C++ generated include file.
+--- a/TPMFactoryUpd/Response.c
++++ b/TPMFactoryUpd/Response.c
+@@ -1047,6 +1047,8 @@ Response_ShowHelp()
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE41);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE42);
+ #endif
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE43, CMD_DRY_RUN);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE44);
+ 	}
+ 	WHILE_FALSE_END;
+ 

@@ -1,0 +1,71 @@
+From a3a3055004336c1fcd15dc08958f8ea0f6d9ebe3 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 16:14:56 -0300
+Subject: [PATCH 128/163] libio: Handle -Wno-restrict with libc-diag.h
+
+---
+ libio/Makefile         |  4 ----
+ libio/tst-sprintf-ub.c | 14 ++++++++++++++
+ 2 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/libio/Makefile b/libio/Makefile
+index 8da4260593..b00147fae0 100644
+--- a/libio/Makefile
++++ b/libio/Makefile
+@@ -165,10 +165,6 @@ CFLAGS-iofputs_u.c += $(config-cflags-wno-ignored-attributes)
+ 
+ CFLAGS-tst_putwc.c += -DOBJPFX=\"$(objpfx)\"
+ 
+-# These test cases intentionally use overlapping arguments
+-CFLAGS-tst-sprintf-ub.c += -Wno-restrict
+-CFLAGS-tst-sprintf-chk-ub.c += -Wno-restrict
+-
+ LDFLAGS-tst-bz24228 = -Wl,--version-script=tst-bz24228.map
+ 
+ tst_wprintf2-ARGS = "Some Text"
+diff --git a/libio/tst-sprintf-ub.c b/libio/tst-sprintf-ub.c
+index 55f341eadb..e6baa4fe6c 100644
+--- a/libio/tst-sprintf-ub.c
++++ b/libio/tst-sprintf-ub.c
+@@ -16,8 +16,14 @@
+    License along with the GNU C Library; if not, see
+    <https://www.gnu.org/licenses/>.  */
+ 
++#include <libc-diag.h>
+ #include <stdarg.h>
++/* This is required to disable the overlap warnings for the fortify
++   test.  */
++DIAG_PUSH_NEEDS_COMMENT;
++DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wrestrict");
+ #include <stdio.h>
++DIAG_POP_NEEDS_COMMENT;
+ #include <string.h>
+ 
+ #include <support/check.h>
+@@ -54,7 +60,11 @@ do_one_test (int function, char *buf, ...)
+       /* The regular sprintf and vsprintf functions do not override the
+          destination buffer, even if source and destination overlap.  */
+       case FUNCTION_SPRINTF:
++	/* This intentionally use overlapping arguments.  */
++	DIAG_PUSH_NEEDS_COMMENT;
++	DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wrestrict");
+         sprintf (buf, "%sCD", buf);
++	DIAG_POP_NEEDS_COMMENT;
+         TEST_COMPARE_STRING (buf, expected);
+         break;
+       case FUNCTION_VSPRINTF:
+@@ -66,7 +76,11 @@ do_one_test (int function, char *buf, ...)
+       /* On the other hand, snprint and vsnprint override overlapping
+          source and destination buffers.  */
+       case FUNCTION_SNPRINF:
++	/* This intentionally use overlapping arguments.  */
++	DIAG_PUSH_NEEDS_COMMENT;
++	DIAG_IGNORE_NEEDS_COMMENT_GCC (5, "-Wrestrict");
+         snprintf (buf, 3, "%sCD", buf);
++	DIAG_POP_NEEDS_COMMENT;
+         TEST_COMPARE_STRING (buf, "CD");
+         break;
+       case FUNCTION_VSNPRINTF:
+-- 
+2.37.2
+

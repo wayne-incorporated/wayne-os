@@ -1,0 +1,49 @@
+From c708c8a867057fedf58bd17ed3be0c53820e5aba Mon Sep 17 00:00:00 2001
+From: Nicholas Bishop <nicholasbishop@google.com>
+Date: Fri, 17 Jun 2022 10:38:32 -0400
+Subject: [PATCH 2/2] Bump cc version in bootstrap to fix build of uefi targets
+
+The newer cc release pulls in this fix:
+https://github.com/rust-lang/cc-rs/commit/b2792e33ff91b92e2e920e54d582b0c334670c37
+
+This avoids an "Unsupported target" error when building
+compiler_builtins for the uefi targets.
+
+BUG=b:202164480
+---
+ Cargo.lock               | 4 ++--
+ src/bootstrap/Cargo.toml | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index e3ab987b3ab..8dcfc9af2b7 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -498,9 +498,9 @@ version = "0.1.0"
+ 
+ [[package]]
+ name = "cc"
+-version = "1.0.69"
++version = "1.0.73"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "e70cc2f62c6ce1868963827bd677764c62d07c3d9a3e1fb1177ee1a9ab199eb2"
++checksum = "2fff2a6927b3bb87f9595d67196a70493f627687a71d87a0d692242c33f58c11"
+ dependencies = [
+  "jobserver",
+ ]
+diff --git a/src/bootstrap/Cargo.toml b/src/bootstrap/Cargo.toml
+index 592a137e379..a7d51da968d 100644
+--- a/src/bootstrap/Cargo.toml
++++ b/src/bootstrap/Cargo.toml
+@@ -39,7 +39,7 @@ cmake = "0.1.38"
+ filetime = "0.2"
+ num_cpus = "1.0"
+ getopts = "0.2.19"
+-cc = "1.0.69"
++cc = "1.0.73"
+ libc = "0.2"
+ serde = { version = "1.0.8", features = ["derive"] }
+ serde_json = "1.0.2"
+-- 
+2.37.0.170.g444d1eabd0-goog
+

@@ -1,0 +1,33 @@
+type cros_tcsd, chromeos_domain, domain;
+
+domain_auto_trans(cros_init, cros_tcsd_exec, cros_tcsd)
+
+uma_writer(cros_tcsd)
+log_writer(cros_tcsd)
+r_dir_file(cros_tcsd, cros_passwd_file)
+
+r_dir_file(cros_tcsd, { sysfs sysfs_tpm })
+
+create_dir_file(cros_tcsd, {
+  cros_var_lib_tpm
+  cros_var_log_tcsd
+  cros_run_tcsd
+})
+
+filetrans_pattern(cros_tcsd, cros_run_tcsd, cros_tcsd_socket, sock_file, "tcsd.socket")
+allow cros_tcsd cros_tcsd_socket:sock_file create_file_perms;
+
+allow cros_tcsd tpm_device:chr_file rw_file_perms;
+
+allow cros_tcsd self:capability { chown setuid setgid };
+
+filetrans_pattern(chromeos_domain, cros_var_lib, cros_var_lib_tpm, dir, "tpm")
+filetrans_pattern(chromeos_domain, cros_var_log, cros_var_log_tcsd, dir, "tcsd")
+
+cros_dbus_client(cros_tcsd)
+
+### clients
+allow cros_tcsd_client_domain cros_run:dir { getattr search read };
+allow cros_tcsd_client_domain cros_run_tcsd:dir { getattr search read };
+allow cros_tcsd_client_domain cros_tcsd_socket:sock_file write;
+allow cros_tcsd_client_domain cros_tcsd:unix_stream_socket connectto;

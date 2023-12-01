@@ -1,0 +1,9 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Give bluetoothd appropriate permissions to write to /sys/.../coredump_disabled
+# and set the default state of the bluetooth devcoredump feature.
+ACTION!="remove", SUBSYSTEM=="bluetooth", ENV{DEVTYPE}=="host", \
+	ATTR{device/coredump_disabled}=="*", \
+	PROGRAM="/usr/bin/set_bluetooth_coredump.sh $sys $devpath"

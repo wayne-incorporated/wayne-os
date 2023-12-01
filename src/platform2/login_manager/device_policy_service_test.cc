@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include <base/bind.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
+#include <base/functional/bind.h>
 #include <base/memory/ptr_util.h>
 #include <base/run_loop.h>
 #include <brillo/message_loops/fake_message_loop.h>
@@ -36,8 +36,8 @@
 #include "login_manager/mock_policy_key.h"
 #include "login_manager/mock_policy_service.h"
 #include "login_manager/mock_policy_store.h"
+#include "login_manager/mock_system_utils.h"
 #include "login_manager/mock_vpd_process.h"
-#include "login_manager/system_utils_impl.h"
 
 namespace em = enterprise_management;
 
@@ -61,6 +61,9 @@ namespace login_manager {
 namespace {
 
 constexpr char kTestUser[] = "user@example.com";
+
+const base::FilePath kChromadMigrationFilePath =
+    base::FilePath(DevicePolicyService::kChromadMigrationSkipOobePreservePath);
 
 ACTION_P(AssignVector, str) {
   arg0->assign(str.begin(), str.end());
@@ -94,12 +97,32 @@ void InitPolicyFetchResponse(const std::string& policy_value_str,
 
 }  // namespace
 
+class FakePolicyServiceDelegate : public PolicyService::Delegate {
+ public:
+  explicit FakePolicyServiceDelegate(
+      DevicePolicyService* device_policy_service) {
+    device_policy_service_ = device_policy_service;
+  }
+
+  // PolicyService::Delegate implementation:
+  void OnPolicyPersisted(bool success) override {
+    settings_ = device_policy_service_->GetSettings();
+  }
+
+  void OnKeyPersisted(bool success) override {}
+
+  const em::ChromeDeviceSettingsProto& GetSettings() { return settings_; }
+
+ private:
+  DevicePolicyService* device_policy_service_;
+  em::ChromeDeviceSettingsProto settings_;
+};
+
 class DevicePolicyServiceTest : public ::testing::Test {
  public:
   DevicePolicyServiceTest() = default;
 
   void SetUp() override {
-    fake_loop_.SetAsCurrent();
     ASSERT_TRUE(tmpdir_.CreateUniqueTempDir());
     install_attributes_file_ =
         tmpdir_.GetPath().AppendASCII("install_attributes.pb");
@@ -130,7 +153,7 @@ class DevicePolicyServiceTest : public ::testing::Test {
     mitigator_ = std::make_unique<StrictMock<MockMitigator>>();
     service_.reset(new DevicePolicyService(
         tmpdir_.GetPath(), &key_, metrics_.get(), mitigator_.get(), nss,
-        &crossystem_, &vpd_process_, &install_attributes_reader_));
+        &utils_, &crossystem_, &vpd_process_, &install_attributes_reader_));
     if (use_mock_store) {
       auto store_ptr = std::make_unique<StrictMock<MockPolicyStore>>();
       store_ = store_ptr.get();
@@ -140,6 +163,10 @@ class DevicePolicyServiceTest : public ::testing::Test {
 
     // Allow the key to be read any time.
     EXPECT_CALL(key_, public_key_der()).WillRepeatedly(ReturnRef(fake_key_));
+  }
+
+  void SetInstallAttributesMissing() {
+    install_attributes_reader_.SetLocked(false);
   }
 
   void SetDataInInstallAttributes(const std::string& mode) {
@@ -181,15 +208,14 @@ class DevicePolicyServiceTest : public ::testing::Test {
       EXPECT_CALL(key_, IsPopulated()).WillRepeatedly(Return(false));
     else
       EXPECT_CALL(key_, IsPopulated()).Times(0);
-    EXPECT_CALL(key_, Verify(_, _)).WillRepeatedly(Return(true));
+    EXPECT_CALL(key_, Verify(_, _, _)).WillRepeatedly(Return(true));
 
     EXPECT_CALL(*store, Persist()).WillRepeatedly(Return(true));
     EXPECT_CALL(*store, Set(_)).Times(AnyNumber());
     EXPECT_CALL(*store, Get()).WillRepeatedly(ReturnRef(policy_proto));
-    EXPECT_TRUE(service_->Store(
-        ns, SerializeAsBlob(policy_proto), PolicyService::KEY_CLOBBER,
-        SignatureCheck::kEnabled, MockPolicyService::CreateDoNothing()));
-    fake_loop_.Run();
+    EXPECT_TRUE(service_->Store(ns, SerializeAsBlob(policy_proto),
+                                PolicyService::KEY_CLOBBER,
+                                MockPolicyService::CreateDoNothing()));
   }
 
   bool UpdateSystemSettings(DevicePolicyService* service) {
@@ -247,23 +273,14 @@ class DevicePolicyServiceTest : public ::testing::Test {
   }
 
   void ExpectPersistKeyAndPolicy(bool is_populated) {
-    Mock::VerifyAndClearExpectations(&key_);
-    Mock::VerifyAndClearExpectations(store_);
-
     EXPECT_CALL(key_, IsPopulated()).WillRepeatedly(Return(is_populated));
-
     EXPECT_CALL(key_, Persist()).WillOnce(Return(true));
     EXPECT_CALL(*store_, Persist()).WillOnce(Return(true));
-    fake_loop_.Run();
   }
 
   void ExpectNoPersistKeyAndPolicy() {
-    Mock::VerifyAndClearExpectations(&key_);
-    Mock::VerifyAndClearExpectations(store_);
-
     EXPECT_CALL(key_, Persist()).Times(0);
     EXPECT_CALL(*store_, Persist()).Times(0);
-    fake_loop_.Run();
   }
 
   void ExpectKeyPopulated(bool key_populated) {
@@ -273,61 +290,18 @@ class DevicePolicyServiceTest : public ::testing::Test {
 
   bool IsResilient() { return service_->IsChromeStoreResilientForTesting(); }
 
-  LoginMetrics::PolicyFileState SimulateNullPolicy() {
-    EXPECT_CALL(*store_, Get()).WillRepeatedly(ReturnRef(new_policy_proto_));
-    return LoginMetrics::NOT_PRESENT;
-  }
-
-  LoginMetrics::PolicyFileState SimulateGoodPolicy() {
-    InitEmptyPolicy(owner_, fake_sig_, "");
-    EXPECT_CALL(*store_, Get()).WillRepeatedly(ReturnRef(policy_proto_));
-    return LoginMetrics::GOOD;
-  }
-
-  LoginMetrics::PolicyFileState SimulateNullPrefs() {
-    EXPECT_CALL(*store_, DefunctPrefsFilePresent()).WillOnce(Return(false));
-    return LoginMetrics::NOT_PRESENT;
-  }
-
-  LoginMetrics::PolicyFileState SimulateExtantPrefs() {
-    EXPECT_CALL(*store_, DefunctPrefsFilePresent()).WillOnce(Return(true));
-    return LoginMetrics::GOOD;
-  }
-
-  LoginMetrics::PolicyFileState SimulateNullOwnerKey() {
-    EXPECT_CALL(key_, IsPopulated()).WillRepeatedly(Return(false));
-    return LoginMetrics::NOT_PRESENT;
-  }
-
-  LoginMetrics::PolicyFileState SimulateBadOwnerKey(MockNssUtil* nss) {
-    EXPECT_CALL(key_, IsPopulated()).WillRepeatedly(Return(true));
-    EXPECT_CALL(*nss, CheckPublicKeyBlob(fake_key_))
-        .WillRepeatedly(Return(false));
-    return LoginMetrics::MALFORMED;
-  }
-
-  LoginMetrics::PolicyFileState SimulateGoodOwnerKey(MockNssUtil* nss) {
-    EXPECT_CALL(key_, IsPopulated()).WillRepeatedly(Return(true));
-    EXPECT_CALL(*nss, CheckPublicKeyBlob(fake_key_))
-        .WillRepeatedly(Return(true));
-    return LoginMetrics::GOOD;
-  }
-
   bool PolicyAllowsNewUsers(const em::ChromeDeviceSettingsProto settings) {
     InitPolicy(settings, owner_, fake_sig_, "");
     return DevicePolicyService::PolicyAllowsNewUsers(policy_proto_);
   }
 
   em::PolicyFetchResponse policy_proto_;
-
   em::PolicyFetchResponse new_policy_proto_;
 
   const std::string owner_ = "user@somewhere";
   const std::vector<uint8_t> fake_sig_ = StringToBlob("fake_signature");
   const std::vector<uint8_t> fake_key_ = StringToBlob("fake_key");
   const std::vector<uint8_t> new_fake_sig_ = StringToBlob("new_fake_signature");
-
-  brillo::FakeMessageLoop fake_loop_{nullptr};
 
   base::ScopedTempDir tmpdir_;
   base::FilePath install_attributes_file_;
@@ -338,15 +312,15 @@ class DevicePolicyServiceTest : public ::testing::Test {
   StrictMock<MockPolicyStore>* store_ = nullptr;
   std::unique_ptr<MockMetrics> metrics_;
   std::unique_ptr<StrictMock<MockMitigator>> mitigator_;
+  testing::NiceMock<MockSystemUtils> utils_;
   FakeCrossystem crossystem_;
-  SystemUtilsImpl utils_;
   MockVpdProcess vpd_process_;
   MockInstallAttributesReader install_attributes_reader_;
 
   std::unique_ptr<DevicePolicyService> service_;
 };
 
-TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_SuccessEmptyPolicy) {
+TEST_F(DevicePolicyServiceTest, HandleOwnerLogin_SuccessEmptyPolicy) {
   KeyCheckUtil nss;
   InitService(&nss, true);
   em::ChromeDeviceSettingsProto settings;
@@ -356,55 +330,15 @@ TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_SuccessEmptyPolicy) {
   ExpectGetPolicy(s, policy_proto_);
   EXPECT_CALL(*mitigator_.get(), Mitigate(_, _)).Times(0);
   ExpectKeyPopulated(true);
-  EXPECT_CALL(*metrics_.get(), SendConsumerAllowsNewUsers(_)).Times(1);
 
   brillo::ErrorPtr error;
-  bool is_owner = false;
-  EXPECT_TRUE(service_->CheckAndHandleOwnerLogin(owner_, nss.GetDescriptor(),
-                                                 &is_owner, &error));
+  const bool is_owner = service_->UserIsOwner(owner_);
+  EXPECT_TRUE(service_->HandleOwnerLogin(owner_, nss.GetDescriptor(), &error));
   EXPECT_FALSE(error.get());
   EXPECT_TRUE(is_owner);
 }
 
-TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_NotOwner) {
-  KeyFailUtil nss;
-  InitService(&nss, true);
-  ASSERT_NO_FATAL_FAILURE(InitEmptyPolicy(owner_, fake_sig_, ""));
-
-  Sequence s;
-  ExpectGetPolicy(s, policy_proto_);
-  EXPECT_CALL(*mitigator_.get(), Mitigate(_, _)).Times(0);
-  ExpectKeyPopulated(true);
-  EXPECT_CALL(*metrics_.get(), SendConsumerAllowsNewUsers(_)).Times(1);
-
-  brillo::ErrorPtr error;
-  bool is_owner = true;
-  EXPECT_TRUE(service_->CheckAndHandleOwnerLogin(
-      "regular_user@somewhere", nss.GetDescriptor(), &is_owner, &error));
-  EXPECT_FALSE(error.get());
-  EXPECT_FALSE(is_owner);
-}
-
-TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_EnterpriseDevice) {
-  KeyFailUtil nss;
-  InitService(&nss, true);
-  ASSERT_NO_FATAL_FAILURE(InitEmptyPolicy(owner_, fake_sig_, "fake_token"));
-
-  Sequence s;
-  ExpectGetPolicy(s, policy_proto_);
-  EXPECT_CALL(*mitigator_.get(), Mitigate(_, _)).Times(0);
-  ExpectKeyPopulated(true);
-  EXPECT_CALL(*metrics_.get(), SendConsumerAllowsNewUsers(_)).Times(0);
-
-  brillo::ErrorPtr error;
-  bool is_owner = true;
-  EXPECT_TRUE(service_->CheckAndHandleOwnerLogin(owner_, nss.GetDescriptor(),
-                                                 &is_owner, &error));
-  EXPECT_FALSE(error.get());
-  EXPECT_FALSE(is_owner);
-}
-
-TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_MissingKey) {
+TEST_F(DevicePolicyServiceTest, HandleOwnerLogin_MissingKey) {
   KeyFailUtil nss;
   InitService(&nss, true);
   ASSERT_NO_FATAL_FAILURE(InitEmptyPolicy(owner_, fake_sig_, ""));
@@ -415,18 +349,15 @@ TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_MissingKey) {
       .InSequence(s)
       .WillOnce(Return(true));
   ExpectKeyPopulated(true);
-  EXPECT_CALL(*metrics_.get(), SendConsumerAllowsNewUsers(_)).Times(1);
 
   brillo::ErrorPtr error;
-  bool is_owner = false;
-  EXPECT_TRUE(service_->CheckAndHandleOwnerLogin(owner_, nss.GetDescriptor(),
-                                                 &is_owner, &error));
+  const bool is_owner = service_->UserIsOwner(owner_);
+  EXPECT_TRUE(service_->HandleOwnerLogin(owner_, nss.GetDescriptor(), &error));
   EXPECT_FALSE(error.get());
   EXPECT_TRUE(is_owner);
 }
 
-TEST_F(DevicePolicyServiceTest,
-       CheckAndHandleOwnerLogin_MissingPublicKeyOwner) {
+TEST_F(DevicePolicyServiceTest, HandleOwnerLogin_MissingPublicKeyOwner) {
   KeyFailUtil nss;
   InitService(&nss, true);
   ASSERT_NO_FATAL_FAILURE(InitEmptyPolicy(owner_, fake_sig_, ""));
@@ -437,37 +368,15 @@ TEST_F(DevicePolicyServiceTest,
       .InSequence(s)
       .WillOnce(Return(true));
   ExpectKeyPopulated(true);
-  EXPECT_CALL(*metrics_.get(), SendConsumerAllowsNewUsers(_)).Times(1);
 
   brillo::ErrorPtr error;
-  bool is_owner = false;
-  EXPECT_TRUE(service_->CheckAndHandleOwnerLogin(owner_, nss.GetDescriptor(),
-                                                 &is_owner, &error));
+  const bool is_owner = service_->UserIsOwner(owner_);
+  EXPECT_TRUE(service_->HandleOwnerLogin(owner_, nss.GetDescriptor(), &error));
   EXPECT_FALSE(error.get());
   EXPECT_TRUE(is_owner);
 }
 
-TEST_F(DevicePolicyServiceTest,
-       CheckAndHandleOwnerLogin_MissingPublicKeyNonOwner) {
-  KeyFailUtil nss;
-  InitService(&nss, true);
-  ASSERT_NO_FATAL_FAILURE(InitEmptyPolicy(owner_, fake_sig_, ""));
-
-  Sequence s;
-  ExpectGetPolicy(s, policy_proto_);
-  EXPECT_CALL(*mitigator_.get(), Mitigate(_, _)).Times(0);
-  ExpectKeyPopulated(false);
-  EXPECT_CALL(*metrics_.get(), SendConsumerAllowsNewUsers(_)).Times(1);
-
-  brillo::ErrorPtr error;
-  bool is_owner = true;
-  EXPECT_TRUE(service_->CheckAndHandleOwnerLogin(
-      "other@somwhere", nss.GetDescriptor(), &is_owner, &error));
-  EXPECT_FALSE(error.get());
-  EXPECT_FALSE(is_owner);
-}
-
-TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_MitigationFailure) {
+TEST_F(DevicePolicyServiceTest, HandleOwnerLogin_MitigationFailure) {
   KeyFailUtil nss;
   InitService(&nss, true);
   ASSERT_NO_FATAL_FAILURE(InitEmptyPolicy(owner_, fake_sig_, ""));
@@ -478,13 +387,12 @@ TEST_F(DevicePolicyServiceTest, CheckAndHandleOwnerLogin_MitigationFailure) {
       .InSequence(s)
       .WillOnce(Return(false));
   ExpectKeyPopulated(true);
-  EXPECT_CALL(*metrics_.get(), SendConsumerAllowsNewUsers(_)).Times(1);
 
   brillo::ErrorPtr error;
-  bool is_owner = false;
-  EXPECT_FALSE(service_->CheckAndHandleOwnerLogin(owner_, nss.GetDescriptor(),
-                                                  &is_owner, &error));
+  const bool is_owner = service_->UserIsOwner(owner_);
+  EXPECT_FALSE(service_->HandleOwnerLogin(owner_, nss.GetDescriptor(), &error));
   EXPECT_TRUE(error.get());
+  EXPECT_TRUE(is_owner);
   EXPECT_EQ(dbus_error::kPubkeySetIllegal, error->GetCode());
 }
 
@@ -600,9 +508,8 @@ TEST_F(DevicePolicyServiceTest, ValidateAndStoreOwnerKey_SuccessNewKey) {
   ExpectInstallNewOwnerPolicy(s, &nss);
 
   SetDefaultSettings();
-  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
-
   ExpectPersistKeyAndPolicy(true);
+  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
 }
 
 TEST_F(DevicePolicyServiceTest, ValidateAndStoreOwnerKey_SuccessMitigating) {
@@ -621,9 +528,8 @@ TEST_F(DevicePolicyServiceTest, ValidateAndStoreOwnerKey_SuccessMitigating) {
   ExpectInstallNewOwnerPolicy(s, &nss);
   SetDefaultSettings();
 
-  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
-
   ExpectPersistKeyAndPolicy(true);
+  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
 }
 
 TEST_F(DevicePolicyServiceTest, ValidateAndStoreOwnerKey_FailedMitigating) {
@@ -640,9 +546,8 @@ TEST_F(DevicePolicyServiceTest, ValidateAndStoreOwnerKey_FailedMitigating) {
       .WillOnce(Return(true));
   ExpectFailedInstallNewOwnerPolicy(s, &nss);
 
-  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
-
   ExpectNoPersistKeyAndPolicy();
+  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
 }
 
 TEST_F(DevicePolicyServiceTest,
@@ -665,9 +570,8 @@ TEST_F(DevicePolicyServiceTest,
   ExpectInstallNewOwnerPolicy(s, &nss);
   SetDefaultSettings();
 
-  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
-
   ExpectPersistKeyAndPolicy(true);
+  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
 }
 
 TEST_F(DevicePolicyServiceTest,
@@ -690,9 +594,8 @@ TEST_F(DevicePolicyServiceTest,
   ExpectInstallNewOwnerPolicy(s, &nss);
   SetDefaultSettings();
 
-  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
-
   ExpectPersistKeyAndPolicy(true);
+  service_->ValidateAndStoreOwnerKey(owner_, fake_key_, nss.GetDescriptor());
 }
 
 // Ensure block devmode is set properly in NVRAM.
@@ -709,6 +612,10 @@ TEST_F(DevicePolicyServiceTest, SetBlockDevModeInNvram) {
   SetSettings(service_.get(), std::move(proto));
 
   EXPECT_CALL(vpd_process_, RunInBackground(_, false, _))
+      .WillOnce(Return(true));
+
+  // This file should be removed, because the device is cloud managed.
+  EXPECT_CALL(utils_, RemoveFile(kChromadMigrationFilePath))
       .WillOnce(Return(true));
 
   SetDataInInstallAttributes("enterprise");
@@ -734,6 +641,10 @@ TEST_F(DevicePolicyServiceTest, UnsetBlockDevModeInNvram) {
   EXPECT_CALL(vpd_process_, RunInBackground(_, false, _))
       .WillOnce(Return(true));
 
+  // This file should be removed, because the device is cloud managed.
+  EXPECT_CALL(utils_, RemoveFile(kChromadMigrationFilePath))
+      .WillOnce(Return(true));
+
   SetDataInInstallAttributes("enterprise");
   EXPECT_TRUE(UpdateSystemSettings(service_.get()));
 
@@ -753,6 +664,7 @@ TEST_F(DevicePolicyServiceTest, CheckNotEnrolledDevice) {
   service.SetStoreForTesting(MakeChromePolicyNamespace(),
                              std::unique_ptr<MockPolicyStore>(store));
 
+  service.set_system_utils(&utils_);
   service.set_crossystem(&crossystem_);
   service.set_vpd_process(&vpd_process_);
   service.set_install_attributes_reader(&install_attributes_reader_);
@@ -772,7 +684,10 @@ TEST_F(DevicePolicyServiceTest, CheckNotEnrolledDevice) {
       {Crossystem::kCheckEnrollment, "0"},
   };
   EXPECT_CALL(vpd_process_, RunInBackground(updates, false, _))
-      .Times(1)
+      .WillOnce(Return(true));
+
+  // This file should be removed, because the device is owned by a consumer.
+  EXPECT_CALL(utils_, RemoveFile(kChromadMigrationFilePath))
       .WillOnce(Return(true));
 
   PersistPolicy(&service);
@@ -790,6 +705,7 @@ TEST_F(DevicePolicyServiceTest, CheckEnrolledDevice) {
   service.SetStoreForTesting(MakeChromePolicyNamespace(),
                              std::unique_ptr<MockPolicyStore>(store));
 
+  service.set_system_utils(&utils_);
   service.set_crossystem(&crossystem_);
   service.set_vpd_process(&vpd_process_);
   service.set_install_attributes_reader(&install_attributes_reader_);
@@ -809,44 +725,10 @@ TEST_F(DevicePolicyServiceTest, CheckEnrolledDevice) {
       {Crossystem::kCheckEnrollment, "1"},
   };
   EXPECT_CALL(vpd_process_, RunInBackground(updates, false, _))
-      .Times(1)
       .WillOnce(Return(true));
 
-  PersistPolicy(&service);
-}
-
-// Ensure device enrolled to Active Directory gets VPD updated.
-// A MockDevicePolicyService object is used.
-TEST_F(DevicePolicyServiceTest, CheckADEnrolledDevice) {
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  MockPolicyKey key;
-  MockPolicyStore* store = new MockPolicyStore();
-  MockDevicePolicyService service(&key);
-  service.SetStoreForTesting(MakeChromePolicyNamespace(),
-                             std::unique_ptr<MockPolicyStore>(store));
-
-  service.set_crossystem(&crossystem_);
-  service.set_vpd_process(&vpd_process_);
-  service.set_install_attributes_reader(&install_attributes_reader_);
-  crossystem_.VbSetSystemPropertyString(Crossystem::kMainfwType, "normal");
-
-  auto proto = std::make_unique<em::ChromeDeviceSettingsProto>();
-  proto->mutable_system_settings()->set_block_devmode(false);
-  SetSettings(&service, std::move(proto));
-  SetPolicyKey(&service, &key);
-
-  EXPECT_CALL(key, IsPopulated()).WillRepeatedly(Return(false));
-  EXPECT_CALL(*store, Persist()).WillRepeatedly(Return(true));
-  SetDataInInstallAttributes("enterprise_ad");
-
-  VpdProcess::KeyValuePairs updates{
-      {Crossystem::kBlockDevmode, "0"},
-      {Crossystem::kCheckEnrollment, "1"},
-  };
-  EXPECT_CALL(vpd_process_, RunInBackground(updates, false, _))
-      .Times(1)
+  // This file should be removed, because the device is cloud managed.
+  EXPECT_CALL(utils_, RemoveFile(kChromadMigrationFilePath))
       .WillOnce(Return(true));
 
   PersistPolicy(&service);
@@ -860,6 +742,7 @@ TEST_F(DevicePolicyServiceTest, CheckFailUpdateVPD) {
   MockPolicyKey key;
   MockDevicePolicyService service;
 
+  service.set_system_utils(&utils_);
   service.set_crossystem(&crossystem_);
   service.set_vpd_process(&vpd_process_);
   service.set_install_attributes_reader(&install_attributes_reader_);
@@ -877,8 +760,11 @@ TEST_F(DevicePolicyServiceTest, CheckFailUpdateVPD) {
       {Crossystem::kCheckEnrollment, "1"},
   };
   EXPECT_CALL(vpd_process_, RunInBackground(updates, false, _))
-      .Times(1)
       .WillOnce(Return(false));
+
+  // This file should be removed, because the device is cloud managed.
+  EXPECT_CALL(utils_, RemoveFile(kChromadMigrationFilePath))
+      .WillOnce(Return(true));
 
   EXPECT_FALSE(UpdateSystemSettings(&service));
 }
@@ -896,9 +782,13 @@ TEST_F(DevicePolicyServiceTest, CheckMissingInstallAttributes) {
   proto->mutable_system_settings()->set_block_devmode(true);
   SetSettings(service_.get(), std::move(proto));
 
-  SetDataInInstallAttributes(std::string());
+  SetInstallAttributesMissing();
 
   EXPECT_CALL(vpd_process_, RunInBackground(_, _, _)).Times(0);
+
+  // No file should be removed, because the management mode is unknown.
+  EXPECT_CALL(utils_, RemoveFile(_)).Times(0);
+
   EXPECT_TRUE(UpdateSystemSettings(service_.get()));
 }
 
@@ -915,9 +805,14 @@ TEST_F(DevicePolicyServiceTest, CheckWeirdInstallAttributes) {
   proto->mutable_system_settings()->set_block_devmode(true);
   SetSettings(service_.get(), std::move(proto));
 
-  SetDataInInstallAttributes("consumer");
+  SetDataInInstallAttributes(std::string());
 
   EXPECT_CALL(vpd_process_, RunInBackground(_, _, _)).Times(0);
+
+  // This file should be removed, because the device is owned by a consumer.
+  EXPECT_CALL(utils_, RemoveFile(kChromadMigrationFilePath))
+      .WillOnce(Return(true));
+
   EXPECT_TRUE(UpdateSystemSettings(service_.get()));
 }
 
@@ -987,105 +882,6 @@ TEST_F(DevicePolicyServiceTest, KeyMissing_CheckedAndMissing) {
   EXPECT_TRUE(service_->KeyMissing());
 }
 
-TEST_F(DevicePolicyServiceTest, Metrics_NoKeyNoPolicyNoPrefs) {
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = SimulateNullOwnerKey();
-  status.policy_file_state = SimulateNullPolicy();
-  status.defunct_prefs_file_state = SimulateNullPrefs();
-
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(StatusEq(status)))
-      .Times(1);
-  service_->ReportPolicyFileMetrics(true, true);
-}
-
-TEST_F(DevicePolicyServiceTest, Metrics_UnloadableKeyNoPolicyNoPrefs) {
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = LoginMetrics::MALFORMED;
-  status.policy_file_state = SimulateNullPolicy();
-  status.defunct_prefs_file_state = SimulateNullPrefs();
-
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(StatusEq(status)))
-      .Times(1);
-  service_->ReportPolicyFileMetrics(false, true);
-}
-
-TEST_F(DevicePolicyServiceTest, Metrics_BadKeyNoPolicyNoPrefs) {
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = SimulateBadOwnerKey(&nss);
-  status.policy_file_state = SimulateNullPolicy();
-  status.defunct_prefs_file_state = SimulateNullPrefs();
-
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(StatusEq(status)))
-      .Times(1);
-  service_->ReportPolicyFileMetrics(true, true);
-}
-
-TEST_F(DevicePolicyServiceTest, Metrics_GoodKeyNoPolicyNoPrefs) {
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = SimulateGoodOwnerKey(&nss);
-  status.policy_file_state = SimulateNullPolicy();
-  status.defunct_prefs_file_state = SimulateNullPrefs();
-
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(StatusEq(status)))
-      .Times(1);
-  service_->ReportPolicyFileMetrics(true, true);
-}
-
-TEST_F(DevicePolicyServiceTest, Metrics_GoodKeyUnloadablePolicyNoPrefs) {
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = SimulateGoodOwnerKey(&nss);
-  status.policy_file_state = LoginMetrics::MALFORMED;
-  status.defunct_prefs_file_state = SimulateNullPrefs();
-
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(StatusEq(status)))
-      .Times(1);
-  service_->ReportPolicyFileMetrics(true, false);
-}
-
-TEST_F(DevicePolicyServiceTest, Metrics_GoodKeyGoodPolicyNoPrefs) {
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = SimulateGoodOwnerKey(&nss);
-  status.policy_file_state = SimulateGoodPolicy();
-  status.defunct_prefs_file_state = SimulateNullPrefs();
-
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(StatusEq(status)))
-      .Times(1);
-  service_->ReportPolicyFileMetrics(true, true);
-}
-
-TEST_F(DevicePolicyServiceTest, Metrics_GoodKeyNoPolicyExtantPrefs) {
-  // This is http://crosbug.com/24361
-  MockNssUtil nss;
-  InitService(&nss, true);
-
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = SimulateGoodOwnerKey(&nss);
-  status.policy_file_state = SimulateNullPolicy();
-  status.defunct_prefs_file_state = SimulateExtantPrefs();
-
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(StatusEq(status)))
-      .Times(1);
-  service_->ReportPolicyFileMetrics(true, true);
-}
-
 TEST_F(DevicePolicyServiceTest, RecoverOwnerKeyFromPolicy) {
   MockNssUtil nss;
   InitService(&nss, true);
@@ -1098,8 +894,6 @@ TEST_F(DevicePolicyServiceTest, RecoverOwnerKeyFromPolicy) {
   EXPECT_CALL(key_, Persist()).WillRepeatedly(Return(true));
   EXPECT_CALL(*store_, EnsureLoadedOrCreated()).WillRepeatedly(Return(true));
   EXPECT_CALL(*store_, Get()).WillRepeatedly(ReturnRef(policy_proto_));
-  EXPECT_CALL(*store_, DefunctPrefsFilePresent()).WillRepeatedly(Return(false));
-  EXPECT_CALL(*metrics_.get(), SendPolicyFilesStatus(_)).Times(AnyNumber());
 
   em::ChromeDeviceSettingsProto settings;
   ASSERT_NO_FATAL_FAILURE(InitPolicy(settings, owner_, fake_sig_, ""));
@@ -1126,6 +920,30 @@ TEST_F(DevicePolicyServiceTest, GetSettings) {
   SetExpectationsAndStorePolicy(MakeChromePolicyNamespace(), store_,
                                 policy_proto_);
   EXPECT_EQ(service_->GetSettings().SerializeAsString(),
+            settings.SerializeAsString());
+}
+
+TEST_F(DevicePolicyServiceTest, CheckSettingsOnPolicyStore) {
+  MockNssUtil nss;
+  InitService(&nss, true);
+
+  FakePolicyServiceDelegate delegate(service_.get());
+  service_->set_delegate(&delegate);
+
+  // Store some default settings first.
+  em::ChromeDeviceSettingsProto settings;
+  EXPECT_CALL(*store_, Get()).WillRepeatedly(ReturnRef(policy_proto_));
+  EXPECT_EQ(service_->GetSettings().SerializeAsString(),
+            settings.SerializeAsString());
+  Mock::VerifyAndClearExpectations(store_);
+
+  // Storing new policy should cause the settings to update as well.
+  // At the time the delegate is notified, the new settings should be in.
+  settings.mutable_metrics_enabled()->set_metrics_enabled(true);
+  ASSERT_NO_FATAL_FAILURE(InitPolicy(settings, owner_, fake_sig_, "t"));
+  SetExpectationsAndStorePolicy(MakeChromePolicyNamespace(), store_,
+                                policy_proto_);
+  EXPECT_EQ(delegate.GetSettings().SerializeAsString(),
             settings.SerializeAsString());
 }
 
@@ -1213,18 +1031,18 @@ TEST_F(DevicePolicyServiceTest, PersistPolicyMultipleNamespaces) {
             settings.SerializeAsString());
 }
 
-TEST_F(DevicePolicyServiceTest, TestClearCheckEnrollmentFlags) {
+TEST_F(DevicePolicyServiceTest, TestClearBlockDevmode) {
   MockNssUtil nss;
   InitService(&nss, true);
   const std::vector<std::pair<std::string, std::string>> kExpectedUpdate = {
-      {Crossystem::kBlockDevmode, "0"}, {Crossystem::kCheckEnrollment, "0"}};
+      {Crossystem::kBlockDevmode, "0"}};
 
   EXPECT_EQ(0,
             crossystem_.VbSetSystemPropertyInt(Crossystem::kBlockDevmode, 1));
   EXPECT_CALL(vpd_process_, RunInBackground(kExpectedUpdate, false, _))
       .Times(1)
       .WillOnce(Return(true));
-  service_->ClearForcedReEnrollmentFlags(MockPolicyService::CreateDoNothing());
+  service_->ClearBlockDevmode(MockPolicyService::CreateDoNothing());
   Mock::VerifyAndClearExpectations(&vpd_process_);
   EXPECT_EQ(-1, crossystem_.VbGetSystemPropertyInt(Crossystem::kNvramCleared));
   EXPECT_EQ(0, crossystem_.VbGetSystemPropertyInt(Crossystem::kBlockDevmode));
@@ -1234,8 +1052,7 @@ TEST_F(DevicePolicyServiceTest, TestClearCheckEnrollmentFlags) {
   EXPECT_CALL(vpd_process_, RunInBackground(kExpectedUpdate, false, _))
       .Times(1)
       .WillOnce(Return(false));
-  service_->ClearForcedReEnrollmentFlags(
-      MockPolicyService::CreateExpectFailureCallback());
+  service_->ClearBlockDevmode(MockPolicyService::CreateExpectFailureCallback());
   EXPECT_EQ(-1, crossystem_.VbGetSystemPropertyInt(Crossystem::kNvramCleared));
   EXPECT_EQ(0, crossystem_.VbGetSystemPropertyInt(Crossystem::kBlockDevmode));
 }
@@ -1277,12 +1094,14 @@ TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_Success) {
   MockNssUtil nss;
   InitService(&nss, false);
 
-  EXPECT_CALL(key_, Verify(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(key_, Verify(_, _, crypto::SignatureVerifier::RSA_PKCS1_SHA1))
+      .WillOnce(Return(true));
   em::RemoteCommand command = CreatePowerwashCommand();
   em::PolicyData policy_data = CreatePolicydata(command);
   em::SignedData data = CreateSignedCommand(policy_data);
 
-  EXPECT_TRUE(service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(data)));
+  EXPECT_TRUE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::SHA1_RSA));
 }
 
 TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_BadSignedData) {
@@ -1292,8 +1111,8 @@ TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_BadSignedData) {
   em::RemoteCommand command = CreatePowerwashCommand();
 
   // Passing over RemoteCommand proto instead of SignedData should fail.
-  EXPECT_FALSE(
-      service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(command)));
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(command), em::PolicyFetchRequest::SHA1_RSA));
 }
 
 TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_BadSignature) {
@@ -1301,28 +1120,43 @@ TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_BadSignature) {
   InitService(&nss, false);
 
   // Set the signature verification call to fail.
-  EXPECT_CALL(key_, Verify(_, _)).WillOnce(Return(false));
+  EXPECT_CALL(key_, Verify(_, _, crypto::SignatureVerifier::RSA_PKCS1_SHA1))
+      .WillOnce(Return(false));
   em::RemoteCommand command = CreatePowerwashCommand();
   em::PolicyData policy_data = CreatePolicydata(command);
   em::SignedData data = CreateSignedCommand(policy_data);
 
-  EXPECT_FALSE(
-      service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(data)));
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::SHA1_RSA));
+}
+
+TEST_F(DevicePolicyServiceTest,
+       ValidateRemoteDeviceWipeCommand_BadSignatureType) {
+  MockNssUtil nss;
+  InitService(&nss, false);
+
+  em::RemoteCommand command = CreatePowerwashCommand();
+  em::PolicyData policy_data = CreatePolicydata(command);
+  em::SignedData data = CreateSignedCommand(policy_data);
+
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::NONE));
 }
 
 TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_BadPolicyData) {
   MockNssUtil nss;
   InitService(&nss, false);
 
-  EXPECT_CALL(key_, Verify(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(key_, Verify(_, _, crypto::SignatureVerifier::RSA_PKCS1_SHA1))
+      .WillOnce(Return(true));
   em::RemoteCommand command = CreatePowerwashCommand();
   em::PolicyData policy_data = CreatePolicydata(command);
   em::SignedData data = CreateSignedCommand(policy_data);
   // Corrupt PolicyData proto data by removing one byte.
   data.mutable_data()->resize(data.data().size() - 1);
 
-  EXPECT_FALSE(
-      service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(data)));
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::SHA1_RSA));
 }
 
 TEST_F(DevicePolicyServiceTest,
@@ -1330,15 +1164,16 @@ TEST_F(DevicePolicyServiceTest,
   MockNssUtil nss;
   InitService(&nss, false);
 
-  EXPECT_CALL(key_, Verify(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(key_, Verify(_, _, crypto::SignatureVerifier::RSA_PKCS1_SHA1))
+      .WillOnce(Return(true));
   em::RemoteCommand command = CreatePowerwashCommand();
   em::PolicyData policy_data = CreatePolicydata(command);
   // Corrupt the policy type.
   policy_data.set_policy_type("acme-type");
   em::SignedData data = CreateSignedCommand(policy_data);
 
-  EXPECT_FALSE(
-      service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(data)));
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::SHA1_RSA));
 }
 
 TEST_F(DevicePolicyServiceTest,
@@ -1346,7 +1181,8 @@ TEST_F(DevicePolicyServiceTest,
   MockNssUtil nss;
   InitService(&nss, false);
 
-  EXPECT_CALL(key_, Verify(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(key_, Verify(_, _, crypto::SignatureVerifier::RSA_PKCS1_SHA1))
+      .WillOnce(Return(true));
   em::RemoteCommand command = CreatePowerwashCommand();
   em::PolicyData policy_data = CreatePolicydata(command);
   // Corrupt RemoteCommand proto data by removing one byte.
@@ -1354,8 +1190,8 @@ TEST_F(DevicePolicyServiceTest,
                                              1);
   em::SignedData data = CreateSignedCommand(policy_data);
 
-  EXPECT_FALSE(
-      service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(data)));
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::SHA1_RSA));
 }
 
 TEST_F(DevicePolicyServiceTest,
@@ -1363,22 +1199,24 @@ TEST_F(DevicePolicyServiceTest,
   MockNssUtil nss;
   InitService(&nss, false);
 
-  EXPECT_CALL(key_, Verify(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(key_, Verify(_, _, crypto::SignatureVerifier::RSA_PKCS1_SHA1))
+      .WillOnce(Return(true));
   em::RemoteCommand command = CreatePowerwashCommand();
   // Set the command type here to reboot, that should fail.
   command.set_type(em::RemoteCommand_Type_DEVICE_REBOOT);
   em::PolicyData policy_data = CreatePolicydata(command);
   em::SignedData data = CreateSignedCommand(policy_data);
 
-  EXPECT_FALSE(
-      service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(data)));
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::SHA1_RSA));
 }
 
 TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_BadDeviceId) {
   MockNssUtil nss;
   InitService(&nss, true);
 
-  EXPECT_CALL(key_, Verify(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(key_, Verify(_, _, crypto::SignatureVerifier::RSA_PKCS1_SHA1))
+      .WillOnce(Return(true));
   em::RemoteCommand command = CreatePowerwashCommand();
   // Set bogus target device id.
   command.set_target_device_id("acme-device");
@@ -1392,8 +1230,27 @@ TEST_F(DevicePolicyServiceTest, ValidateRemoteDeviceWipeCommand_BadDeviceId) {
   policy_proto.set_policy_data(policy_data_id.SerializeAsString());
   EXPECT_CALL(*store_, Get()).WillOnce(ReturnRef(policy_proto));
 
-  EXPECT_FALSE(
-      service_->ValidateRemoteDeviceWipeCommand(SerializeAsBlob(data)));
+  EXPECT_FALSE(service_->ValidateRemoteDeviceWipeCommand(
+      SerializeAsBlob(data), em::PolicyFetchRequest::SHA1_RSA));
+}
+
+TEST_F(DevicePolicyServiceTest, MayUpdateSystemSettings) {
+  MockNssUtil nss;
+  InitService(&nss, true);
+  EXPECT_CALL(key_, IsPopulated()).WillRepeatedly(Return(true));
+
+  // We shouldn't update system settings if kMainfwType isn't set.
+  EXPECT_FALSE(service_->MayUpdateSystemSettings());
+
+  crossystem_.VbSetSystemPropertyString(Crossystem::kMainfwType,
+                                        Crossystem::kMainfwTypeNonchrome);
+  // We shouldn't update system settings if the device is non chrome.
+  EXPECT_FALSE(service_->MayUpdateSystemSettings());
+
+  // Any FW type that's not "nonchrome" is a valid FW to update.
+  crossystem_.VbSetSystemPropertyString(Crossystem::kMainfwType, "normal");
+  // We should update a "normal" ChromeOS FW.
+  EXPECT_TRUE(service_->MayUpdateSystemSettings());
 }
 
 }  // namespace login_manager

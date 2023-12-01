@@ -1,0 +1,34 @@
+From b5c21be99c1d744ba55f88d8930da2764b2d707c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fran=C3=A7ois=20Degros?= <fdegros@chromium.org>
+Date: Wed, 2 Nov 2022 14:07:42 +1100
+Subject: [PATCH] Allow non-root block device mounts when using external fuse
+
+The internal libfuse has the ability to drop and restore privileges
+using setresuid() when ntfs3g is installed with suid root. However,
+ChromeOS does not install with suid root, but rather launches ntfs3g as
+a regular user with the CAP_SYS_ADMIN capability. This renders the
+internal libfuse privilege dropping code ineffective and unnecessary.
+Because of this, the safety check to prevent unsafe use of ntfs3g
+compiled with external libfuse can be removed, allowing ntfs3g to be
+compiled with external libfuse.
+---
+ src/ntfs-3g.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/ntfs-3g.c b/src/ntfs-3g.c
+index 820733e8..faf372fd 100644
+--- a/src/ntfs-3g.c
++++ b/src/ntfs-3g.c
+@@ -4445,7 +4445,8 @@ int main(int argc, char *argv[])
+ 		ctx->blkdev = TRUE;
+ #endif
+ 
+-#ifndef FUSE_INTERNAL
++/* #if FUSE_INTERNAL */
++#if 0
+ 	if (getuid() && ctx->blkdev) {
+ 		ntfs_log_error("%s", unpriv_fuseblk_msg);
+ 		err = NTFS_VOLUME_NO_PRIVILEGE;
+-- 
+2.38.1.273.g43a17bfeac-goog
+

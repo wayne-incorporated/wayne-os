@@ -1,0 +1,55 @@
+From 778f36306d91411f7fa18c206f5efb9bd5ca2524 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 16:41:34 -0300
+Subject: [PATCH 144/163] Undef attribute_relro on internal tests that include
+ tls.h
+
+So it does not clash with global definition.
+---
+ elf/tst-ptrguard1.c    | 2 ++
+ elf/tst-stackguard1.c  | 2 ++
+ nptl/tst-stackguard1.c | 2 ++
+ 3 files changed, 6 insertions(+)
+
+diff --git a/elf/tst-ptrguard1.c b/elf/tst-ptrguard1.c
+index dffcb5a805..9faceaf5c5 100644
+--- a/elf/tst-ptrguard1.c
++++ b/elf/tst-ptrguard1.c
+@@ -22,6 +22,8 @@
+ #include <string.h>
+ #include <sys/wait.h>
+ #include <stackguard-macros.h>
++#undef attribute_relro
++#define attribute_relro
+ #include <tls.h>
+ #include <unistd.h>
+ 
+diff --git a/elf/tst-stackguard1.c b/elf/tst-stackguard1.c
+index 050784319a..b6cc490d28 100644
+--- a/elf/tst-stackguard1.c
++++ b/elf/tst-stackguard1.c
+@@ -23,6 +23,8 @@
+ #include <string.h>
+ #include <sys/wait.h>
+ #include <stackguard-macros.h>
++#undef attribute_relro
++#define attribute_relro
+ #include <tls.h>
+ #include <unistd.h>
+ 
+diff --git a/nptl/tst-stackguard1.c b/nptl/tst-stackguard1.c
+index 3460c01819..060c2fb212 100644
+--- a/nptl/tst-stackguard1.c
++++ b/nptl/tst-stackguard1.c
+@@ -24,6 +24,8 @@
+ #include <string.h>
+ #include <sys/wait.h>
+ #include <stackguard-macros.h>
++#undef attribute_relro
++#define attribute_relro
+ #include <tls.h>
+ #include <unistd.h>
+ 
+-- 
+2.37.2
+

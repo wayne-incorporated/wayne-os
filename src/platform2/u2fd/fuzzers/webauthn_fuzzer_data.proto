@@ -1,0 +1,27 @@
+// Copyright 2021 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+
+import "u2f_interface.proto";
+
+package u2f;
+
+message WebAuthnFuzzerData {
+  message Request {
+    oneof requests {
+      MakeCredentialRequest make_credential_request = 1;
+      GetAssertionRequest get_assertion_request = 2;
+      HasCredentialsRequest has_credentials_request = 3;
+      HasCredentialsRequest has_legacy_credentials_request = 4;
+      CancelWebAuthnFlowRequest cancel_web_authn_flow_request = 5;
+      IsUvpaaRequest is_uvpaa_request = 6;
+      IsU2fEnabledRequest is_u2f_enabled_request = 7;
+    }
+  }
+
+  bytes fuzzed_data = 1;
+  repeated Request requests = 2;
+}

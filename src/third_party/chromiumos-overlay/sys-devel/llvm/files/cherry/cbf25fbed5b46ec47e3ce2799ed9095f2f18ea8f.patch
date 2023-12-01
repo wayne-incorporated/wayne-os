@@ -1,0 +1,828 @@
+commit cbf25fbed5b46ec47e3ce2799ed9095f2f18ea8f
+Author: Hans Wennborg <hans@chromium.org>
+Date:   Tue Nov 3 13:01:55 2020 +0100
+
+    Revert "[CodeGen] [WinException] Only produce handler data at the end of the function if needed"
+    
+    This caused an explosion in ICF times during linking on Windows when libfuzzer
+    instrumentation is enabled. For a small binary we see ICF time go from ~0 to
+    ~10 s. For a large binary it goes from ~1 s to forevert (I gave up after 30
+    minutes).
+    
+    See comment on the code review.
+    
+    > If we are going to write handler data (that is written as variable
+    > length data following after the unwind info in .xdata), we need to
+    > emit the handler data immediately, but for cases where no such
+    > info is going to be written, skip emitting it right away. (Unwind
+    > info for all remaining functions that hasn't gotten it emitted
+    > directly is emitted at the end.)
+    >
+    > This does slightly change the ordering of sections (triggering a
+    > bunch of updates to DebugInfo/COFF tests), but the change should be
+    > benign.
+    >
+    > This also matches GCC's assembly output, which doesn't output
+    > .seh_handlerdata unless it actually is needed.
+    >
+    > For ARM64, the unwind info can be packed into the runtime function
+    > entry itself (leaving no data in the .xdata section at all), but
+    > that can only be done if there's no follow-on data in the .xdata
+    > section. If emission of the unwind info is triggered via
+    > EmitWinEHHandlerData (or the .seh_handlerdata directive), which
+    > implicitly switches to the .xdata section, there's a chance of the
+    > caller wanting to pass further data there, so the packed format
+    > can't be used in that case.
+    >
+    > Differential Revision: https://reviews.llvm.org/D87448
+    
+    This reverts commit 36c64af9d7f97414d48681b74352c9684077259b.
+
+diff --git a/llvm/lib/CodeGen/AsmPrinter/WinException.cpp b/llvm/lib/CodeGen/AsmPrinter/WinException.cpp
+index 083c931a0a4..67e3299299b 100644
+--- a/llvm/lib/CodeGen/AsmPrinter/WinException.cpp
++++ b/llvm/lib/CodeGen/AsmPrinter/WinException.cpp
+@@ -258,11 +258,11 @@ void WinException::endFuncletImpl() {
+     if (F.hasPersonalityFn())
+       Per = classifyEHPersonality(F.getPersonalityFn()->stripPointerCasts());
+ 
++    // Emit an UNWIND_INFO struct describing the prologue.
++    Asm->OutStreamer->EmitWinEHHandlerData();
++
+     if (Per == EHPersonality::MSVC_CXX && shouldEmitPersonality &&
+         !CurrentFuncletEntry->isCleanupFuncletEntry()) {
+-      // Emit an UNWIND_INFO struct describing the prologue.
+-      Asm->OutStreamer->EmitWinEHHandlerData();
+-
+       // If this is a C++ catch funclet (or the parent function),
+       // emit a reference to the LSDA for the parent function.
+       StringRef FuncLinkageName = GlobalValue::dropLLVMManglingEscape(F.getName());
+@@ -271,22 +271,9 @@ void WinException::endFuncletImpl() {
+       Asm->OutStreamer->emitValue(create32bitRef(FuncInfoXData), 4);
+     } else if (Per == EHPersonality::MSVC_TableSEH && MF->hasEHFunclets() &&
+                !CurrentFuncletEntry->isEHFuncletEntry()) {
+-      // Emit an UNWIND_INFO struct describing the prologue.
+-      Asm->OutStreamer->EmitWinEHHandlerData();
+-
+       // If this is the parent function in Win64 SEH, emit the LSDA immediately
+       // following .seh_handlerdata.
+       emitCSpecificHandlerTable(MF);
+-    } else if (shouldEmitPersonality || shouldEmitLSDA) {
+-      // Emit an UNWIND_INFO struct describing the prologue.
+-      Asm->OutStreamer->EmitWinEHHandlerData();
+-      // In these cases, no further info is written to the .xdata section
+-      // right here, but is written by e.g. emitExceptionTable in endFunction()
+-      // above.
+-    } else {
+-      // No need to emit the EH handler data right here if nothing needs
+-      // writing to the .xdata section; it will be emitted for all
+-      // functions that need it in the end anyway.
+     }
+ 
+     // Switch back to the funclet start .text section now that we are done
+diff --git a/llvm/test/CodeGen/AArch64/win64-jumptable.ll b/llvm/test/CodeGen/AArch64/win64-jumptable.ll
+index 7c4efa22f60..1071a736cff 100644
+--- a/llvm/test/CodeGen/AArch64/win64-jumptable.ll
++++ b/llvm/test/CodeGen/AArch64/win64-jumptable.ll
+@@ -44,6 +44,8 @@ declare void @g(i32, i32)
+ ; CHECK:    .word .LBB0_3-.Ltmp0
+ ; CHECK:    .word .LBB0_4-.Ltmp0
+ ; CHECK:    .word .LBB0_5-.Ltmp0
++; CHECK:    .seh_handlerdata
++; CHECK:    .text
+ ; CHECK:    .seh_endproc
+ 
+ ; Check that we can emit an object file with correct unwind info.
+diff --git a/llvm/test/CodeGen/AArch64/wineh1.mir b/llvm/test/CodeGen/AArch64/wineh1.mir
+index d82e4bce7d1..2f73a5291dd 100644
+--- a/llvm/test/CodeGen/AArch64/wineh1.mir
++++ b/llvm/test/CodeGen/AArch64/wineh1.mir
+@@ -73,6 +73,8 @@
+ # ASM: .seh_endepilogue
+ 
+ # ASM: .seh_endfunclet
++# ASM: .seh_handlerdata
++# ASM: .text
+ # ASM: .seh_endproc
+ 
+ ...
+diff --git a/llvm/test/CodeGen/X86/avx512-intel-ocl.ll b/llvm/test/CodeGen/X86/avx512-intel-ocl.ll
+index 439bf8deb0b..b9285412529 100644
+--- a/llvm/test/CodeGen/X86/avx512-intel-ocl.ll
++++ b/llvm/test/CodeGen/X86/avx512-intel-ocl.ll
+@@ -423,6 +423,8 @@ define <16 x float> @testf16_inp_mask(<16 x float> %a, i16 %mask)  {
+ ; WIN64-KNL-NEXT:    nop
+ ; WIN64-KNL-NEXT:    addq $40, %rsp
+ ; WIN64-KNL-NEXT:    retq
++; WIN64-KNL-NEXT:    .seh_handlerdata
++; WIN64-KNL-NEXT:    .text
+ ; WIN64-KNL-NEXT:    .seh_endproc
+ ;
+ ; WIN64-SKX-LABEL: testf16_inp_mask:
+@@ -437,6 +439,8 @@ define <16 x float> @testf16_inp_mask(<16 x float> %a, i16 %mask)  {
+ ; WIN64-SKX-NEXT:    nop
+ ; WIN64-SKX-NEXT:    addq $40, %rsp
+ ; WIN64-SKX-NEXT:    retq
++; WIN64-SKX-NEXT:    .seh_handlerdata
++; WIN64-SKX-NEXT:    .text
+ ; WIN64-SKX-NEXT:    .seh_endproc
+ ;
+ ; X64-KNL-LABEL: testf16_inp_mask:
+diff --git a/llvm/test/CodeGen/X86/avx512-regcall-Mask.ll b/llvm/test/CodeGen/X86/avx512-regcall-Mask.ll
+index bbf495619db..897632fb10d 100644
+--- a/llvm/test/CodeGen/X86/avx512-regcall-Mask.ll
++++ b/llvm/test/CodeGen/X86/avx512-regcall-Mask.ll
+@@ -157,6 +157,8 @@ define i64 @caller_argv64i1() #0 {
+ ; WIN64-NEXT:    popq %r14
+ ; WIN64-NEXT:    popq %r15
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_argv64i1:
+@@ -261,6 +263,8 @@ define <64 x i1> @caller_retv64i1() #0 {
+ ; WIN64-NEXT:    popq %rdi
+ ; WIN64-NEXT:    popq %rsi
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_retv64i1:
+@@ -345,6 +349,8 @@ define x86_regcallcc i32 @test_argv32i1(<32 x i1> %x0, <32 x i1> %x1, <32 x i1>
+ ; WIN64-NEXT:    popq %r11
+ ; WIN64-NEXT:    popq %rbp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_argv32i1:
+@@ -432,6 +438,8 @@ define i32 @caller_argv32i1() #0 {
+ ; WIN64-NEXT:    popq %rdi
+ ; WIN64-NEXT:    popq %rsi
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_argv32i1:
+@@ -495,6 +503,8 @@ define i32 @caller_retv32i1() #0 {
+ ; WIN64-NEXT:    popq %rdi
+ ; WIN64-NEXT:    popq %rsi
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_retv32i1:
+@@ -574,6 +584,8 @@ define x86_regcallcc i16 @test_argv16i1(<16 x i1> %x0, <16 x i1> %x1, <16 x i1>
+ ; WIN64-NEXT:    popq %r10
+ ; WIN64-NEXT:    popq %r11
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_argv16i1:
+@@ -660,6 +672,8 @@ define i16 @caller_argv16i1() #0 {
+ ; WIN64-NEXT:    popq %rdi
+ ; WIN64-NEXT:    popq %rsi
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_argv16i1:
+@@ -727,6 +741,8 @@ define i16 @caller_retv16i1() #0 {
+ ; WIN64-NEXT:    popq %rdi
+ ; WIN64-NEXT:    popq %rsi
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_retv16i1:
+@@ -808,6 +824,8 @@ define x86_regcallcc i8 @test_argv8i1(<8 x i1> %x0, <8 x i1> %x1, <8 x i1> %x2)
+ ; WIN64-NEXT:    popq %r10
+ ; WIN64-NEXT:    popq %r11
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_argv8i1:
+@@ -894,6 +912,8 @@ define i8 @caller_argv8i1() #0 {
+ ; WIN64-NEXT:    popq %rdi
+ ; WIN64-NEXT:    popq %rsi
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_argv8i1:
+@@ -965,6 +985,8 @@ define <8 x i1> @caller_retv8i1() #0 {
+ ; WIN64-NEXT:    popq %rsi
+ ; WIN64-NEXT:    vzeroupper
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: caller_retv8i1:
+diff --git a/llvm/test/CodeGen/X86/avx512-regcall-NoMask.ll b/llvm/test/CodeGen/X86/avx512-regcall-NoMask.ll
+index 1ab55e17ce0..e832e42fea1 100644
+--- a/llvm/test/CodeGen/X86/avx512-regcall-NoMask.ll
++++ b/llvm/test/CodeGen/X86/avx512-regcall-NoMask.ll
+@@ -49,6 +49,8 @@ define x86_regcallcc i1 @test_CallargReti1(i1 %a)  {
+ ; WIN64-NEXT:    incb %al
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargReti1:
+@@ -115,6 +117,8 @@ define x86_regcallcc i8 @test_CallargReti8(i8 %a)  {
+ ; WIN64-NEXT:    incb %al
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargReti8:
+@@ -183,6 +187,8 @@ define x86_regcallcc i16 @test_CallargReti16(i16 %a)  {
+ ; WIN64-NEXT:    # kill: def $ax killed $ax killed $eax
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargReti16:
+@@ -245,6 +251,8 @@ define x86_regcallcc i32 @test_CallargReti32(i32 %a)  {
+ ; WIN64-NEXT:    incl %eax
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargReti32:
+@@ -310,6 +318,8 @@ define x86_regcallcc i64 @test_CallargReti64(i64 %a)  {
+ ; WIN64-NEXT:    incq %rax
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargReti64:
+@@ -382,6 +392,8 @@ define x86_regcallcc float @test_CallargRetFloat(float %a)  {
+ ; WIN64-NEXT:    addq $16, %rsp
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargRetFloat:
+@@ -462,6 +474,8 @@ define x86_regcallcc double @test_CallargRetDouble(double %a)  {
+ ; WIN64-NEXT:    addq $16, %rsp
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargRetDouble:
+@@ -561,6 +575,8 @@ define x86_regcallcc x86_fp80 @test_CallargRetf80(x86_fp80 %a)  {
+ ; WIN64-NEXT:    fadd %st, %st(0)
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargRetf80:
+@@ -600,6 +616,8 @@ define x86_regcallcc double @test_CallargParamf80(x86_fp80 %a)  {
+ ; WIN64-NEXT:    vaddsd %xmm0, %xmm0, %xmm0
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargParamf80:
+@@ -662,6 +680,8 @@ define x86_regcallcc [4 x i32]* @test_CallargRetPointer([4 x i32]* %a)  {
+ ; WIN64-NEXT:    incl %eax
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargRetPointer:
+@@ -754,6 +774,8 @@ define x86_regcallcc <4 x i32> @test_CallargRet128Vector(<4 x i1> %x, <4 x i32>
+ ; WIN64-NEXT:    addq $32, %rsp
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargRet128Vector:
+@@ -844,6 +866,8 @@ define x86_regcallcc <8 x i32> @test_CallargRet256Vector(<8 x i1> %x, <8 x i32>
+ ; WIN64-NEXT:    addq $80, %rsp
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargRet256Vector:
+@@ -930,6 +954,8 @@ define x86_regcallcc <16 x i32> @test_CallargRet512Vector(<16 x i1> %x, <16 x i3
+ ; WIN64-NEXT:    addq $176, %rsp
+ ; WIN64-NEXT:    popq %rsp
+ ; WIN64-NEXT:    retq
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ ;
+ ; LINUXOSX64-LABEL: test_CallargRet512Vector:
+diff --git a/llvm/test/CodeGen/X86/break-false-dep.ll b/llvm/test/CodeGen/X86/break-false-dep.ll
+index 9bc2b438caf..e480ba13137 100644
+--- a/llvm/test/CodeGen/X86/break-false-dep.ll
++++ b/llvm/test/CodeGen/X86/break-false-dep.ll
+@@ -519,6 +519,8 @@ define void @loopdep3() {
+ ; SSE-WIN-NEXT:    addq $160, %rsp
+ ; SSE-WIN-NEXT:    popq %rsi
+ ; SSE-WIN-NEXT:    retq
++; SSE-WIN-NEXT:    .seh_handlerdata
++; SSE-WIN-NEXT:    .text
+ ; SSE-WIN-NEXT:    .seh_endproc
+ ;
+ ; AVX-LABEL: loopdep3:
+@@ -595,6 +597,8 @@ define void @loopdep3() {
+ ; AVX-NEXT:    addq $160, %rsp
+ ; AVX-NEXT:    popq %rsi
+ ; AVX-NEXT:    retq
++; AVX-NEXT:    .seh_handlerdata
++; AVX-NEXT:    .text
+ ; AVX-NEXT:    .seh_endproc
+ entry:
+   br label %for.cond1.preheader
+@@ -712,6 +716,8 @@ define double @inlineasmdep(i64 %arg) {
+ ; SSE-WIN-NEXT:    movaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; SSE-WIN-NEXT:    addq $168, %rsp
+ ; SSE-WIN-NEXT:    retq
++; SSE-WIN-NEXT:    .seh_handlerdata
++; SSE-WIN-NEXT:    .text
+ ; SSE-WIN-NEXT:    .seh_endproc
+ ;
+ ; AVX-LABEL: inlineasmdep:
+@@ -769,6 +775,8 @@ define double @inlineasmdep(i64 %arg) {
+ ; AVX-NEXT:    vmovaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; AVX-NEXT:    addq $168, %rsp
+ ; AVX-NEXT:    retq
++; AVX-NEXT:    .seh_handlerdata
++; AVX-NEXT:    .text
+ ; AVX-NEXT:    .seh_endproc
+ top:
+   tail call void asm sideeffect "", "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{dirflag},~{fpsr},~{flags}"()
+@@ -871,6 +879,8 @@ define double @truedeps(float %arg) {
+ ; SSE-WIN-NEXT:    movaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; SSE-WIN-NEXT:    addq $184, %rsp
+ ; SSE-WIN-NEXT:    retq
++; SSE-WIN-NEXT:    .seh_handlerdata
++; SSE-WIN-NEXT:    .text
+ ; SSE-WIN-NEXT:    .seh_endproc
+ ;
+ ; AVX-LABEL: truedeps:
+@@ -932,6 +942,8 @@ define double @truedeps(float %arg) {
+ ; AVX-NEXT:    vmovaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; AVX-NEXT:    addq $184, %rsp
+ ; AVX-NEXT:    retq
++; AVX-NEXT:    .seh_handlerdata
++; AVX-NEXT:    .text
+ ; AVX-NEXT:    .seh_endproc
+ top:
+   tail call void asm sideeffect "", "~{xmm6},~{dirflag},~{fpsr},~{flags}"()
+@@ -1031,6 +1043,8 @@ define double @clearence(i64 %arg) {
+ ; SSE-WIN-NEXT:    movaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; SSE-WIN-NEXT:    addq $168, %rsp
+ ; SSE-WIN-NEXT:    retq
++; SSE-WIN-NEXT:    .seh_handlerdata
++; SSE-WIN-NEXT:    .text
+ ; SSE-WIN-NEXT:    .seh_endproc
+ ;
+ ; AVX-LABEL: clearence:
+@@ -1090,6 +1104,8 @@ define double @clearence(i64 %arg) {
+ ; AVX-NEXT:    vmovaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; AVX-NEXT:    addq $168, %rsp
+ ; AVX-NEXT:    retq
++; AVX-NEXT:    .seh_handlerdata
++; AVX-NEXT:    .text
+ ; AVX-NEXT:    .seh_endproc
+ top:
+   tail call void asm sideeffect "", "~{xmm6},~{dirflag},~{fpsr},~{flags}"()
+@@ -1400,6 +1416,8 @@ define void @loopclearance2(double* nocapture %y, i64* %x, double %c1, double %c
+ ; SSE-WIN-NEXT:    movaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; SSE-WIN-NEXT:    addq $152, %rsp
+ ; SSE-WIN-NEXT:    retq
++; SSE-WIN-NEXT:    .seh_handlerdata
++; SSE-WIN-NEXT:    .text
+ ; SSE-WIN-NEXT:    .seh_endproc
+ ;
+ ; AVX1-LABEL: loopclearance2:
+@@ -1481,6 +1499,8 @@ define void @loopclearance2(double* nocapture %y, i64* %x, double %c1, double %c
+ ; AVX1-NEXT:    vmovaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; AVX1-NEXT:    addq $152, %rsp
+ ; AVX1-NEXT:    retq
++; AVX1-NEXT:    .seh_handlerdata
++; AVX1-NEXT:    .text
+ ; AVX1-NEXT:    .seh_endproc
+ ;
+ ; AVX512VL-LABEL: loopclearance2:
+@@ -1562,6 +1582,8 @@ define void @loopclearance2(double* nocapture %y, i64* %x, double %c1, double %c
+ ; AVX512VL-NEXT:    vmovaps {{[-0-9]+}}(%r{{[sb]}}p), %xmm15 # 16-byte Reload
+ ; AVX512VL-NEXT:    addq $152, %rsp
+ ; AVX512VL-NEXT:    retq
++; AVX512VL-NEXT:    .seh_handlerdata
++; AVX512VL-NEXT:    .text
+ ; AVX512VL-NEXT:    .seh_endproc
+ entry:
+   tail call void asm sideeffect "", "~{xmm7},~{dirflag},~{fpsr},~{flags}"()
+diff --git a/llvm/test/CodeGen/X86/conditional-tailcall-pgso.ll b/llvm/test/CodeGen/X86/conditional-tailcall-pgso.ll
+index 074d9d17f01..65bd1dad21a 100644
+--- a/llvm/test/CodeGen/X86/conditional-tailcall-pgso.ll
++++ b/llvm/test/CodeGen/X86/conditional-tailcall-pgso.ll
+@@ -124,6 +124,8 @@ define void @f_non_leaf(i32 %x, i32 %y) !prof !14 {
+ ; WIN64-NEXT:    jmp bar # TAILCALL
+ ; WIN64-NEXT:    # encoding: [0xeb,A]
+ ; WIN64-NEXT:    # fixup A - offset: 1, value: bar-1, kind: FK_PCRel_1
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ entry:
+   ; Force %ebx to be spilled on the stack, turning this into
+diff --git a/llvm/test/CodeGen/X86/conditional-tailcall.ll b/llvm/test/CodeGen/X86/conditional-tailcall.ll
+index 822e3d5d07c..17078413a82 100644
+--- a/llvm/test/CodeGen/X86/conditional-tailcall.ll
++++ b/llvm/test/CodeGen/X86/conditional-tailcall.ll
+@@ -124,6 +124,8 @@ define void @f_non_leaf(i32 %x, i32 %y) optsize {
+ ; WIN64-NEXT:    jmp bar # TAILCALL
+ ; WIN64-NEXT:    # encoding: [0xeb,A]
+ ; WIN64-NEXT:    # fixup A - offset: 1, value: bar-1, kind: FK_PCRel_1
++; WIN64-NEXT:    .seh_handlerdata
++; WIN64-NEXT:    .text
+ ; WIN64-NEXT:    .seh_endproc
+ entry:
+   ; Force %ebx to be spilled on the stack, turning this into
+diff --git a/llvm/test/CodeGen/X86/gnu-seh-nolpads.ll b/llvm/test/CodeGen/X86/gnu-seh-nolpads.ll
+index 53912b09e43..311f4d522b1 100644
+--- a/llvm/test/CodeGen/X86/gnu-seh-nolpads.ll
++++ b/llvm/test/CodeGen/X86/gnu-seh-nolpads.ll
+@@ -15,6 +15,7 @@ entry:
+ ; CHECK: .seh_proc use_gxx_seh
+ ; CHECK-NOT: .seh_handler __gxx_personality_seh0
+ ; CHECK: callq throwit
++; CHECK: .seh_handlerdata
+ ; CHECK: .seh_endproc
+ 
+ define void @use_gcc_seh()
+@@ -28,5 +29,6 @@ entry:
+ ; CHECK: .seh_proc use_gcc_seh
+ ; CHECK-NOT: .seh_handler __gcc_personality_seh0
+ ; CHECK: callq throwit
++; CHECK: .seh_handlerdata
+ ; CHECK: .seh_endproc
+ 
+diff --git a/llvm/test/CodeGen/X86/mingw-comdats.ll b/llvm/test/CodeGen/X86/mingw-comdats.ll
+index ddf72cf5867..c7caf925250 100644
+--- a/llvm/test/CodeGen/X86/mingw-comdats.ll
++++ b/llvm/test/CodeGen/X86/mingw-comdats.ll
+@@ -77,8 +77,8 @@ entry:
+ ; Make sure the assembler puts the .xdata and .pdata in sections with the right
+ ; names.
+ ; GNUOBJ: .text$_Z3fooi
+-; GNUOBJ: .data$gv
+ ; GNUOBJ: .xdata$_Z3fooi
++; GNUOBJ: .data$gv
+ ; GNUOBJ: .pdata$_Z3fooi
+ 
+ declare dso_local i32 @_Z3bari(i32)
+diff --git a/llvm/test/CodeGen/X86/mixed-ptr-sizes.ll b/llvm/test/CodeGen/X86/mixed-ptr-sizes.ll
+index 76f775b834e..e282f6dc9a5 100644
+--- a/llvm/test/CodeGen/X86/mixed-ptr-sizes.ll
++++ b/llvm/test/CodeGen/X86/mixed-ptr-sizes.ll
+@@ -135,6 +135,8 @@ define dso_local void @test_null_arg(%struct.Foo* %f) {
+ ; ALL-NEXT:    nop
+ ; ALL-NEXT:    addq $40, %rsp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+ entry:
+   call void @test_noop1(%struct.Foo* %f, i32 addrspace(270)* null)
+diff --git a/llvm/test/CodeGen/X86/musttail-varargs.ll b/llvm/test/CodeGen/X86/musttail-varargs.ll
+index 6e293935911..5d88f0dd11c 100644
+--- a/llvm/test/CodeGen/X86/musttail-varargs.ll
++++ b/llvm/test/CodeGen/X86/musttail-varargs.ll
+@@ -236,6 +236,8 @@ define void @f_thunk(i8* %this, ...) {
+ ; WINDOWS-NEXT:    popq %rsi
+ ; WINDOWS-NEXT:    popq %r14
+ ; WINDOWS-NEXT:    rex64 jmpq *%rax # TAILCALL
++; WINDOWS-NEXT:    .seh_handlerdata
++; WINDOWS-NEXT:    .text
+ ; WINDOWS-NEXT:    .seh_endproc
+ ;
+ ; X86-NOSSE-LABEL: f_thunk:
+diff --git a/llvm/test/CodeGen/X86/no-sse-win64.ll b/llvm/test/CodeGen/X86/no-sse-win64.ll
+index 258cdf25a6f..c220b960612 100644
+--- a/llvm/test/CodeGen/X86/no-sse-win64.ll
++++ b/llvm/test/CodeGen/X86/no-sse-win64.ll
+@@ -54,6 +54,8 @@ define void @pass_double(double* %p) {
+ ; CHECK-NEXT:    nop
+ ; CHECK-NEXT:    addq $40, %rsp
+ ; CHECK-NEXT:    retq
++; CHECK-NEXT:    .seh_handlerdata
++; CHECK-NEXT:    .text
+ ; CHECK-NEXT:    .seh_endproc
+   %v = load double, double* %p
+   call void @take_double(double %v)
+@@ -71,6 +73,8 @@ define void @pass_float(float* %p) {
+ ; CHECK-NEXT:    nop
+ ; CHECK-NEXT:    addq $40, %rsp
+ ; CHECK-NEXT:    retq
++; CHECK-NEXT:    .seh_handlerdata
++; CHECK-NEXT:    .text
+ ; CHECK-NEXT:    .seh_endproc
+   %v = load float, float* %p
+   call void @take_float(float %v)
+@@ -94,6 +98,8 @@ define void @call_double(double* %p) {
+ ; CHECK-NEXT:    addq $32, %rsp
+ ; CHECK-NEXT:    popq %rsi
+ ; CHECK-NEXT:    retq
++; CHECK-NEXT:    .seh_handlerdata
++; CHECK-NEXT:    .text
+ ; CHECK-NEXT:    .seh_endproc
+   %v = call double @produce_double()
+   store double %v, double* %p
+@@ -114,6 +120,8 @@ define void @call_float(float* %p) {
+ ; CHECK-NEXT:    addq $32, %rsp
+ ; CHECK-NEXT:    popq %rsi
+ ; CHECK-NEXT:    retq
++; CHECK-NEXT:    .seh_handlerdata
++; CHECK-NEXT:    .text
+ ; CHECK-NEXT:    .seh_endproc
+   %v = call float @produce_float()
+   store float %v, float* %p
+diff --git a/llvm/test/CodeGen/X86/win64-jumptable.ll b/llvm/test/CodeGen/X86/win64-jumptable.ll
+index 000f176c2a6..6bb9d64c05c 100644
+--- a/llvm/test/CodeGen/X86/win64-jumptable.ll
++++ b/llvm/test/CodeGen/X86/win64-jumptable.ll
+@@ -53,6 +53,7 @@ declare void @g(i32)
+ ; CHECK: .quad .LBB0_
+ ; CHECK: .quad .LBB0_
+ ; CHECK: .quad .LBB0_
++; CHECK: .seh_handlerdata
+ 
+ ; It's important that we switch back to .text here, not .rdata.
+ ; CHECK: .text
+diff --git a/llvm/test/CodeGen/X86/win64_frame.ll b/llvm/test/CodeGen/X86/win64_frame.ll
+index 7ba6c987d05..9158b19b2f9 100644
+--- a/llvm/test/CodeGen/X86/win64_frame.ll
++++ b/llvm/test/CodeGen/X86/win64_frame.ll
+@@ -13,6 +13,8 @@ define i32 @f1(i32 %p1, i32 %p2, i32 %p3, i32 %p4, i32 %p5) "frame-pointer"="all
+ ; ALL-NEXT:    movl 48(%rbp), %eax
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   ret i32 %p5
+ }
+@@ -35,6 +37,8 @@ define void @f2(i32 %p, ...) "frame-pointer"="all" {
+ ; ALL-NEXT:    addq $8, %rsp
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   %ap = alloca i8, align 8
+   call void @llvm.va_start(i8* %ap)
+@@ -52,6 +56,8 @@ define i8* @f3() "frame-pointer"="all" {
+ ; ALL-NEXT:    movq 8(%rbp), %rax
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   %ra = call i8* @llvm.returnaddress(i32 0)
+   ret i8* %ra
+@@ -71,6 +77,8 @@ define i8* @f4() "frame-pointer"="all" {
+ ; ALL-NEXT:    addq $304, %rsp # imm = 0x130
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   alloca [300 x i8]
+   %ra = call i8* @llvm.returnaddress(i32 0)
+@@ -95,6 +103,8 @@ define void @f5() "frame-pointer"="all" {
+ ; ALL-NEXT:    addq $336, %rsp # imm = 0x150
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   %a = alloca [300 x i8]
+   %gep = getelementptr [300 x i8], [300 x i8]* %a, i32 0, i32 0
+@@ -118,6 +128,8 @@ define void @f6(i32 %p, ...) "frame-pointer"="all" {
+ ; ALL-NEXT:    addq $336, %rsp # imm = 0x150
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   %a = alloca [300 x i8]
+   %gep = getelementptr [300 x i8], [300 x i8]* %a, i32 0, i32 0
+@@ -140,6 +152,8 @@ define i32 @f7(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) "frame-pointer"="all" {
+ ; ALL-NEXT:    leaq 176(%rbp), %rsp
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   alloca [300 x i8], align 64
+   ret i32 %e
+@@ -177,6 +191,8 @@ define i32 @f8(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) "frame-pointer"="all" {
+ ; ALL-NEXT:    popq %rsi
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   %alloca = alloca [300 x i8], align 64
+   alloca i32, i32 %a
+@@ -197,6 +213,8 @@ define i64 @f9() {
+ ; ALL-NEXT:    popq %rax
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+ entry:
+   %call = call i64 @llvm.x86.flags.read.u64()
+@@ -226,6 +244,8 @@ define i64 @f10(i64* %foo, i64 %bar, i64 %baz) {
+ ; ALL-NEXT:    popq %rbx
+ ; ALL-NEXT:    popq %rsi
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   %cx = cmpxchg i64* %foo, i64 %bar, i64 %baz seq_cst seq_cst
+   %v = extractvalue { i64, i1 } %cx, 0
+@@ -246,6 +266,8 @@ define i8* @f11() "frame-pointer"="all" {
+ ; ALL-NEXT:    leaq 8(%rbp), %rax
+ ; ALL-NEXT:    popq %rbp
+ ; ALL-NEXT:    retq
++; ALL-NEXT:    .seh_handlerdata
++; ALL-NEXT:    .text
+ ; ALL-NEXT:    .seh_endproc
+   %aora = call i8* @llvm.addressofreturnaddress()
+   ret i8* %aora
+diff --git a/llvm/test/DebugInfo/COFF/defer-complete-type.ll b/llvm/test/DebugInfo/COFF/defer-complete-type.ll
+index 9f0b5da9a7f..67b4f2844b7 100644
+--- a/llvm/test/DebugInfo/COFF/defer-complete-type.ll
++++ b/llvm/test/DebugInfo/COFF/defer-complete-type.ll
+@@ -12,7 +12,7 @@
+ ; $ clang t.cpp -S -emit-llvm -g -gcodeview -o t.ll
+ 
+ ; CHECK: CodeViewTypes [
+-; CHECK:   Section: .debug$T (5)
++; CHECK:   Section: .debug$T (6)
+ ; CHECK:   Magic: 0x4
+ ; CHECK:   Struct (0x1000) {
+ ; CHECK:     TypeLeafKind: LF_STRUCTURE (0x1505)
+diff --git a/llvm/test/DebugInfo/COFF/enum-co.ll b/llvm/test/DebugInfo/COFF/enum-co.ll
+index 08cd637f4c8..b6cb10baaf7 100644
+--- a/llvm/test/DebugInfo/COFF/enum-co.ll
++++ b/llvm/test/DebugInfo/COFF/enum-co.ll
+@@ -31,7 +31,7 @@
+ ; CHECK: Arch: x86_64
+ ; CHECK: AddressSize: 64bit
+ ; CHECK: CodeViewTypes [
+-; CHECK:   Section: .debug$T (5)
++; CHECK:   Section: .debug$T (6)
+ ; CHECK:   Magic: 0x4
+ ; CHECK:   Enum ({{.*}}) {
+ ; CHECK:     TypeLeafKind: LF_ENUM (0x1507)
+diff --git a/llvm/test/DebugInfo/COFF/global_visibility.ll b/llvm/test/DebugInfo/COFF/global_visibility.ll
+index 5765b8abf68..4a5eff8a6b2 100644
+--- a/llvm/test/DebugInfo/COFF/global_visibility.ll
++++ b/llvm/test/DebugInfo/COFF/global_visibility.ll
+@@ -42,7 +42,7 @@
+ ;
+ 
+ ; CHECK: CodeViewDebugInfo [
+-; CHECK:   Section: .debug$S (8)
++; CHECK:   Section: .debug$S (9)
+ 
+ ; CHECK:   Subsection [
+ ; CHECK:     SubSectionType: Symbols (0xF1)
+@@ -96,7 +96,7 @@
+ ; CHECK:   ]
+ ; CHECK: ]
+ ; CHECK: CodeViewDebugInfo [
+-; CHECK:   Section: .debug$S (12)
++; CHECK:   Section: .debug$S (16)
+ ; CHECK:   Subsection [
+ ; CHECK:     SubSectionType: Symbols (0xF1)
+ ; CHECK:     GlobalData {
+@@ -107,7 +107,7 @@
+ ; CHECK:   ]
+ ; CHECK: ]
+ ; CHECK: CodeViewDebugInfo [
+-; CHECK:   Section: .debug$S (15)
++; CHECK:   Section: .debug$S (17)
+ ; CHECK:   Subsection [
+ ; CHECK:     SubSectionType: Symbols (0xF1)
+ ; CHECK:     GlobalData {
+diff --git a/llvm/test/DebugInfo/COFF/type-quals.ll b/llvm/test/DebugInfo/COFF/type-quals.ll
+index 5c0d5bf501a..c5953d384d3 100644
+--- a/llvm/test/DebugInfo/COFF/type-quals.ll
++++ b/llvm/test/DebugInfo/COFF/type-quals.ll
+@@ -40,7 +40,7 @@
+ 
+ 
+ ; CHECK: CodeViewTypes [
+-; CHECK:   Section: .debug$T (6)
++; CHECK:   Section: .debug$T (7)
+ ; CHECK:   Magic: 0x4
+ ; CHECK:   Modifier (0x1000) {
+ ; CHECK:     TypeLeafKind: LF_MODIFIER (0x1001)
+@@ -367,7 +367,7 @@
+ ; CHECK: ]
+ 
+ ; CHECK-LABEL: CodeViewDebugInfo [
+-; CHECK-NEXT:   Section: .debug$S (5)
++; CHECK-NEXT:   Section: .debug$S (6)
+ ; CHECK:   Subsection [
+ ; CHECK:     SubSectionType: Symbols (0xF1)
+ ; CHECK:     GlobalProcIdSym {
+diff --git a/llvm/test/DebugInfo/COFF/types-basic.ll b/llvm/test/DebugInfo/COFF/types-basic.ll
+index 537502fb8e6..81e0c25d17c 100644
+--- a/llvm/test/DebugInfo/COFF/types-basic.ll
++++ b/llvm/test/DebugInfo/COFF/types-basic.ll
+@@ -35,7 +35,7 @@
+ ; $ clang t.cpp -S -emit-llvm -g -gcodeview -o t.ll
+ 
+ ; CHECK: CodeViewTypes [
+-; CHECK:   Section: .debug$T (5)
++; CHECK:   Section: .debug$T (6)
+ ; CHECK:   Magic: 0x4
+ ; CHECK:   ArgList (0x1000) {
+ ; CHECK:     TypeLeafKind: LF_ARGLIST (0x1201)
+diff --git a/llvm/test/DebugInfo/COFF/types-data-members.ll b/llvm/test/DebugInfo/COFF/types-data-members.ll
+index f47047312d4..87fde74b989 100644
+--- a/llvm/test/DebugInfo/COFF/types-data-members.ll
++++ b/llvm/test/DebugInfo/COFF/types-data-members.ll
+@@ -39,7 +39,7 @@
+ ; $ clang t.cpp -S -emit-llvm -g -gcodeview -o t.ll
+ 
+ ; CHECK: CodeViewTypes [
+-; CHECK:   Section: .debug$T (7)
++; CHECK:   Section: .debug$T (8)
+ ; CHECK:   Magic: 0x4
+ ; CHECK:   ArgList (0x1000) {
+ ; CHECK:     TypeLeafKind: LF_ARGLIST (0x1201)
+diff --git a/llvm/test/DebugInfo/COFF/types-method-ref-qualifiers.ll b/llvm/test/DebugInfo/COFF/types-method-ref-qualifiers.ll
+index 479a2a94703..bfb67353f9b 100644
+--- a/llvm/test/DebugInfo/COFF/types-method-ref-qualifiers.ll
++++ b/llvm/test/DebugInfo/COFF/types-method-ref-qualifiers.ll
+@@ -85,7 +85,7 @@ attributes #1 = { nounwind readnone speculatable }
+ 
+ 
+ ; CHECK: CodeViewTypes [
+-; CHECK:   Section: .debug$T (6)
++; CHECK:   Section: .debug$T (7)
+ ; CHECK:   Magic: 0x4
+ ; CHECK:   Pointer (0x1005) {
+ ; CHECK:     TypeLeafKind: LF_POINTER (0x1002)
+diff --git a/llvm/test/DebugInfo/COFF/types-recursive-struct.ll b/llvm/test/DebugInfo/COFF/types-recursive-struct.ll
+index 5afd241be16..d8697e45fa8 100644
+--- a/llvm/test/DebugInfo/COFF/types-recursive-struct.ll
++++ b/llvm/test/DebugInfo/COFF/types-recursive-struct.ll
+@@ -20,7 +20,7 @@
+ ; $ clang t.cpp -S -emit-llvm -g -gcodeview -o t.ll
+ 
+ ; CHECK: CodeViewTypes [
+-; CHECK:   Section: .debug$T (5)
++; CHECK:   Section: .debug$T (6)
+ ; CHECK:   Magic: 0x4
+ ; CHECK:   ArgList (0x1000) {
+ ; CHECK:     TypeLeafKind: LF_ARGLIST (0x1201)

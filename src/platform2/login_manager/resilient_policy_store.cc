@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,9 @@
 #include <base/logging.h>
 #include <base/notreached.h>
 #include <base/strings/string_number_conversions.h>
+#include <brillo/files/file_util.h>
 #include <policy/policy_util.h>
+#include <policy/device_policy_impl.h>
 #include <policy/resilient_policy_util.h>
 
 #include "login_manager/login_metrics.h"
@@ -61,39 +63,35 @@ bool CreateCleanupDoneFile(const base::FilePath& policy_path) {
 
 ResilientPolicyStore::ResilientPolicyStore(const base::FilePath& policy_path,
                                            LoginMetrics* metrics)
-    : PolicyStore(policy_path), metrics_(metrics) {}
+    : PolicyStore(policy_path, /*is_resilient=*/true), metrics_(metrics) {}
 
 bool ResilientPolicyStore::LoadOrCreate() {
   DCHECK(metrics_);
-  std::map<int, base::FilePath> sorted_policy_file_paths =
-      policy::GetSortedResilientPolicyFilePaths(policy_path_);
-  if (sorted_policy_file_paths.empty())
+  if (!device_policy_)
+    device_policy_ = std::make_unique<policy::DevicePolicyImpl>();
+  bool policy_loaded =
+      device_policy_->LoadPolicy(/*delete_invalid_files=*/true);
+  if (device_policy_->get_number_of_policy_files() == 0) {
+    LOG(INFO) << "No device policy file present.";
     return true;
-
-  // Try to load the existent policy files one by one in reverse order of their
-  // index until we succeed. The files that fail to be parsed are deleted.
-  int number_of_invalid_files = 0;
-  bool policy_loaded = false;
-  for (const auto& map_pair : base::Reversed(sorted_policy_file_paths)) {
-    const base::FilePath& policy_path = map_pair.second;
-    if (LoadOrCreateFromPath(policy_path)) {
-      policy_loaded = true;
-      break;
-    }
-    number_of_invalid_files++;
-    base::DeleteFile(policy_path);
   }
+
+  if (policy_loaded)
+    policy_ = device_policy_->get_policy_fetch_response();
+  else
+    policy_.Clear();
+
+  int number_of_invalid_files = device_policy_->get_number_of_invalid_files();
+  ReportInvalidDevicePolicyFilesStatus(
+      device_policy_->get_number_of_policy_files() - number_of_invalid_files,
+      number_of_invalid_files);
 
   if (number_of_invalid_files > 0) {
     // If at least one policy file has been deleted, we need to delete the
     // |kCleanupDoneFileName| to make sure the next persist doesn't overwrite
     // the data in a good file saved in a previous session.
-    base::DeleteFile(GetCleanupDoneFilePath(policy_path_));
+    brillo::DeleteFile(GetCleanupDoneFilePath(policy_path_));
   }
-
-  ReportInvalidDevicePolicyFilesStatus(
-      sorted_policy_file_paths.size() - number_of_invalid_files,
-      number_of_invalid_files);
 
   return policy_loaded;
 }
@@ -123,47 +121,20 @@ bool ResilientPolicyStore::Persist() {
       policy::GetResilientPolicyFilePathForIndex(policy_path_, new_index));
 }
 
-bool ResilientPolicyStore::Delete() {
-  NOTREACHED();
-  return false;
-}
-
 void ResilientPolicyStore::CleanupPolicyFiles(
     const std::map<int, base::FilePath>& sorted_policy_file_paths) {
-  DCHECK(metrics_);
-  int number_of_good_files = 0;
-  int number_of_invalid_files = 0;
-  // Allow one less file, since we need room for the new file to be persisted
-  // after cleanup.
-  const int max_allowed_files = kMaxPolicyFileCount - 1;
-  for (const auto& map_pair : base::Reversed(sorted_policy_file_paths)) {
+  int remaining_files = sorted_policy_file_paths.size();
+  for (const auto& map_pair : sorted_policy_file_paths) {
+    // Allow one less file, since we need room for the new file to be persisted
+    // after cleanup.
+    if (remaining_files < kMaxPolicyFileCount)
+      break;
+
     const base::FilePath& policy_path = map_pair.second;
-    if (number_of_good_files >= max_allowed_files) {
-      base::DeleteFile(policy_path);
-      continue;
-    }
-
-    std::string polstr;
-    enterprise_management::PolicyFetchResponse policy;
-    policy::LoadPolicyResult result =
-        policy::LoadPolicyFromPath(policy_path, &polstr, &policy);
-    switch (result) {
-      case policy::LoadPolicyResult::kSuccess:
-        number_of_good_files++;
-        break;
-      case policy::LoadPolicyResult::kFileNotFound:
-        break;
-      case policy::LoadPolicyResult::kFailedToReadFile:
-      case policy::LoadPolicyResult::kEmptyFile:
-      case policy::LoadPolicyResult::kInvalidPolicyData:
-        number_of_invalid_files++;
-        base::DeleteFile(policy_path);
-        break;
-    }
+    brillo::DeleteFile(policy_path);
+    LOG(INFO) << "Deleted old device policy file: " << policy_path.value();
+    remaining_files--;
   }
-
-  ReportInvalidDevicePolicyFilesStatus(number_of_good_files,
-                                       number_of_invalid_files);
 }
 
 void ResilientPolicyStore::ReportInvalidDevicePolicyFilesStatus(

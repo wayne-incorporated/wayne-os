@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define LOGIN_MANAGER_PROCESS_MANAGER_SERVICE_INTERFACE_H_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,15 +70,26 @@ class ProcessManagerServiceInterface {
 
   // Calls |BrowserJob::SetBrowserDataMigrationArgsForUser()| in order to run
   // browser data migration on chrome launched subsequently.
-  virtual void SetBrowserDataMigrationArgsForUser(
+  virtual void SetBrowserDataMigrationArgsForUser(const std::string& userhash,
+                                                  const std::string& mode) = 0;
+  // Calls |BrowserJob::SetBrowserDataBackwardMigrationArgsForUser()| in order
+  // to run browser data backward migration on chrome launched subsequently.
+  virtual void SetBrowserDataBackwardMigrationArgsForUser(
       const std::string& userhash) = 0;
 
   // Check if |pid| is the currently-managed browser process.
   virtual bool IsBrowser(pid_t pid) = 0;
 
+  // Returns the pid of the browser process, if there is one.
+  virtual std::optional<pid_t> GetBrowserPid() const = 0;
+
   // Returns the last time that the browser was restarted after exiting
   // (typically due to a crash).
   virtual base::TimeTicks GetLastBrowserRestartTime() = 0;
+
+  // Calls |BrowserJob::SetMultiUserSessionStarted()| so that |BrowserJob| can
+  // pass |kDisallowLacrosFlag| for subsequent Chrome runs.
+  virtual void SetMultiUserSessionStarted() = 0;
 };
 }  // namespace login_manager
 

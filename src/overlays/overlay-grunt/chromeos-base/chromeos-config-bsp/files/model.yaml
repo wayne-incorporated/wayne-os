@@ -1,0 +1,703 @@
+#
+# Copyright 2019 The ChromiumOS Authors
+#
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+audio-common: &audio_common
+  $cras_root: "/etc/cras"
+  $ucm_root: "/usr/share/alsa/ucm"
+  $card: "acpd7219m98357"
+
+  $ucm_extra_suffix: ""
+  $sub_cras_config: ""
+  cras-config-dir: "{{$audio-config}}{{$sub_cras_config}}"
+  ucm-suffix: "{{$num-mic-locations}}mic{{$ucm_extra_suffix}}"
+  files:
+    - source: "cras-config/{{cras-config-dir}}/{{$card}}"
+      destination: "{{$cras_root}}/{{cras-config-dir}}/{{$card}}"
+    - source: "cras-config/{{cras-config-dir}}/dsp.ini"
+      destination: "{{$cras_root}}/{{cras-config-dir}}/dsp.ini"
+    - source: "cras-config/{{cras-config-dir}}/board.ini"
+      destination: "{{$cras_root}}/{{cras-config-dir}}/board.ini"
+    - source: "ucm-config/HDA ATI HDMI/HiFi.conf"
+      destination: "{{$ucm_root}}/HDA ATI HDMI/HiFi.conf"
+    - source: "ucm-config/HDA ATI HDMI/HDA ATI HDMI.conf"
+      destination: "{{$ucm_root}}/HDA ATI HDMI/HDA ATI HDMI.conf"
+    - source: "ucm-config/{{$card}}.{{$num-mic-locations}}mic{{$ucm_extra_suffix}}/HiFi.conf"
+      destination: "{{$ucm_root}}/{{$card}}.{{ucm-suffix}}/HiFi.conf"
+    - source: "ucm-config/{{$card}}.{{$num-mic-locations}}mic{{$ucm_extra_suffix}}/{{$card}}.{{$num-mic-locations}}mic.conf"
+      destination: "{{$ucm_root}}/{{$card}}.{{ucm-suffix}}/{{$card}}.{{$num-mic-locations}}mic{{$ucm_extra_suffix}}.conf"
+
+touch-common: &touch_common
+  $fw_root: "/lib/firmware"
+  $fw_dest: "/opt/google/touch/firmware"
+
+power-common: &power_common
+  instant-transitions-below-min-level: "1"
+  low-battery-shutdown-percent: "4.0"
+  min-visible-backlight-level: "6"
+  $has-keyboard-backlight: "0"
+  has-keyboard-backlight: "{{$has-keyboard-backlight}}"
+
+rmad-common: &rmad_common
+  enabled: True
+  has-cbi: False
+
+base-config: &base_config
+  $firmware-target: "{{$device-name}}"
+  $audio-config: "{{$device-name}}"
+  arc:
+    build-properties:
+      product: "grunt"
+      device: "grunt_cheets"
+      marketing-name: "{{$marketing-name}}"
+      metrics-tag: "{{$device-name}}"
+  audio:
+    main: *audio_common
+  brand-code: "{{$brand-code}}"
+  camera:
+    $camera-count: 1
+    count: "{{$camera-count}}"
+  name: "{{$device-name}}"
+  identity: &base_identity
+    platform-name: "Grunt"
+    frid: "Google_Grunt"
+    sku-id: "{{$sku-id}}"
+  test-label: "{{$device-name}}"
+  power:
+    <<: *power_common
+    charging-ports: |
+      CROS_USB_PD_CHARGER0 LEFT
+      CROS_USB_PD_CHARGER1 RIGHT
+  $wallpaper: ""
+  wallpaper: "{{$wallpaper}}"
+  firmware-signing:
+    $key-id: "DEFAULT"
+    key-id: "{{$key-id}}"
+    signature-id: "{{name}}"
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    psu-type: battery
+  rmad: *rmad_common
+
+firmware: &firmware_common
+  build-targets:
+    bmpblk: "grunt"
+    coreboot: "{{$firmware-target}}"
+    depthcharge: "grunt"
+    ec: "{{$firmware-target}}"
+    libpayload: "grunt"
+    u-boot: "coreboot"
+  image-name: "{{$device-name}}"
+
+convertible-base-config: &convertible_base_config
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    psu-type: battery
+    is-lid-convertible: True
+    has-lid-accelerometer: True
+    has-base-accelerometer: True
+    has-base-gyroscope: True
+
+grunt-config: &grunt_config
+  <<: *base_config
+  firmware:
+    <<: *firmware_common
+
+careena-config: &careena_config
+  <<: *base_config
+  firmware:
+    <<: *firmware_common
+  power:
+    <<: *power_common
+    charging-ports: |
+      CROS_USB_PD_CHARGER0 RIGHT
+      CROS_USB_PD_CHARGER1 LEFT
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/raydium/raydium_0xa200082c_1.3.bin"
+        destination: "{{$fw_dest}}/raydium_0xa200082c_1.3.bin"
+        symlink: "{{$fw_root}}/raydium_0xa200082c.fw"
+      - source: "touch/raydium/raydium_0xa2000a2b_1.2.bin"
+        destination: "{{$fw_dest}}/raydium_0xa2000a2b_1.2.bin"
+        symlink: "{{$fw_root}}/raydium_0xa2000a2b.fw"
+      - source: "touch/raydium/raydium_0xa2000a3d_1.4.bin"
+        destination: "{{$fw_dest}}/raydium_0xa2000a3d_1.4.bin"
+        symlink: "{{$fw_root}}/raydium_0xa2000a3d.fw"
+      - source: "touch/raydium/raydium_0xa200083e_1.4.bin"
+        destination: "{{$fw_dest}}/raydium_0xa200083e_1.4.bin"
+        symlink: "{{$fw_root}}/raydium_0xa200083e.fw"
+      - source: "touch/elan/213.0_2.0.bin"
+        destination: "{{$fw_dest}}/213.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_213.0.bin"
+      - source: "touch/elan/180.0_2.0.bin"
+        destination: "{{$fw_dest}}/180.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_180.0.bin"
+      - source: "touch/elan/205.0_2.0.bin"
+        destination: "{{$fw_dest}}/205.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_205.0.bin"
+      - source: "touch/elan/2f88_5600.bin"
+        destination: "{{$fw_dest}}/2f88_5600.bin"
+        symlink: "{{$fw_root}}/elants_i2c_2f88.bin"
+      - source: "touch/elan/2fe5_5612.bin"
+        destination: "{{$fw_dest}}/2fe5_5612.bin"
+        symlink: "{{$fw_root}}/elants_i2c_2fe5.bin"
+      - source: "touch/elan/31a8_5612.bin"
+        destination: "{{$fw_dest}}/31a8_5612.bin"
+        symlink: "{{$fw_root}}/elants_i2c_31a8.bin"
+      - source: "touch/elan/31a7_5603.bin"
+        destination: "{{$fw_dest}}/31a7_5603.bin"
+        symlink: "{{$fw_root}}/elants_i2c_31a7.bin"
+      - source: "touch/elan/3259_5604.bin"
+        destination: "{{$fw_dest}}/3259_5604.bin"
+        symlink: "{{$fw_root}}/elants_i2c_3259.bin"
+      - source: "touch/elan/31a8_5614.bin"
+        destination: "{{$fw_dest}}/31a8_5614.bin"
+        symlink: "{{$fw_root}}/elants_i2c_31a8.bin"
+      - source: "touch/elan/31a3_5983.bin"
+        destination: "{{$fw_dest}}/31a3_5983.bin"
+        symlink: "{{$fw_root}}/elants_i2c_31a3.bin"
+      - source: "touch/elan/31aa_5914.bin"
+        destination: "{{$fw_dest}}/31aa_5914.bin"
+        symlink: "{{$fw_root}}/elants_i2c_31aa.bin"
+      - source: "touch/elan/3132_5982.bin"
+        destination: "{{$fw_dest}}/3132_5982.bin"
+        symlink: "{{$fw_root}}/elants_i2c_3132.bin"
+      - source: "touch/elan/31a7_5605.bin"
+        destination: "{{$fw_dest}}/31a7_5605.bin"
+        symlink: "{{$fw_root}}/elants_i2c_31a7.bin"
+      - source: "touch/elan/3632_5651.bin"
+        destination: "{{$fw_dest}}/3632_5651.bin"
+        symlink: "{{$fw_root}}/elants_i2c_3632.bin"
+      - source: "touch/elan/3665_5616.bin"
+        destination: "{{$fw_dest}}/3665_5616.bin"
+        symlink: "{{$fw_root}}/elants_i2c_3665.bin"
+      - source: "touch/g2touch/PID_A802_R00.02.14132.bin"
+        destination: "{{$fw_dest}}/PID_A802_R00.02.14132.bin"
+        symlink: "{{$fw_root}}/g2touch_A802.bin"
+      - source: "touch/g2touch/PID_A804_R00.12.14366.bin"
+        destination: "{{$fw_dest}}/PID_A804_R00.12.14366.bin"
+        symlink: "{{$fw_root}}/g2touch_A804.bin"
+      - source: "touch/g2touch/PID_A803_R00.11.14365.bin"
+        destination: "{{$fw_dest}}/PID_A803_R00.11.14365.bin"
+        symlink: "{{$fw_root}}/g2touch_A803.bin"
+  $wallpaper: "hp_default"
+
+barla-config: &barla_config
+  <<: *careena_config
+  $brand-code: "PXDO"
+  $firmware-target: "careena"
+  $sub_cras_config: ""
+
+mordin-config: &mordin_config
+  <<: *barla_config
+  $brand-code: "ZKJH"
+  $sub_cras_config: ".refresh"
+
+barla-alc5682-config: &barla_alc5682_config
+  <<: *barla_config
+  $brand-code: "ZKJH"
+  $sub_cras_config: ".alc5682refresh"
+  $card: "acpr5682m98357"
+
+aleena-config: &aleena_config
+  <<: *base_config
+  firmware:
+    <<: *firmware_common
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/raydium/raydium_0xa222173f_2.7.bin"
+        destination: "{{$fw_dest}}/raydium_0xa222173f_2.7.bin"
+        symlink: "{{$fw_root}}/raydium_0xa222173f.fw"
+      - source: "touch/elan/176.0_4.0.bin"
+        destination: "{{$fw_dest}}/176.0_4.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_176.0.bin"
+
+kasumi-config: &kasumi_config
+  <<: *aleena_config
+  firmware:
+    <<: *firmware_common
+  $firmware-target: "aleena"
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/elan/188.0_2.0.bin"
+        destination: "{{$fw_dest}}/188.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_188.0.bin"
+      - source: "touch/elan/1d8c_5603.bin"
+        destination: "{{$fw_dest}}/1d8c_5603.bin"
+        symlink: "{{$fw_root}}/elants_i2c_1d8c.bin"
+      - source: "touch/synaptics/CDB5_1.4.2939319.bin"
+        destination: "{{$fw_dest}}/CDB5_1.4.2939319.bin"
+        symlink: "{{$fw_root}}/hid-06CB_CDB5"
+
+kasumi360-config: &kasumi360_config
+  <<: [ *kasumi_config, *convertible_base_config ]
+  $audio-config: "kasumi"
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/elan/1d8e_5612.bin"
+        destination: "{{$fw_dest}}/1d8e_5612.bin"
+        symlink: "{{$fw_root}}/elants_i2c_1d8e.bin"
+  ui:
+    side-volume-button:
+      region: keyboard
+      side: right
+
+liara-config: &liara_config
+  <<: *base_config
+  firmware:
+    <<: *firmware_common
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/elan/1f08_5715.bin"
+        destination: "{{$fw_dest}}/1f08_5715.bin"
+        symlink: "{{$fw_root}}/elants_i2c_1f08.bin"
+      - source: "touch/synaptics/7CA0_1.1.2826960.bin"
+        destination: "{{$fw_dest}}/7CA0_1.1.2826960.bin"
+        symlink: "{{$fw_root}}/hid-06CB_7CA0"
+      - source: "touch/elan/181.0_2.0.bin"
+        destination: "{{$fw_dest}}/181.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_181.0.bin"
+      - source: "touch/raydium/raydium_0xa2221840_1.3.bin"
+        destination: "{{$fw_dest}}/raydium_0xa2221840_1.3.bin"
+        symlink: "{{$fw_root}}/raydium_0xa2221840.fw"
+      - source: "touch/elan/34d7_5711.bin"
+        destination: "{{$fw_dest}}/34d7_5711.bin"
+        symlink: "{{$fw_root}}/elants_i2c_34d7.bin"
+
+treeya-config: &treeya_config
+  <<: *base_config
+  $key-id: "LIARA"
+  identity:
+    <<: *base_identity
+    custom-label-tag: "{{$custom-label-tag}}"
+  firmware:
+    <<: *firmware_common
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/elan/196.0_2.0.bin"
+        destination: "{{$fw_dest}}/196.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_196.0.bin"
+      - source: "touch/synaptics/7CA1_1.1.3104979.bin"
+        destination: "{{$fw_dest}}/7CA1_1.1.3104979.bin"
+        symlink: "{{$fw_root}}/hid-06CB_7CA1"
+
+treeyac-config: &treeyac_config
+  <<: *treeya_config
+  $sub_cras_config: ".refresh"
+
+treeya360-config: &treeya360_config
+  <<: [ *treeya_config, *convertible_base_config ]
+  $audio-config: "treeya"
+  $firmware-target: "treeya"
+  $key-id: "LIARA"
+  identity:
+    <<: *base_identity
+    custom-label-tag: "{{$custom-label-tag}}"
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/elan/196.0_2.0.bin"
+        destination: "{{$fw_dest}}/196.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_196.0.bin"
+      - source: "touch/synaptics/7CA1_1.1.3104979.bin"
+        destination: "{{$fw_dest}}/7CA1_1.1.3104979.bin"
+        symlink: "{{$fw_root}}/hid-06CB_7CA1"
+      - source: "touch/synaptics/1A20_0.0.3046700.bin"
+        destination: "{{$fw_dest}}/1A20_0.0.3046700.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A20"
+      - source: "touch/synaptics/1A21_0.0.3209178.bin"
+        destination: "{{$fw_dest}}/1A21_0.0.3209178.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A21"
+      - source: "touch/synaptics/1A22_0.0.3046704.bin"
+        destination: "{{$fw_dest}}/1A22_0.0.3046704.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A22"
+      - source: "touch/synaptics/1A23_0.0.3209179.bin"
+        destination: "{{$fw_dest}}/1A23_0.0.3209179.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A23"
+      - source: "touch/synaptics/1A24_0.0.3203407.bin"
+        destination: "{{$fw_dest}}/1A24_0.0.3203407.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A24"
+      - source: "touch/synaptics/1A25_0.0.3203408.bin"
+        destination: "{{$fw_dest}}/1A25_0.0.3203408.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A25"
+      - source: "touch/synaptics/7817_0.0.3209178.bin"
+        destination: "{{$fw_dest}}/7817_0.0.3209178.bin"
+        symlink: "{{$fw_root}}/hid-06CB_7817"
+      - source: "touch/synaptics/2A34_0.0.3298220.bin"
+        destination: "{{$fw_dest}}/2A34_0.0.3298220.bin"
+        symlink: "{{$fw_root}}/hid-06CB_2A34"
+
+treeya360-alc5682-config: &treeya360_alc5682_config
+  <<: [ *treeya_config, *convertible_base_config ]
+  $audio-config: "treeya"
+  $firmware-target: "treeya"
+  $sub_cras_config: ".alc5682"
+  $ucm_extra_suffix: "treeya"
+  $card: "acpr5682m98357"
+  $key-id: "LIARA"
+  identity:
+    <<: *base_identity
+    custom-label-tag: "{{$custom-label-tag}}"
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/elan/196.0_2.0.bin"
+        destination: "{{$fw_dest}}/196.0_2.0.bin"
+        symlink: "{{$fw_root}}/elan_i2c_196.0.bin"
+      - source: "touch/synaptics/7CA1_1.1.3104979.bin"
+        destination: "{{$fw_dest}}/7CA1_1.1.3104979.bin"
+        symlink: "{{$fw_root}}/hid-06CB_7CA1"
+      - source: "touch/synaptics/1A20_0.0.3046700.bin"
+        destination: "{{$fw_dest}}/1A20_0.0.3046700.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A20"
+      - source: "touch/synaptics/1A21_0.0.3209178.bin"
+        destination: "{{$fw_dest}}/1A21_0.0.3209178.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A21"
+      - source: "touch/synaptics/1A22_0.0.3046704.bin"
+        destination: "{{$fw_dest}}/1A22_0.0.3046704.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A22"
+      - source: "touch/synaptics/1A23_0.0.3209179.bin"
+        destination: "{{$fw_dest}}/1A23_0.0.3209179.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A23"
+      - source: "touch/synaptics/1A24_0.0.3203407.bin"
+        destination: "{{$fw_dest}}/1A24_0.0.3203407.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A24"
+      - source: "touch/synaptics/1A25_0.0.3203408.bin"
+        destination: "{{$fw_dest}}/1A25_0.0.3203408.bin"
+        symlink: "{{$fw_root}}/hid-06CB_1A25"
+      - source: "touch/synaptics/7817_0.0.3209178.bin"
+        destination: "{{$fw_dest}}/7817_0.0.3209178.bin"
+        symlink: "{{$fw_root}}/hid-06CB_7817"
+
+nuwani-config: &nuwani_config
+  <<: *base_config
+  firmware:
+    <<: *firmware_common
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/pixart/1004_0002.bin"
+        destination: "{{$fw_dest}}/1004_0002.bin"
+        symlink: "{{$fw_root}}/pix_tp2xxx_1004.bin"
+
+nuwani360-config: &nuwani360_config
+  <<: [ *nuwani_config, *convertible_base_config ]
+  $audio-config: "nuwani"
+  $firmware-target: "nuwani"
+  touch:
+    <<: *touch_common
+    files:
+      - source: "touch/elan/1d02_6421.bin"
+        destination: "{{$fw_dest}}/1d02_6421.bin"
+        symlink: "{{$fw_root}}/elants_i2chid_1d02.bin"
+
+cros-healthd-sku-number-enabled: &cros_healthd_sku_number_enabled
+  cros-healthd:
+    cached-vpd:
+      has-sku-number: True
+
+chromeos:
+  devices:
+    - $device-name: "grunt"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "ZZCR"
+          $marketing-name: "TBD"
+      $has-keyboard-backlight: "1"
+      skus:
+        - $sku-id: 1
+          config: *grunt_config
+
+        - $sku-id: 2
+          config: *grunt_config
+
+        - $sku-id: 3
+          config: *grunt_config
+
+        - $sku-id: 4
+          config: *grunt_config
+
+        - $sku-id: 5
+          config: *grunt_config
+
+        - $sku-id: 6
+          config: *grunt_config
+
+    - $device-name: "careena"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "HHRN"
+          $marketing-name: "TBD"
+          $key-id: "CAREENA"
+      skus:
+        - $sku-id: 16
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 17
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 18
+          $has-keyboard-backlight: "1"
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 19
+          $has-keyboard-backlight: "1"
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 20
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 21
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 22
+          $has-keyboard-backlight: "1"
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 23
+          $has-keyboard-backlight: "1"
+          config:
+            <<: *careena_config
+            <<: *cros_healthd_sku_number_enabled
+
+    - $device-name: "barla"
+      $num-mic-locations: 1
+      $ucm_extra_suffix: "{{$device-name}}"
+      products:
+        - $marketing-name: "TBD"
+          $key-id: "CAREENA"
+      skus:
+        - $sku-id: 32
+          config:
+            <<: *barla_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 33
+          config:
+            <<: *barla_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 40
+          config:
+            <<: *mordin_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 41
+          config:
+            <<: *mordin_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 42
+          config:
+            <<: *mordin_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 43
+          config:
+            <<: *mordin_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 44
+          config:
+            <<: *barla_alc5682_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 45
+          config:
+            <<: *barla_alc5682_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 46
+          config:
+            <<: *barla_alc5682_config
+            <<: *cros_healthd_sku_number_enabled
+
+        - $sku-id: 47
+          config:
+            <<: *barla_alc5682_config
+            <<: *cros_healthd_sku_number_enabled
+
+    - $device-name: "aleena"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "MXUY"
+          $marketing-name: "TBD"
+          $key-id: "ALEENA"
+      skus:
+        - $sku-id: 64
+          config: *aleena_config
+
+        - $sku-id: 65
+          $has-keyboard-backlight: "1"
+          config: *aleena_config
+
+        - $sku-id: 66
+          config: *aleena_config
+
+        - $sku-id: 67
+          $has-keyboard-backlight: "1"
+          config: *aleena_config
+
+        - $sku-id: 68
+          config: *aleena_config
+
+        - $sku-id: 69
+          config: *aleena_config
+
+        - $sku-id: 70
+          config: *aleena_config
+
+        - $sku-id: 71
+          config: *aleena_config
+
+    - $device-name: "kasumi"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "UGAY"
+          $marketing-name: "TBD"
+          $key-id: "ALEENA"
+      skus:
+        - $sku-id: 80
+          config: *kasumi_config
+
+        - $sku-id: 81
+          config: *kasumi_config
+
+    - $device-name: "kasumi360"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "OFPE"
+          $marketing-name: "TBD"
+          $key-id: "ALEENA"
+      skus:
+        - $sku-id: 82
+          config: *kasumi360_config
+
+    - $device-name: "liara"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "JFZB"
+          $marketing-name: "TBD"
+          $key-id: "LIARA"
+      skus:
+        - $sku-id: 128
+          config: *liara_config
+
+        - $sku-id: 129
+          config: *liara_config
+
+        - $sku-id: 130
+          $has-keyboard-backlight: "1"
+          config: *liara_config
+
+        - $sku-id: 131
+          $has-keyboard-backlight: "1"
+          config: *liara_config
+
+        - $sku-id: 132
+          config: *liara_config
+
+        - $sku-id: 133
+          config: *liara_config
+
+        - $sku-id: 134
+          $has-keyboard-backlight: "1"
+          config: *liara_config
+
+        - $sku-id: 135
+          $has-keyboard-backlight: "1"
+          config: *liara_config
+
+    - $device-name: "treeya"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "BAUA"
+          $marketing-name: "TBD"
+          $custom-label-tag: ""
+        - $brand-code: "QCDF"
+          $marketing-name: "TBD"
+          $custom-label-tag: "treeyac"
+      skus:
+        - $sku-id: 160
+          config: *treeya_config
+        - $sku-id: 165
+          config: *treeyac_config
+
+    - $device-name: "treeya360"
+      products:
+        - $brand-code: "XFUX"
+          $marketing-name: "TBD"
+          $custom-label-tag: ""
+        - $brand-code: "TZIV"
+          $marketing-name: "TBD"
+          $custom-label-tag: "miranda"
+      skus:
+        - $sku-id: 168
+          $num-mic-locations: 1
+          config: *treeya360_config
+
+        - $sku-id: 169
+          $camera-count: 2
+          $num-mic-locations: 2
+          config: *treeya360_config
+
+        - $sku-id: 174
+          $num-mic-locations: 1
+          config: *treeya360_config
+
+        - $sku-id: 175
+          $camera-count: 2
+          $num-mic-locations: 2
+          config: *treeya360_config
+
+        - $sku-id: 190
+          $num-mic-locations: 1
+          config: *treeya360_alc5682_config
+
+        - $sku-id: 191
+          $camera-count: 2
+          $num-mic-locations: 2
+          config: *treeya360_alc5682_config
+
+    - $device-name: "nuwani"
+      $num-mic-locations: 1
+      products:
+        - $brand-code: "ZZCR"
+          $marketing-name: "TBD"
+          $key-id: "DEFAULT"
+      skus:
+        - $sku-id: 208
+          config: *nuwani_config
+
+    - $device-name: "nuwani360"
+      products:
+        - $brand-code: "ZZCR"
+          $marketing-name: "TBD"
+          $key-id: "DEFAULT"
+      skus:
+        - $sku-id: 216
+          $camera-count: 2
+          $num-mic-locations: 2
+          config: *nuwani360_config

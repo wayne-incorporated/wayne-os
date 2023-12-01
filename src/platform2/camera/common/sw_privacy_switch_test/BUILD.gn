@@ -1,0 +1,31 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+group("all") {
+  deps = [ ":sw_privacy_switch_test" ]
+}
+
+pkg_config("target_defaults") {
+  configs = [
+    "//camera/build:cros_camera_common",
+    "//common-mk:test",
+  ]
+  pkg_deps = [
+    "libchrome-test",
+    "libcros_camera_android_deps",
+    "libdrm",
+    "libyuv",
+  ]
+}
+
+executable("sw_privacy_switch_test") {
+  sources = [ "//camera/common/sw_privacy_switch_stream_manipulator_test.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//camera/common:libcros_camera_device_config",
+    "//camera/common:libcros_camera_mojom",
+    "//camera/common:stream_manipulator",
+  ]
+  install_path = "bin"
+}

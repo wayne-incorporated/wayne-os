@@ -1,0 +1,983 @@
+commit 06829034ca64b8c83a5b20d8abe5ddbfe7af0004
+Author: Juneyoung Lee <aqjune@gmail.com>
+Date:   Thu Feb 4 00:07:04 2021 +0900
+
+    Revert "[ConstantFold] Fold more operations to poison"
+    
+    This reverts commit 53040a968dc2ff20931661e55f05da2ef8b964a0 due to its
+    bad interaction with select i1 -> and/or i1 transformation.
+    
+    This fixes:
+    https://bugs.llvm.org/show_bug.cgi?id=49005
+    https://bugs.llvm.org/show_bug.cgi?id=48435
+
+diff --git a/clang/test/Frontend/fixed_point_unary.c b/clang/test/Frontend/fixed_point_unary.c
+index 6ce760daba11..849e38a94bc4 100644
+--- a/clang/test/Frontend/fixed_point_unary.c
++++ b/clang/test/Frontend/fixed_point_unary.c
+@@ -90,7 +90,7 @@ void inc_usa() {
+ // SIGNED-LABEL: @inc_uf(
+ // SIGNED-NEXT:  entry:
+ // SIGNED-NEXT:    [[TMP0:%.*]] = load i16, i16* @uf, align 2
+-// SIGNED-NEXT:    [[TMP1:%.*]] = add i16 [[TMP0]], poison
++// SIGNED-NEXT:    [[TMP1:%.*]] = add i16 [[TMP0]], undef
+ // SIGNED-NEXT:    store i16 [[TMP1]], i16* @uf, align 2
+ // SIGNED-NEXT:    ret void
+ //
+@@ -271,7 +271,7 @@ void dec_usa() {
+ // SIGNED-LABEL: @dec_uf(
+ // SIGNED-NEXT:  entry:
+ // SIGNED-NEXT:    [[TMP0:%.*]] = load i16, i16* @uf, align 2
+-// SIGNED-NEXT:    [[TMP1:%.*]] = sub i16 [[TMP0]], poison
++// SIGNED-NEXT:    [[TMP1:%.*]] = sub i16 [[TMP0]], undef
+ // SIGNED-NEXT:    store i16 [[TMP1]], i16* @uf, align 2
+ // SIGNED-NEXT:    ret void
+ //
+diff --git a/llvm/lib/IR/ConstantFold.cpp b/llvm/lib/IR/ConstantFold.cpp
+index 03cb108cc485..95dd55237e5f 100644
+--- a/llvm/lib/IR/ConstantFold.cpp
++++ b/llvm/lib/IR/ConstantFold.cpp
+@@ -630,7 +630,7 @@ Constant *llvm::ConstantFoldCastInstruction(unsigned opc, Constant *V,
+           V.convertToInteger(IntVal, APFloat::rmTowardZero, &ignored)) {
+         // Undefined behavior invoked - the destination type can't represent
+         // the input constant.
+-        return PoisonValue::get(DestTy);
++        return UndefValue::get(DestTy);
+       }
+       return ConstantInt::get(FPC->getContext(), IntVal);
+     }
+@@ -916,7 +916,7 @@ Constant *llvm::ConstantFoldInsertElementInstruction(Constant *Val,
+ 
+   unsigned NumElts = ValTy->getNumElements();
+   if (CIdx->uge(NumElts))
+-    return PoisonValue::get(Val->getType());
++    return UndefValue::get(Val->getType());
+ 
+   SmallVector<Constant*, 16> Result;
+   Result.reserve(NumElts);
+@@ -1151,21 +1151,23 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+     }
+     case Instruction::SDiv:
+     case Instruction::UDiv:
+-      // X / undef -> poison
+-      // X / 0 -> poison
+-      if (match(C2, m_CombineOr(m_Undef(), m_Zero())))
+-        return PoisonValue::get(C2->getType());
++      // X / undef -> undef
++      if (isa<UndefValue>(C2))
++        return C2;
++      // undef / 0 -> undef
+       // undef / 1 -> undef
+-      if (match(C2, m_One()))
++      if (match(C2, m_Zero()) || match(C2, m_One()))
+         return C1;
+       // undef / X -> 0       otherwise
+       return Constant::getNullValue(C1->getType());
+     case Instruction::URem:
+     case Instruction::SRem:
+-      // X % undef -> poison
+-      // X % 0 -> poison
+-      if (match(C2, m_CombineOr(m_Undef(), m_Zero())))
+-        return PoisonValue::get(C2->getType());
++      // X % undef -> undef
++      if (match(C2, m_Undef()))
++        return C2;
++      // undef % 0 -> undef
++      if (match(C2, m_Zero()))
++        return C1;
+       // undef % X -> 0       otherwise
+       return Constant::getNullValue(C1->getType());
+     case Instruction::Or:                          // X | undef -> -1
+@@ -1173,28 +1175,28 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+         return C1;
+       return Constant::getAllOnesValue(C1->getType()); // undef | X -> ~0
+     case Instruction::LShr:
+-      // X >>l undef -> poison
++      // X >>l undef -> undef
+       if (isa<UndefValue>(C2))
+-        return PoisonValue::get(C2->getType());
++        return C2;
+       // undef >>l 0 -> undef
+       if (match(C2, m_Zero()))
+         return C1;
+       // undef >>l X -> 0
+       return Constant::getNullValue(C1->getType());
+     case Instruction::AShr:
+-      // X >>a undef -> poison
++      // X >>a undef -> undef
+       if (isa<UndefValue>(C2))
+-        return PoisonValue::get(C2->getType());
++        return C2;
+       // undef >>a 0 -> undef
+       if (match(C2, m_Zero()))
+         return C1;
+-      // TODO: undef >>a X -> poison if the shift is exact
++      // TODO: undef >>a X -> undef if the shift is exact
+       // undef >>a X -> 0
+       return Constant::getNullValue(C1->getType());
+     case Instruction::Shl:
+       // X << undef -> undef
+       if (isa<UndefValue>(C2))
+-        return PoisonValue::get(C2->getType());
++        return C2;
+       // undef << 0 -> undef
+       if (match(C2, m_Zero()))
+         return C1;
+@@ -1247,14 +1249,14 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+       if (CI2->isOne())
+         return C1;                                            // X / 1 == X
+       if (CI2->isZero())
+-        return PoisonValue::get(CI2->getType());              // X / 0 == poison
++        return UndefValue::get(CI2->getType());               // X / 0 == undef
+       break;
+     case Instruction::URem:
+     case Instruction::SRem:
+       if (CI2->isOne())
+         return Constant::getNullValue(CI2->getType());        // X % 1 == 0
+       if (CI2->isZero())
+-        return PoisonValue::get(CI2->getType());              // X % 0 == poison
++        return UndefValue::get(CI2->getType());               // X % 0 == undef
+       break;
+     case Instruction::And:
+       if (CI2->isZero()) return C2;                           // X & 0 == 0
+@@ -1368,7 +1370,7 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+       case Instruction::SDiv:
+         assert(!CI2->isZero() && "Div by zero handled above");
+         if (C2V.isAllOnesValue() && C1V.isMinSignedValue())
+-          return PoisonValue::get(CI1->getType());   // MIN_INT / -1 -> poison
++          return UndefValue::get(CI1->getType());   // MIN_INT / -1 -> undef
+         return ConstantInt::get(CI1->getContext(), C1V.sdiv(C2V));
+       case Instruction::URem:
+         assert(!CI2->isZero() && "Div by zero handled above");
+@@ -1376,7 +1378,7 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+       case Instruction::SRem:
+         assert(!CI2->isZero() && "Div by zero handled above");
+         if (C2V.isAllOnesValue() && C1V.isMinSignedValue())
+-          return PoisonValue::get(CI1->getType());   // MIN_INT % -1 -> poison
++          return UndefValue::get(CI1->getType());   // MIN_INT % -1 -> undef
+         return ConstantInt::get(CI1->getContext(), C1V.srem(C2V));
+       case Instruction::And:
+         return ConstantInt::get(CI1->getContext(), C1V & C2V);
+@@ -1387,15 +1389,15 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+       case Instruction::Shl:
+         if (C2V.ult(C1V.getBitWidth()))
+           return ConstantInt::get(CI1->getContext(), C1V.shl(C2V));
+-        return PoisonValue::get(C1->getType()); // too big shift is poison
++        return UndefValue::get(C1->getType()); // too big shift is undef
+       case Instruction::LShr:
+         if (C2V.ult(C1V.getBitWidth()))
+           return ConstantInt::get(CI1->getContext(), C1V.lshr(C2V));
+-        return PoisonValue::get(C1->getType()); // too big shift is poison
++        return UndefValue::get(C1->getType()); // too big shift is undef
+       case Instruction::AShr:
+         if (C2V.ult(C1V.getBitWidth()))
+           return ConstantInt::get(CI1->getContext(), C1V.ashr(C2V));
+-        return PoisonValue::get(C1->getType()); // too big shift is poison
++        return UndefValue::get(C1->getType()); // too big shift is undef
+       }
+     }
+ 
+@@ -1441,7 +1443,7 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+     // Fast path for splatted constants.
+     if (Constant *C2Splat = C2->getSplatValue()) {
+       if (Instruction::isIntDivRem(Opcode) && C2Splat->isNullValue())
+-        return PoisonValue::get(VTy);
++        return UndefValue::get(VTy);
+       if (Constant *C1Splat = C1->getSplatValue()) {
+         return ConstantVector::getSplat(
+             VTy->getElementCount(),
+@@ -1458,9 +1460,9 @@ Constant *llvm::ConstantFoldBinaryInstruction(unsigned Opcode, Constant *C1,
+         Constant *LHS = ConstantExpr::getExtractElement(C1, ExtractIdx);
+         Constant *RHS = ConstantExpr::getExtractElement(C2, ExtractIdx);
+ 
+-        // If any element of a divisor vector is zero, the whole op is poison.
++        // If any element of a divisor vector is zero, the whole op is undef.
+         if (Instruction::isIntDivRem(Opcode) && RHS->isNullValue())
+-          return PoisonValue::get(VTy);
++          return UndefValue::get(VTy);
+ 
+         Result.push_back(ConstantExpr::get(Opcode, LHS, RHS));
+       }
+@@ -2343,8 +2345,7 @@ Constant *llvm::ConstantFoldGetElementPtr(Type *PointeeTy, Constant *C,
+     return PoisonValue::get(GEPTy);
+ 
+   if (isa<UndefValue>(C))
+-    // If inbounds, we can choose an out-of-bounds pointer as a base pointer.
+-    return InBounds ? PoisonValue::get(GEPTy) : UndefValue::get(GEPTy);
++    return UndefValue::get(GEPTy);
+ 
+   Constant *Idx0 = cast<Constant>(Idxs[0]);
+   if (Idxs.size() == 1 && (Idx0->isNullValue() || isa<UndefValue>(Idx0)))
+diff --git a/llvm/test/CodeGen/AMDGPU/amdgpu-codegenprepare-fold-binop-select.ll b/llvm/test/CodeGen/AMDGPU/amdgpu-codegenprepare-fold-binop-select.ll
+index e0037f0d8e45..bfe83c7a1285 100644
+--- a/llvm/test/CodeGen/AMDGPU/amdgpu-codegenprepare-fold-binop-select.ll
++++ b/llvm/test/CodeGen/AMDGPU/amdgpu-codegenprepare-fold-binop-select.ll
+@@ -42,7 +42,7 @@ define i32 @select_sdiv_rhs_const_i32(i1 %cond) {
+ 
+ define <2 x i32> @select_sdiv_lhs_const_v2i32(i1 %cond) {
+ ; IR-LABEL: @select_sdiv_lhs_const_v2i32(
+-; IR-NEXT:    [[OP:%.*]] = select i1 [[COND:%.*]], <2 x i32> <i32 666, i32 poison>, <2 x i32> <i32 555, i32 1428>
++; IR-NEXT:    [[OP:%.*]] = select i1 [[COND:%.*]], <2 x i32> <i32 666, i32 undef>, <2 x i32> <i32 555, i32 1428>
+ ; IR-NEXT:    ret <2 x i32> [[OP]]
+ ;
+ ; GCN-LABEL: select_sdiv_lhs_const_v2i32:
+diff --git a/llvm/test/Transforms/InstCombine/apint-shift.ll b/llvm/test/Transforms/InstCombine/apint-shift.ll
+index 908aeac0cea2..5a351efccfcc 100644
+--- a/llvm/test/Transforms/InstCombine/apint-shift.ll
++++ b/llvm/test/Transforms/InstCombine/apint-shift.ll
+@@ -337,7 +337,7 @@ define <2 x i1> @test16vec_nonuniform(<2 x i84> %X) {
+ 
+ define <2 x i1> @test16vec_undef(<2 x i84> %X) {
+ ; CHECK-LABEL: @test16vec_undef(
+-; CHECK-NEXT:    [[TMP1:%.*]] = and <2 x i84> [[X:%.*]], <i84 16, i84 poison>
++; CHECK-NEXT:    [[TMP1:%.*]] = and <2 x i84> [[X:%.*]], <i84 16, i84 undef>
+ ; CHECK-NEXT:    [[CMP:%.*]] = icmp ne <2 x i84> [[TMP1]], zeroinitializer
+ ; CHECK-NEXT:    ret <2 x i1> [[CMP]]
+ ;
+diff --git a/llvm/test/Transforms/InstCombine/canonicalize-ashr-shl-to-masking.ll b/llvm/test/Transforms/InstCombine/canonicalize-ashr-shl-to-masking.ll
+index 8d29372c3a72..ba0d32ee3768 100644
+--- a/llvm/test/Transforms/InstCombine/canonicalize-ashr-shl-to-masking.ll
++++ b/llvm/test/Transforms/InstCombine/canonicalize-ashr-shl-to-masking.ll
+@@ -418,7 +418,7 @@ define <3 x i8> @positive_sameconst_vec_undef1(<3 x i8> %x) {
+ 
+ define <3 x i8> @positive_sameconst_vec_undef2(<3 x i8> %x) {
+ ; CHECK-LABEL: @positive_sameconst_vec_undef2(
+-; CHECK-NEXT:    [[RET:%.*]] = and <3 x i8> [[X:%.*]], <i8 -8, i8 poison, i8 -8>
++; CHECK-NEXT:    [[RET:%.*]] = and <3 x i8> [[X:%.*]], <i8 -8, i8 undef, i8 -8>
+ ; CHECK-NEXT:    ret <3 x i8> [[RET]]
+ ;
+   %tmp0 = ashr <3 x i8> %x, <i8 3, i8 undef, i8 3>
+diff --git a/llvm/test/Transforms/InstCombine/canonicalize-lshr-shl-to-masking.ll b/llvm/test/Transforms/InstCombine/canonicalize-lshr-shl-to-masking.ll
+index 40bc4aaab21c..445f6406b3d2 100644
+--- a/llvm/test/Transforms/InstCombine/canonicalize-lshr-shl-to-masking.ll
++++ b/llvm/test/Transforms/InstCombine/canonicalize-lshr-shl-to-masking.ll
+@@ -418,7 +418,7 @@ define <3 x i8> @positive_sameconst_vec_undef1(<3 x i8> %x) {
+ 
+ define <3 x i8> @positive_sameconst_vec_undef2(<3 x i8> %x) {
+ ; CHECK-LABEL: @positive_sameconst_vec_undef2(
+-; CHECK-NEXT:    [[RET:%.*]] = and <3 x i8> [[X:%.*]], <i8 -8, i8 poison, i8 -8>
++; CHECK-NEXT:    [[RET:%.*]] = and <3 x i8> [[X:%.*]], <i8 -8, i8 undef, i8 -8>
+ ; CHECK-NEXT:    ret <3 x i8> [[RET]]
+ ;
+   %tmp0 = lshr <3 x i8> %x, <i8 3, i8 undef, i8 3>
+diff --git a/llvm/test/Transforms/InstCombine/canonicalize-shl-lshr-to-masking.ll b/llvm/test/Transforms/InstCombine/canonicalize-shl-lshr-to-masking.ll
+index 45aa22aa808f..9de0b337de28 100644
+--- a/llvm/test/Transforms/InstCombine/canonicalize-shl-lshr-to-masking.ll
++++ b/llvm/test/Transforms/InstCombine/canonicalize-shl-lshr-to-masking.ll
+@@ -171,7 +171,7 @@ define <3 x i32> @positive_sameconst_vec_undef1(<3 x i32> %x) {
+ 
+ define <3 x i32> @positive_sameconst_vec_undef2(<3 x i32> %x) {
+ ; CHECK-LABEL: @positive_sameconst_vec_undef2(
+-; CHECK-NEXT:    [[RET:%.*]] = and <3 x i32> [[X:%.*]], <i32 134217727, i32 poison, i32 134217727>
++; CHECK-NEXT:    [[RET:%.*]] = and <3 x i32> [[X:%.*]], <i32 134217727, i32 undef, i32 134217727>
+ ; CHECK-NEXT:    ret <3 x i32> [[RET]]
+ ;
+   %tmp0 = shl <3 x i32> %x, <i32 5, i32 undef, i32 5>
+diff --git a/llvm/test/Transforms/InstCombine/icmp.ll b/llvm/test/Transforms/InstCombine/icmp.ll
+index b48466e678d8..5e6bed4e280f 100644
+--- a/llvm/test/Transforms/InstCombine/icmp.ll
++++ b/llvm/test/Transforms/InstCombine/icmp.ll
+@@ -2876,7 +2876,7 @@ define <2 x i1> @icmp_and_or_lshr_cst_vec_nonuniform(<2 x i32> %x) {
+ 
+ define <2 x i1> @icmp_and_or_lshr_cst_vec_undef(<2 x i32> %x) {
+ ; CHECK-LABEL: @icmp_and_or_lshr_cst_vec_undef(
+-; CHECK-NEXT:    [[TMP1:%.*]] = and <2 x i32> [[X:%.*]], <i32 3, i32 poison>
++; CHECK-NEXT:    [[TMP1:%.*]] = and <2 x i32> [[X:%.*]], <i32 3, i32 -1>
+ ; CHECK-NEXT:    [[RET:%.*]] = icmp ne <2 x i32> [[TMP1]], zeroinitializer
+ ; CHECK-NEXT:    ret <2 x i1> [[RET]]
+ ;
+@@ -2920,7 +2920,7 @@ define <2 x i1> @icmp_and_or_lshr_cst_vec_nonuniform_commute(<2 x i32> %xp) {
+ define <2 x i1> @icmp_and_or_lshr_cst_vec_undef_commute(<2 x i32> %xp) {
+ ; CHECK-LABEL: @icmp_and_or_lshr_cst_vec_undef_commute(
+ ; CHECK-NEXT:    [[X:%.*]] = srem <2 x i32> [[XP:%.*]], <i32 42, i32 42>
+-; CHECK-NEXT:    [[TMP1:%.*]] = and <2 x i32> [[X]], <i32 3, i32 poison>
++; CHECK-NEXT:    [[TMP1:%.*]] = and <2 x i32> [[X]], <i32 3, i32 -1>
+ ; CHECK-NEXT:    [[RET:%.*]] = icmp ne <2 x i32> [[TMP1]], zeroinitializer
+ ; CHECK-NEXT:    ret <2 x i1> [[RET]]
+ ;
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-a.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-a.ll
+index e49c381fcd16..89c16a0949e8 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-a.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-a.ll
+@@ -103,7 +103,7 @@ define <8 x i32> @t2_vec_splat_undef(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T4]]
+-; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T7]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef, i32 -1>
+@@ -138,7 +138,7 @@ define <8 x i32> @t3_vec_nonsplat(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T4]]
+-; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 poison, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1>
++; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 undef, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1>
+ ; CHECK-NEXT:    ret <8 x i32> [[T7]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -33, i32 -32, i32 -31, i32 -1, i32 0, i32 1, i32 31, i32 32>
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-b.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-b.ll
+index 20f38deeb0d5..8aef637c6a74 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-b.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-b.ll
+@@ -103,7 +103,7 @@ define <8 x i32> @t2_vec_splat_undef(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T4]]
+-; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T7]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef, i32 -1>
+@@ -138,7 +138,7 @@ define <8 x i32> @t3_vec_nonsplat(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T4]]
+-; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 poison, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1>
++; CHECK-NEXT:    [[T7:%.*]] = and <8 x i32> [[TMP2]], <i32 undef, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1>
+ ; CHECK-NEXT:    ret <8 x i32> [[T7]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -33, i32 -32, i32 -31, i32 -1, i32 0, i32 1, i32 31, i32 32>
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-c.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-c.ll
+index 562280391c5e..61f25e6ca0b1 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-c.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-c.ll
+@@ -83,7 +83,7 @@ define <8 x i32> @t2_vec_splat_undef(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T2]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = zext <8 x i32> %nbits to <8 x i64>
+@@ -110,7 +110,7 @@ define <8 x i32> @t3_vec_nonsplat(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T2]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 poison, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 poison, i32 poison>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 undef, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 undef, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = zext <8 x i32> %nbits to <8 x i64>
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-d.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-d.ll
+index aa644e6264e4..077bb8296f3e 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-d.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-d.ll
+@@ -93,7 +93,7 @@ define <8 x i32> @t2_vec_splat_undef(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T3]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T3]]
+-; CHECK-NEXT:    [[T6:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T6:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T6]]
+ ;
+   %t0 = zext <8 x i32> %nbits to <8 x i64>
+@@ -124,7 +124,7 @@ define <8 x i32> @t3_vec_nonsplat(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T3]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X:%.*]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T3]]
+-; CHECK-NEXT:    [[T6:%.*]] = and <8 x i32> [[TMP2]], <i32 poison, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 poison, i32 poison>
++; CHECK-NEXT:    [[T6:%.*]] = and <8 x i32> [[TMP2]], <i32 undef, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 undef, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T6]]
+ ;
+   %t0 = zext <8 x i32> %nbits to <8 x i64>
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-e.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-e.ll
+index f2aa2894e27a..961ea5e48416 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-e.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-after-truncation-variant-e.ll
+@@ -83,7 +83,7 @@ define <8 x i32> @t2_vec_splat_undef(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T2]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = zext <8 x i32> %nbits to <8 x i64>
+@@ -110,7 +110,7 @@ define <8 x i32> @t3_vec_nonsplat(<8 x i64> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = trunc <8 x i64> [[X]] to <8 x i32>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = shl <8 x i32> [[TMP1]], [[T2]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 poison, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 poison, i32 poison>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP2]], <i32 undef, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 undef, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = zext <8 x i32> %nbits to <8 x i64>
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-a.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-a.ll
+index 882117fe3480..41a71aa98f40 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-a.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-a.ll
+@@ -82,7 +82,7 @@ define <8 x i32> @t1_vec_splat_undef(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T4]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef, i32 -1>
+@@ -109,7 +109,7 @@ define <8 x i32> @t2_vec_nonsplat(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T4]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 poison, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 poison>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 undef, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -33, i32 -32, i32 -31, i32 -1, i32 0, i32 1, i32 31, i32 32>
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-b.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-b.ll
+index e92875d79207..787135229148 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-b.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-b.ll
+@@ -82,7 +82,7 @@ define <8 x i32> @t1_vec_splat_undef(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T4]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef, i32 -1>
+@@ -109,7 +109,7 @@ define <8 x i32> @t2_vec_nonsplat(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T4]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T4]]
+-; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 poison, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 poison>
++; CHECK-NEXT:    [[T5:%.*]] = and <8 x i32> [[TMP1]], <i32 undef, i32 0, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T5]]
+ ;
+   %t0 = add <8 x i32> %nbits, <i32 -33, i32 -32, i32 -31, i32 -1, i32 0, i32 1, i32 31, i32 32>
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-c.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-c.ll
+index b8066cef2b40..c0959d9e1ac6 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-c.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-c.ll
+@@ -62,7 +62,7 @@ define <8 x i32> @t1_vec_splat_undef(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T0]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T2]]
+-; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T3]]
+ ;
+   %t0 = lshr <8 x i32> <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef, i32 -1>, %nbits
+@@ -81,7 +81,7 @@ define <8 x i32> @t1_vec_nonsplat(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T0]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T2]]
+-; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 poison, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1, i32 poison>
++; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 undef, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T3]]
+ ;
+   %t0 = lshr <8 x i32> <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1>, %nbits
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-d.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-d.ll
+index 20b322c0b647..5e0f0be2b1ad 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-d.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-d.ll
+@@ -72,7 +72,7 @@ define <8 x i32> @t2_vec_splat_undef(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T1]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T3]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T3]]
+-; CHECK-NEXT:    [[T4:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T4:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T4]]
+ ;
+   %t0 = shl <8 x i32> <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef, i32 -1>, %nbits
+@@ -95,7 +95,7 @@ define <8 x i32> @t2_vec_nonsplat(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T1]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T3]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X:%.*]], [[T3]]
+-; CHECK-NEXT:    [[T4:%.*]] = and <8 x i32> [[TMP1]], <i32 poison, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1, i32 poison>
++; CHECK-NEXT:    [[T4:%.*]] = and <8 x i32> [[TMP1]], <i32 undef, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T4]]
+ ;
+   %t0 = shl <8 x i32> <i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1, i32 -1>, %nbits
+diff --git a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-e.ll b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-e.ll
+index 46f5b0c2f213..2e335f0083c1 100644
+--- a/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-e.ll
++++ b/llvm/test/Transforms/InstCombine/partally-redundant-left-shift-input-masking-variant-e.ll
+@@ -62,7 +62,7 @@ define <8 x i32> @t1_vec_splat_undef(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T0]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X]], [[T2]]
+-; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 poison, i32 2147483647>
++; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 2147483647, i32 undef, i32 2147483647>
+ ; CHECK-NEXT:    ret <8 x i32> [[T3]]
+ ;
+   %t0 = shl <8 x i32> %x, %nbits
+@@ -81,7 +81,7 @@ define <8 x i32> @t1_vec_nonsplat(<8 x i32> %x, <8 x i32> %nbits) {
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T0]])
+ ; CHECK-NEXT:    call void @use8xi32(<8 x i32> [[T2]])
+ ; CHECK-NEXT:    [[TMP1:%.*]] = shl <8 x i32> [[X]], [[T2]]
+-; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 poison, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1, i32 poison>
++; CHECK-NEXT:    [[T3:%.*]] = and <8 x i32> [[TMP1]], <i32 undef, i32 1, i32 2147483647, i32 -1, i32 -1, i32 -1, i32 -1, i32 undef>
+ ; CHECK-NEXT:    ret <8 x i32> [[T3]]
+ ;
+   %t0 = shl <8 x i32> %x, %nbits
+diff --git a/llvm/test/Transforms/InstCombine/select-of-bittest.ll b/llvm/test/Transforms/InstCombine/select-of-bittest.ll
+index c85bcba82e97..d9bef00b2f78 100644
+--- a/llvm/test/Transforms/InstCombine/select-of-bittest.ll
++++ b/llvm/test/Transforms/InstCombine/select-of-bittest.ll
+@@ -82,7 +82,7 @@ define <2 x i32> @and_lshr_and_vec_v2(<2 x i32> %arg) {
+ 
+ define <3 x i32> @and_lshr_and_vec_undef(<3 x i32> %arg) {
+ ; CHECK-LABEL: @and_lshr_and_vec_undef(
+-; CHECK-NEXT:    [[TMP1:%.*]] = and <3 x i32> [[ARG:%.*]], <i32 3, i32 poison, i32 3>
++; CHECK-NEXT:    [[TMP1:%.*]] = and <3 x i32> [[ARG:%.*]], <i32 3, i32 undef, i32 3>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = icmp ne <3 x i32> [[TMP1]], zeroinitializer
+ ; CHECK-NEXT:    [[TMP4:%.*]] = zext <3 x i1> [[TMP2]] to <3 x i32>
+ ; CHECK-NEXT:    ret <3 x i32> [[TMP4]]
+@@ -91,7 +91,6 @@ define <3 x i32> @and_lshr_and_vec_undef(<3 x i32> %arg) {
+   %tmp1 = icmp eq <3 x i32> %tmp, <i32 0, i32 undef, i32 0>
+   %tmp2 = lshr <3 x i32> %arg, <i32 1, i32 undef, i32 1>
+   %tmp3 = and <3 x i32> %tmp2, <i32 1, i32 undef, i32 1>
+-  ; The second element of %tmp4 is poison because it is (undef ? poison : undef).
+   %tmp4 = select <3 x i1> %tmp1, <3 x i32> %tmp3, <3 x i32> <i32 1, i32 undef, i32 1>
+   ret <3 x i32> %tmp4
+ }
+@@ -223,7 +222,7 @@ define <2 x i32> @f_var0_vec(<2 x i32> %arg, <2 x i32> %arg1) {
+ 
+ define <3 x i32> @f_var0_vec_undef(<3 x i32> %arg, <3 x i32> %arg1) {
+ ; CHECK-LABEL: @f_var0_vec_undef(
+-; CHECK-NEXT:    [[TMP1:%.*]] = or <3 x i32> [[ARG1:%.*]], <i32 2, i32 poison, i32 2>
++; CHECK-NEXT:    [[TMP1:%.*]] = or <3 x i32> [[ARG1:%.*]], <i32 2, i32 undef, i32 2>
+ ; CHECK-NEXT:    [[TMP2:%.*]] = and <3 x i32> [[TMP1]], [[ARG:%.*]]
+ ; CHECK-NEXT:    [[TMP3:%.*]] = icmp ne <3 x i32> [[TMP2]], zeroinitializer
+ ; CHECK-NEXT:    [[TMP5:%.*]] = zext <3 x i1> [[TMP3]] to <3 x i32>
+@@ -233,7 +232,6 @@ define <3 x i32> @f_var0_vec_undef(<3 x i32> %arg, <3 x i32> %arg1) {
+   %tmp2 = icmp eq <3 x i32> %tmp, <i32 0, i32 undef, i32 0>
+   %tmp3 = lshr <3 x i32> %arg, <i32 1, i32 undef, i32 1>
+   %tmp4 = and <3 x i32> %tmp3, <i32 1, i32 undef, i32 1>
+-  ; The second element of %tmp5 is poison because it is (undef ? poison : undef).
+   %tmp5 = select <3 x i1> %tmp2, <3 x i32> %tmp4, <3 x i32> <i32 1, i32 undef, i32 1>
+   ret <3 x i32> %tmp5
+ }
+diff --git a/llvm/test/Transforms/InstCombine/shift-add.ll b/llvm/test/Transforms/InstCombine/shift-add.ll
+index eea8b7a074d7..e227274f4930 100644
+--- a/llvm/test/Transforms/InstCombine/shift-add.ll
++++ b/llvm/test/Transforms/InstCombine/shift-add.ll
+@@ -40,7 +40,7 @@ define i32 @lshr_C1_add_A_C2_i32(i32 %A) {
+ define <4 x i32> @shl_C1_add_A_C2_v4i32(<4 x i16> %A) {
+ ; CHECK-LABEL: @shl_C1_add_A_C2_v4i32(
+ ; CHECK-NEXT:    [[B:%.*]] = zext <4 x i16> [[A:%.*]] to <4 x i32>
+-; CHECK-NEXT:    [[D:%.*]] = shl <4 x i32> <i32 6, i32 4, i32 poison, i32 -458752>, [[B]]
++; CHECK-NEXT:    [[D:%.*]] = shl <4 x i32> <i32 6, i32 4, i32 undef, i32 -458752>, [[B]]
+ ; CHECK-NEXT:    ret <4 x i32> [[D]]
+ ;
+   %B = zext <4 x i16> %A to <4 x i32>
+@@ -52,7 +52,7 @@ define <4 x i32> @shl_C1_add_A_C2_v4i32(<4 x i16> %A) {
+ define <4 x i32> @ashr_C1_add_A_C2_v4i32(<4 x i32> %A) {
+ ; CHECK-LABEL: @ashr_C1_add_A_C2_v4i32(
+ ; CHECK-NEXT:    [[B:%.*]] = and <4 x i32> [[A:%.*]], <i32 0, i32 15, i32 255, i32 65535>
+-; CHECK-NEXT:    [[D:%.*]] = ashr <4 x i32> <i32 6, i32 1, i32 poison, i32 -1>, [[B]]
++; CHECK-NEXT:    [[D:%.*]] = ashr <4 x i32> <i32 6, i32 1, i32 undef, i32 -1>, [[B]]
+ ; CHECK-NEXT:    ret <4 x i32> [[D]]
+ ;
+   %B = and <4 x i32> %A, <i32 0, i32 15, i32 255, i32 65535>
+@@ -64,7 +64,7 @@ define <4 x i32> @ashr_C1_add_A_C2_v4i32(<4 x i32> %A) {
+ define <4 x i32> @lshr_C1_add_A_C2_v4i32(<4 x i32> %A) {
+ ; CHECK-LABEL: @lshr_C1_add_A_C2_v4i32(
+ ; CHECK-NEXT:    [[B:%.*]] = and <4 x i32> [[A:%.*]], <i32 0, i32 15, i32 255, i32 65535>
+-; CHECK-NEXT:    [[D:%.*]] = lshr <4 x i32> <i32 6, i32 1, i32 poison, i32 65535>, [[B]]
++; CHECK-NEXT:    [[D:%.*]] = lshr <4 x i32> <i32 6, i32 1, i32 undef, i32 65535>, [[B]]
+ ; CHECK-NEXT:    ret <4 x i32> [[D]]
+ ;
+   %B = and <4 x i32> %A, <i32 0, i32 15, i32 255, i32 65535>
+@@ -78,7 +78,7 @@ define <4 x i32> @shl_C1_add_A_C2_v4i32_splat(i16 %I) {
+ ; CHECK-NEXT:    [[A:%.*]] = zext i16 [[I:%.*]] to i32
+ ; CHECK-NEXT:    [[B:%.*]] = insertelement <4 x i32> undef, i32 [[A]], i32 0
+ ; CHECK-NEXT:    [[C:%.*]] = shufflevector <4 x i32> [[B]], <4 x i32> undef, <4 x i32> zeroinitializer
+-; CHECK-NEXT:    [[E:%.*]] = shl <4 x i32> <i32 6, i32 4, i32 poison, i32 -458752>, [[C]]
++; CHECK-NEXT:    [[E:%.*]] = shl <4 x i32> <i32 6, i32 4, i32 undef, i32 -458752>, [[C]]
+ ; CHECK-NEXT:    ret <4 x i32> [[E]]
+ ;
+   %A = zext i16 %I to i32
+@@ -94,7 +94,7 @@ define <4 x i32> @ashr_C1_add_A_C2_v4i32_splat(i16 %I) {
+ ; CHECK-NEXT:    [[A:%.*]] = zext i16 [[I:%.*]] to i32
+ ; CHECK-NEXT:    [[B:%.*]] = insertelement <4 x i32> undef, i32 [[A]], i32 0
+ ; CHECK-NEXT:    [[C:%.*]] = shufflevector <4 x i32> [[B]], <4 x i32> undef, <4 x i32> zeroinitializer
+-; CHECK-NEXT:    [[E:%.*]] = ashr <4 x i32> <i32 6, i32 1, i32 poison, i32 -1>, [[C]]
++; CHECK-NEXT:    [[E:%.*]] = ashr <4 x i32> <i32 6, i32 1, i32 undef, i32 -1>, [[C]]
+ ; CHECK-NEXT:    ret <4 x i32> [[E]]
+ ;
+   %A = zext i16 %I to i32
+@@ -110,7 +110,7 @@ define <4 x i32> @lshr_C1_add_A_C2_v4i32_splat(i16 %I) {
+ ; CHECK-NEXT:    [[A:%.*]] = zext i16 [[I:%.*]] to i32
+ ; CHECK-NEXT:    [[B:%.*]] = insertelement <4 x i32> undef, i32 [[A]], i32 0
+ ; CHECK-NEXT:    [[C:%.*]] = shufflevector <4 x i32> [[B]], <4 x i32> undef, <4 x i32> zeroinitializer
+-; CHECK-NEXT:    [[E:%.*]] = lshr <4 x i32> <i32 6, i32 1, i32 poison, i32 65535>, [[C]]
++; CHECK-NEXT:    [[E:%.*]] = lshr <4 x i32> <i32 6, i32 1, i32 undef, i32 65535>, [[C]]
+ ; CHECK-NEXT:    ret <4 x i32> [[E]]
+ ;
+   %A = zext i16 %I to i32
+diff --git a/llvm/test/Transforms/InstSimplify/ConstProp/InsertElement.ll b/llvm/test/Transforms/InstSimplify/ConstProp/InsertElement.ll
+index 127c1692b5b8..a9a27a5df01f 100644
+--- a/llvm/test/Transforms/InstSimplify/ConstProp/InsertElement.ll
++++ b/llvm/test/Transforms/InstSimplify/ConstProp/InsertElement.ll
+@@ -25,7 +25,7 @@ define <4 x i64> @insertelement() {
+ 
+ define <4 x i64> @insertelement_undef() {
+ ; CHECK-LABEL: @insertelement_undef(
+-; CHECK-NEXT:    ret <4 x i64> poison
++; CHECK-NEXT:    ret <4 x i64> undef
+ ;
+   %vec1 = insertelement <4 x i64> undef, i64 -1, i32 0
+   %vec2 = insertelement <4 x i64> %vec1, i64 -2, i32 1
+diff --git a/llvm/test/Transforms/InstSimplify/ConstProp/cast.ll b/llvm/test/Transforms/InstSimplify/ConstProp/cast.ll
+index 1136151f7157..adf5e4b68a1b 100644
+--- a/llvm/test/Transforms/InstSimplify/ConstProp/cast.ll
++++ b/llvm/test/Transforms/InstSimplify/ConstProp/cast.ll
+@@ -5,7 +5,7 @@
+ 
+ define i8 @overflow_fptosi() {
+ ; CHECK-LABEL: @overflow_fptosi(
+-; CHECK-NEXT:    ret i8 poison
++; CHECK-NEXT:    ret i8 undef
+ ;
+   %i = fptosi double 1.56e+02 to i8
+   ret i8 %i
+@@ -13,7 +13,7 @@ define i8 @overflow_fptosi() {
+ 
+ define i8 @overflow_fptoui() {
+ ; CHECK-LABEL: @overflow_fptoui(
+-; CHECK-NEXT:    ret i8 poison
++; CHECK-NEXT:    ret i8 undef
+ ;
+   %i = fptoui double 2.56e+02 to i8
+   ret i8 %i
+diff --git a/llvm/test/Transforms/InstSimplify/ConstProp/poison.ll b/llvm/test/Transforms/InstSimplify/ConstProp/poison.ll
+index f3fe29ff57ba..ea34bb4699e6 100644
+--- a/llvm/test/Transforms/InstSimplify/ConstProp/poison.ll
++++ b/llvm/test/Transforms/InstSimplify/ConstProp/poison.ll
+@@ -104,14 +104,14 @@ define void @vec_aggr_ops() {
+ 
+ define void @other_ops(i8 %x) {
+ ; CHECK-LABEL: @other_ops(
+-; CHECK-NEXT:    call void (...) @use(i1 poison, i1 poison, i8 poison, i8 poison, i8* poison, i8* poison)
++; CHECK-NEXT:    call void (...) @use(i1 poison, i1 poison, i8 poison, i8 poison, i8* poison)
+ ; CHECK-NEXT:    ret void
+ ;
+   %i1 = icmp eq i8 poison, 1
+   %i2 = fcmp oeq float poison, 1.0
+   %i3 = select i1 poison, i8 1, i8 2
+   %i4 = select i1 true, i8 poison, i8 %x
+-  call void (...) @use(i1 %i1, i1 %i2, i8 %i3, i8 %i4, i8* getelementptr (i8, i8* poison, i64 1), i8* getelementptr inbounds (i8, i8* undef, i64 1))
++  call void (...) @use(i1 %i1, i1 %i2, i8 %i3, i8 %i4, i8* getelementptr (i8, i8* poison, i64 1))
+   ret void
+ }
+ 
+diff --git a/llvm/test/Transforms/InstSimplify/ConstProp/shift.ll b/llvm/test/Transforms/InstSimplify/ConstProp/shift.ll
+index a7a60e562117..3e64513533ff 100644
+--- a/llvm/test/Transforms/InstSimplify/ConstProp/shift.ll
++++ b/llvm/test/Transforms/InstSimplify/ConstProp/shift.ll
+@@ -3,15 +3,15 @@
+ ; CHECK-LABEL: shift_undef_64
+ define void @shift_undef_64(i64* %p) {
+   %r1 = lshr i64 -1, 4294967296 ; 2^32
+-  ; CHECK: store i64 poison
++  ; CHECK: store i64 undef
+   store i64 %r1, i64* %p
+ 
+   %r2 = ashr i64 -1, 4294967297 ; 2^32 + 1
+-  ; CHECK: store i64 poison
++  ; CHECK: store i64 undef
+   store i64 %r2, i64* %p
+ 
+   %r3 = shl i64 -1, 4294967298 ; 2^32 + 2
+-  ; CHECK: store i64 poison
++  ; CHECK: store i64 undef
+   store i64 %r3, i64* %p
+ 
+   ret void
+@@ -20,15 +20,15 @@ define void @shift_undef_64(i64* %p) {
+ ; CHECK-LABEL: shift_undef_65
+ define void @shift_undef_65(i65* %p) {
+   %r1 = lshr i65 2, 18446744073709551617
+-  ; CHECK: store i65 poison
++  ; CHECK: store i65 undef
+   store i65 %r1, i65* %p
+ 
+   %r2 = ashr i65 4, 18446744073709551617
+-  ; CHECK: store i65 poison
++  ; CHECK: store i65 undef
+   store i65 %r2, i65* %p
+ 
+   %r3 = shl i65 1, 18446744073709551617
+-  ; CHECK: store i65 poison
++  ; CHECK: store i65 undef
+   store i65 %r3, i65* %p
+ 
+   ret void
+@@ -37,15 +37,15 @@ define void @shift_undef_65(i65* %p) {
+ ; CHECK-LABEL: shift_undef_256
+ define void @shift_undef_256(i256* %p) {
+   %r1 = lshr i256 2, 18446744073709551617
+-  ; CHECK: store i256 poison
++  ; CHECK: store i256 undef
+   store i256 %r1, i256* %p
+ 
+   %r2 = ashr i256 4, 18446744073709551618
+-  ; CHECK: store i256 poison
++  ; CHECK: store i256 undef
+   store i256 %r2, i256* %p
+ 
+   %r3 = shl i256 1, 18446744073709551619
+-  ; CHECK: store i256 poison
++  ; CHECK: store i256 undef
+   store i256 %r3, i256* %p
+ 
+   ret void
+@@ -54,15 +54,15 @@ define void @shift_undef_256(i256* %p) {
+ ; CHECK-LABEL: shift_undef_511
+ define void @shift_undef_511(i511* %p) {
+   %r1 = lshr i511 -1, 1208925819614629174706276 ; 2^80 + 100
+-  ; CHECK: store i511 poison
++  ; CHECK: store i511 undef
+   store i511 %r1, i511* %p
+ 
+   %r2 = ashr i511 -2, 1208925819614629174706200
+-  ; CHECK: store i511 poison
++  ; CHECK: store i511 undef
+   store i511 %r2, i511* %p
+ 
+   %r3 = shl i511 -3, 1208925819614629174706180
+-  ; CHECK: store i511 poison
++  ; CHECK: store i511 undef
+   store i511 %r3, i511* %p
+ 
+   ret void
+diff --git a/llvm/test/Transforms/InstSimplify/ConstProp/vector-undef-elts.ll b/llvm/test/Transforms/InstSimplify/ConstProp/vector-undef-elts.ll
+index 99cc2527d12e..5d0f484bc3fd 100644
+--- a/llvm/test/Transforms/InstSimplify/ConstProp/vector-undef-elts.ll
++++ b/llvm/test/Transforms/InstSimplify/ConstProp/vector-undef-elts.ll
+@@ -5,7 +5,7 @@
+ 
+ define <3 x i8> @shl() {
+ ; CHECK-LABEL: @shl(
+-; CHECK-NEXT:    ret <3 x i8> <i8 poison, i8 0, i8 0>
++; CHECK-NEXT:    ret <3 x i8> <i8 undef, i8 0, i8 0>
+ ;
+   %c = shl <3 x i8> undef, <i8 undef, i8 4, i8 1>
+   ret <3 x i8> %c
+diff --git a/llvm/test/Transforms/InstSimplify/ConstProp/vscale.ll b/llvm/test/Transforms/InstSimplify/ConstProp/vscale.ll
+index 048e8840ffd8..66e4c93e1968 100644
+--- a/llvm/test/Transforms/InstSimplify/ConstProp/vscale.ll
++++ b/llvm/test/Transforms/InstSimplify/ConstProp/vscale.ll
+@@ -75,7 +75,7 @@ define <vscale x 4 x float> @fmul() {
+ 
+ define <vscale x 4 x i32> @udiv() {
+ ; CHECK-LABEL: @udiv(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = udiv <vscale x 4 x i32> undef, undef
+   ret <vscale x 4 x i32> %r
+@@ -83,7 +83,7 @@ define <vscale x 4 x i32> @udiv() {
+ 
+ define <vscale x 4 x i32> @udiv_splat_zero() {
+ ; CHECK-LABEL: @udiv_splat_zero(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = udiv <vscale x 4 x i32> zeroinitializer, zeroinitializer
+   ret <vscale x 4 x i32> %r
+@@ -91,7 +91,7 @@ define <vscale x 4 x i32> @udiv_splat_zero() {
+ 
+ define <vscale x 4 x i32> @sdiv() {
+ ; CHECK-LABEL: @sdiv(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = sdiv <vscale x 4 x i32> undef, undef
+   ret <vscale x 4 x i32> %r
+@@ -107,7 +107,7 @@ define <vscale x 4 x float> @fdiv() {
+ 
+ define <vscale x 4 x i32> @urem() {
+ ; CHECK-LABEL: @urem(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = urem <vscale x 4 x i32> undef, undef
+   ret <vscale x 4 x i32> %r
+@@ -115,7 +115,7 @@ define <vscale x 4 x i32> @urem() {
+ 
+ define <vscale x 4 x i32> @srem() {
+ ; CHECK-LABEL: @srem(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = srem <vscale x 4 x i32> undef, undef
+   ret <vscale x 4 x i32> %r
+@@ -135,7 +135,7 @@ define <vscale x 4 x float> @frem() {
+ 
+ define <vscale x 4 x i32> @shl() {
+ ; CHECK-LABEL: @shl(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = shl <vscale x 4 x i32> undef, undef
+   ret <vscale x 4 x i32> %r
+@@ -143,7 +143,7 @@ define <vscale x 4 x i32> @shl() {
+ 
+ define <vscale x 4 x i32> @lshr() {
+ ; CHECK-LABEL: @lshr(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = lshr <vscale x 4 x i32> undef, undef
+   ret <vscale x 4 x i32> %r
+@@ -151,7 +151,7 @@ define <vscale x 4 x i32> @lshr() {
+ 
+ define <vscale x 4 x i32> @ashr() {
+ ; CHECK-LABEL: @ashr(
+-; CHECK-NEXT:    ret <vscale x 4 x i32> poison
++; CHECK-NEXT:    ret <vscale x 4 x i32> undef
+ ;
+   %r = ashr <vscale x 4 x i32> undef, undef
+   ret <vscale x 4 x i32> %r
+diff --git a/llvm/test/Transforms/InstSimplify/rem.ll b/llvm/test/Transforms/InstSimplify/rem.ll
+index 6aaeb5c70d00..6ccb6474ce44 100644
+--- a/llvm/test/Transforms/InstSimplify/rem.ll
++++ b/llvm/test/Transforms/InstSimplify/rem.ll
+@@ -25,11 +25,11 @@ define <2 x i32> @zero_dividend_vector_undef_elt(<2 x i32> %A) {
+   ret <2 x i32> %B
+ }
+ 
+-; Division-by-zero is poison. UB in any vector lane means the whole op is poison.
++; Division-by-zero is undef. UB in any vector lane means the whole op is undef.
+ 
+ define <2 x i8> @srem_zero_elt_vec_constfold(<2 x i8> %x) {
+ ; CHECK-LABEL: @srem_zero_elt_vec_constfold(
+-; CHECK-NEXT:    ret <2 x i8> poison
++; CHECK-NEXT:    ret <2 x i8> undef
+ ;
+   %rem = srem <2 x i8> <i8 1, i8 2>, <i8 0, i8 -42>
+   ret <2 x i8> %rem
+@@ -37,7 +37,7 @@ define <2 x i8> @srem_zero_elt_vec_constfold(<2 x i8> %x) {
+ 
+ define <2 x i8> @urem_zero_elt_vec_constfold(<2 x i8> %x) {
+ ; CHECK-LABEL: @urem_zero_elt_vec_constfold(
+-; CHECK-NEXT:    ret <2 x i8> poison
++; CHECK-NEXT:    ret <2 x i8> undef
+ ;
+   %rem = urem <2 x i8> <i8 1, i8 2>, <i8 42, i8 0>
+   ret <2 x i8> %rem
+@@ -325,28 +325,3 @@ define <2 x i32> @srem_with_sext_bool_divisor_vec(<2 x i1> %x, <2 x i32> %y) {
+   ret <2 x i32> %r
+ }
+ 
+-define i8 @srem_minusone_divisor() {
+-; CHECK-LABEL: @srem_minusone_divisor(
+-; CHECK-NEXT:    ret i8 poison
+-;
+-  %v = srem i8 -128, -1
+-  ret i8 %v
+-}
+-
+-define i32 @poison(i32 %x) {
+-; CHECK-LABEL: @poison(
+-; CHECK-NEXT:    ret i32 poison
+-;
+-  %v = urem i32 %x, poison
+-  ret i32 %v
+-}
+-
+-; TODO: this should be poison
+-
+-define i32 @poison2(i32 %x) {
+-; CHECK-LABEL: @poison2(
+-; CHECK-NEXT:    ret i32 0
+-;
+-  %v = urem i32 poison, %x
+-  ret i32 %v
+-}
+diff --git a/llvm/test/Transforms/SROA/phi-gep.ll b/llvm/test/Transforms/SROA/phi-gep.ll
+index 915ae546beda..6bf2a7718658 100644
+--- a/llvm/test/Transforms/SROA/phi-gep.ll
++++ b/llvm/test/Transforms/SROA/phi-gep.ll
+@@ -348,7 +348,7 @@ define void @test_sroa_gep_phi_select_same_block() {
+ ; CHECK-NEXT:    [[PHI:%.*]] = phi %pair* [ [[ALLOCA]], [[ENTRY:%.*]] ], [ [[SELECT:%.*]], [[WHILE_BODY]] ]
+ ; CHECK-NEXT:    [[SELECT]] = select i1 undef, %pair* [[PHI]], %pair* undef
+ ; CHECK-NEXT:    [[PHI_SROA_GEP:%.*]] = getelementptr inbounds [[PAIR]], %pair* [[PHI]], i64 1
+-; CHECK-NEXT:    [[SELECT_SROA_SEL:%.*]] = select i1 undef, %pair* [[PHI_SROA_GEP]], %pair* poison
++; CHECK-NEXT:    [[SELECT_SROA_SEL:%.*]] = select i1 undef, %pair* [[PHI_SROA_GEP]], %pair* undef
+ ; CHECK-NEXT:    br i1 undef, label [[EXIT:%.*]], label [[WHILE_BODY]]
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    unreachable
+diff --git a/llvm/test/Transforms/SROA/select-gep.ll b/llvm/test/Transforms/SROA/select-gep.ll
+index f69cfeb410bd..93cb3420d0af 100644
+--- a/llvm/test/Transforms/SROA/select-gep.ll
++++ b/llvm/test/Transforms/SROA/select-gep.ll
+@@ -83,7 +83,7 @@ define i32 @test_sroa_select_gep_undef(i1 %cond) {
+ ; CHECK-LABEL: @test_sroa_select_gep_undef(
+ ; CHECK-NEXT:  bb:
+ ; CHECK-NEXT:    [[A_SROA_0:%.*]] = alloca i32, align 4
+-; CHECK-NEXT:    [[SELECT_SROA_SEL:%.*]] = select i1 [[COND:%.*]], i32* [[A_SROA_0]], i32* poison
++; CHECK-NEXT:    [[SELECT_SROA_SEL:%.*]] = select i1 [[COND:%.*]], i32* [[A_SROA_0]], i32* undef
+ ; CHECK-NEXT:    [[LOAD:%.*]] = load i32, i32* [[SELECT_SROA_SEL]], align 4
+ ; CHECK-NEXT:    ret i32 [[LOAD]]
+ ;
+diff --git a/llvm/unittests/IR/ConstantsTest.cpp b/llvm/unittests/IR/ConstantsTest.cpp
+index 9eabc7c55638..96d3672647e8 100644
+--- a/llvm/unittests/IR/ConstantsTest.cpp
++++ b/llvm/unittests/IR/ConstantsTest.cpp
+@@ -27,7 +27,7 @@ TEST(ConstantsTest, Integer_i1) {
+   Constant* Zero = ConstantInt::get(Int1, 0);
+   Constant* NegOne = ConstantInt::get(Int1, static_cast<uint64_t>(-1), true);
+   EXPECT_EQ(NegOne, ConstantInt::getSigned(Int1, -1));
+-  Constant* Poison = PoisonValue::get(Int1);
++  Constant* Undef = UndefValue::get(Int1);
+ 
+   // Input:  @b = constant i1 add(i1 1 , i1 1)
+   // Output: @b = constant i1 false
+@@ -53,21 +53,21 @@ TEST(ConstantsTest, Integer_i1) {
+   // @g = constant i1 false
+   EXPECT_EQ(Zero, ConstantExpr::getSub(One, One));
+ 
+-  // @h = constant i1 shl(i1 1 , i1 1)  ; poison
+-  // @h = constant i1 poison
+-  EXPECT_EQ(Poison, ConstantExpr::getShl(One, One));
++  // @h = constant i1 shl(i1 1 , i1 1)  ; undefined
++  // @h = constant i1 undef
++  EXPECT_EQ(Undef, ConstantExpr::getShl(One, One));
+ 
+   // @i = constant i1 shl(i1 1 , i1 0)
+   // @i = constant i1 true
+   EXPECT_EQ(One, ConstantExpr::getShl(One, Zero));
+ 
+-  // @j = constant i1 lshr(i1 1, i1 1)  ; poison
+-  // @j = constant i1 poison
+-  EXPECT_EQ(Poison, ConstantExpr::getLShr(One, One));
++  // @j = constant i1 lshr(i1 1, i1 1)  ; undefined
++  // @j = constant i1 undef
++  EXPECT_EQ(Undef, ConstantExpr::getLShr(One, One));
+ 
+-  // @m = constant i1 ashr(i1 1, i1 1)  ; poison
+-  // @m = constant i1 poison
+-  EXPECT_EQ(Poison, ConstantExpr::getAShr(One, One));
++  // @m = constant i1 ashr(i1 1, i1 1)  ; undefined
++  // @m = constant i1 undef
++  EXPECT_EQ(Undef, ConstantExpr::getAShr(One, One));
+ 
+   // @n = constant i1 mul(i1 -1, i1 1)
+   // @n = constant i1 true
+@@ -218,6 +218,7 @@ TEST(ConstantsTest, AsInstructionsTest) {
+   Constant *Elt = ConstantInt::get(Int16Ty, 2015);
+   Constant *Poison16 = PoisonValue::get(Int16Ty);
+   Constant *Undef64  = UndefValue::get(Int64Ty);
++  Constant *UndefV16 = UndefValue::get(P6->getType());
+   Constant *PoisonV16 = PoisonValue::get(P6->getType());
+ 
+   #define P0STR "ptrtoint (i32** @dummy to i32)"
+@@ -294,8 +295,8 @@ TEST(ConstantsTest, AsInstructionsTest) {
+ 
+   EXPECT_EQ(Elt, ConstantExpr::getExtractElement(
+                  ConstantExpr::getInsertElement(P6, Elt, One), One));
+-  EXPECT_EQ(PoisonV16, ConstantExpr::getInsertElement(P6, Elt, Two));
+-  EXPECT_EQ(PoisonV16, ConstantExpr::getInsertElement(P6, Elt, Big));
++  EXPECT_EQ(UndefV16, ConstantExpr::getInsertElement(P6, Elt, Two));
++  EXPECT_EQ(UndefV16, ConstantExpr::getInsertElement(P6, Elt, Big));
+   EXPECT_EQ(PoisonV16, ConstantExpr::getInsertElement(P6, Elt, Undef64));
+ }
+ 

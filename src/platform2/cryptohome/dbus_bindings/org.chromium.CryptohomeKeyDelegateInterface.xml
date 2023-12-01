@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Copyright 2018 The ChromiumOS Authors
+  Use of this source code is governed by a BSD-style license that can be
+  found in the LICENSE file.
+-->
+<node name="/org/chromium/CryptohomeKeyDelegate">
+  <!-- Interface for a delegate service to be used by cryptohome for operations
+       related to user protection keys.
+  -->
+  <interface name="org.chromium.CryptohomeKeyDelegateInterface">
+    <!-- Called by cryptohome when it needs to request a challenge in order to
+         authenticate the user using a key that has the
+         KEY_TYPE_CHALLENGE_RESPONSE type.
+         account_id: binary serialized AccountIdentifier
+         challenge_request: binary serialized KeyChallengeRequest
+         challenge_response: binary serialized KeyChallengeResponse
+    -->
+    <method name="ChallengeKey">
+      <annotation name="org.freedesktop.DBus.GLib.Async" value="true"/>
+      <arg type="ay" name="account_id" direction="in" />
+      <arg type="ay" name="challenge_request" direction="in" />
+      <arg type="ay" name="challenge_response" direction="out" />
+    </method>
+
+    <!-- Called by cryptohome when it needs to create a new u2f credential.
+         fido_create_credential_request: binary serialized
+           PublicKeyCredentialCreationOptions protobuf
+         fido_create_credential_response: binary serialized
+           MakeCredentialAuthenticatorResponse protobuf
+    -->
+    <method name="FidoMakeCredential">
+      <annotation name="org.freedesktop.DBus.Glib.Async" value="true" />
+      <arg type="s" name="client_data_json" direction="in" />
+      <arg type="ay" name="fido_create_credential_request" direction="in" />
+      <arg type="ay" name="fido_create_credential_response" direction="out" />
+    </method>
+
+    <!-- Called by cryptohome when it needs to challenge a u2f key.
+         fido_get_assertion_request: binary serialized
+           PublicKeyCredentialRequestOptions protobuf
+         fido_create_credential_response: binary serialized
+           GetAssertionAuthenticatorResponse protobuf
+    -->
+    <method name="FidoGetAssertion">
+      <annotation name="org.freedesktop.DBus.Glib.Async" value="true" />
+      <arg type="s" name="client_data_json" direction="in" />
+      <arg type="ay" name="fido_get_assertion_request" direction="in" />
+      <arg type="ay" name="fido_get_assertion_response" direction="out" />
+    </method>
+  </interface>
+</node>

@@ -1,0 +1,20 @@
+From: Pranav Batra <batrapranav@chromium.org>
+
+The hpcups ljcolor filter periodically restarts the compression algorithm
+to prevent printers from running out of memory during decompression.
+m_iYPos is used to restart said algorithm every 1200 encapsulate calls.
+This variable should be initialized to zero so that the print output is stable.
+
+https://bugs.launchpad.net/hplip/+bug/1926369
+
+--- a/prnt/hpcups/LJColor.cpp
++++ b/prnt/hpcups/LJColor.cpp
+@@ -38,7 +38,7 @@
+ #include "ColorMaps.h"
+ #include "PrinterCommands.h"
+ 
+-LJColor::LJColor() : Encapsulator()
++LJColor::LJColor() : Encapsulator(), m_iYPos(0)
+ {
+     memset(&m_PM, 0, sizeof(m_PM));
+     strcpy(m_szLanguage, "PCL");

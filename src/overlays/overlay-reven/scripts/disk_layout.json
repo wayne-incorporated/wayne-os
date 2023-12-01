@@ -1,0 +1,67 @@
+{
+  "_comment": "Written by seongbin@wayne-inc.com",
+  "parent": "legacy_disk_layout.json",
+  "layouts":{
+    "common":[
+      {
+        # Reven board doesn't look like to use this partition.
+        "num": 11,
+	"size": "512"
+      },
+      {
+        "num": 10
+      },
+      {
+        # Pad out so Kernel A partition (num 2) starts on a 4096 LBA boundary.
+        "type": "blank",
+	"size": "2061824"
+      },
+      {
+        "num": 2
+      },
+      {
+        # OEM partition is not required for Base version user.
+        "num": 8,
+	"size": "3 GiB"
+      },
+      {
+        # Remove ambiguous blank.
+        "type": "blank",
+	"size": "0"
+      },
+      {
+        "num": 12,
+	"size": "128 MiB"
+      },
+      {
+        "num": 5
+      },
+      {
+        "num": 3,
+	"size": "4 GiB",
+        "fs_size":"4000 MiB"
+      }
+    ],
+    "base":[
+      {
+        "num": 5,
+        "size": "4 GiB"
+      }
+    ],
+    "usb":[
+    ],
+    "16g":[
+      {
+        "num": 5,
+	"size": "2 MiB"
+      },
+      {
+      # Base: the build_image will add 117 sectors (59904 B)
+      # Test: the build_image will add 109 sectors (55808 B)
+      # on the below size, but not sure why.
+        "num": 1,
+	"size": "7511760384"
+      }
+    ]
+  }
+}

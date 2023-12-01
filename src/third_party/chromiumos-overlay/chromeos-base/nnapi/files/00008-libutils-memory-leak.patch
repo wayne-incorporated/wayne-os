@@ -1,0 +1,16 @@
+WeakCopies test doesn't actually clean up the memory it allocates.
+
+diff --git a/platform2/aosp/system/core/libutils/RefBase_test.cpp b/platform2/aosp/system/core/libutils/RefBase_test.cpp
+index c9b4894..6f2bcc5 100644
+--- a/RefBase_test.cpp
++++ b/RefBase_test.cpp
+@@ -126,6 +126,9 @@ TEST(RefBase, WeakCopies) {
+     ASSERT_FALSE(isDeleted) << "deleted too early! still has a reference!";
+     wp1 = nullptr;
+     ASSERT_FALSE(isDeleted) << "Deletion on wp destruction should no longer occur";
++
++    // cleanup memory
++    sp<Foo> sp1(foo);
+ }
+
+ TEST(RefBase, Comparisons) {

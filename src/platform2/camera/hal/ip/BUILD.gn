@@ -1,0 +1,78 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/mojom_bindings_generator.gni")
+
+group("all") {
+  deps = [
+    ":install_ip_so",
+    ":libcamera_hal",
+  ]
+  if (use.test) {
+    deps += [ ":request_queue_test" ]
+  }
+}
+
+generate_dbus_proxies("libcamera_hal_dbus") {
+  proxy_output_file = "include/dbus_proxies/dbus-proxies.h"
+  sources = [ "dbus/org.chromium.IpPeripheralService.CameraDetector.xml" ]
+}
+
+generate_mojom_bindings("libcamera_hal_mojom") {
+  sources = [ "//camera/mojo/ip/ip_camera.mojom" ]
+  mojo_root = "${platform2_root}"
+}
+
+shared_library("libcamera_hal") {
+  sources = [
+    "camera_device.cc",
+    "camera_hal.cc",
+    "metadata_handler.cc",
+    "request_queue.cc",
+  ]
+  configs += [ "//camera/build:cros_camera_common" ]
+  pkg_deps = [
+    "libbrillo",
+    "libcros_camera",
+    "libcros_camera_android_deps",
+    "libcros_config",
+    "libsync",
+    "libyuv",
+  ]
+  deps = [
+    ":libcamera_hal_dbus",
+    ":libcamera_hal_mojom",
+  ]
+}
+
+if (use.test) {
+  executable("request_queue_test") {
+    sources = [
+      "metadata_handler.cc",
+      "request_queue.cc",
+      "request_queue_test.cc",
+    ]
+    configs += [
+      "//camera/build:cros_camera_common",
+      "//common-mk:test",
+    ]
+    run_test = true
+    pkg_deps = [
+      "libcros_camera_android_deps",
+      "libsync",
+    ]
+    deps = [
+      ":libcamera_hal_mojom",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+install_config("install_ip_so") {
+  sources = [ "${root_out_dir}/lib/libcamera_hal.so" ]
+  outputs = [ "ip.so" ]
+  install_path = "${libdir}/camera_hal"
+  deps = [ ":libcamera_hal" ]
+}

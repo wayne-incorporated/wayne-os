@@ -1,0 +1,78 @@
+From 0334da5dd0148dce82622a47306166501b740835 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 15:02:05 -0300
+Subject: [PATCH 119/163] x86: Use -mfpmath=387 iff compiler supports it
+
+---
+ sysdeps/x86/configure    | 22 ++++++++++++++++++++++
+ sysdeps/x86/configure.ac | 10 ++++++++++
+ sysdeps/x86/fpu/Makefile |  5 ++++-
+ 3 files changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/sysdeps/x86/configure b/sysdeps/x86/configure
+index e1ec171f66..d5c9eba76e 100644
+--- a/sysdeps/x86/configure
++++ b/sysdeps/x86/configure
+@@ -189,3 +189,25 @@ $as_echo "$libc_cv_have_x86_movbe" >&6; }
+ fi
+ config_vars="$config_vars
+ enable-x86-isa-level = $libc_cv_include_x86_isa_level"
++
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking if compiler supports -mpfmath=387" >&5
++$as_echo_n "checking if compiler supports -mpfmath=387... " >&6; }
++if ${libc_cv_cc_mfpmath_387+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  if { ac_try='${CC-cc} -Werror -mfpmath=387 -xc /dev/null -S -o /dev/null'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }; then :
++  libc_cv_cc_mfpmath_387="-mfpmath=387"
++else
++  libc_cv_cc_mfpmath_387=
++fi
++
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_cc_mfpmath_387" >&5
++$as_echo "$libc_cv_cc_mfpmath_387" >&6; }
++config_vars="$config_vars
++config-cflags-mfpath-387 = $libc_cv_cc_mfpmath_387"
+diff --git a/sysdeps/x86/configure.ac b/sysdeps/x86/configure.ac
+index 1837563e8f..6f73b57a1d 100644
+--- a/sysdeps/x86/configure.ac
++++ b/sysdeps/x86/configure.ac
+@@ -127,3 +127,13 @@ if test $libc_cv_include_x86_isa_level = yes; then
+   fi
+ fi
+ LIBC_CONFIG_VAR([enable-x86-isa-level], [$libc_cv_include_x86_isa_level])
++
++dnl Determine if compiler supports -mfpmath=387
++AC_CACHE_CHECK([if compiler supports -mpfmath=387],
++	       libc_cv_cc_mfpmath_387, [dnl
++LIBC_TRY_CC_OPTION([-Werror -mfpmath=387],
++		   [libc_cv_cc_mfpmath_387="-mfpmath=387"],
++		   [libc_cv_cc_mfpmath_387=])
++])
++LIBC_CONFIG_VAR([config-cflags-mfpath-387],
++		[$libc_cv_cc_mfpmath_387])
+diff --git a/sysdeps/x86/fpu/Makefile b/sysdeps/x86/fpu/Makefile
+index 6ef4c065c9..b2e4774e74 100644
+--- a/sysdeps/x86/fpu/Makefile
++++ b/sysdeps/x86/fpu/Makefile
+@@ -1,7 +1,10 @@
+ ifeq ($(subdir),math)
+ libm-support += powl_helper
+ tests += test-fenv-sse test-fenv-clear-sse test-fenv-x87 test-fenv-sse-2 \
+-	 test-flt-eval-method-387 test-flt-eval-method-sse
++	 test-flt-eval-method-sse
++ifneq ($(config-cflags-mfpath-387),)
++tests += test-flt-eval-method-387
++endif
+ CFLAGS-test-fenv-sse.c += -msse2 -mfpmath=sse
+ CFLAGS-test-fenv-clear-sse.c += -msse2 -mfpmath=sse
+ CFLAGS-test-fenv-sse-2.c += -msse2 -mfpmath=sse
+-- 
+2.37.2
+

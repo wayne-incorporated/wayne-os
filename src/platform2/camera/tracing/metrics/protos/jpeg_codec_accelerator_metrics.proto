@@ -1,0 +1,44 @@
+// Copyright 2023 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto2";
+
+package perfetto.protos;
+
+import "third_party/perfetto/protos/perfetto/metrics/metrics.proto";
+
+message JpegEncodeAcceleratorMetrics {
+  optional int32 width = 1;
+  optional int32 height = 2;
+
+  optional int64 min_encode_latency_us = 3;
+  optional int64 avg_encode_latency_us = 4;
+  optional int64 max_encode_latency_us = 5;
+}
+
+message JpegDecodeAcceleratorMetrics {
+  optional int32 width = 1;
+  optional int32 height = 2;
+
+  optional int64 min_decode_latency_us = 3;
+  optional int64 avg_decode_latency_us = 4;
+  optional int64 max_decode_latency_us = 5;
+}
+
+message JpegCodecAcceleratorMetrics {
+  // Camera session identifier.
+  optional int32 sid = 1;
+
+  repeated JpegEncodeAcceleratorMetrics jea_metrics = 2;
+  repeated JpegDecodeAcceleratorMetrics jda_metrics = 3;
+}
+
+message JpegCodecAcceleratorMetricsPerSession {
+  repeated JpegCodecAcceleratorMetrics sessions = 1;
+}
+
+extend TraceMetrics {
+  optional JpegCodecAcceleratorMetricsPerSession
+      jpeg_codec_accelerator_metrics = 501;
+}

@@ -1,0 +1,33 @@
+From d9b31338153591944d72e62523bad7850b407c63 Mon Sep 17 00:00:00 2001
+From: Takashi Iwai <tiwai@suse.de>
+Date: Tue, 24 Aug 2021 09:58:29 +0200
+Subject: [PATCH 2/5] aplay: Don't pass most negative integer to abs() in peak
+ calculations
+
+The return value from abs() for the most negative integer is
+undefined.  Cap it properly for the 32bit sample handling.
+
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+---
+ aplay/aplay.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/aplay/aplay.c b/aplay/aplay.c
+index c884346..2543de5 100644
+--- a/aplay/aplay.c
++++ b/aplay/aplay.c
+@@ -1874,7 +1874,10 @@ static void compute_max_peak(u_char *data, size_t samples)
+ 			else
+ 				val = be32toh(*valp);
+ 			val ^= mask;
+-			val = abs(val);
++			if (val == 0x80000000U)
++				val = 0x7fffffff;
++			else
++				val = abs(val);
+ 			if (max_peak[c] < val)
+ 				max_peak[c] = val;
+ 			valp++;
+-- 
+2.33.0.259.gc128427fd7-goog
+

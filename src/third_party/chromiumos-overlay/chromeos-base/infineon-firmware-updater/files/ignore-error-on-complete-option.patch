@@ -1,0 +1,130 @@
+Add ignore-error-on-complete option to work around the cases when
+UpgradeComplete returns TPM_FAIL after a succesful upgrade.
+
+--- a/Common/FirmwareUpdate.c
++++ b/Common/FirmwareUpdate.c
+@@ -1466,11 +1466,23 @@
+ 		uint16_t usOutCompleteSize = 0;
+ 		BYTE bCompleteData = 0;
+ 
+-		if (RC_SUCCESS != TSS_TPM_FieldUpgradeComplete(usCompleteDataSize, &bCompleteData, &usOutCompleteSize))
++		unReturnValue = TSS_TPM_FieldUpgradeComplete(usCompleteDataSize, &bCompleteData, &usOutCompleteSize);
++		if (TPM_RC_SUCCESS != unReturnValue)
+ 		{
+-			ERROR_STORE_FMT(RC_E_FIRMWARE_UPDATE_FAILED, L"TSS_TPM_FieldUpgradeComplete returned an unexpected value. (0x%.8x)", unReturnValue);
+-			unReturnValue = RC_E_FIRMWARE_UPDATE_FAILED;
+-			break;
++			BOOL fIgnoreError = FALSE;
++			if (TPM_FAIL == (unReturnValue ^ RC_TPM_MASK) &&
++				TRUE == PropertyStorage_GetBooleanValueByKey(PROPERTY_IGNORE_ERROR_ON_COMPLETE, &fIgnoreError) &&
++				TRUE == fIgnoreError)
++			{
++				LOGGING_WRITE_LEVEL1(L"TSS_TPM_FieldUpgradeComplete returned TPM_FAIL - ignoring.");
++				usOutCompleteSize = 0;
++			}
++			else
++			{
++				ERROR_STORE_FMT(RC_E_FIRMWARE_UPDATE_FAILED, L"TSS_TPM_FieldUpgradeComplete returned an unexpected value. (0x%.8x)", unReturnValue);
++				unReturnValue = RC_E_FIRMWARE_UPDATE_FAILED;
++				break;
++			}
+ 		}
+ 
+ 		// Check if out parameter is as expected (zero)
+--- a/TPMFactoryUpd/CommandLineParser.c
++++ b/TPMFactoryUpd/CommandLineParser.c
+@@ -330,6 +330,20 @@
+ 			break;
+ 		}
+ 
++		// **** -ignore-error-on-complete
++		if (0 == Platform_StringCompare(PwszCommandLineOption, CMD_IGNORE_ERROR_ON_COMPLETE, RG_LEN(CMD_IGNORE_ERROR_ON_COMPLETE), TRUE))
++		{
++			unReturnValue = CommandLineParser_CheckCommandLineOptions(PwszCommandLineOption);
++			if (RC_SUCCESS != unReturnValue)
++				break;
++
++			// Add IgnoreErrorOnComplete property, ignore return value because CommandLineParser_CheckCommandLineOptions takes care of doubled given options
++			IGNORE_RETURN_VALUE(PropertyStorage_AddKeyBooleanValuePair(PROPERTY_IGNORE_ERROR_ON_COMPLETE, TRUE));
++
++			unReturnValue = CommandLineParser_IncrementOptionCount();
++			break;
++		}
++
+ 		unReturnValue = RC_E_BAD_COMMANDLINE;
+ 		ERROR_STORE_FMT(unReturnValue, L"Unknown command line parameter (%ls).", PwszCommandLineOption);
+ 	}
+@@ -657,6 +671,7 @@
+ 		BOOL fAccessMode = FALSE;
+ 		BOOL fConfigFileOption = FALSE;
+ 		BOOL fDryRunOption = FALSE;
++		BOOL fIgnoreErrorOnComplete = FALSE;
+ 
+ 		// Read Property storage
+ 		if (TRUE == PropertyStorage_ExistsElement(PROPERTY_HELP))
+@@ -677,6 +692,8 @@
+ 			fConfigFileOption = TRUE;
+ 		if (TRUE == PropertyStorage_ExistsElement(PROPERTY_DRY_RUN))
+ 			fDryRunOption = TRUE;
++		if (TRUE == PropertyStorage_ExistsElement(PROPERTY_IGNORE_ERROR_ON_COMPLETE))
++			fIgnoreErrorOnComplete = TRUE;
+ 
+ 		// **** -help [Help]
+ 		if (0 == Platform_StringCompare(PwszCommand, CMD_HELP, RG_LEN(CMD_HELP), TRUE) ||
+@@ -790,6 +807,15 @@
+ 				unReturnValue = RC_E_BAD_COMMANDLINE;
+ 			break;
+ 		}
++
++		// **** -ignore-error-on-complete [IgnoreErrorOnComplete]
++		if (0 == Platform_StringCompare(PwszCommand, CMD_IGNORE_ERROR_ON_COMPLETE, RG_LEN(CMD_IGNORE_ERROR_ON_COMPLETE), TRUE))
++		{
++			// Command line parameter 'ignore-error-on-complete' can be combined with any parameters, though has meaning only for 'update'
++			if (TRUE == fIgnoreErrorOnComplete) // And parameter 'ignore-error-on-complete' should not be given twice
++				unReturnValue = RC_E_BAD_COMMANDLINE;
++			break;
++		}
+ 
+ 		unReturnValue = RC_E_BAD_COMMANDLINE;
+ 	}
+--- a/TPMFactoryUpd/PropertyDefines.h
++++ b/TPMFactoryUpd/PropertyDefines.h
+@@ -68,6 +68,8 @@
+ #define PROPERTY_CONFIG_FIRMWARE_FOLDER_PATH	L"FirmwareFolderPath"
+ /// Define for dry run property
+ #define PROPERTY_DRY_RUN				L"DryRun"
++/// Define for IgnoreErrorOnComplete property
++#define PROPERTY_IGNORE_ERROR_ON_COMPLETE		L"IgnoreErrorOnComplete"
+ 
+ #ifdef __cplusplus
+ }
+--- a/TPMFactoryUpd/Resource.h
++++ b/TPMFactoryUpd/Resource.h
+@@ -111,6 +111,7 @@
+ #define CMD_ACCESS_MODE								L"access-mode"
+ #define CMD_CONFIG									L"config"
+ #define CMD_DRY_RUN									L"dry-run"
++#define CMD_IGNORE_ERROR_ON_COMPLETE				L"ignore-error-on-complete"
+ 
+ // --------------- Help Output ---------------------
+ #define HELP_LINE1		L"Call: TPMFactoryUpd [parameter] [parameter] ..."
+@@ -157,6 +158,8 @@
+ #define HELP_LINE42		L"      (default value: /dev/tpm0)"
+ #define HELP_LINE43		L"\n-%ls" /* use with format CMD_DRY_RUN */
+ #define HELP_LINE44		L"  Optional parameter. Do everything except actually updating the image."
++#define HELP_LINE45		L"\n-%ls" /* use with format CMD_IGNORE_ERROR_ON_COMPLETE */
++#define HELP_LINE46		L"  Optional parameter. Ignores TPM_FAIL errors from FieldUpgradeComplete."
+ 
+ //{{NO_DEPENDENCIES}}
+ // Microsoft Visual C++ generated include file.
+--- a/TPMFactoryUpd/Response.c
++++ b/TPMFactoryUpd/Response.c
+@@ -1049,6 +1049,8 @@
+ #endif
+ 		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE43, CMD_DRY_RUN);
+ 		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE44);
++		CONSOLEIO_WRITE_BREAK_FMT(FALSE, HELP_LINE45, CMD_IGNORE_ERROR_ON_COMPLETE);
++		CONSOLEIO_WRITE_BREAK(FALSE, HELP_LINE46);
+ 	}
+ 	WHILE_FALSE_END;
+ 

@@ -1,0 +1,18 @@
+# Force-enable -c/--no-canonicalize for mount(8).
+# This will prevent mount(8) from following symlinks, which can be used
+# essentially as a write-anywhere-as-root primitive.
+# See b/194944898 for details.
+
+--- a/sys-utils/mount.c	2021-02-12 06:32:01.835988410 -0500
++++ b/sys-utils/mount.c	2022-03-18 18:53:36.704541168 -0400
+@@ -862,6 +862,10 @@
+ 		mnt_context_set_optsmode(cxt, optmode);
+ 	}
+
++	/* Always disable canonicalization to avoid following malicious
++	   symlinks. */
++	mnt_context_disable_canonicalize(cxt, TRUE);
++
+ 	if (fstab && !mnt_context_is_nocanonicalize(cxt)) {
+ 		/*
+ 		 * We have external (context independent) fstab instance, let's

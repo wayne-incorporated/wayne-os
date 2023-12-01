@@ -1,0 +1,57 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_dbus",
+    ":install_init",
+    ":install_seccomp",
+    ":opencl_cacher",
+  ]
+
+  if (use.test) {
+    deps += []
+  }
+  if (use.fuzzer) {
+    deps += []
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+executable("opencl_cacher") {
+  sources = [
+    "main.cc",
+    "utils.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//ml_core:libcros_ml_core",
+    "//ml_core/dlc:dlc_client",
+  ]
+  install_path = "bin"
+}
+
+install_config("install_init") {
+  sources = [ "init/opencl-cacher.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_dbus") {
+  sources = [ "dbus/opencl-cacher-dbus.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+# Only on AMD64 for now
+install_config("install_seccomp") {
+  sources = [ "seccomp_filter/opencl-cacher-amd64.policy" ]
+  install_path = "/usr/share/policy"
+}

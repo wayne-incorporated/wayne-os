@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright 2016 The Chromium OS Authors. All rights reserved.
+# Copyright 2016 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,20 +10,43 @@ set -e
 # Only emits metrics if none of the three arguments are empty.
 # Arguments are <starting point> <ending point> <metric name>
 record_delta() {
-  if [ $# -eq 3 ]; then
-    metrics_client $3 $(($2 - $1)) 1 1000000 50
+  if [ $# -eq 3 ] && [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ]; then
+    metrics_client "$3" $(($2 - $1)) 1 1000000 50
   fi
 }
 
-CHROME_LOGOUT_STARTED=$(bootstat_get_last logout-started time-ms)
+# logout-started signal is written asynchronously after Chrome starts.
+# Wait for new signal to appear for 10 seconds.
+FLAG_FILE=/tmp/stats-logout-started.written
+for i in $(seq 10) ; do
+  if mv -f "${FLAG_FILE}" "${FLAG_FILE}".done 2> /dev/null ; then
+    FOUND=true
+    break;
+  fi
+  sleep 1
+  if [ "${i}" = 10 ]; then
+    logger -i -p crit "No new logout-started signal received after" \
+    " 10 seconds."
+  fi
+done
+
+# Report infinite value when there was no recent logout-started.
+# Max histograms value is 1000000ms, which is calculated from the
+# device uptime. Set "impossible" start value to -1000000 to force
+# out-of-bounds histogram result.
+if [ -z "${FOUND}" ] ; then
+  CHROME_LOGOUT_STARTED=-1000000
+else
+  CHROME_LOGOUT_STARTED=$(bootstat_get_last logout-started time-ms)
+fi
+
 # Only record restart statistics if chrome performed a logout.
-if [ -n "$CHROME_LOGOUT_STARTED" ]; then
+if [ -n "${CHROME_LOGOUT_STARTED}" ]; then
   CHROME_UI_POST_STOP=$(bootstat_get_last ui-post-stop time-ms)
   CHROME_PROCESSES_TERMINATED=$(bootstat_get_last \
                                 other-processes-terminated time-ms)
-  # Stub this out since X no longer exists, but the stats below are defined
-  # as transitions to/from the X kill phase.
-  CHROME_X_TERMINATED=${CHROME_PROCESSES_TERMINATED}
+  # Stub this out since X no longer exists, but the stats below are
+  # defined as transitions to/from the X kill phase.
   CHROME_CRYPTOHOME_UNMOUNTED=$(bootstat_get_last \
                                 cryptohome-unmounted time-ms)
   CHROME_EXEC=$(bootstat_get_last chrome-exec time-ms)
@@ -31,25 +54,26 @@ if [ -n "$CHROME_LOGOUT_STARTED" ]; then
                                 login-prompt-visible time-ms)
 
   # Record deltas between some interesting steps.
-  record_delta $CHROME_LOGOUT_STARTED $CHROME_UI_POST_STOP \
+  record_delta "${CHROME_LOGOUT_STARTED}" "${CHROME_UI_POST_STOP}" \
                Uptime.LogoutToUIStopAfterLogout
 
-  record_delta $CHROME_UI_POST_STOP $CHROME_PROCESSES_TERMINATED \
+  record_delta "${CHROME_UI_POST_STOP}" "${CHROME_PROCESSES_TERMINATED}" \
                Uptime.UIStopToProcessesTerminatedAfterLogout
 
-  record_delta $CHROME_PROCESSES_TERMINATED $CHROME_EXEC \
+  record_delta "${CHROME_PROCESSES_TERMINATED}" "${CHROME_EXEC}" \
                Uptime.OtherProcessesTerminatedToChromeExecAfterLogout
 
-  record_delta $CHROME_EXEC $CHROME_LOGIN_PROMPT_VISIBLE \
+  record_delta "${CHROME_EXEC}" "${CHROME_LOGIN_PROMPT_VISIBLE}" \
                Uptime.ChromeExecToLoginPromptVisibleAfterLogout
 
   # Some summary statistics so we can account for everything.
-  record_delta $CHROME_LOGOUT_STARTED $CHROME_CRYPTOHOME_UNMOUNTED \
+  record_delta "${CHROME_LOGOUT_STARTED}" "${CHROME_CRYPTOHOME_UNMOUNTED}" \
                Uptime.Logout
 
-  record_delta $CHROME_CRYPTOHOME_UNMOUNTED $CHROME_LOGIN_PROMPT_VISIBLE \
+  record_delta "${CHROME_CRYPTOHOME_UNMOUNTED}" \
+               "${CHROME_LOGIN_PROMPT_VISIBLE}" \
                Uptime.LoginPromptSetupTimeAfterLogout
 
-  record_delta $CHROME_LOGOUT_STARTED $CHROME_LOGIN_PROMPT_VISIBLE \
+  record_delta "${CHROME_LOGOUT_STARTED}" "${CHROME_LOGIN_PROMPT_VISIBLE}" \
                Uptime.LogoutToLoginPromptVisible
 fi

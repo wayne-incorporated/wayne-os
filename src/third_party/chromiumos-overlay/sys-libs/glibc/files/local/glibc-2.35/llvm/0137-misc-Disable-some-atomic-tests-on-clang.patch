@@ -1,0 +1,118 @@
+From 3caa05d1e425e440980d2be419aa88a418c3d494 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 11:22:44 -0300
+Subject: [PATCH 137/163] misc: Disable some atomic tests on clang
+
+clang warns on some atomic macros, disable for now:
+
+  tst-atomic.c:463:7: error: unsupported inline asm: input with type
+  'int64_t' (aka 'long') matching output with type 'typeof (*&mem)' (aka
+  'int')
+    if (catomic_exchange_and_add (&mem, 11) != 2
+        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../sysdeps/x86/atomic-machine.h:213:3: note: expanded from macro
+  'catomic_exchange_and_add'
+    __arch_exchange_and_add_body (__arch_exchange_and_add_cprefix,
+  __arch_c,    \
+    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../sysdeps/x86/atomic-machine.h:199:12: note: expanded from macro
+  '__arch_exchange_and_add_body'
+                           : "0" ((int64_t) cast_to_integer (__addval)),
+  \
+                                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  tst-atomic.c:487:7: error: unsupported inline asm: input with type
+  'int64_t' (aka 'long') matching output with type 'typeof (*(&mem))' (aka
+  'int')
+    if (catomic_increment_val (&mem) != 3)
+        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../include/atomic.h:313:38: note: expanded from macro
+  'catomic_increment_val'
+  # define catomic_increment_val(mem) (catomic_exchange_and_add ((mem), 1)
+  + 1)
+                                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../sysdeps/x86/atomic-machine.h:213:3: note: expanded from macro
+  'catomic_exchange_and_add'
+    __arch_exchange_and_add_body (__arch_exchange_and_add_cprefix,
+  __arch_c,    \
+    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../sysdeps/x86/atomic-machine.h:199:12: note: expanded from macro
+  '__arch_exchange_and_add_body'
+                           : "0" ((int64_t) cast_to_integer (__addval)),
+  \
+                                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  tst-atomic.c:501:7: error: unsupported inline asm: input with type
+  'int64_t' (aka 'long') matching output with type 'typeof (*(&mem))' (aka
+  'int')
+    if (catomic_decrement_val (&mem) != 15)
+        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../include/atomic.h:340:38: note: expanded from macro
+  'catomic_decrement_val'
+  # define catomic_decrement_val(mem) (catomic_exchange_and_add ((mem),
+  -1) - 1)
+                                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../sysdeps/x86/atomic-machine.h:213:3: note: expanded from macro
+  'catomic_exchange_and_add'
+    __arch_exchange_and_add_body (__arch_exchange_and_add_cprefix,
+  __arch_c,    \
+    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ../sysdeps/x86/atomic-machine.h:199:12: note: expanded from macro
+  '__arch_exchange_and_add_body'
+                           : "0" ((int64_t) cast_to_integer (__addval)),
+  \
+                                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+---
+ misc/tst-atomic.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/misc/tst-atomic.c b/misc/tst-atomic.c
+index 6d681a7bfd..2212ef66ce 100644
+--- a/misc/tst-atomic.c
++++ b/misc/tst-atomic.c
+@@ -459,6 +459,7 @@ do_test (void)
+       ret = 1;
+     }
+ 
++#ifndef __clang__
+   mem = 2;
+   if (catomic_exchange_and_add (&mem, 11) != 2
+       || mem != 13)
+@@ -466,6 +467,7 @@ do_test (void)
+       puts ("catomic_exchange_and_add test failed");
+       ret = 1;
+     }
++#endif
+ 
+   mem = -21;
+   catomic_add (&mem, 22);
+@@ -483,12 +485,14 @@ do_test (void)
+       ret = 1;
+     }
+ 
++#ifndef __clang__
+   mem = 2;
+   if (catomic_increment_val (&mem) != 3)
+     {
+       puts ("catomic_increment_val test failed");
+       ret = 1;
+     }
++#endif
+ 
+   mem = 17;
+   catomic_decrement (&mem);
+@@ -498,11 +502,13 @@ do_test (void)
+       ret = 1;
+     }
+ 
++#ifndef __clang__
+   if (catomic_decrement_val (&mem) != 15)
+     {
+       puts ("catomic_decrement_val test failed");
+       ret = 1;
+     }
++#endif
+ 
+   /* Tests for C11-like atomics.  */
+   mem = 11;
+-- 
+2.37.2
+

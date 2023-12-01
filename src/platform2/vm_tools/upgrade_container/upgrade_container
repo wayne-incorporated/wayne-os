@@ -1,0 +1,112 @@
+#!/bin/sh
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Upgrades a Crostini container to the versions in the arguments in order,
+# expects to be run as root.
+#
+# Upgrade from stretch to buster:
+# ./upgrade_container DEBIAN_BUSTER
+#
+# Upgrade from buster to bullseye:
+# ./upgrade_container DEBIAN_BULLSEYE
+#
+# Upgrade from stretch to bullseye through buster:
+# ./upgrade_container DEBIAN_BUSTER DEBIAN_BULLSEYE
+# Note that debian does not support skip-version upgrades.
+#
+# Complete a previously unfinished upgrade:
+# ./upgrade_container
+
+set -ex
+
+to_buster() {
+  [ $1 = 'DEBIAN_BUSTER' ]
+}
+
+to_bullseye() {
+  [ $1 = 'DEBIAN_BULLSEYE' ]
+}
+
+# Really old versions of openssl will prioritize expired trust chains over valid
+# ones. This is problematic because deb.debian.org chains up to Let's Encrypt,
+# whose root cert is cross-signed by a now-expired certificate, which means we
+# can't update packages (including openssl itself). Work around this issue by
+# deleting any expired root certificates now, before we try to connect to
+# anything.
+if grep -q "VERSION_CODENAME=stretch" /etc/os-release; then
+  for pem in /usr/share/ca-certificates/mozilla/*; do
+    if ! openssl x509 -checkend 0 -in "${pem}" -out /dev/null; then
+      rm "${pem}"
+    fi
+  done
+  /usr/sbin/update-ca-certificates
+fi
+
+# Use defaults for everything, we don't support answering prompts.
+export DEBIAN_FRONTEND=noninteractive
+
+# Make sure apt-keys are up to date. We don't use keyring.debian.org because it
+# only serves debian-specific keys and that's not enough when we want the
+# Google package signing key. however most people don't need this so ignore
+# failures.
+APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1 apt-key adv --batch \
+    --refresh-keys --keyserver keyserver.ubuntu.com \
+    EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796 || true
+
+do_upgrade() {
+  # When conflicting configuration files exist between the local system and the
+  # upstream package, prefer the default option. If there is no default option,
+  # default to keeping the local version. This is required along with setting
+  # DEBIAN_FRONTEND above and passing -y --allow-releaseinfo-change for apt to
+  # hopefully really be noninteractive.
+  APT_OPTIONS="-o Dpkg::Options::=--force-confdef
+   -o Dpkg::Options::=--force-confold"
+
+  # If a previous run of this script was killed, it might have left packages in
+  # a half-configured state. Complete the configurations.
+  dpkg --configure -a || true
+
+  # Upgrade everything.
+  # --allow-releaseinfo-change was only added in buster, so if it fails try
+  # again without the argument in case we're on stretch.  We try this way
+  # instead of checking lsb-release or similar in case a failed upgrade leaves
+  # them with modified release info but old apt. They'll probably hit other
+  # issues if that's the case, but might as well try.
+  if ! apt-get ${APT_OPTIONS} update -y --allow-releaseinfo-change; then
+    apt-get ${APT_OPTIONS} update -y
+  fi
+  apt-get ${APT_OPTIONS} upgrade -y
+  apt-get ${APT_OPTIONS} dist-upgrade -y
+}
+
+# Debian doesn't support skip-version upgrades, so we need to make sure we're
+# already up to date on our current version before continuing. This also handles
+# the case where we restart an upgrade after /etc/os-release has been updated.
+do_upgrade
+
+for version in $@; do
+  if to_buster "${version}"; then
+    # No longer need to backport GPU support packages.
+    rm -f /etc/apt/sources.list.d/cros-gpu.list \
+      /etc/apt/preferences.d/cros-gpu.pref
+
+    # The actual flip to buster.
+    sed -i 's/stretch/buster/g' /etc/apt/sources.list \
+      /etc/apt/sources.list.d/cros.list
+
+  elif to_bullseye "${version}"; then
+    # The actual flip to bullseye.
+    sed -i 's/buster/bullseye/g' /etc/apt/sources.list \
+      /etc/apt/sources.list.d/cros.list
+
+    # The bullseye security repo is called "bullseye-security", while buster
+    # uses "buster/updates"
+    sed -i 's/debian-security\/\? bullseye\/updates/debian-security bullseye-security/g' \
+      /etc/apt/sources.list
+  fi
+
+  # Upgrade again, now to the new version.
+  do_upgrade
+done

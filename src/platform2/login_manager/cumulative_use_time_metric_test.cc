@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,9 @@
 #include <base/files/scoped_temp_dir.h>
 #include <base/memory/ref_counted.h>
 #include <base/memory/weak_ptr.h>
-#include <base/single_thread_task_runner.h>
+#include <base/task/single_thread_task_runner.h>
 #include <base/test/simple_test_clock.h>
 #include <base/test/simple_test_tick_clock.h>
-#include <base/threading/thread_task_runner_handle.h>
 #include <base/time/time.h>
 #include <gtest/gtest.h>
 #include <metrics/metrics_library.h>
@@ -124,7 +123,7 @@ class FakeSingleThreadTaskRunner : public base::SingleThreadTaskRunner {
         break;
       base::TimeDelta time_to_task = task_time - tick_clock_->NowTicks();
       // Verify the assumption that posted tasks are posted in order of their
-      // expected execution - if this assumtion starts not holding,
+      // expected execution - if this assumption starts not holding,
       // |pending_tasks_| should be switched to priority_queue.
       ASSERT_GE(time_to_task, base::TimeDelta());
 
@@ -184,7 +183,27 @@ class TestMetricsLibrary : public MetricsLibraryInterface {
 
   bool AreMetricsEnabled() override { return true; }
 
+  bool IsAppSyncEnabled() override { return true; }
+
   bool SendEnumToUMA(const std::string& name, int sample, int max) override {
+    ADD_FAILURE() << "Should not be reached";
+    return false;
+  }
+
+  bool SendRepeatedEnumToUMA(const std::string& name,
+                             int sample,
+                             int max,
+                             int num_samples) override {
+    ADD_FAILURE() << "Should not be reached";
+    return false;
+  }
+
+  bool SendLinearToUMA(const std::string& name, int sample, int max) override {
+    ADD_FAILURE() << "Should not be reached";
+    return false;
+  }
+
+  bool SendPercentageToUMA(const std::string& name, int sample) override {
     ADD_FAILURE() << "Should not be reached";
     return false;
   }
@@ -232,6 +251,10 @@ class TestMetricsLibrary : public MetricsLibraryInterface {
     return true;
   }
 
+  void SetOutputFile(const std::string& output_file) override {
+    ADD_FAILURE() << "Should not be reached";
+  }
+
  private:
   const std::string expected_use_time_metric_name_;
   int total_sent_{0};
@@ -243,8 +266,7 @@ class TestMetricsLibrary : public MetricsLibraryInterface {
 class CumulativeUseTimeMetricTest : public testing::Test {
  public:
   CumulativeUseTimeMetricTest()
-      : task_runner_(new FakeSingleThreadTaskRunner(&clock_, &tick_clock_)),
-        task_runner_handle_(task_runner_.get()) {}
+      : task_runner_(new FakeSingleThreadTaskRunner(&clock_, &tick_clock_)) {}
   CumulativeUseTimeMetricTest(const CumulativeUseTimeMetricTest&) = delete;
   CumulativeUseTimeMetricTest& operator=(const CumulativeUseTimeMetricTest&) =
       delete;
@@ -261,7 +283,7 @@ class CumulativeUseTimeMetricTest : public testing::Test {
 
     // Verifying some assumptions made in tests about timing of
     // updating/uploading use time metrics.
-    ASSERT_GT(UpdateCycle(), base::TimeDelta::FromSeconds(10));
+    ASSERT_GT(UpdateCycle(), base::Seconds(10));
     ASSERT_GT(UploadCycle(), 3 * UpdateCycle());
   }
 
@@ -320,7 +342,8 @@ class CumulativeUseTimeMetricTest : public testing::Test {
   base::SimpleTestTickClock tick_clock_;
 
   scoped_refptr<FakeSingleThreadTaskRunner> task_runner_;
-  base::ThreadTaskRunnerHandle task_runner_handle_;
+  base::SingleThreadTaskRunner::CurrentDefaultHandle task_runner_handle_{
+      task_runner_};
 
   base::ScopedTempDir temp_dir_;
 };
@@ -415,7 +438,7 @@ TEST_F(CumulativeUseTimeMetricTest, RecoverOnUncleanRestart) {
 
   cumulative_use_time_metric_->Start();
 
-  AdvanceTime(2 * UpdateCycle() + base::TimeDelta::FromSeconds(10));
+  AdvanceTime(2 * UpdateCycle() + base::Seconds(10));
 
   ResetCumulativeUseTimeMetric();
   cumulative_use_time_metric_->Init("53.0.0.7");
@@ -460,7 +483,7 @@ TEST_F(CumulativeUseTimeMetricTest, IncreaseTimeOnlyWhileActive) {
   cumulative_use_time_metric_->Start();
   EXPECT_EQ(0, metrics_library_.GetTimesSent());
 
-  AdvanceTime(base::TimeDelta::FromSeconds(2));
+  AdvanceTime(base::Seconds(2));
   cumulative_use_time_metric_->Stop();
   AdvanceTime(UploadCycle());
   cumulative_use_time_metric_->Start();
@@ -473,7 +496,7 @@ TEST_F(CumulativeUseTimeMetricTest, HandleLeftoverFromRoundingToSeconds) {
   cumulative_use_time_metric_->Init("53.0.1.0");
   cumulative_use_time_metric_->Start();
 
-  base::TimeDelta residue = base::TimeDelta::FromMilliseconds(530);
+  base::TimeDelta residue = base::Milliseconds(530);
   AdvanceTime(UpdateCycle() + residue);
   cumulative_use_time_metric_->Stop();
 

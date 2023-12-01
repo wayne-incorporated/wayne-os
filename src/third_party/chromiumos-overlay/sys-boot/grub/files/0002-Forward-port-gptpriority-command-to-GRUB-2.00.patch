@@ -1,0 +1,188 @@
+From 6e05eb38d1f8e83af24f4c6c4304d027da4994ba Mon Sep 17 00:00:00 2001
+From: Josh Triplett <josh@joshtriplett.org>
+Date: Wed, 31 Jul 2013 14:03:00 -0700
+Subject: [PATCH 2/2] Forward-port gptpriority command to GRUB 2.00
+
+Forward-ported from git commit 9866f9750a38a175849ca04439922ac1ffe8a0e7
+with significant edits: Ported from the previous Ruby-based build system
+to the new autogen-based Makefile.am generator, and updated for GRUB API
+changes.  In particular, the previous version of gptpriority counted on
+GRUB's part_gpt to provide access to the original partition table data
+in a field of "struct grub_partition" that no longer exists; this
+updated version modifies part_gpt to directly export the relevant
+attribute field as a new field in grub_partition.
+
+Since this adds a new source file and a new module, and the GRUB ebuild
+expects source in "make dist" form (with configure and Makefile.in
+already generated), this commit also updates the corresponding generated
+files via autogen.sh.
+
+BUG=chromium:265918
+TEST=With the complete patch series, built a complete x86-generic image,
+     and booted it via UEFI on both 32-bit and 64-bit UEFI platforms.
+
+CQ-DEPEND=Ie865f3d5ab0ecd8e9138bfd5b576a8147a205757
+
+Change-Id: I238f4ad26af3b1d924d5d5ac5fbcd567415cfb3f
+Reviewed-on: https://gerrit.chromium.org/gerrit/63986
+Tested-by: Josh Triplett <josh@joshtriplett.org>
+Reviewed-by: Liam McLoughlin <lmcloughlin@chromium.org>
+Commit-Queue: Josh Triplett <josh@joshtriplett.org>
+---
+ grub-core/Makefile.core.def      |  5 ++
+ grub-core/commands/gptpriority.c | 99 ++++++++++++++++++++++++++++++++
+ grub-core/partmap/gpt.c          |  1 +
+ include/grub/partition.h         |  3 +
+ 4 files changed, 108 insertions(+)
+ create mode 100644 grub-core/commands/gptpriority.c
+
+diff --git a/grub-core/Makefile.core.def b/grub-core/Makefile.core.def
+index 2dfa22a92..bc170349a 100644
+--- a/grub-core/Makefile.core.def
++++ b/grub-core/Makefile.core.def
+@@ -821,6 +821,11 @@ module = {
+   common = commands/gptsync.c;
+ };
+ 
++module = {
++  name = gptpriority;
++  common = commands/gptpriority.c;
++};
++
+ module = {
+   name = halt;
+   nopc = commands/halt.c;
+diff --git a/grub-core/commands/gptpriority.c b/grub-core/commands/gptpriority.c
+new file mode 100644
+index 000000000..0bb40cb65
+--- /dev/null
++++ b/grub-core/commands/gptpriority.c
+@@ -0,0 +1,99 @@
++/* gptpriority.c - read the priority of gpt partitions  */
++/*
++ *  GRUB  --  GRand Unified Bootloader
++ *
++ *  GRUB is free software: you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  GRUB is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with GRUB.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <grub/command.h>
++#include <grub/dl.h>
++#include <grub/disk.h>
++#include <grub/partition.h>
++#include <grub/gpt_partition.h>
++#include <grub/misc.h>
++#include <grub/mm.h>
++#include <grub/fs.h>
++#include <grub/env.h>
++
++GRUB_MOD_LICENSE ("GPLv3+");
++
++static grub_err_t
++grub_cmd_gptpriority (grub_command_t cmd __attribute__ ((unused)),
++                      int argc, char **args)
++{
++  grub_disk_t disk;
++  grub_partition_t part;
++  char priority_str[3]; /* Maximum value 15 */
++
++  if (argc < 2 || argc > 3)
++    return grub_error (GRUB_ERR_BAD_ARGUMENT,
++                       "gptpriority DISKNAME PARTITIONNUM [VARNAME]");
++
++  /* Open the disk if it exists */
++  disk = grub_disk_open (args[0]);
++  if (!disk)
++    {
++      return grub_error (GRUB_ERR_BAD_ARGUMENT,
++                         "Not a disk");
++    }
++
++  part = grub_partition_probe (disk, args[1]);
++  if (!part)
++    {
++      grub_disk_close (disk);
++      return grub_error (GRUB_ERR_BAD_ARGUMENT,
++                         "No such partition");
++    }
++
++  if (grub_strcmp (part->partmap->name, "gpt"))
++    {
++      grub_disk_close (disk);
++      return grub_error (GRUB_ERR_BAD_PART_TABLE,
++                         "Not a GPT partition");
++    }
++
++  grub_snprintf (priority_str, sizeof(priority_str), "%" PRIuGRUB_UINT64_T,
++                 (part->gpt_attrib >> 48) & 0xf);
++
++  if (argc == 3)
++    {
++      grub_env_set (args[2], priority_str);
++      grub_env_export (args[2]);
++    }
++  else
++    {
++      grub_printf ("Priority is %s\n", priority_str);
++    }
++
++  grub_disk_close (disk);
++  return GRUB_ERR_NONE;
++}
++
++static grub_command_t cmd;
++
++GRUB_MOD_INIT(gptpriority)
++{
++  (void) mod;
++  cmd = grub_register_command ("gptpriority", grub_cmd_gptpriority,
++                               "gptpriority DISKNAME PARTITIONNUM [VARNAME]",
++                               "\nDisplays the priority of the specified "
++                               "partition from the given disk, and optionally"
++                               " stores it in an environment variable.\n\n"
++                               "E.g. gptpriority hd2 2 prioA");
++}
++
++GRUB_MOD_FINI(gptpriority)
++{
++  grub_unregister_command (cmd);
++}
+diff --git a/grub-core/partmap/gpt.c b/grub-core/partmap/gpt.c
+index 83bcba779..ff754dcda 100644
+--- a/grub-core/partmap/gpt.c
++++ b/grub-core/partmap/gpt.c
+@@ -108,6 +108,7 @@ grub_gpt_partition_map_iterate (grub_disk_t disk,
+ 	  part.index = last_offset;
+ 	  part.partmap = &grub_gpt_partition_map;
+ 	  part.parent = disk->partition;
++	  part.gpt_attrib = entry.attrib;
+ 
+ 	  grub_dprintf ("gpt", "GPT entry %d: start=%lld, length=%lld\n", i,
+ 			(unsigned long long) part.start,
+diff --git a/include/grub/partition.h b/include/grub/partition.h
+index 7adb7ec6e..639f1e610 100644
+--- a/include/grub/partition.h
++++ b/include/grub/partition.h
+@@ -87,6 +87,9 @@ struct grub_partition
+   /* The type of partition whne it's on MSDOS.
+      Used for embedding detection.  */
+   grub_uint8_t msdostype;
++
++  /* The attrib field for GPT. Needed for priority detection. */
++  grub_uint64_t gpt_attrib;
+ };
+ 
+ grub_partition_t EXPORT_FUNC(grub_partition_probe) (struct grub_disk *disk,
+-- 
+2.17.0
+

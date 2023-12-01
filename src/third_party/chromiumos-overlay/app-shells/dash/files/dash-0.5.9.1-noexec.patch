@@ -1,0 +1,192 @@
+From ce548820b626dbe0496933864e9d4cc6d0e8eb46 Mon Sep 17 00:00:00 2001
+From: Mike Frysinger <vapier@chromium.org>
+Date: Wed, 1 Nov 2017 14:00:26 -0400
+Subject: [PATCH] do not source/exec scripts on noexec mount points
+
+Today, if you have a script that lives on a noexec mount point, the
+kernel will reject attempts to run it directly:
+  $ printf '#!/bin/sh\necho hi\n' > /dev/shm/test.sh
+  $ chmod a+rx /dev/shm/test.sh
+  $ /dev/shm/test.sh
+  dash: /dev/shm/test.sh: Permission denied
+
+But dash itself has no problem running this file:
+  $ dash /dev/shm/test.sh
+  hi
+Or with letting other scripts run this file:
+  $ dash -c '. /dev/shm/test.sh'
+  hi
+Or with reading the script from stdin:
+  $ dash </dev/shm/test.sh
+  hi
+Or indirect loading:
+  $ ln -s test.sh /dev/shm/.profile
+  $ HOME=/dev/shm dash -l
+  hi
+
+This detracts from the security of the overall system.  People writing
+scripts sometimes want to save/restore state (like variables) and will
+restore the content from a noexec point using the aforementioned source
+command without realizing that it executes code too.  Of course their
+code is wrong, but it would be nice if the system would catch & reject
+it explicitly to stave of inadvertent usage.
+
+This is not a perfect solution as it can still be worked around by
+inlining the code itself:
+  $ dash -c "$(cat /dev/shm/test.sh)"
+  hi
+Or forcing interactive mode:
+  $ dash -i </dev/shm/test.sh
+  hi
+Or piping it:
+  $ cat /dev/shm/test.sh | dash
+  hi
+
+But this makes things a bit harder for malicious attackers (depending
+how exactly they've managed to escalate), and it also helps developers
+avoid getting it wrong in the first place.
+
+There are some compile-time knobs provided:
+* SHELL_IGNORE_NOEXEC: If defined, allow scripts on noexec mounts.
+* SHELL_NOEXEC_CRASH_REPORTS: If defined, generate crash reports when
+  noexec scripts are attempted.
+* SHELL_NOEXEC_REPORT_ONLY: If defined, don't halt script execution,
+  only emit warnings to stderr.
+
+URL: https://crbug.com/569168
+URL: https://chromium.googlesource.com/chromiumos/docs/+/master/security/noexec_shell_scripts.md
+---
+ src/input.c | 61 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/input.h |  6 ++++++
+ src/main.c  | 17 +++++++++++++++
+ 3 files changed, 84 insertions(+)
+
+diff --git a/src/input.c b/src/input.c
+index 06c08d49b3d7..1781c419e56f 100644
+--- a/src/input.c
++++ b/src/input.c
+@@ -37,6 +37,7 @@
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/statvfs.h>
+ 
+ /*
+  * This file implements the input routines used by the parser.
+@@ -390,6 +391,10 @@ setinputfile(const char *fname, int flags)
+ 		exitstatus = 127;
+ 		exerror(EXERROR, "Can't open %s", fname);
+ 	}
++
++	/* Make sure we don't load files from noexec sources. */
++	checknoexec(fd, fname);
++
+ 	if (fd < 10)
+ 		fd = savefd(fd, fd);
+ 	setinputfd(fd, flags & INPUT_PUSH_FILE);
+@@ -502,3 +507,60 @@ closescript(void)
+ 		parsefile->fd = 0;
+ 	}
+ }
++
++
++#ifndef SHELL_IGNORE_NOEXEC
++
++/*
++ * We'll fork a child who will then crash.  This will signal to the system
++ * that we ran into a problem without actually halting the script.  This is
++ * useful for tracking down users on releases w/out breaking them.
++ */
++static void
++maybe_generate_crash_report(void)
++{
++# ifdef SHELL_NOEXEC_CRASH_REPORTS
++	if (fork() == 0)
++		abort();
++# endif
++}
++
++/*
++ * See if the fd is coming from a noexec partition.
++ * If so, fall over and complain.
++ */
++void
++checknoexec(int fd, const char *source)
++{
++	struct statvfs stvfs;
++	if (fstatvfs(fd, &stvfs) == -1) {
++		maybe_generate_crash_report();
++
++# ifdef SHELL_NOEXEC_REPORT_ONLY
++		sh_warnx("%s: warning: can't fstatvfs %s", source);
++		/* Clear the flag to avoid the code path below. */
++		stvfs.f_flag = 0;
++# else
++		close(fd);
++		errno = EACCES;
++		exitstatus = 127;
++		exerror(EXERROR, "Can't fstatvfs %s", source);
++# endif
++	}
++
++	if (stvfs.f_flag & ST_NOEXEC) {
++		const char docs[] = "https://chromium.googlesource.com/chromiumos/docs/+/master/security/noexec_shell_scripts.md";
++		maybe_generate_crash_report();
++
++# ifdef SHELL_NOEXEC_REPORT_ONLY
++		sh_warnx("%s: warning: script from noexec mount; see %s", source, docs);
++# else
++		close(fd);
++		errno = EACCES;
++		exitstatus = 127;
++		exerror(EXERROR, "Refusing to exec %s from noexec mount; see %s", source, docs);
++# endif
++	}
++}
++
++#endif
+diff --git a/src/input.h b/src/input.h
+index ec97c1d67d7c..62b329106c21 100644
+--- a/src/input.h
++++ b/src/input.h
+@@ -99,3 +99,9 @@ void setinputstring(char *);
+ void popfile(void);
+ void popallfiles(void);
+ void closescript(void);
++
++#ifndef SHELL_IGNORE_NOEXEC
++void checknoexec(int, const char *);
++#else
++static inline void checknoexec(int fd, const char *source) {}
++#endif
+diff --git a/src/main.c b/src/main.c
+index fcd3e7d20818..3b95380022c5 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -171,6 +171,23 @@ state3:
+ 
+ 	if (sflag || minusc == NULL) {
+ state4:	/* XXX ??? - why isn't this before the "if" statement */
++
++		/*
++		 * For non-interactive shells, require the code lives on an exec
++		 * source.  For interactive shells, we should check stdin if it
++		 * isn't a tty, but that leads to an infinite loop atm.
++		 */
++		if (!iflag) {
++			/*
++			 * If we're parsing stdin, verify it's an exec source.  If the
++			 * source is <0, then it's invalid, and we can't check it.  If
++			 * it's >0, then setinputfile already checked the source.
++			 */
++			if (parsefile->fd == 0) {
++				checknoexec(0, "stdin");
++			}
++		}
++
+ 		cmdloop(1);
+ 	}
+ #if PROFILE
+-- 
+2.19.1
+

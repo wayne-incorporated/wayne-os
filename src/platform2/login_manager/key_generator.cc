@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <optional>
 #include <utility>
 
 #include <base/check.h>
 #include <base/files/file_util.h>
+#include <base/logging.h>
 #include <brillo/cryptohome.h>
+#include <brillo/files/file_util.h>
 
 #include "login_manager/generator_job.h"
 #include "login_manager/system_utils.h"
@@ -35,12 +38,13 @@ KeyGenerator::KeyGenerator(uid_t uid, SystemUtils* utils)
 KeyGenerator::~KeyGenerator() {}
 
 bool KeyGenerator::Start(const string& username,
-                         const base::Optional<base::FilePath>& ns_path) {
+                         const std::optional<base::FilePath>& ns_path) {
   DCHECK(!generating_) << "Must call Reset() between calls to Start()!";
-  base::FilePath user_path(brillo::cryptohome::home::GetUserPath(username));
+  base::FilePath user_path(brillo::cryptohome::home::GetUserPath(
+      brillo::cryptohome::home::Username(username)));
   base::FilePath temporary_key_path(
       user_path.AppendASCII(kTemporaryKeyFilename));
-  if (!base::DeleteFile(temporary_key_path)) {
+  if (!brillo::DeleteFile(temporary_key_path)) {
     PLOG(ERROR) << "Old keygen state still present; can't generate keys: ";
     return false;
   }

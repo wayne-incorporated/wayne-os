@@ -1,0 +1,369 @@
+commit da0448a361d4502f75e6d8102bdf3202d658575c
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Sat Jun 25 09:51:00 2022 -0700
+
+    Revert "[libc++] Simplify type_traits and use more builtins"
+    
+    This reverts commit 42f8f557989741434d7b7b4439b3eef3e68b2ab5.
+    
+    Breaks float128 usage, test case provided in D127226.
+    
+    Differential Revision: https://reviews.llvm.org/D128587
+
+diff --git a/libcxx/include/__type_traits/is_abstract.h b/libcxx/include/__type_traits/is_abstract.h
+index c74b3284f75d..0480118b3761 100644
+--- a/libcxx/include/__type_traits/is_abstract.h
++++ b/libcxx/include/__type_traits/is_abstract.h
+@@ -23,7 +23,7 @@ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_abstract
+ 
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+-inline constexpr bool is_abstract_v = __is_abstract(_Tp);
++inline constexpr bool is_abstract_v = is_abstract<_Tp>::value;
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
+diff --git a/libcxx/include/__type_traits/is_aggregate.h b/libcxx/include/__type_traits/is_aggregate.h
+index ea9de84f96d0..f32aec8ac543 100644
+--- a/libcxx/include/__type_traits/is_aggregate.h
++++ b/libcxx/include/__type_traits/is_aggregate.h
+@@ -24,7 +24,7 @@ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS
+ is_aggregate : public integral_constant<bool, __is_aggregate(_Tp)> {};
+ 
+ template <class _Tp>
+-inline constexpr bool is_aggregate_v = __is_aggregate(_Tp);
++inline constexpr bool is_aggregate_v = is_aggregate<_Tp>::value;
+ 
+ #endif // _LIBCPP_STD_VER > 14
+ 
+diff --git a/libcxx/include/__type_traits/is_arithmetic.h b/libcxx/include/__type_traits/is_arithmetic.h
+index cfe2fff7d439..6d631f41c7d4 100644
+--- a/libcxx/include/__type_traits/is_arithmetic.h
++++ b/libcxx/include/__type_traits/is_arithmetic.h
+@@ -20,19 +20,10 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#if __has_keyword(__is_arithmetic)
+-
+-template <class _Tp>
+-struct _LIBCPP_TEMPLATE_VIS is_arithmetic : integral_constant<bool, __is_arithmetic(_Tp)> {};
+-
+-#else
+-
+ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_arithmetic
+     : public integral_constant<bool, is_integral<_Tp>::value      ||
+                                      is_floating_point<_Tp>::value> {};
+ 
+-#endif // __has_keyword(__is_arithmetic)
+-
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+ inline constexpr bool is_arithmetic_v = is_arithmetic<_Tp>::value;
+diff --git a/libcxx/include/__type_traits/is_base_of.h b/libcxx/include/__type_traits/is_base_of.h
+index 0e6dec0b5ee0..b944a65d2823 100644
+--- a/libcxx/include/__type_traits/is_base_of.h
++++ b/libcxx/include/__type_traits/is_base_of.h
+@@ -24,7 +24,7 @@ struct _LIBCPP_TEMPLATE_VIS is_base_of
+ 
+ #if _LIBCPP_STD_VER > 14
+ template <class _Bp, class _Dp>
+-inline constexpr bool is_base_of_v = __is_base_of(_Bp, _Dp);
++inline constexpr bool is_base_of_v = is_base_of<_Bp, _Dp>::value;
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
+diff --git a/libcxx/include/__type_traits/is_class.h b/libcxx/include/__type_traits/is_class.h
+index cddaeae6e8a9..8e07a5ef070e 100644
+--- a/libcxx/include/__type_traits/is_class.h
++++ b/libcxx/include/__type_traits/is_class.h
+@@ -20,12 +20,27 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
++#if __has_feature(is_class) || defined(_LIBCPP_COMPILER_GCC)
++
+ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_class
+     : public integral_constant<bool, __is_class(_Tp)> {};
+ 
++#else
++
++namespace __is_class_imp
++{
++template <class _Tp> true_type  __test(int _Tp::*);
++template <class _Tp> false_type __test(...);
++}
++
++template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_class
++    : public integral_constant<bool, decltype(__is_class_imp::__test<_Tp>(0))::value && !is_union<_Tp>::value> {};
++
++#endif
++
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+-inline constexpr bool is_class_v = __is_class(_Tp);
++inline constexpr bool is_class_v = is_class<_Tp>::value;
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
+diff --git a/libcxx/include/__type_traits/is_compound.h b/libcxx/include/__type_traits/is_compound.h
+index 643edd78229a..f055155b9f54 100644
+--- a/libcxx/include/__type_traits/is_compound.h
++++ b/libcxx/include/__type_traits/is_compound.h
+@@ -19,7 +19,8 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#if __has_keyword(__is_compound)
++// >= 11 because in C++03 nullptr isn't actually nullptr
++#if __has_keyword(__is_compound) && !defined(_LIBCPP_CXX03_LANG)
+ 
+ template<class _Tp>
+ struct _LIBCPP_TEMPLATE_VIS is_compound : _BoolConstant<__is_compound(_Tp)> { };
+diff --git a/libcxx/include/__type_traits/is_empty.h b/libcxx/include/__type_traits/is_empty.h
+index 042b4e68074c..e81c6f7e2fa4 100644
+--- a/libcxx/include/__type_traits/is_empty.h
++++ b/libcxx/include/__type_traits/is_empty.h
+@@ -18,13 +18,38 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
++#if __has_feature(is_empty) || defined(_LIBCPP_COMPILER_GCC)
++
+ template <class _Tp>
+ struct _LIBCPP_TEMPLATE_VIS is_empty
+     : public integral_constant<bool, __is_empty(_Tp)> {};
+ 
++#else  // __has_feature(is_empty)
++
++template <class _Tp>
++struct __is_empty1
++    : public _Tp
++{
++    double __lx;
++};
++
++struct __is_empty2
++{
++    double __lx;
++};
++
++template <class _Tp, bool = is_class<_Tp>::value>
++struct __libcpp_empty : public integral_constant<bool, sizeof(__is_empty1<_Tp>) == sizeof(__is_empty2)> {};
++
++template <class _Tp> struct __libcpp_empty<_Tp, false> : public false_type {};
++
++template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_empty : public __libcpp_empty<_Tp> {};
++
++#endif // __has_feature(is_empty)
++
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+-inline constexpr bool is_empty_v = __is_empty(_Tp);
++inline constexpr bool is_empty_v = is_empty<_Tp>::value;
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
+diff --git a/libcxx/include/__type_traits/is_enum.h b/libcxx/include/__type_traits/is_enum.h
+index bf6921c88c94..ac160da84e99 100644
+--- a/libcxx/include/__type_traits/is_enum.h
++++ b/libcxx/include/__type_traits/is_enum.h
+@@ -19,6 +19,8 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
++#if __has_feature(is_enum) || defined(_LIBCPP_COMPILER_GCC)
++
+ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_enum
+     : public integral_constant<bool, __is_enum(_Tp)> {};
+ 
+@@ -27,6 +29,27 @@ template <class _Tp>
+ inline constexpr bool is_enum_v = __is_enum(_Tp);
+ #endif
+ 
++#else
++
++template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_enum
++    : public integral_constant<bool, !is_void<_Tp>::value             &&
++                                     !is_integral<_Tp>::value         &&
++                                     !is_floating_point<_Tp>::value   &&
++                                     !is_array<_Tp>::value            &&
++                                     !is_pointer<_Tp>::value          &&
++                                     !is_reference<_Tp>::value        &&
++                                     !is_member_pointer<_Tp>::value   &&
++                                     !is_union<_Tp>::value            &&
++                                     !is_class<_Tp>::value            &&
++                                     !is_function<_Tp>::value         > {};
++
++#if _LIBCPP_STD_VER > 14
++template <class _Tp>
++inline constexpr bool is_enum_v = is_enum<_Tp>::value;
++#endif
++
++#endif // __has_feature(is_enum) || defined(_LIBCPP_COMPILER_GCC)
++
+ _LIBCPP_END_NAMESPACE_STD
+ 
+ #endif // _LIBCPP___TYPE_TRAITS_IS_ENUM_H
+diff --git a/libcxx/include/__type_traits/is_final.h b/libcxx/include/__type_traits/is_final.h
+index 74ced23a14e0..f2d9b5b3c8f4 100644
+--- a/libcxx/include/__type_traits/is_final.h
++++ b/libcxx/include/__type_traits/is_final.h
+@@ -28,7 +28,7 @@ is_final : public integral_constant<bool, __is_final(_Tp)> {};
+ 
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+-inline constexpr bool is_final_v = __is_final(_Tp);
++inline constexpr bool is_final_v = is_final<_Tp>::value;
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
+diff --git a/libcxx/include/__type_traits/is_floating_point.h b/libcxx/include/__type_traits/is_floating_point.h
+index d6211af74357..d93e5d99d07b 100644
+--- a/libcxx/include/__type_traits/is_floating_point.h
++++ b/libcxx/include/__type_traits/is_floating_point.h
+@@ -19,13 +19,6 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#if __has_keyword(__is_floating_point)
+-
+-template <class _Tp>
+-struct _LIBCPP_TEMPLATE_VIS is_floating_point : integral_constant<bool, __is_floating_point(_Tp)> {};
+-
+-#else
+-
+ template <class _Tp> struct __libcpp_is_floating_point              : public false_type {};
+ template <>          struct __libcpp_is_floating_point<float>       : public true_type {};
+ template <>          struct __libcpp_is_floating_point<double>      : public true_type {};
+@@ -34,8 +27,6 @@ template <>          struct __libcpp_is_floating_point<long double> : public tru
+ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_floating_point
+     : public __libcpp_is_floating_point<typename remove_cv<_Tp>::type> {};
+ 
+-#endif // __has_keyword(__is_floating_point)
+-
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+ inline constexpr bool is_floating_point_v = is_floating_point<_Tp>::value;
+diff --git a/libcxx/include/__type_traits/is_function.h b/libcxx/include/__type_traits/is_function.h
+index bce980c21b4e..23ba9cbb0dd6 100644
+--- a/libcxx/include/__type_traits/is_function.h
++++ b/libcxx/include/__type_traits/is_function.h
+@@ -20,18 +20,15 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#if __has_keyword(__is_function)
+-
+-template <class _Tp>
+-struct _LIBCPP_TEMPLATE_VIS is_function : integral_constant<bool, __is_function(_Tp)> {};
+-
++template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_function
++    : public _BoolConstant<
++#ifdef __clang__
++    __is_function(_Tp)
+ #else
++ !(is_reference<_Tp>::value || is_const<const _Tp>::value)
++#endif
++    > {};
+ 
+-template <class _Tp>
+-struct _LIBCPP_TEMPLATE_VIS is_function
+-    : public integral_constant<bool, !(is_reference<_Tp>::value || is_const<const _Tp>::value)> {};
+-
+-#endif // __has_keyword(__is_function)
+ 
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+diff --git a/libcxx/include/__type_traits/is_fundamental.h b/libcxx/include/__type_traits/is_fundamental.h
+index aaa7063eef9b..859cfde39bfa 100644
+--- a/libcxx/include/__type_traits/is_fundamental.h
++++ b/libcxx/include/__type_traits/is_fundamental.h
+@@ -20,7 +20,11 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#if __has_keyword(__is_fundamental)
++// Before Clang 10, __is_fundamental didn't work for nullptr_t.
++// In C++03 nullptr_t is library-provided but must still count as "fundamental."
++#if __has_keyword(__is_fundamental) &&                                         \
++    !(defined(_LIBCPP_CLANG_VER) && _LIBCPP_CLANG_VER < 1000) &&               \
++    !defined(_LIBCPP_CXX03_LANG)
+ 
+ template<class _Tp>
+ struct _LIBCPP_TEMPLATE_VIS is_fundamental : _BoolConstant<__is_fundamental(_Tp)> { };
+diff --git a/libcxx/include/__type_traits/is_pointer.h b/libcxx/include/__type_traits/is_pointer.h
+index 2139b03282e7..ab66989ef86d 100644
+--- a/libcxx/include/__type_traits/is_pointer.h
++++ b/libcxx/include/__type_traits/is_pointer.h
+@@ -19,7 +19,9 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#if __has_keyword(__is_pointer)
++// Before AppleClang 12.0.5, __is_pointer didn't work for Objective-C types.
++#if __has_keyword(__is_pointer) &&                                             \
++    !(defined(_LIBCPP_APPLE_CLANG_VER) && _LIBCPP_APPLE_CLANG_VER < 1205)
+ 
+ template<class _Tp>
+ struct _LIBCPP_TEMPLATE_VIS is_pointer : _BoolConstant<__is_pointer(_Tp)> { };
+diff --git a/libcxx/include/__type_traits/is_scalar.h b/libcxx/include/__type_traits/is_scalar.h
+index 0ca34c7cf79b..f745bf5e3638 100644
+--- a/libcxx/include/__type_traits/is_scalar.h
++++ b/libcxx/include/__type_traits/is_scalar.h
+@@ -22,7 +22,8 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#if __has_keyword(__is_scalar)
++// In C++03 nullptr_t is library-provided but must still count as "scalar."
++#if __has_keyword(__is_scalar) && !defined(_LIBCPP_CXX03_LANG)
+ 
+ template<class _Tp>
+ struct _LIBCPP_TEMPLATE_VIS is_scalar : _BoolConstant<__is_scalar(_Tp)> { };
+diff --git a/libcxx/include/__type_traits/is_union.h b/libcxx/include/__type_traits/is_union.h
+index 3e8cffe034d4..d02931fc01d3 100644
+--- a/libcxx/include/__type_traits/is_union.h
++++ b/libcxx/include/__type_traits/is_union.h
+@@ -19,12 +19,22 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
++#if __has_feature(is_union) || defined(_LIBCPP_COMPILER_GCC)
++
+ template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_union
+     : public integral_constant<bool, __is_union(_Tp)> {};
+ 
++#else
++
++template <class _Tp> struct __libcpp_union : public false_type {};
++template <class _Tp> struct _LIBCPP_TEMPLATE_VIS is_union
++    : public __libcpp_union<typename remove_cv<_Tp>::type> {};
++
++#endif
++
+ #if _LIBCPP_STD_VER > 14
+ template <class _Tp>
+-inline constexpr bool is_union_v = __is_union(_Tp);
++inline constexpr bool is_union_v = is_union<_Tp>::value;
+ #endif
+ 
+ _LIBCPP_END_NAMESPACE_STD
+diff --git a/libcxx/include/__type_traits/is_unsigned.h b/libcxx/include/__type_traits/is_unsigned.h
+index bb279fdb729d..b0522812aad3 100644
+--- a/libcxx/include/__type_traits/is_unsigned.h
++++ b/libcxx/include/__type_traits/is_unsigned.h
+@@ -20,8 +20,11 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-// Before AppleClang 14, __is_unsigned returned true for enums with signed underlying type.
+-#if __has_keyword(__is_unsigned) && !(defined(_LIBCPP_APPLE_CLANG_VER) && _LIBCPP_APPLE_CLANG_VER < 1400)
++// Before Clang 13, __is_unsigned returned true for enums with signed underlying type.
++// No currently-released version of AppleClang contains the fixed intrinsic.
++#if __has_keyword(__is_unsigned) &&                                            \
++    !(defined(_LIBCPP_CLANG_VER) && _LIBCPP_CLANG_VER < 1300) &&               \
++    !defined(_LIBCPP_APPLE_CLANG_VER)
+ 
+ template<class _Tp>
+ struct _LIBCPP_TEMPLATE_VIS is_unsigned : _BoolConstant<__is_unsigned(_Tp)> { };

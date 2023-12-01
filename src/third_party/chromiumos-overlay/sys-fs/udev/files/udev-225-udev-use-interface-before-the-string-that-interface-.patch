@@ -1,0 +1,92 @@
+From f7b1c8d1fca94474c74b2281670c185d9e48a8bb Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Sun, 18 Jun 2017 12:31:30 +0300
+Subject: [PATCH] udev: use interface before the string that interface points
+ to is freed by device_add_property_internal (#6105)
+
+This prevents udev from reading the data after freeing it.
+
+See https://github.com/systemd/systemd/issues/6040#issuecomment-306589836
+==264== Invalid read of size 1
+==264==    at 0x4C2E112: strlen (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+==264==    by 0x5943EBD: strdup (in /usr/lib/libc-2.25.so)
+==264==    by 0x13E263: device_add_property_aux (sd-device.c:122)
+==264==    by 0x14788C: device_add_property_internal (sd-device.c:150)
+==264==    by 0x14788C: device_rename (device-private.c:786)
+==264==    by 0x120DB6: udev_device_rename (libudev-device-private.c:213)
+==264==    by 0x120DB6: udev_event_execute_rules (udev-event.c:895)
+==264==    by 0x120DB6: worker_spawn (udevd.c:456)
+==264==    by 0x1216E5: event_run (udevd.c:584)
+==264==    by 0x1216E5: event_queue_start (udevd.c:823)
+==264==    by 0x122213: on_uevent (udevd.c:927)
+==264==    by 0x141F2F: source_dispatch (sd-event.c:2272)
+==264==    by 0x142D52: sd_event_dispatch (sd-event.c:2631)
+==264==    by 0x142D52: sd_event_run (sd-event.c:2690)
+==264==    by 0x142D52: sd_event_loop (sd-event.c:2710)
+==264==    by 0x1159CB: run (udevd.c:1643)
+==264==    by 0x1159CB: main (udevd.c:1772)
+==264==  Address 0x7b251a0 is 0 bytes inside a block of size 5 free'd
+==264==    at 0x4C2C14B: free (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+==264==    by 0x13E2A2: freep (alloc-util.h:57)
+==264==    by 0x13E2A2: device_add_property_aux (sd-device.c:111)
+==264==    by 0x147873: device_add_property_internal (sd-device.c:150)
+==264==    by 0x147873: device_rename (device-private.c:781)
+==264==    by 0x120DB6: udev_device_rename (libudev-device-private.c:213)
+==264==    by 0x120DB6: udev_event_execute_rules (udev-event.c:895)
+==264==    by 0x120DB6: worker_spawn (udevd.c:456)
+==264==    by 0x1216E5: event_run (udevd.c:584)
+==264==    by 0x1216E5: event_queue_start (udevd.c:823)
+==264==    by 0x122213: on_uevent (udevd.c:927)
+==264==    by 0x141F2F: source_dispatch (sd-event.c:2272)
+==264==    by 0x142D52: sd_event_dispatch (sd-event.c:2631)
+==264==    by 0x142D52: sd_event_run (sd-event.c:2690)
+==264==    by 0x142D52: sd_event_loop (sd-event.c:2710)
+==264==    by 0x1159CB: run (udevd.c:1643)
+==264==    by 0x1159CB: main (udevd.c:1772)
+==264==  Block was alloc'd at
+==264==    at 0x4C2AF1F: malloc (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+==264==    by 0x5943EC9: strdup (in /usr/lib/libc-2.25.so)
+==264==    by 0x13E263: device_add_property_aux (sd-device.c:122)
+==264==    by 0x143B45: device_add_property_internal (sd-device.c:150)
+==264==    by 0x143B45: device_amend.lto_priv.235 (device-private.c:454)
+==264==    by 0x1387B7: device_append (device-private.c:516)
+==264==    by 0x1387B7: device_new_from_nulstr (device-private.c:620)
+==264==    by 0x1387B7: udev_device_new_from_nulstr (libudev-device-private.c:268)
+==264==    by 0x1387B7: udev_monitor_receive_device (libudev-monitor.c:682)
+==264==    by 0x11FC69: worker_spawn (udevd.c:509)
+==264==    by 0x1216E5: event_run (udevd.c:584)
+==264==    by 0x1216E5: event_queue_start (udevd.c:823)
+==264==    by 0x122213: on_uevent (udevd.c:927)
+==264==    by 0x141F2F: source_dispatch (sd-event.c:2272)
+==264==    by 0x142D52: sd_event_dispatch (sd-event.c:2631)
+==264==    by 0x142D52: sd_event_run (sd-event.c:2690)
+==264==    by 0x142D52: sd_event_loop (sd-event.c:2710)
+==264==    by 0x1159CB: run (udevd.c:1643)
+==264==    by 0x1159CB: main (udevd.c:1772)
+==264==
+---
+ src/libsystemd/sd-device/device-private.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/libsystemd/sd-device/device-private.c b/src/libsystemd/sd-device/device-private.c
+index 9082d377f4d1..b4cd676c12a5 100644
+--- a/src/libsystemd/sd-device/device-private.c
++++ b/src/libsystemd/sd-device/device-private.c
+@@ -778,12 +778,12 @@ int device_rename(sd_device *device, const char *name) {
+ 
+         r = sd_device_get_property_value(device, "INTERFACE", &interface);
+         if (r >= 0) {
+-                r = device_add_property_internal(device, "INTERFACE", name);
++                /* like DEVPATH_OLD, INTERFACE_OLD is not saved to the db, but only stays around for the current event */
++                r = device_add_property_internal(device, "INTERFACE_OLD", interface);
+                 if (r < 0)
+                         return r;
+ 
+-                /* like DEVPATH_OLD, INTERFACE_OLD is not saved to the db, but only stays around for the current event */
+-                r = device_add_property_internal(device, "INTERFACE_OLD", interface);
++                r = device_add_property_internal(device, "INTERFACE", name);
+                 if (r < 0)
+                         return r;
+         } else if (r != -ENOENT)
+-- 
+

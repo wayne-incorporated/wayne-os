@@ -1,0 +1,194 @@
+commit 320fd3314e378ae6242a2dde97250a8a94d68e27
+Author: Kristof Beyls <kristof.beyls@arm.com>
+Date:   Thu Nov 19 13:58:26 2020 +0000
+
+    [ARM] Implement harden-sls-retbr for Thumb mode
+    
+    The only non-trivial consideration in this patch is that the formation
+    of TBB/TBH instructions, which is done in the constant island pass, does
+    not understand the speculation barriers inserted by the SLSHardening
+    pass. As such, when harden-sls-retbr is enabled for a function, the
+    formation of TBB/TBH instructions in the constant island pass is
+    disabled.
+    
+    Differential Revision: https://reviews.llvm.org/D92396
+
+diff --git a/llvm/lib/Target/ARM/ARMAsmPrinter.cpp b/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
+index 4cc85ad82d51..dd22e5dfe6e1 100644
+--- a/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
++++ b/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
+@@ -2192,6 +2192,22 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
+     EmitToStreamer(*OutStreamer, TmpInstISB);
+     return;
+   }
++  case ARM::t2SpeculationBarrierISBDSBEndBB: {
++    // Print DSB SYS + ISB
++    MCInst TmpInstDSB;
++    TmpInstDSB.setOpcode(ARM::t2DSB);
++    TmpInstDSB.addOperand(MCOperand::createImm(0xf));
++    TmpInstDSB.addOperand(MCOperand::createImm(ARMCC::AL));
++    TmpInstDSB.addOperand(MCOperand::createReg(0));
++    EmitToStreamer(*OutStreamer, TmpInstDSB);
++    MCInst TmpInstISB;
++    TmpInstISB.setOpcode(ARM::t2ISB);
++    TmpInstISB.addOperand(MCOperand::createImm(0xf));
++    TmpInstISB.addOperand(MCOperand::createImm(ARMCC::AL));
++    TmpInstISB.addOperand(MCOperand::createReg(0));
++    EmitToStreamer(*OutStreamer, TmpInstISB);
++    return;
++  }
+   case ARM::SpeculationBarrierSBEndBB: {
+     // Print SB
+     MCInst TmpInstSB;
+@@ -2199,6 +2215,13 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
+     EmitToStreamer(*OutStreamer, TmpInstSB);
+     return;
+   }
++  case ARM::t2SpeculationBarrierSBEndBB: {
++    // Print SB
++    MCInst TmpInstSB;
++    TmpInstSB.setOpcode(ARM::t2SB);
++    EmitToStreamer(*OutStreamer, TmpInstSB);
++    return;
++  }
+   }
+ 
+   MCInst TmpInst;
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+index 7068da5eb004..1435bba776a3 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+@@ -775,9 +775,11 @@ unsigned ARMBaseInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+     return Size;
+   }
+   case ARM::SpeculationBarrierISBDSBEndBB:
++  case ARM::t2SpeculationBarrierISBDSBEndBB:
+     // This gets lowered to 2 4-byte instructions.
+     return 8;
+   case ARM::SpeculationBarrierSBEndBB:
++  case ARM::t2SpeculationBarrierSBEndBB:
+     // This gets lowered to 1 4-byte instructions.
+     return 4;
+   }
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+index 51a4b44eae1d..e4e71e4925b9 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+@@ -643,7 +643,9 @@ static inline bool isIndirectControlFlowNotComingBack(const MachineInstr &MI) {
+ 
+ static inline bool isSpeculationBarrierEndBBOpcode(int Opc) {
+   return Opc == ARM::SpeculationBarrierISBDSBEndBB ||
+-         Opc == ARM::SpeculationBarrierSBEndBB;
++         Opc == ARM::SpeculationBarrierSBEndBB ||
++         Opc == ARM::t2SpeculationBarrierISBDSBEndBB ||
++         Opc == ARM::t2SpeculationBarrierSBEndBB;
+ }
+ 
+ static inline bool isPopOpcode(int Opc) {
+diff --git a/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp b/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp
+index 77839710e03e..da7bf6170255 100644
+--- a/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp
++++ b/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp
+@@ -359,6 +359,10 @@ bool ARMConstantIslands::runOnMachineFunction(MachineFunction &mf) {
+   isThumb2 = AFI->isThumb2Function();
+ 
+   bool GenerateTBB = isThumb2 || (isThumb1 && SynthesizeThumb1TBB);
++  // TBB generation code in this constant island pass has not been adapted to
++  // deal with speculation barriers.
++  if (STI->hardenSlsRetBr())
++    GenerateTBB = false;
+ 
+   // Renumber all of the machine basic blocks in the function, guaranteeing that
+   // the numbers agree with the position of the block in the function.
+diff --git a/llvm/lib/Target/ARM/ARMInstrThumb2.td b/llvm/lib/Target/ARM/ARMInstrThumb2.td
+index 52da88dab632..f83807d27f88 100644
+--- a/llvm/lib/Target/ARM/ARMInstrThumb2.td
++++ b/llvm/lib/Target/ARM/ARMInstrThumb2.td
+@@ -4935,6 +4935,15 @@ def : InstAlias<"pssbb", (t2DSB 0x4, 14, 0), 1>, Requires<[HasDB, IsThumb2]>;
+ // Armv8-R 'Data Full Barrier'
+ def : InstAlias<"dfb${p}", (t2DSB 0xc, pred:$p), 1>, Requires<[HasDFB]>;
+ 
++// SpeculationBarrierEndBB must only be used after an unconditional control
++// flow, i.e. after a terminator for which isBarrier is True.
++let hasSideEffects = 1, isCodeGenOnly = 1, isTerminator = 1, isBarrier = 1 in {
++  def t2SpeculationBarrierISBDSBEndBB
++      : PseudoInst<(outs), (ins), NoItinerary, []>, Sched<[]>;
++  def t2SpeculationBarrierSBEndBB
++      : PseudoInst<(outs), (ins), NoItinerary, []>, Sched<[]>;
++}
++
+ // Alias for LDR, LDRB, LDRH, LDRSB, and LDRSH without the ".w" optional
+ // width specifier.
+ def : t2InstAlias<"ldr${p} $Rt, $addr",
+diff --git a/llvm/lib/Target/ARM/ARMSLSHardening.cpp b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+index b3c697893ed9..3f6fa8a47d6a 100644
+--- a/llvm/lib/Target/ARM/ARMSLSHardening.cpp
++++ b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+@@ -75,9 +75,13 @@ static void insertSpeculationBarrier(const ARMSubtarget *ST,
+   assert(std::prev(MBBI)->isTerminator() &&
+          "SpeculationBarrierEndBB must only follow terminators.");
+   const TargetInstrInfo *TII = ST->getInstrInfo();
+-  unsigned BarrierOpc = ST->hasSB() && !AlwaysUseISBDSB
+-                            ? ARM::SpeculationBarrierSBEndBB
+-                            : ARM::SpeculationBarrierISBDSBEndBB;
++  assert(ST->hasDataBarrier() || ST->hasSB());
++  bool ProduceSB = ST->hasSB() && !AlwaysUseISBDSB;
++  unsigned BarrierOpc =
++      ProduceSB ? (ST->isThumb() ? ARM::t2SpeculationBarrierSBEndBB
++                                 : ARM::SpeculationBarrierSBEndBB)
++                : (ST->isThumb() ? ARM::t2SpeculationBarrierISBDSBEndBB
++                                 : ARM::SpeculationBarrierISBDSBEndBB);
+   if (MBBI == MBB.end() || !isSpeculationBarrierEndBBOpcode(MBBI->getOpcode()))
+     BuildMI(MBB, MBBI, DL, TII->get(BarrierOpc));
+ }
+@@ -96,6 +100,7 @@ bool ARMSLSHardening::runOnMachineFunction(MachineFunction &MF) {
+ bool ARMSLSHardening::hardenReturnsAndBRs(MachineBasicBlock &MBB) const {
+   if (!ST->hardenSlsRetBr())
+     return false;
++  assert(!ST->isThumb1Only());
+   bool Modified = false;
+   MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator(), E = MBB.end();
+   MachineBasicBlock::iterator NextMBBI;
+diff --git a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+index 9a2335988790..14b17e62c930 100644
+--- a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
++++ b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+@@ -1,8 +1,13 @@
+ ; RUN: llc -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB,ISBDSBDAGISEL -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB,ISBDSBDAGISEL -dump-input-context=100
+ ; RUN: llc -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB,SBDAGISEL -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB,SBDAGISEL -dump-input-context=100
+ ; RUN: llc -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,NOHARDEN,NOHARDENARM -dump-input-context=100
++; RUN: llc -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,NOHARDEN,NOHARDENTHUMB
+ ; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,ISBDSB
+ ; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=thumbv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,THUMB,HARDENTHUMB,HARDEN,SB
+ 
+ ; Function Attrs: norecurse nounwind readnone
+ define dso_local i32 @double_return(i32 %a, i32 %b) local_unnamed_addr {
+@@ -18,6 +23,7 @@ if.then:                                          ; preds = %entry
+ ; CHECK-LABEL: double_return:
+ ; HARDEN:          {{bx lr$}}
+ ; NOHARDENARM:     {{bxge lr$}}
++; NOHARDENTHUMB:   {{bx lr$}}
+ ; ISBDSB-NEXT: dsb sy
+ ; ISBDSB-NEXT: isb
+ ; SB-NEXT:     {{ sb$}}
+@@ -46,6 +52,7 @@ entry:
+   %0 = load i8*, i8** %arrayidx, align 8
+   indirectbr i8* %0, [label %return, label %l2]
+ ; ARM:       bx r0
++; THUMB:     mov pc, r0
+ ; ISBDSB-NEXT: dsb sy
+ ; ISBDSB-NEXT: isb
+ ; SB-NEXT:     {{ sb$}}
+@@ -108,6 +115,8 @@ entry:
+     i32 4, label %sw.bb5
+   ]
+ ; ARM:             ldr pc, [{{r[0-9]}}, {{r[0-9]}}, lsl #2]
++; NOHARDENTHUMB:   tbb [pc, {{r[0-9]}}]
++; HARDENTHUMB:     mov pc, {{r[0-9]}}
+ ; ISBDSB-NEXT:     dsb sy
+ ; ISBDSB-NEXT:     isb
+ ; SB-NEXT:         {{ sb$}}

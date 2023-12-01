@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Copyright (c) 2019 Intel Corporation
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+          http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+-->
+<graph_descriptor>
+    <nodes>
+        <node name="sensor" stream_id="1" type="source" vflip="0" hflip="0">
+            <port id="0" name="port_0" type="port" direction="1"/>
+        </node>
+
+        <node name="csi_be" type="hw" stream_id="1" subsystem="isys">
+            <!-- ports -->
+            <port name="input" id="0" direction="0"/>
+            <port name="output" id="1" direction="1"/>
+            <!-- ports end -->
+        </node>
+
+        <node name="imgu" type="hw" stream_id="1" pg_id="0" subsystem="imgu">
+            <!-- ports -->
+            <port name="input" id="0" direction="0"/>
+            <port name="vf" id="1" direction="1"/>
+            <port name="main" id="2" direction="1"/>
+            <!-- ports end -->
+        </node>
+        <sink name="vf"/>
+        <sink name="main"/>
+        <sink name="raw"/>
+    </nodes>
+    <graphs>
+        <graph id="1" name="Full graph">
+            <connection source="sensor:port_0" sink="csi_be:input"/>
+            <connection source="csi_be:output" sink="imgu:input"/>
+            <connection source="imgu:main" sink="main"/>
+            <connection source="imgu:vf" sink="vf"/>
+        </graph>
+    </graphs>
+</graph_descriptor>
+

@@ -1,0 +1,53 @@
+From c62cfafbfe1cefca37fd64004c99c670fd4fdd27 Mon Sep 17 00:00:00 2001
+From: Piotr Pawliczek <pawliczek@google.com>
+Date: Mon, 19 Dec 2022 22:00:20 +0000
+Subject: [PATCH 10/10] catch and handle sigxcpu
+
+Catch the SIGXCPU signal to gs and handle it by terminating the application with
+an exit code 126. This value is later detected in foomatic_shell.
+---
+ psi/gs.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/psi/gs.c b/psi/gs.c
+index 9f48d12bf..ee91448c6 100644
+--- a/psi/gs.c
++++ b/psi/gs.c
+@@ -13,6 +13,8 @@
+    CA 94945, U.S.A., +1(415)492-9861, for further information.
+ */
+ 
++#include <signal.h>
++#include <unistd.h>
+ 
+ /* 'main' program for Ghostscript */
+ #include "ghost.h"
+@@ -64,12 +66,25 @@ commit_stack_pages( void )
+ }
+ #endif
+ 
++static void
++exit_with_126(int)
++{
++    _exit(126);
++}
++
+ int
+ main(int argc, char *argv[])
+ {
++    struct sigaction action_xcpu = {exit_with_126, NULL, 0, 0, NULL};
+     int exit_status, code;
+     void *minst = NULL;
+ 
++    /*
++     * Catch SIGXCPU signal and handle it by terminating the application
++     * with an exit code equals 126.
++     */
++    sigaction(SIGXCPU, &action_xcpu, NULL);
++
+ #ifdef NEED_COMMIT_STACK   /* hack for bug in gcc 2.96 */
+     commit_stack_pages();
+ #endif
+-- 
+2.39.1
+

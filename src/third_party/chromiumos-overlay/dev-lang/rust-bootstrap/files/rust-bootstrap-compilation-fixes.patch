@@ -1,0 +1,121 @@
+mrustc-0.9.0 fails to compile out of the box:
+src/common.hpp:268:28: error: cannot increment value of type
+      'std::__1::__wrap_iter<const AST::Attribute *>'
+
+This patch fixes the code so that it compiles.
+
+diff --git a/src/ast/ast.cpp b/src/ast/ast.cpp
+index 827ac2d..4cb0061 100644
+--- a/src/ast/ast.cpp
++++ b/src/ast/ast.cpp
+@@ -47,6 +47,13 @@ const Attribute* AttributeList::get(const char *name) const
+     return 0;
+ }
+ 
++::std::ostream& operator<<(::std::ostream& os, const AttributeList& x) {
++    for(const auto& i : x.m_items) {
++        os << "#[" << i << "]";
++    }
++    return os;
++}
++
+ Attribute Attribute::clone() const
+ {
+     TU_MATCHA( (m_data), (e),
+diff --git a/src/ast/attrs.hpp b/src/ast/attrs.hpp
+index 7a6ce86..452debb 100644
+--- a/src/ast/attrs.hpp
++++ b/src/ast/attrs.hpp
+@@ -12,48 +12,6 @@
+ 
+ //
+ class Attribute;
+-::std::ostream& operator<<(::std::ostream& os, const Attribute& x);
+-
+-/// A list of attributes on an item (searchable by the attribute name)
+-class AttributeList
+-{
+-public:
+-    ::std::vector<Attribute> m_items;
+-
+-    AttributeList() {}
+-    AttributeList(::std::vector<Attribute> items):
+-        m_items( mv$(items) )
+-    {
+-    }
+-
+-    // Move present
+-    AttributeList(AttributeList&&) = default;
+-    AttributeList& operator=(AttributeList&&) = default;
+-    // No copy assign, but explicit copy
+-    explicit AttributeList(const AttributeList&) = default;
+-    AttributeList& operator=(const AttributeList&) = delete;
+-    // Explicit clone
+-    AttributeList clone() const;
+-
+-    void push_back(Attribute i);
+-
+-    const Attribute* get(const char *name) const;
+-    Attribute* get(const char *name) {
+-        return const_cast<Attribute*>( const_cast<const AttributeList*>(this)->get(name));
+-    }
+-    bool has(const char *name) const {
+-        return get(name) != 0;
+-    }
+-
+-    friend ::std::ostream& operator<<(::std::ostream& os, const AttributeList& x) {
+-        for(const auto& i : x.m_items) {
+-            os << "#[" << i << "]";
+-        }
+-        return os;
+-    }
+-};
+-
+-
+ TAGGED_UNION(AttributeData, None,
+     (None, struct {}),
+     (String, struct {
+@@ -153,7 +99,42 @@ public:
+     }
+ };
+ 
++::std::ostream& operator<<(::std::ostream& os, const Attribute& x);
++
++/// A list of attributes on an item (searchable by the attribute name)
++class AttributeList
++{
++public:
++    ::std::vector<Attribute> m_items;
++
++    AttributeList() {}
++    AttributeList(::std::vector<Attribute> items):
++        m_items( mv$(items) )
++    {
++    }
++
++    // Move present
++    AttributeList(AttributeList&&) = default;
++    AttributeList& operator=(AttributeList&&) = default;
++    // No copy assign, but explicit copy
++    explicit AttributeList(const AttributeList&) = default;
++    AttributeList& operator=(const AttributeList&) = delete;
++    // Explicit clone
++    AttributeList clone() const;
++
++    void push_back(Attribute i);
++
++    const Attribute* get(const char *name) const;
++    Attribute* get(const char *name) {
++        return const_cast<Attribute*>( const_cast<const AttributeList*>(this)->get(name));
++    }
++    bool has(const char *name) const {
++        return get(name) != 0;
++    }
++};
++
++::std::ostream& operator<<(::std::ostream& os, const AttributeList& x);
++
+ }   // namespace AST
+ 
+ #endif
+-

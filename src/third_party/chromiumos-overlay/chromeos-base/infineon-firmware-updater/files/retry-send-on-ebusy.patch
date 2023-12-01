@@ -1,0 +1,39 @@
+Retries sending the TPM command a couple times upon receiving EBUSY. See
+http://crbug.com/759541 for more details.
+
+--- a/Common/TpmDeviceAccess/Linux/DeviceAccessTpmDriver.c
++++ b/Common/TpmDeviceAccess/Linux/DeviceAccessTpmDriver.c
+@@ -16,6 +16,7 @@
+ #include "StdInclude.h"
+ #include "DeviceAccessTpmDriver.h"
+ #include "Logging.h"
++#include "Platform.h"
+ #include "PropertyStorage.h"
+ 
+ #define DEV_TPM "/dev/tpm0"
+@@ -151,6 +152,7 @@
+ 	{
+ 		UINT32 unFileHandle = 0;
+ 		int nBytes = 0;
++		int nWriteRetryCounter = 0;
+ 
+ 		// Check parameters
+ 		if (NULL == PrgbRequestBuffer || NULL == PrgbResponseBuffer || NULL == PpunResponseBufferSize)
+@@ -167,7 +169,16 @@
+ 			break;
+ 		}
+ 
+-		nBytes = write(unFileHandle, PrgbRequestBuffer, PunRequestBufferSize);
++		while (1) {
++			nBytes = write(unFileHandle, PrgbRequestBuffer, PunRequestBufferSize);
++			if (nBytes == -1 && errno == EBUSY && ++nWriteRetryCounter < 5) {
++				LOGGING_WRITE_LEVEL1(L"Error: DeviceAccess_Transmit: Write failed with EBUSY, retrying.");
++				Platform_Sleep(1000);
++			} else {
++				break;
++			}
++		}
++
+ 		if (nBytes == -1 || nBytes != (int)PunRequestBufferSize)
+ 		{
+ 			LOGGING_WRITE_LEVEL1_FMT(L"Error: DeviceAccess_Transmit: Write failed with errno %d (%s).", errno, strerror(errno));

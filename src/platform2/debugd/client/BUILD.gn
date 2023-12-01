@@ -1,0 +1,40 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":libdebugd-client-headers",
+    ":libdebugd-client-test.pc",
+    ":libdebugd-client.pc",
+  ]
+}
+
+# debugd client library generated headers. Used by other daemons to
+# interact with debugd.
+generate_dbus_proxies("libdebugd-client-headers") {
+  dbus_service_config = "../dbus_bindings/dbus-service-config.json"
+  proxy_output_file = "include/debugd/dbus-proxies.h"
+  mock_output_file = "include/debugd/dbus-proxy-mocks.h"
+  proxy_path_in_mocks = "debugd/dbus-proxies.h"
+  sources = [ "../dbus_bindings/org.chromium.debugd.xml" ]
+}
+
+generate_pkg_config("libdebugd-client.pc") {
+  name = "libdebugd-client"
+  version = getenv("PV")
+  description = "debugd client interface library"
+  cflags = [ "-I/usr/include/debugd-client" ]
+  install = true
+}
+
+generate_pkg_config("libdebugd-client-test.pc") {
+  name = "libdebugd-client-test"
+  version = getenv("PV")
+  description = "debugd client interface mock library"
+  cflags = [ "-I/usr/include/debugd-client-test" ]
+  install = true
+}

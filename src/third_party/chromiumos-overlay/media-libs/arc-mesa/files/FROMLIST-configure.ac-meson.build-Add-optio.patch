@@ -1,0 +1,243 @@
+From 51c3ead6f6f714b6aba521e6cac6cbe85d0644ee Mon Sep 17 00:00:00 2001
+From: Benjamin Gordon <bmgordon@chromium.org>
+Date: Wed, 13 Jun 2018 16:17:32 -0600
+Subject: [PATCH 1/6] BACKPORT: FROMLIST: configure.ac/meson.build: Add options
+ for library suffixes
+
+When building the Chrome OS Android container, we need to build copies
+of mesa that don't conflict with the Android system-supplied libraries.
+This adds options to create suffixed versions of EGL and GLES libraries:
+
+libEGL.so -> libEGL${egl-lib-suffix}.so
+libGLESv1_CM.so -> libGLESv1_CM${gles-lib-suffix}.so
+libGLESv2.so -> libGLES${gles-lib-suffix}.so
+
+This is similar to what happens when --enable-libglvnd is specified, but
+without the side effects of linking against libglvnd.  To avoid
+unexpected clashes with the suffixed appended by libglvnd, make it an
+error to specify both --enable-libglvnd and --with-egl-lib-suffix.
+
+(am from https://patchwork.freedesktop.org/patch/229368/)
+Backport: trivial merge conflicts
+
+BUG=b:78687332
+TEST=test_that cheets_CTS_P.9.0_r1.x86.CtsJniTestCases passes
+
+Change-Id: I94a39f6ec177894838a0fcdd050b682250dab564
+Signed-off-by: Benjamin Gordon <bmgordon@chromium.org>
+Reviewed-by: Eric Engestrom <eric.engestrom@intel.com>
+Signed-off-by: Drew Davenport <ddavenport@chromium.org>
+Reviewed-on: https://chromium-review.googlesource.com/1157883
+Reviewed-by: Tomasz Figa <tfiga@chromium.org>
+---
+ configure.ac                | 19 +++++++++++++++++++
+ meson.build                 |  3 +++
+ meson_options.txt           | 11 +++++++++++
+ src/egl/Makefile.am         |  8 ++++----
+ src/egl/meson.build         |  2 +-
+ src/mapi/Makefile.am        | 28 ++++++++++++++--------------
+ src/mapi/es1api/meson.build |  2 +-
+ src/mapi/es2api/meson.build |  2 +-
+ 8 files changed, 54 insertions(+), 21 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index d169223094f7..e5c55ef9e0f0 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1556,6 +1556,23 @@ AC_ARG_WITH([osmesa-lib-name],
+ GL_LIB="$DEFAULT_GL_LIB_NAME"
+ OSMESA_LIB=OSMesa
+ 
++AC_ARG_WITH([egl-lib-suffix],
++  [AS_HELP_STRING([--with-egl-lib-suffix@<:@=NAME@:>@],
++    [specify EGL library suffix @<:@default=none@:>@])],
++  [EGL_LIB_SUFFIX=$withval],
++  [EGL_LIB_SUFFIX=""])
++AC_ARG_WITH([gles-lib-suffix],
++  [AS_HELP_STRING([--with-gles-lib-suffix@<:@=NAME@:>@],
++    [specify GLES library suffix @<:@default=none@:>@])],
++  [GLES_LIB_SUFFIX=$withval],
++  [GLES_LIB_SUFFIX=""])
++AS_IF([test "x$EGL_LIB_SUFFIX" = xyes], [EGL_LIB_SUFFIX=""])
++AS_IF([test "x$GLES_LIB_SUFFIX" = xyes], [GLES_LIB_SUFFIX=""])
++
++if test "x$enable_libglvnd" = xyes -a "x$EGL_LIB_SUFFIX" != x; then
++    AC_MSG_ERROR([EGL lib suffix can't be used with libglvnd])
++fi
++
+ dnl
+ dnl Mangled Mesa support
+ dnl
+@@ -1574,6 +1591,8 @@ if test "x${enable_mangling}" = "xyes" ; then
+   OSMESA_LIB="Mangled${OSMESA_LIB}"
+ fi
+ AC_SUBST([GL_LIB])
++AC_SUBST([EGL_LIB_SUFFIX])
++AC_SUBST([GLES_LIB_SUFFIX])
+ AC_SUBST([OSMESA_LIB])
+ 
+ dnl HACK when building glx + glvnd we ship gl.pc, despite that glvnd should do it
+diff --git a/meson.build b/meson.build
+index bfff862c3c8a..7b8869ba6cc1 100644
+--- a/meson.build
++++ b/meson.build
+@@ -368,6 +368,9 @@ if with_glvnd
+   elif with_glx == 'disabled' and not with_egl
+     error('glvnd requires DRI based GLX and/or EGL')
+   endif
++  if get_option('egl-lib-suffix') != ''
++    error('''EGL lib suffix can't be used with libglvnd''')
++  endif
+ endif
+ 
+ if with_vulkan_icd_dir == ''
+diff --git a/meson_options.txt b/meson_options.txt
+index ccf70659ff72..8773b67cbd55 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -324,3 +324,14 @@ option(
+   value : true,
+   description : 'Enable direct rendering in GLX and EGL for DRI',
+ )
++option('egl-lib-suffix',
++  type : 'string',
++  value : '',
++  description : 'Suffix to append to EGL library name.  Default: none.'
++)
++option(
++  'gles-lib-suffix',
++  type : 'string',
++  value : '',
++  description : 'Suffix to append to GLES library names.  Default: none.'
++)
+diff --git a/src/egl/Makefile.am b/src/egl/Makefile.am
+index de4a754a2dbd..abe7b0f2917a 100644
+--- a/src/egl/Makefile.am
++++ b/src/egl/Makefile.am
+@@ -191,12 +191,12 @@ libEGL_mesa_la_LDFLAGS = \
+ 
+ else # USE_LIBGLVND
+ 
+-lib_LTLIBRARIES = libEGL.la
+-libEGL_la_SOURCES =
+-libEGL_la_LIBADD = \
++lib_LTLIBRARIES = libEGL@EGL_LIB_SUFFIX@.la
++libEGL@EGL_LIB_SUFFIX@_la_SOURCES =
++libEGL@EGL_LIB_SUFFIX@_la_LIBADD = \
+ 	libEGL_common.la \
+ 	$(top_builddir)/src/mapi/shared-glapi/libglapi.la
+-libEGL_la_LDFLAGS = \
++libEGL@EGL_LIB_SUFFIX@_la_LDFLAGS = \
+ 	-no-undefined \
+ 	-version-number 1:0 \
+ 	$(BSYMBOLIC) \
+diff --git a/src/egl/meson.build b/src/egl/meson.build
+index a23cc36fc2b8..fae9a0a1358f 100644
+--- a/src/egl/meson.build
++++ b/src/egl/meson.build
+@@ -144,7 +144,7 @@ if cc.has_function('mincore')
+ endif
+ 
+ if not with_glvnd
+-  egl_lib_name = 'EGL'
++  egl_lib_name = 'EGL' + get_option('egl-lib-suffix')
+   egl_lib_version = '1.0.0'
+ else
+   egl_lib_name = 'EGL_mesa'
+diff --git a/src/mapi/Makefile.am b/src/mapi/Makefile.am
+index daaf46ddb238..7c03aeae8133 100644
+--- a/src/mapi/Makefile.am
++++ b/src/mapi/Makefile.am
+@@ -189,24 +189,24 @@ GLES_include_HEADERS = \
+ 	$(top_srcdir)/include/GLES/glext.h \
+ 	$(top_srcdir)/include/GLES/glplatform.h
+ 
+-lib_LTLIBRARIES += es1api/libGLESv1_CM.la
++lib_LTLIBRARIES += es1api/libGLESv1_CM@GLES_LIB_SUFFIX@.la
+ 
+-es1api_libGLESv1_CM_la_SOURCES = entry.c es1api/glapi_mapi_tmp.h
+-es1api_libGLESv1_CM_la_CFLAGS = \
++es1api_libGLESv1_CM@GLES_LIB_SUFFIX@_la_SOURCES = entry.c es1api/glapi_mapi_tmp.h
++es1api_libGLESv1_CM@GLES_LIB_SUFFIX@_la_CFLAGS = \
+ 	$(AM_CFLAGS) \
+ 	$(VISIBILITY_CFLAGS)
+-es1api_libGLESv1_CM_la_CPPFLAGS = \
++es1api_libGLESv1_CM@GLES_LIB_SUFFIX@_la_CPPFLAGS = \
+ 	$(AM_CPPFLAGS) \
+ 	-DMAPI_MODE_BRIDGE \
+ 	-DMAPI_ABI_HEADER=\"es1api/glapi_mapi_tmp.h\"
+-es1api_libGLESv1_CM_la_LIBADD = $(GLESv1_CM_LIB_DEPS)
+-es1api_libGLESv1_CM_la_LDFLAGS = \
++es1api_libGLESv1_CM@GLES_LIB_SUFFIX@_la_LIBADD = $(GLESv1_CM_LIB_DEPS)
++es1api_libGLESv1_CM@GLES_LIB_SUFFIX@_la_LDFLAGS = \
+ 	-no-undefined \
+ 	-version-number 1:1 \
+ 	$(GC_SECTIONS) \
+ 	$(LD_NO_UNDEFINED)
+ 
+-es1api_libGLESv1_CM_la_LIBADD += shared-glapi/libglapi.la
++es1api_libGLESv1_CM@GLES_LIB_SUFFIX@_la_LIBADD += shared-glapi/libglapi.la
+ endif
+ 
+ es1api/glapi_mapi_tmp.h: $(glapi_gen_mapi_deps)
+@@ -233,24 +233,24 @@ GLES3_include_HEADERS = \
+ 	$(top_srcdir)/include/GLES3/gl3ext.h \
+ 	$(top_srcdir)/include/GLES3/gl3platform.h
+ 
+-lib_LTLIBRARIES += es2api/libGLESv2.la
++lib_LTLIBRARIES += es2api/libGLESv2@GLES_LIB_SUFFIX@.la
+ 
+-es2api_libGLESv2_la_SOURCES = entry.c es2api/glapi_mapi_tmp.h
+-es2api_libGLESv2_la_CFLAGS = \
++es2api_libGLESv2@GLES_LIB_SUFFIX@_la_SOURCES = entry.c es2api/glapi_mapi_tmp.h
++es2api_libGLESv2@GLES_LIB_SUFFIX@_la_CFLAGS = \
+ 	$(AM_CFLAGS) \
+ 	$(VISIBILITY_CFLAGS)
+-es2api_libGLESv2_la_CPPFLAGS = \
++es2api_libGLESv2@GLES_LIB_SUFFIX@_la_CPPFLAGS = \
+ 	$(AM_CPPFLAGS) \
+ 	-DMAPI_MODE_BRIDGE \
+ 	-DMAPI_ABI_HEADER=\"es2api/glapi_mapi_tmp.h\"
+-es2api_libGLESv2_la_LIBADD = $(GLESv2_LIB_DEPS)
+-es2api_libGLESv2_la_LDFLAGS = \
++es2api_libGLESv2@GLES_LIB_SUFFIX@_la_LIBADD = $(GLESv2_LIB_DEPS)
++es2api_libGLESv2@GLES_LIB_SUFFIX@_la_LDFLAGS = \
+ 	-no-undefined \
+ 	-version-number 2 \
+ 	$(GC_SECTIONS) \
+ 	$(LD_NO_UNDEFINED)
+ 
+-es2api_libGLESv2_la_LIBADD += shared-glapi/libglapi.la
++es2api_libGLESv2@GLES_LIB_SUFFIX@_la_LIBADD += shared-glapi/libglapi.la
+ endif
+ 
+ es2api/glapi_mapi_tmp.h: $(glapi_gen_mapi_deps)
+diff --git a/src/mapi/es1api/meson.build b/src/mapi/es1api/meson.build
+index b0416e705a1d..e723e3b4b652 100644
+--- a/src/mapi/es1api/meson.build
++++ b/src/mapi/es1api/meson.build
+@@ -28,7 +28,7 @@ es1_glapi_mapi_tmp_h = custom_target(
+ )
+ 
+ libglesv1_cm = shared_library(
+-  'GLESv1_CM',
++  'GLESv1_CM' + get_option('gles-lib-suffix'),
+   ['../entry.c', es1_glapi_mapi_tmp_h],
+   c_args : [
+     c_msvc_compat_args, c_vis_args, '-DMAPI_MODE_BRIDGE',
+diff --git a/src/mapi/es2api/meson.build b/src/mapi/es2api/meson.build
+index a7f0904b6996..9e2a28088e1e 100644
+--- a/src/mapi/es2api/meson.build
++++ b/src/mapi/es2api/meson.build
+@@ -28,7 +28,7 @@ es2_glapi_mapi_tmp_h = custom_target(
+ )
+ 
+ libgles2 = shared_library(
+-  'GLESv2',
++  'GLESv2' + get_option('gles-lib-suffix'),
+   ['../entry.c', es2_glapi_mapi_tmp_h],
+   c_args : [
+     c_msvc_compat_args, c_vis_args, '-DMAPI_MODE_BRIDGE',
+-- 
+2.20.1
+

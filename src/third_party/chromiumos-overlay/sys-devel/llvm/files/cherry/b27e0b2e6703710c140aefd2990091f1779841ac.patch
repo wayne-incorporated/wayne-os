@@ -1,0 +1,51 @@
+From b27e0b2e6703710c140aefd2990091f1779841ac Mon Sep 17 00:00:00 2001
+From: Shubham Sandeep Rastogi <srastogi22@apple.com>
+Date: Thu, 22 Dec 2022 14:23:34 -0800
+Subject: [PATCH] Revert "Emit unwind information in the .debug_frame section
+ when the .cfi_sections .debug_frame directive is used."
+
+This reverts commit d2cbdb6bef31bdc3254daf57148225ea4b34520c.
+
+This is because we are seeing linker crashes in the internal apple bots.
+---
+ llvm/lib/MC/MCDwarf.cpp                      |  2 +-
+ llvm/test/DebugInfo/AArch64/debugframeinfo.s | 14 --------------
+ 2 files changed, 1 insertion(+), 15 deletions(-)
+ delete mode 100644 llvm/test/DebugInfo/AArch64/debugframeinfo.s
+
+diff --git a/llvm/lib/MC/MCDwarf.cpp b/llvm/lib/MC/MCDwarf.cpp
+index 7d7e790a254c..a3ecebbfa038 100644
+--- a/llvm/lib/MC/MCDwarf.cpp
++++ b/llvm/lib/MC/MCDwarf.cpp
+@@ -1860,7 +1860,7 @@ void MCDwarfFrameEmitter::Emit(MCObjectStreamer &Streamer, MCAsmBackend *MAB,
+ 
+   // Emit the compact unwind info if available.
+   bool NeedsEHFrameSection = !MOFI->getSupportsCompactUnwindWithoutEHFrame();
+-  if (MOFI->getCompactUnwindSection()) {
++  if (IsEH && MOFI->getCompactUnwindSection()) {
+     Streamer.generateCompactUnwindEncodings(MAB);
+     bool SectionEmitted = false;
+     for (const MCDwarfFrameInfo &Frame : FrameArray) {
+diff --git a/llvm/test/DebugInfo/AArch64/debugframeinfo.s b/llvm/test/DebugInfo/AArch64/debugframeinfo.s
+deleted file mode 100644
+index 02b95ee57657..000000000000
+--- a/llvm/test/DebugInfo/AArch64/debugframeinfo.s
++++ /dev/null
+@@ -1,14 +0,0 @@
+-# RUN: llvm-mc -filetype=obj --triple=arm64-apple-darwin22.1.0 %s -o %t.o
+-# RUN: llvm-dwarfdump -debug-frame %t.o | FileCheck %s
+-
+-# CHECK: .debug_frame contents:
+-# CHECK-EMPTY:
+-# CHECK-NEXT: 00000000 00000014 ffffffff CIE
+-# CHECK: .eh_frame contents:
+-# CHECK-EMPTY:
+-
+- .cfi_startproc
+- .cfi_signal_frame
+- .cfi_def_cfa x28, 0x340
+- .cfi_endproc
+- .cfi_sections .debug_frame
+-- 
+2.40.0.348.gf938b09366-goog
+

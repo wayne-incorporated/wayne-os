@@ -1,0 +1,253 @@
+commit 9c895aea118a2f50ca8413372363c3ff6ecc21bf
+Author: Kristof Beyls <kristof.beyls@arm.com>
+Date:   Sun Dec 13 18:56:48 2020 +0000
+
+    [ARM] Add clang command line support for -mharden-sls=
+    
+    The command line syntax is identical to the -mharden-sls= command line
+    syntax for AArch64 targets.
+    
+    Differential Revision: https://reviews.llvm.org/D93221
+
+diff --git a/clang/include/clang/Basic/DiagnosticDriverKinds.td b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+index c67cce099a28..e92a4bf1dac5 100644
+--- a/clang/include/clang/Basic/DiagnosticDriverKinds.td
++++ b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+@@ -348,6 +348,8 @@ def err_invalid_branch_protection: Error <
+   "invalid branch protection option '%0' in '%1'">;
+ def err_invalid_sls_hardening : Error<
+   "invalid sls hardening option '%0' in '%1'">;
++def err_sls_hardening_arm_not_supported : Error<
++  "-mharden-sls is only supported on armv7-a or later">;
+ 
+ def note_drv_command_failed_diag_msg : Note<
+   "diagnostic msg: %0">;
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.cpp b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+index 309a7298300f..ef590db1eecd 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.cpp
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+@@ -32,6 +32,12 @@ bool arm::isARMMProfile(const llvm::Triple &Triple) {
+   return llvm::ARM::parseArchProfile(Arch) == llvm::ARM::ProfileKind::M;
+ }
+ 
++// True if A-profile.
++bool arm::isARMAProfile(const llvm::Triple &Triple) {
++  llvm::StringRef Arch = Triple.getArchName();
++  return llvm::ARM::parseArchProfile(Arch) == llvm::ARM::ProfileKind::A;
++}
++
+ // Get Arch/CPU from args.
+ void arm::getARMArchCPUFromArgs(const ArgList &Args, llvm::StringRef &Arch,
+                                 llvm::StringRef &CPU, bool FromAs) {
+@@ -606,6 +612,45 @@ fp16_fml_fallthrough:
+ 
+   if (Args.hasArg(options::OPT_mno_neg_immediates))
+     Features.push_back("+no-neg-immediates");
++
++  // Enable/disable straight line speculation hardening.
++  if (Arg *A = Args.getLastArg(options::OPT_mharden_sls_EQ)) {
++    StringRef Scope = A->getValue();
++    bool EnableRetBr = false;
++    bool EnableBlr = false;
++    if (Scope != "none" && Scope != "all") {
++      SmallVector<StringRef, 4> Opts;
++      Scope.split(Opts, ",");
++      for (auto Opt : Opts) {
++        Opt = Opt.trim();
++        if (Opt == "retbr") {
++          EnableRetBr = true;
++          continue;
++        }
++        if (Opt == "blr") {
++          EnableBlr = true;
++          continue;
++        }
++        D.Diag(diag::err_invalid_sls_hardening)
++            << Scope << A->getAsString(Args);
++        break;
++      }
++    } else if (Scope == "all") {
++      EnableRetBr = true;
++      EnableBlr = true;
++    }
++
++    if (EnableRetBr || EnableBlr)
++      if (!(isARMAProfile(Triple) && getARMSubArchVersionNumber(Triple) >= 7))
++        D.Diag(diag::err_sls_hardening_arm_not_supported)
++            << Scope << A->getAsString(Args);
++
++    if (EnableRetBr)
++      Features.push_back("+harden-sls-retbr");
++    if (EnableBlr)
++      Features.push_back("+harden-sls-blr");
++  }
++
+ }
+ 
+ const std::string arm::getARMArch(StringRef Arch, const llvm::Triple &Triple) {
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.h b/clang/lib/Driver/ToolChains/Arch/ARM.h
+index 091c09b160ae..02d91cdaee13 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.h
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.h
+@@ -63,6 +63,7 @@ void getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
+                           std::vector<llvm::StringRef> &Features, bool ForAS);
+ int getARMSubArchVersionNumber(const llvm::Triple &Triple);
+ bool isARMMProfile(const llvm::Triple &Triple);
++bool isARMAProfile(const llvm::Triple &Triple);
+ 
+ } // end namespace arm
+ } // end namespace tools
+diff --git a/clang/test/Driver/aarch64-sls-hardening-options.c b/clang/test/Driver/aarch64-sls-hardening-options.c
+deleted file mode 100644
+index 250007aa1254..000000000000
+--- a/clang/test/Driver/aarch64-sls-hardening-options.c
++++ /dev/null
+@@ -1,45 +0,0 @@
+-// Check the -mharden-sls= option, which has a required argument to select
+-// scope.
+-// RUN: %clang -target aarch64--none-eabi -c %s -### 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=none 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-ON
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=none 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,retbr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,r 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=none,blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
+-
+-// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=all,-blr 2>&1 | \
+-// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
+-
+-// RETBR-OFF-NOT: "harden-sls-retbr"
+-// RETBR-ON:  "+harden-sls-retbr"
+-
+-// BLR-OFF-NOT: "harden-sls-blr"
+-// BLR-ON:  "+harden-sls-blr"
+-
+-// BAD-SLS-SPEC: invalid sls hardening option '{{[^']+}}' in '-mharden-sls=
+diff --git a/clang/test/Driver/sls-hardening-options.c b/clang/test/Driver/sls-hardening-options.c
+new file mode 100644
+index 000000000000..c48b694bc8b7
+--- /dev/null
++++ b/clang/test/Driver/sls-hardening-options.c
+@@ -0,0 +1,97 @@
++// Check the -mharden-sls= option, which has a required argument to select
++// scope.
++// RUN: %clang -target aarch64--none-eabi -c %s -### 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: %clang -target armv7a--none-eabi -c %s -### 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=none 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=none 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-ON
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-ON
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=none 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=none 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-OFF --check-prefix=BLR-OFF
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=retbr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=blr -mharden-sls=retbr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-OFF
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,retbr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,blr,retbr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RETBR-ON --check-prefix=BLR-ON
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=retbr,blr,r 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=retbr,blr,r 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=none,blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=none,blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++
++// RUN: %clang -target aarch64--none-eabi -c %s -### -mharden-sls=all,-blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++// RUN: %clang -target armv7a--none-eabi -c %s -### -mharden-sls=all,-blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=BAD-SLS-SPEC
++
++// RETBR-OFF-NOT: "harden-sls-retbr"
++// RETBR-ON:  "+harden-sls-retbr"
++
++// BLR-OFF-NOT: "harden-sls-blr"
++// BLR-ON:  "+harden-sls-blr"
++
++// BAD-SLS-SPEC: invalid sls hardening option '{{[^']+}}' in '-mharden-sls=
++
++// RUN: %clang -target armv6a--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-NOT-SUPPORTED
++
++// RUN: %clang -target armv6a--none-eabi -c %s -### -mharden-sls=retbr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-NOT-SUPPORTED
++
++// RUN: %clang -target armv6a--none-eabi -c %s -### -mharden-sls=blr 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-NOT-SUPPORTED
++
++// RUN: %clang -target armv7r--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-NOT-SUPPORTED
++
++// RUN: %clang -target armv7m--none-eabi -c %s -### -mharden-sls=all 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-NOT-SUPPORTED
++
++// RUN: %clang -target armv6a--none-eabi -c %s -### -mharden-sls=none 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-SUPPORTED
++
++// RUN: %clang -target armv7a-linux-gnueabihf -c %s -### -mharden-sls=all 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-SUPPORTED
++
++// RUN: %clang -target armv8a-linux-gnueabihf -c %s -### -mharden-sls=all 2>&1 | \
++// RUN: FileCheck %s --check-prefix=SLS-SUPPORTED
++
++// SLS-NOT-SUPPORTED: -mharden-sls is only supported on armv7-a or later
++// SLS-SUPPORTED-NOT: mharden-sls
++

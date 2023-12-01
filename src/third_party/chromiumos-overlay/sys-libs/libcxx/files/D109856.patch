@@ -1,0 +1,117 @@
+commit 1c1b78e04b75e9ab21d4da102abcc433618a6e0f
+Author: Daniel Kiss <daniel.kiss@arm.com>
+Date:   Wed Nov 24 00:41:37 2021 +0000
+
+    [libunwind][ARM] Handle end of stack during unwind
+    
+    When unwind step reaches the end of the stack that means the force unwind should notify the stop function.
+    This is not an error, it could mean just the thread is cleaned up completely.
+    
+    Differential Revision: https://reviews.llvm.org/D109856
+
+diff --git a/libcxxabi/src/cxa_personality.cpp b/libcxxabi/src/cxa_personality.cpp
+index ccad45979db2..f6e135f137c0 100644
+--- a/libcxxabi/src/cxa_personality.cpp
++++ b/libcxxabi/src/cxa_personality.cpp
+@@ -1004,9 +1004,14 @@ extern "C" _Unwind_Reason_Code __gnu_unwind_frame(_Unwind_Exception*,
+ static _Unwind_Reason_Code continue_unwind(_Unwind_Exception* unwind_exception,
+                                            _Unwind_Context* context)
+ {
+-    if (__gnu_unwind_frame(unwind_exception, context) != _URC_OK)
+-        return _URC_FAILURE;
++  switch (__gnu_unwind_frame(unwind_exception, context)) {
++  case _URC_OK:
+     return _URC_CONTINUE_UNWIND;
++  case _URC_END_OF_STACK:
++    return _URC_END_OF_STACK;
++  default:
++    return _URC_FAILURE;
++  }
+ }
+ 
+ // ARM register names
+diff --git a/libcxxabi/test/forced_unwind3.pass.cpp b/libcxxabi/test/forced_unwind3.pass.cpp
+new file mode 100644
+index 000000000000..3bcc7978aeab
+--- /dev/null
++++ b/libcxxabi/test/forced_unwind3.pass.cpp
+@@ -0,0 +1,79 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// Let's run ForcedUnwind until it reaches end of the stack, this test simulates
++// what pthread_cancel does.
++
++// UNSUPPORTED: c++03
++// UNSUPPORTED: libcxxabi-no-threads
++// UNSUPPORTED: no-exceptions
++
++#include <assert.h>
++#include <exception>
++#include <stdlib.h>
++#include <string.h>
++#include <unwind.h>
++#include <thread>
++#include <tuple>
++#include <__cxxabi_config.h>
++
++// TODO: dump version back to 14 once clang is updated on the CI.
++#if defined(_LIBCXXABI_ARM_EHABI) && defined(__clang__) && __clang_major__ < 15
++// _Unwind_ForcedUnwind is not available or broken before version 14.
++int main(int, char**) { return 0; }
++
++#else
++static bool destructorCalled = false;
++
++struct myClass {
++  myClass() {}
++  ~myClass() {
++    assert(destructorCalled == false);
++    destructorCalled = true;
++  };
++};
++
++template <typename T>
++struct Stop;
++
++template <typename R, typename... Args>
++struct Stop<R (*)(Args...)> {
++  // The third argument of _Unwind_Stop_Fn is uint64_t in Itanium C++ ABI/LLVM
++  // libunwind while _Unwind_Exception_Class in libgcc.
++  typedef typename std::tuple_element<2, std::tuple<Args...>>::type type;
++
++  static _Unwind_Reason_Code stop(int, _Unwind_Action actions, type, struct _Unwind_Exception*, struct _Unwind_Context*,
++                                  void*) {
++    if (actions & _UA_END_OF_STACK) {
++      assert(destructorCalled == true);
++      exit(0);
++    }
++    return _URC_NO_REASON;
++  }
++};
++
++static void forced_unwind() {
++  _Unwind_Exception* exc = new _Unwind_Exception;
++  memset(&exc->exception_class, 0, sizeof(exc->exception_class));
++  exc->exception_cleanup = 0;
++  _Unwind_ForcedUnwind(exc, Stop<_Unwind_Stop_Fn>::stop, 0);
++  abort();
++}
++
++__attribute__((__noinline__)) static void test() {
++  myClass c{};
++  forced_unwind();
++  abort();
++}
++
++int main(int, char**) {
++  std::thread t{test};
++  t.join();
++  return -1;
++}
++#endif

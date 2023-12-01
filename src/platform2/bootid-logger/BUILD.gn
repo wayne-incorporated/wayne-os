@@ -1,0 +1,81 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":bootid-logger",
+    ":install_init_config",
+  ]
+  if (use.fuzzer) {
+    deps += [ ":bootid_logger_fuzzer" ]
+  }
+  if (use.test) {
+    deps += [ ":bootid-logger-testrunner" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [ "libchrome" ]
+}
+
+static_library("bootid_logger_lib") {
+  sources = [
+    "bootid_logger.cc",
+    "bootid_logger.h",
+    "constants.h",
+    "timestamp_util.cc",
+    "timestamp_util.h",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ "//croslog:libcroslog_static" ]
+}
+
+executable("bootid-logger") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":bootid_logger_lib" ]
+}
+
+if (use.fuzzer) {
+  executable("bootid_logger_fuzzer") {
+    sources = [ "bootid_logger_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":bootid_logger_lib" ]
+  }
+}
+
+install_config("install_init_config") {
+  sources = [ "log-bootid-on-boot.conf" ]
+  install_path = "/etc/init"
+}
+
+if (use.test) {
+  pkg_config("bootid_logger_testrunner_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("bootid-logger-testrunner") {
+    sources = [
+      "bootid_logger_test.cc",
+      "timestamp_util_test.cc",
+    ]
+    run_test = true
+    defines = [ "UNIT_TEST" ]
+    configs += [
+      "//common-mk:test",
+      ":bootid_logger_testrunner_config",
+      ":target_defaults",
+    ]
+    deps = [
+      ":bootid_logger_lib",
+      "//common-mk/testrunner",
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+#!/bin/bash
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+set -eu -o pipefail
+
+SOURCES_PATH="/etc/apt/sources.list.d/cros.list"
+VM_TOOLS_LSB_RELEASE="/opt/google/cros-containers/etc/lsb-release"
+
+repo_version="$(grep -o -P 'cros-packages(-staging)?/\d+' "${SOURCES_PATH}")"
+local_version="$(cut -d / -f 2 <<< "${repo_version}")"
+
+tools_version="$(
+grep CHROMEOS_RELEASE_CHROME_MILESTONE "${VM_TOOLS_LSB_RELEASE}" \
+  | cut -d = -f 2
+)"
+
+if [[ "${local_version}" -lt "${tools_version}" ]]; then
+  sed -i -e "s/${local_version}/${tools_version}/" "${SOURCES_PATH}"
+  echo "Updated CrOS repo milestone from ${local_version} to ${tools_version}"
+else
+  echo "Already up-to-date"
+fi

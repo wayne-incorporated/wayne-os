@@ -1,0 +1,50 @@
+From 325c0b03244e695e835603fba3f876e59cfaa3ee Mon Sep 17 00:00:00 2001
+From: Mike Gerow <gerow@google.com>
+Date: Wed, 1 Feb 2023 16:14:14 -0800
+Subject: [PATCH 6/8] [crosvm] search for RSD PTR manually
+
+BUG=b:221075887
+---
+ OvmfPkg/AcpiPlatformDxe/CloudHvAcpi.c | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/OvmfPkg/AcpiPlatformDxe/CloudHvAcpi.c b/OvmfPkg/AcpiPlatformDxe/CloudHvAcpi.c
+index ff59600d3e..93858eb3b4 100644
+--- a/OvmfPkg/AcpiPlatformDxe/CloudHvAcpi.c
++++ b/OvmfPkg/AcpiPlatformDxe/CloudHvAcpi.c
+@@ -51,7 +51,31 @@ InstallCloudHvTables (
+   }
+ 
+   pvh_start_info       = (struct hvm_start_info *)(UINTN)PVHResetVectorData[0];
+-  AcpiRsdpStructurePtr = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(UINTN)pvh_start_info->rsdp_paddr;
++
++  // If the PVH struct wasn't there then fall back to finding the RDSP the way a
++  // normal OS would, by scanning for the string "RSD PTR" starting from 0x00E0000.
++  // https://wiki.osdev.org/RSDP
++  //
++  // TODO(b/221075887): teach crosvm to do the xen thing and remove this.
++  if (pvh_start_info->magic != XEN_HVM_START_MAGIC_VALUE) {
++    UINT64 *p = (UINT64 *)0x000E0000;
++    UINT64 magic = 0x2052545020445352; // 'RSD PTR ' but C doesn't have 64-bit character constants, womp womp.
++    int found = 0;
++
++    // Looking on a 16-byte boundary, hence the += 2.
++    for (; p < (UINT64 *)0x000FFFFF; p += 2) {
++      if (*p == magic) {
++        found = 1;
++        break;
++      }
++    }
++    if (!found) {
++      return EFI_NOT_FOUND;
++    }
++    AcpiRsdpStructurePtr = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)p;
++  } else {
++    AcpiRsdpStructurePtr = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)pvh_start_info->rsdp_paddr;
++  }
+ 
+   // If XSDT table is found, just install its tables.
+   // Otherwise, try to find and install the RSDT tables.
+-- 
+2.39.1.456.gfc5497dd1b-goog
+

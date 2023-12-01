@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+// Copyright 2014 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,11 @@
 #include "login_manager/subprocess.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <base/files/file_path.h>
-#include <base/macros.h>
-#include <base/optional.h>
 
 namespace login_manager {
 
@@ -33,7 +32,7 @@ class GeneratorJobFactoryInterface {
   virtual std::unique_ptr<GeneratorJobInterface> Create(
       const std::string& filename,
       const base::FilePath& user_path,
-      const base::Optional<base::FilePath> ns_path,
+      const std::optional<base::FilePath> ns_path,
       uid_t desired_uid,
       SystemUtils* utils) = 0;
 };
@@ -50,7 +49,7 @@ class GeneratorJob : public GeneratorJobInterface {
     std::unique_ptr<GeneratorJobInterface> Create(
         const std::string& filename,
         const base::FilePath& user_path,
-        const base::Optional<base::FilePath> ns_path,
+        const std::optional<base::FilePath> ns_path,
         uid_t desired_uid,
         SystemUtils* utils) override;
 
@@ -70,7 +69,7 @@ class GeneratorJob : public GeneratorJobInterface {
  private:
   GeneratorJob(const std::string& filename,
                const base::FilePath& user_path,
-               const base::Optional<base::FilePath> ns_path,
+               const std::optional<base::FilePath> ns_path,
                uid_t desired_uid,
                SystemUtils* utils);
   GeneratorJob(const GeneratorJob&) = delete;
@@ -82,7 +81,7 @@ class GeneratorJob : public GeneratorJobInterface {
   const base::FilePath user_path_;
   // Optional path identifying the mount namespace where the key file should be
   // generated.
-  const base::Optional<base::FilePath> ns_path_;
+  const std::optional<base::FilePath> ns_path_;
 
   // Wrapper for system library calls. Externally owned.
   SystemUtils* system_;

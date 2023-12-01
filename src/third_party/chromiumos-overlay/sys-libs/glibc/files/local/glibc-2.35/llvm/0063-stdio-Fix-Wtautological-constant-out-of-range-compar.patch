@@ -1,0 +1,32 @@
+From 738415715dc15e0bb8af22653a41bc1993b19181 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 9 Mar 2022 15:57:17 -0300
+Subject: [PATCH 063/163] stdio: Fix
+ -Wtautological-constant-out-of-range-compare on clang
+
+Clang emits an error:
+
+error: result of comparison of constant 255 with expression of type
+'char' is always true
+[-Werror,-Wtautological-constant-out-of-range-compare]
+          if (spec <= UCHAR_MAX
+---
+ stdio-common/vfprintf-internal.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/stdio-common/vfprintf-internal.c b/stdio-common/vfprintf-internal.c
+index 59bd76c890..76b89d5d65 100644
+--- a/stdio-common/vfprintf-internal.c
++++ b/stdio-common/vfprintf-internal.c
+@@ -1878,7 +1878,7 @@ printf_positional (FILE *s, const CHAR_T *format, int readonly_format,
+ 	  extern printf_function **__printf_function_table;
+ 	  int function_done;
+ 
+-	  if (spec <= UCHAR_MAX
++	  if ((int) spec <= UCHAR_MAX
+ 	      && __printf_function_table != NULL
+ 	      && __printf_function_table[(size_t) spec] != NULL)
+ 	    {
+-- 
+2.37.2
+

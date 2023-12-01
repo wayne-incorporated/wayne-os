@@ -1,0 +1,56 @@
+From 2c14cd4556e688540d158a98217f42119ae8a949 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 15 Mar 2022 08:41:43 -0300
+Subject: [PATCH 095/163] string: Use asm alias instead of symbol redirections
+ for stpcpy and mempcpy
+
+Commit 939da411433 added symbols redirections to handle ISO C
+namespace, however some compiler does not support to redeclare the
+function prototype.  Moving these defintions to exported header
+it not a good practice (it exposes a internal implementation and
+it would require to add macros to define it only internally).
+
+Instead this patch replaces the symbol redirections by direct asm
+aliases, as done to handle libcall generation done by compiler on
+some loop optimizations. The only issue is sparc binutils generates
+an extra __mempcpy plt not called anywhere in the code, which indicates
+a binutils issue (this is added in the localplt.data for now).
+
+Checked on most of affected ABIs.
+---
+ include/string.h                                    | 4 ++--
+ sysdeps/unix/sysv/linux/sparc/sparc64/localplt.data | 3 +++
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/include/string.h b/include/string.h
+index 21f641a413..44c4049053 100644
+--- a/include/string.h
++++ b/include/string.h
+@@ -176,8 +176,8 @@ extern __typeof (strsep) strsep attribute_hidden;
+   && !defined NO_MEMPCPY_STPCPY_REDIRECT
+ /* Redirect calls to __builtin_mempcpy and __builtin_stpcpy to call
+    __mempcpy and __stpcpy if not inlined.  */
+-extern __typeof (mempcpy) mempcpy __asm__ ("__mempcpy");
+-extern __typeof (stpcpy) stpcpy __asm__ ("__stpcpy");
++__asm__ ("mempcpy = __mempcpy");
++__asm__ ("stpcpy = __stpcpy");
+ #endif
+ 
+ extern void *__memcpy_chk (void *__restrict __dest,
+diff --git a/sysdeps/unix/sysv/linux/sparc/sparc64/localplt.data b/sysdeps/unix/sysv/linux/sparc/sparc64/localplt.data
+index 6a216f3a5a..21a5fe65ba 100644
+--- a/sysdeps/unix/sysv/linux/sparc/sparc64/localplt.data
++++ b/sysdeps/unix/sysv/linux/sparc/sparc64/localplt.data
+@@ -16,6 +16,9 @@ libc.so: calloc
+ libc.so: free
+ libc.so: malloc
+ libc.so: realloc
++# Unreferenced PLT created by the symbols aliases used to redirect
++# the compiler generated mempcpy/stpcyp calls done by builtin usage.
++libc.so: __mempcpy
+ libm.so: matherr
+ # The TLS-enabled version of these functions is interposed from libc.so.
+ ld.so: _dl_signal_error
+-- 
+2.37.2
+

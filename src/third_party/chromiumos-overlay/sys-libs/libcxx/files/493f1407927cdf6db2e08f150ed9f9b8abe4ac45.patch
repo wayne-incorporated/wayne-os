@@ -1,0 +1,502 @@
+commit 493f1407927cdf6db2e08f150ed9f9b8abe4ac45
+Author: Arthur O'Dwyer <arthur.j.odwyer@gmail.com>
+Date:   Sun Dec 20 15:21:42 2020 -0500
+
+    [libc++] [P0879] constexpr std::sort
+    
+    This completes libc++'s implementation of
+    P0879 "Constexpr for swap and swap related functions."
+    http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0879r0.html
+    
+    For the feature-macro adjustment, see
+    https://cplusplus.github.io/LWG/issue3256
+    
+    Differential Revision: https://reviews.llvm.org/D93661
+
+diff --git a/libcxx/docs/Cxx2aStatusIssuesStatus.csv b/libcxx/docs/Cxx2aStatusIssuesStatus.csv
+index 859c52ae2b21..d2adde69d9d2 100644
+--- a/libcxx/docs/Cxx2aStatusIssuesStatus.csv
++++ b/libcxx/docs/Cxx2aStatusIssuesStatus.csv
+@@ -176,7 +176,7 @@
+ "`3244 <https://wg21.link/LWG3244>`__","Constraints for ``Source``\  in |sect|\ [fs.path.req] insufficiently constrainty","Belfast","",""
+ "`3241 <https://wg21.link/LWG3241>`__","``chrono-spec``\  grammar ambiguity in |sect|\ [time.format]","Belfast","",""
+ "`3257 <https://wg21.link/LWG3257>`__","Missing feature testing macro update from P0858","Belfast","",""
+-"`3256 <https://wg21.link/LWG3256>`__","Feature testing macro for ``constexpr``\  algorithms","Belfast","",""
++"`3256 <https://wg21.link/LWG3256>`__","Feature testing macro for ``constexpr``\  algorithms","Belfast","|Complete|","13.0"
+ "`3273 <https://wg21.link/LWG3273>`__","Specify ``weekday_indexed``\  to range of ``[0, 7]``\ ","Belfast","",""
+ "`3070 <https://wg21.link/LWG3070>`__","``path::lexically_relative``\  causes surprising results if a filename can also be a  *root-name*","Belfast","",""
+ "`3266 <https://wg21.link/LWG3266>`__","``to_chars(bool)``\  should be deleted","Belfast","",""
+diff --git a/libcxx/docs/Cxx2aStatusPaperStatus.csv b/libcxx/docs/Cxx2aStatusPaperStatus.csv
+index b3b60d2ca730..d3819a83fa43 100644
+--- a/libcxx/docs/Cxx2aStatusPaperStatus.csv
++++ b/libcxx/docs/Cxx2aStatusPaperStatus.csv
+@@ -40,7 +40,7 @@
+ "`P0759R1 <https://wg21.link/P0759R1>`__","LWG","fpos Requirements","Rapperswil","|Complete|","11.0"
+ "`P0769R2 <https://wg21.link/P0769R2>`__","LWG","Add shift to <algorithm>","Rapperswil","|Complete|","12.0"
+ "`P0788R3 <https://wg21.link/P0788R3>`__","LWG","Standard Library Specification in a Concepts and Contracts World","Rapperswil","*Removed in Cologne*","n/a"
+-"`P0879R0 <https://wg21.link/P0879R0>`__","LWG","Constexpr for swap and swap related functions Also resolves LWG issue 2800.","Rapperswil","",""
++"`P0879R0 <https://wg21.link/P0879R0>`__","LWG","Constexpr for swap and swap related functions Also resolves LWG issue 2800.","Rapperswil","|Complete|","13.0"
+ "`P0887R1 <https://wg21.link/P0887R1>`__","LWG","The identity metafunction","Rapperswil","|Complete|","8.0"
+ "`P0892R2 <https://wg21.link/P0892R2>`__","CWG","explicit(bool)","Rapperswil","",""
+ "`P0898R3 <https://wg21.link/P0898R3>`__","LWG","Standard Library Concepts","Rapperswil","|In Progress|",""
+diff --git a/libcxx/docs/FeatureTestMacroTable.rst b/libcxx/docs/FeatureTestMacroTable.rst
+index 5fe7005c19c2..7028ff0d83f1 100644
+--- a/libcxx/docs/FeatureTestMacroTable.rst
++++ b/libcxx/docs/FeatureTestMacroTable.rst
+@@ -200,7 +200,7 @@ Status
+     ------------------------------------------------- -----------------
+     ``__cpp_lib_concepts``                            *unimplemented*
+     ------------------------------------------------- -----------------
+-    ``__cpp_lib_constexpr_algorithms``                *unimplemented*
++    ``__cpp_lib_constexpr_algorithms``                ``201806L``
+     ------------------------------------------------- -----------------
+     ``__cpp_lib_constexpr_complex``                   *unimplemented*
+     ------------------------------------------------- -----------------
+diff --git a/libcxx/include/algorithm b/libcxx/include/algorithm
+index d8fbac731b19..7220585d15a3 100644
+--- a/libcxx/include/algorithm
++++ b/libcxx/include/algorithm
+@@ -351,11 +351,11 @@ template <class ForwardIterator, class Compare>
+     is_sorted_until(ForwardIterator first, ForwardIterator last, Compare comp);
+ 
+ template <class RandomAccessIterator>
+-    void
++    constexpr void               // constexpr in C++20
+     sort(RandomAccessIterator first, RandomAccessIterator last);
+ 
+ template <class RandomAccessIterator, class Compare>
+-    void
++    constexpr void               // constexpr in C++20
+     sort(RandomAccessIterator first, RandomAccessIterator last, Compare comp);
+ 
+ template <class RandomAccessIterator>
+@@ -4047,7 +4047,6 @@ template <class _Compare, class _RandomAccessIterator>
+ void
+ __sort(_RandomAccessIterator __first, _RandomAccessIterator __last, _Compare __comp)
+ {
+-    // _Compare is known to be a reference type
+     typedef typename iterator_traits<_RandomAccessIterator>::difference_type difference_type;
+     typedef typename iterator_traits<_RandomAccessIterator>::value_type value_type;
+     const difference_type __limit = is_trivially_copy_constructible<value_type>::value &&
+@@ -4236,47 +4235,13 @@ __sort(_RandomAccessIterator __first, _RandomAccessIterator __last, _Compare __c
+     }
+ }
+ 
+-// This forwarder keeps the top call and the recursive calls using the same instantiation, forcing a reference _Compare
+-template <class _RandomAccessIterator, class _Compare>
+-inline _LIBCPP_INLINE_VISIBILITY
+-void
+-sort(_RandomAccessIterator __first, _RandomAccessIterator __last, _Compare __comp)
+-{
+-    typedef typename __comp_ref_type<_Compare>::type _Comp_ref;
+-    _VSTD::__sort<_Comp_ref>(__first, __last, _Comp_ref(__comp));
+-}
+-
+-template <class _RandomAccessIterator>
+-inline _LIBCPP_INLINE_VISIBILITY
+-void
+-sort(_RandomAccessIterator __first, _RandomAccessIterator __last)
+-{
+-    _VSTD::sort(__first, __last, __less<typename iterator_traits<_RandomAccessIterator>::value_type>());
+-}
+-
+-template <class _Tp>
+-inline _LIBCPP_INLINE_VISIBILITY
+-void
+-sort(_Tp** __first, _Tp** __last)
+-{
+-    _VSTD::sort((uintptr_t*)__first, (uintptr_t*)__last, __less<uintptr_t>());
+-}
+-
+-template <class _Tp>
+-inline _LIBCPP_INLINE_VISIBILITY
+-void
+-sort(__wrap_iter<_Tp*> __first, __wrap_iter<_Tp*> __last)
+-{
+-    _VSTD::sort(__first.base(), __last.base());
+-}
+-
+-template <class _Tp, class _Compare>
++template <class _Compare, class _Tp>
+ inline _LIBCPP_INLINE_VISIBILITY
+ void
+-sort(__wrap_iter<_Tp*> __first, __wrap_iter<_Tp*> __last, _Compare __comp)
++__sort(_Tp** __first, _Tp** __last, __less<_Tp*>&)
+ {
+-    typedef typename add_lvalue_reference<_Compare>::type _Comp_ref;
+-    _VSTD::sort<_Tp*, _Comp_ref>(__first.base(), __last.base(), __comp);
++    __less<uintptr_t> __comp;
++    _VSTD::__sort<__less<uintptr_t>&, uintptr_t*>((uintptr_t*)__first, (uintptr_t*)__last, __comp);
+ }
+ 
+ _LIBCPP_EXTERN_TEMPLATE(_LIBCPP_FUNC_VIS void __sort<__less<char>&, char*>(char*, char*, __less<char>&))
+@@ -5478,6 +5443,29 @@ nth_element(_RandomAccessIterator __first, _RandomAccessIterator __nth, _RandomA
+     _VSTD::nth_element(__first, __nth, __last, __less<typename iterator_traits<_RandomAccessIterator>::value_type>());
+ }
+ 
++// sort
++
++template <class _RandomAccessIterator, class _Compare>
++inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
++void
++sort(_RandomAccessIterator __first, _RandomAccessIterator __last, _Compare __comp)
++{
++    typedef typename __comp_ref_type<_Compare>::type _Comp_ref;
++    if (__libcpp_is_constant_evaluated()) {
++        _VSTD::__partial_sort<_Comp_ref>(__first, __last, __last, _Comp_ref(__comp));
++    } else {
++        _VSTD::__sort<_Comp_ref>(_VSTD::__unwrap_iter(__first), _VSTD::__unwrap_iter(__last), _Comp_ref(__comp));
++    }
++}
++
++template <class _RandomAccessIterator>
++inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX17
++void
++sort(_RandomAccessIterator __first, _RandomAccessIterator __last)
++{
++    _VSTD::sort(__first, __last, __less<typename iterator_traits<_RandomAccessIterator>::value_type>());
++}
++
+ // includes
+ 
+ template <class _Compare, class _InputIterator1, class _InputIterator2>
+diff --git a/libcxx/include/version b/libcxx/include/version
+index 77183e54fcfd..9b37c30d2acd 100644
+--- a/libcxx/include/version
++++ b/libcxx/include/version
+@@ -294,7 +294,7 @@ __cpp_lib_void_t                                        201411L <type_traits>
+ #   define __cpp_lib_char8_t                            201811L
+ # endif
+ // # define __cpp_lib_concepts                             202002L
+-// # define __cpp_lib_constexpr_algorithms                 201806L
++# define __cpp_lib_constexpr_algorithms                 201806L
+ // # define __cpp_lib_constexpr_complex                    201711L
+ # define __cpp_lib_constexpr_dynamic_alloc              201907L
+ # define __cpp_lib_constexpr_functional                 201907L
+diff --git a/libcxx/test/std/algorithms/alg.sorting/alg.sort/sort/sort_constexpr.pass.cpp b/libcxx/test/std/algorithms/alg.sorting/alg.sort/sort/sort_constexpr.pass.cpp
+new file mode 100644
+index 000000000000..41ea82cc4845
+--- /dev/null
++++ b/libcxx/test/std/algorithms/alg.sorting/alg.sort/sort/sort_constexpr.pass.cpp
+@@ -0,0 +1,101 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// <algorithm>
++
++// template<RandomAccessIterator Iter>
++//   requires ShuffleIterator<Iter>
++//         && LessThanComparable<Iter::value_type>
++//   void
++//   sort(Iter first, Iter last);
++
++#include <algorithm>
++#include <cassert>
++
++#include "test_macros.h"
++#include "test_iterators.h"
++#include "MoveOnly.h"
++
++template<int N, class T, class Iter>
++TEST_CONSTEXPR_CXX20 bool test()
++{
++    int orig[N] = {};
++    unsigned x = 1;
++    for (int i=0; i < N; ++i) {
++        x = (x * 1664525) + 1013904223;
++        orig[i] = x % 1000;
++    }
++    T work[N] = {};
++    std::copy(orig, orig+N, work);
++    std::sort(Iter(work), Iter(work+N));
++    assert(std::is_sorted(work, work+N));
++    assert(std::is_permutation(work, work+N, orig));
++
++    return true;
++}
++
++template<int N, class T, class Iter>
++TEST_CONSTEXPR_CXX20 bool test_pointers()
++{
++    T data[N] = {};
++    T *orig[N] = {};
++    unsigned x = 1;
++    for (int i=0; i < N; ++i) {
++        orig[i] = &data[x % 258];
++    }
++    T *work[N] = {};
++    std::copy(orig, orig+N, work);
++    std::sort(Iter(work), Iter(work+N));
++    assert(std::is_sorted(work, work+N));
++    assert(std::is_permutation(work, work+N, orig));
++
++    return true;
++}
++
++int main(int, char**)
++{
++    test<7, int, int*>();
++    test<7, int, random_access_iterator<int*> >();
++    test<257, int, int*>();
++    test<257, int, random_access_iterator<int*> >();
++
++#if TEST_STD_VER >= 11
++    test<7, MoveOnly, MoveOnly*>();
++    test<7, MoveOnly, random_access_iterator<MoveOnly*> >();
++    test<257, MoveOnly, MoveOnly*>();
++    test<257, MoveOnly, random_access_iterator<MoveOnly*> >();
++#endif
++
++    test_pointers<17, char, char**>();
++    test_pointers<17, char, random_access_iterator<char**> >();
++    test_pointers<17, const char, const char**>();
++    test_pointers<17, const char, random_access_iterator<const char**> >();
++    test_pointers<17, int, int**>();
++    test_pointers<17, int, random_access_iterator<int**> >();
++
++#if TEST_STD_VER >= 20
++    static_assert(test<7, int, int*>());
++    static_assert(test<7, int, random_access_iterator<int*>>());
++    static_assert(test<257, int, int*>());
++    static_assert(test<257, int, random_access_iterator<int*>>());
++
++    static_assert(test<7, MoveOnly, MoveOnly*>());
++    static_assert(test<7, MoveOnly, random_access_iterator<MoveOnly*>>());
++    static_assert(test<257, MoveOnly, MoveOnly*>());
++    static_assert(test<257, MoveOnly, random_access_iterator<MoveOnly*>>());
++
++    static_assert(test_pointers<17, char, char**>());
++    static_assert(test_pointers<17, char, random_access_iterator<char**>>());
++    static_assert(test_pointers<17, const char, const char**>());
++    static_assert(test_pointers<17, const char, random_access_iterator<const char**>>());
++    static_assert(test_pointers<17, int, int**>());
++    static_assert(test_pointers<17, int, random_access_iterator<int**>>());
++#endif
++
++    return 0;
++}
+diff --git a/libcxx/test/std/algorithms/alg.sorting/alg.sort/sort/sort_constexpr_comp.pass.cpp b/libcxx/test/std/algorithms/alg.sorting/alg.sort/sort/sort_constexpr_comp.pass.cpp
+new file mode 100644
+index 000000000000..48f057ab8a7f
+--- /dev/null
++++ b/libcxx/test/std/algorithms/alg.sorting/alg.sort/sort/sort_constexpr_comp.pass.cpp
+@@ -0,0 +1,102 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// <algorithm>
++
++// template<RandomAccessIterator Iter, StrictWeakOrder<auto, Iter::value_type> Compare>
++//   requires ShuffleIterator<Iter>
++//         && CopyConstructible<Compare>
++//   void
++//   sort(Iter first, Iter last, Compare comp);
++
++#include <algorithm>
++#include <cassert>
++#include <functional>
++
++#include "test_macros.h"
++#include "test_iterators.h"
++#include "MoveOnly.h"
++
++template<int N, class T, class Iter>
++TEST_CONSTEXPR_CXX20 bool test()
++{
++    int orig[N] = {};
++    unsigned x = 1;
++    for (int i=0; i < N; ++i) {
++        x = (x * 1664525) + 1013904223;
++        orig[i] = x % 1000;
++    }
++    T work[N] = {};
++    std::copy(orig, orig+N, work);
++    std::sort(Iter(work), Iter(work+N), std::greater<T>());
++    assert(std::is_sorted(work, work+N, std::greater<T>()));
++    assert(std::is_permutation(work, work+N, orig));
++
++    return true;
++}
++
++template<int N, class T, class Iter>
++TEST_CONSTEXPR_CXX20 bool test_pointers()
++{
++    T data[N] = {};
++    T *orig[N] = {};
++    unsigned x = 1;
++    for (int i=0; i < N; ++i) {
++        orig[i] = &data[x % 258];
++    }
++    T *work[N] = {};
++    std::copy(orig, orig+N, work);
++    std::sort(Iter(work), Iter(work+N), std::greater<T*>());
++    assert(std::is_sorted(work, work+N, std::greater<T*>()));
++    assert(std::is_permutation(work, work+N, orig));
++
++    return true;
++}
++
++int main(int, char**)
++{
++    test<7, int, int*>();
++    test<7, int, random_access_iterator<int*> >();
++    test<257, int, int*>();
++    test<257, int, random_access_iterator<int*> >();
++
++#if TEST_STD_VER >= 11
++    test<7, MoveOnly, MoveOnly*>();
++    test<7, MoveOnly, random_access_iterator<MoveOnly*> >();
++    test<257, MoveOnly, MoveOnly*>();
++    test<257, MoveOnly, random_access_iterator<MoveOnly*> >();
++#endif
++
++    test_pointers<17, char, char**>();
++    test_pointers<17, char, random_access_iterator<char**> >();
++    test_pointers<17, const char, const char**>();
++    test_pointers<17, const char, random_access_iterator<const char**> >();
++    test_pointers<17, int, int**>();
++    test_pointers<17, int, random_access_iterator<int**> >();
++
++#if TEST_STD_VER >= 20
++    static_assert(test<7, int, int*>());
++    static_assert(test<7, int, random_access_iterator<int*>>());
++    static_assert(test<257, int, int*>());
++    static_assert(test<257, int, random_access_iterator<int*>>());
++
++    static_assert(test<7, MoveOnly, MoveOnly*>());
++    static_assert(test<7, MoveOnly, random_access_iterator<MoveOnly*>>());
++    static_assert(test<257, MoveOnly, MoveOnly*>());
++    static_assert(test<257, MoveOnly, random_access_iterator<MoveOnly*>>());
++
++    static_assert(test_pointers<17, char, char**>());
++    static_assert(test_pointers<17, char, random_access_iterator<char**>>());
++    static_assert(test_pointers<17, const char, const char**>());
++    static_assert(test_pointers<17, const char, random_access_iterator<const char**>>());
++    static_assert(test_pointers<17, int, int**>());
++    static_assert(test_pointers<17, int, random_access_iterator<int**>>());
++#endif
++
++    return 0;
++}
+diff --git a/libcxx/test/std/language.support/support.limits/support.limits.general/algorithm.version.pass.cpp b/libcxx/test/std/language.support/support.limits/support.limits.general/algorithm.version.pass.cpp
+index e081ca79f6f0..eb7591540eac 100644
+--- a/libcxx/test/std/language.support/support.limits/support.limits.general/algorithm.version.pass.cpp
++++ b/libcxx/test/std/language.support/support.limits/support.limits.general/algorithm.version.pass.cpp
+@@ -148,17 +148,11 @@
+ #   error "__cpp_lib_clamp should have the value 201603L in c++20"
+ # endif
+ 
+-# if !defined(_LIBCPP_VERSION)
+-#   ifndef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should be defined in c++20"
+-#   endif
+-#   if __cpp_lib_constexpr_algorithms != 201806L
+-#     error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++20"
+-#   endif
+-# else // _LIBCPP_VERSION
+-#   ifdef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should not be defined because it is unimplemented in libc++!"
+-#   endif
++# ifndef __cpp_lib_constexpr_algorithms
++#   error "__cpp_lib_constexpr_algorithms should be defined in c++20"
++# endif
++# if __cpp_lib_constexpr_algorithms != 201806L
++#   error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++20"
+ # endif
+ 
+ # if !defined(_LIBCPP_VERSION)
+@@ -217,17 +211,11 @@
+ #   error "__cpp_lib_clamp should have the value 201603L in c++2b"
+ # endif
+ 
+-# if !defined(_LIBCPP_VERSION)
+-#   ifndef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should be defined in c++2b"
+-#   endif
+-#   if __cpp_lib_constexpr_algorithms != 201806L
+-#     error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++2b"
+-#   endif
+-# else // _LIBCPP_VERSION
+-#   ifdef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should not be defined because it is unimplemented in libc++!"
+-#   endif
++# ifndef __cpp_lib_constexpr_algorithms
++#   error "__cpp_lib_constexpr_algorithms should be defined in c++2b"
++# endif
++# if __cpp_lib_constexpr_algorithms != 201806L
++#   error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++2b"
+ # endif
+ 
+ # if !defined(_LIBCPP_VERSION)
+diff --git a/libcxx/test/std/language.support/support.limits/support.limits.general/version.version.pass.cpp b/libcxx/test/std/language.support/support.limits/support.limits.general/version.version.pass.cpp
+index 2fe0dfc264f7..1bb4928bd552 100644
+--- a/libcxx/test/std/language.support/support.limits/support.limits.general/version.version.pass.cpp
++++ b/libcxx/test/std/language.support/support.limits/support.limits.general/version.version.pass.cpp
+@@ -2389,17 +2389,11 @@
+ #   endif
+ # endif
+ 
+-# if !defined(_LIBCPP_VERSION)
+-#   ifndef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should be defined in c++20"
+-#   endif
+-#   if __cpp_lib_constexpr_algorithms != 201806L
+-#     error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++20"
+-#   endif
+-# else // _LIBCPP_VERSION
+-#   ifdef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should not be defined because it is unimplemented in libc++!"
+-#   endif
++# ifndef __cpp_lib_constexpr_algorithms
++#   error "__cpp_lib_constexpr_algorithms should be defined in c++20"
++# endif
++# if __cpp_lib_constexpr_algorithms != 201806L
++#   error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++20"
+ # endif
+ 
+ # if !defined(_LIBCPP_VERSION)
+@@ -3608,17 +3602,11 @@
+ #   endif
+ # endif
+ 
+-# if !defined(_LIBCPP_VERSION)
+-#   ifndef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should be defined in c++2b"
+-#   endif
+-#   if __cpp_lib_constexpr_algorithms != 201806L
+-#     error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++2b"
+-#   endif
+-# else // _LIBCPP_VERSION
+-#   ifdef __cpp_lib_constexpr_algorithms
+-#     error "__cpp_lib_constexpr_algorithms should not be defined because it is unimplemented in libc++!"
+-#   endif
++# ifndef __cpp_lib_constexpr_algorithms
++#   error "__cpp_lib_constexpr_algorithms should be defined in c++2b"
++# endif
++# if __cpp_lib_constexpr_algorithms != 201806L
++#   error "__cpp_lib_constexpr_algorithms should have the value 201806L in c++2b"
+ # endif
+ 
+ # if !defined(_LIBCPP_VERSION)
+diff --git a/libcxx/utils/generate_feature_test_macro_components.py b/libcxx/utils/generate_feature_test_macro_components.py
+index 6abc13208538..5537d9b9f1cc 100755
+--- a/libcxx/utils/generate_feature_test_macro_components.py
++++ b/libcxx/utils/generate_feature_test_macro_components.py
+@@ -182,7 +182,6 @@ feature_test_macros = [ add_version_header(x) for x in [
+     "name": "__cpp_lib_constexpr_algorithms",
+     "values": { "c++20": 201806 },
+     "headers": ["algorithm"],
+-    "unimplemented": True,
+   }, {
+     "name": "__cpp_lib_constexpr_complex",
+     "values": { "c++20": 201711 },

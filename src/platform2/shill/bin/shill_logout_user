@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Pop all user network profiles from the shill Manager's stack.
+script_name="$(basename "$0")"
+dbus-send --system --dest=org.chromium.flimflam --print-reply / \
+  org.chromium.flimflam.Manager.PopAllUserProfiles ||
+    logger -t "$script_name"  "Failed to pop shill user profiles"
+rm -rf /run/shill/user_profiles /run/shill/guest_user_profile

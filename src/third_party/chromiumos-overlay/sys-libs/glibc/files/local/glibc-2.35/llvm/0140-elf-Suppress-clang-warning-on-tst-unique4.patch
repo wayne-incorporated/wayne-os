@@ -1,0 +1,56 @@
+From 613f8764f3bdd89e9a56e51398b723ec56e3c844 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 25 Mar 2022 11:21:33 -0300
+Subject: [PATCH 140/163] elf: Suppress clang warning on tst-unique4
+
+clang warns that the instatiation of the variable is required,
+but no definition is available.  They are implemented on
+tst-unique4lib.so.
+
+Checked on x86_64-linux-gnu.
+---
+ elf/tst-unique4.cc    | 6 ++++++
+ elf/tst-unique4lib.cc | 2 +-
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/elf/tst-unique4.cc b/elf/tst-unique4.cc
+index 575c70d3a1..ab727b8dbb 100644
+--- a/elf/tst-unique4.cc
++++ b/elf/tst-unique4.cc
+@@ -2,7 +2,12 @@
+ #include "tst-unique4.h"
+ 
+ #include <cstdio>
++#include <libc-diag.h>
+ 
++/* clang warns that the instatiation of the variable is required, but no
++   definition is available.  They are implemented on tst-unique4lib.so.  */
++DIAG_PUSH_NEEDS_COMMENT_CLANG;
++DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wundefined-var-template");
+ static int a[24] =
+   {
+     S<1>::i, S<2>::i, S<3>::i, S<4>::i, S<5>::i, S<6>::i, S<7>::i, S<8>::i,
+@@ -10,6 +15,7 @@ static int a[24] =
+     S<16>::i, S<17>::i, S<18>::i, S<19>::i, S<20>::i, S<21>::i, S<22>::i,
+     S<23>::i, S<24>::i
+   };
++DIAG_POP_NEEDS_COMMENT_CLANG;
+ 
+ int
+ main (void)
+diff --git a/elf/tst-unique4lib.cc b/elf/tst-unique4lib.cc
+index 17a7cdf567..2829e75cee 100644
+--- a/elf/tst-unique4lib.cc
++++ b/elf/tst-unique4lib.cc
+@@ -2,7 +2,7 @@
+ #include "tst-unique4.h"
+ 
+ template<int N>
+-int S<N>::i = N;
++int S<N>::i __attribute__ ((used)) = N;
+ template<int N>
+ const int S<N>::j __attribute__ ((used)) = -1;
+ 
+-- 
+2.37.2
+

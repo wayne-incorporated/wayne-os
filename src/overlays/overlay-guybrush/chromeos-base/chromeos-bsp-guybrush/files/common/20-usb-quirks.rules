@@ -1,0 +1,12 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Quirk for Fibocom LG850-GL
+# Increase autosuspend_delay_ms from default 2 seconds to 7 seconds
+# The modem manager is sending meessages every 5 seconds. So auto suspending
+# in 2 seconds causes constant ping ponging on the port. This can occasionally
+# cause suspend to fail if it occurs at the wrong moment (b/229781171).
+SUBSYSTEM=="usb", KERNEL=="?-?", ATTR{idVendor}=="2cb7", \
+  ATTR{idProduct}=="0007", ACTION=="add|change", \
+  ATTR{power/autosuspend_delay_ms}="7000"

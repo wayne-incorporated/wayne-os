@@ -1,0 +1,180 @@
+From 49dd02bd081901db6011bdbe676573bfd5482627 Mon Sep 17 00:00:00 2001
+From: Hans Wennborg <hans@chromium.org>
+Date: Tue, 20 Dec 2022 17:22:53 +0100
+Subject: [PATCH] Revert "[clang] Don't spuriously pass -stdlib=libc++ to CC1
+ on Darwin"
+
+This broke the instrprof-darwin-exports.c test on mac, see e.g.
+https://green.lab.llvm.org/green/job/clang-stage1-RA/32351/
+
+> Previously, we would be passing down -stdlib=libc++ from the Driver
+> to CC1 whenever the default standard library on the platform was libc++,
+> even if -stdlib= had not been passed to the Driver. This meant that we
+> would pass -stdlib=libc++ in nonsensical circumstances, such as when
+> compiling C code.
+>
+> This logic had been added in b534ce46bd40 to make sure that header
+> search paths were set up properly. However, since libc++ is now the
+> default Standard Library on Darwin, passing this explicitly is not
+> required anymore. Indeed, if no -stdlib= is specified, CC1 will end
+> up using libc++ if it queries which standard library to use, without
+> having to be told.
+>
+> Not passing -stdlib= at all to CC1 on Darwin should become possible
+> once CC1 stops relying on it to set up framework search paths.
+>
+> Furthermore, this commit also removes a diagnostic checking whether the
+> deployment target is too old to support libc++. Nowadays, all supported
+> deployment targets use libc++ and compiling with libstdc++ is not
+> supported anymore. The Driver was the wrong place to issue this
+> diagnostic since it doesn't know whether libc++ will actually be linked
+> against (e.g. C vs C++), which would lead to spurious diagnostics.
+> Given that these targets are not supported anymore, we simply drop
+> the diagnostic instead of trying to refactor it into CC1.
+>
+> rdar://103198514
+>
+> Differential Revision: https://reviews.llvm.org/D139938
+
+This reverts commit 6540f32db09cf6b367812642fbd91d44cbb6638d.
+---
+ .../clang/Basic/DiagnosticDriverKinds.td      |  2 ++
+ clang/lib/Driver/ToolChains/Darwin.cpp        | 21 +++++++++++
+ .../Driver/darwin-header-search-libcxx.cpp    | 13 -------
+ .../Driver/darwin-stdlib-dont-pass-in-c.c     |  8 -----
+ clang/test/Driver/darwin-stdlib.cpp           | 35 +++++--------------
+ 5 files changed, 31 insertions(+), 48 deletions(-)
+ delete mode 100644 clang/test/Driver/darwin-stdlib-dont-pass-in-c.c
+
+diff --git a/clang/include/clang/Basic/DiagnosticDriverKinds.td b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+index 4e86a5ec46b9..e8927161dcbe 100644
+--- a/clang/include/clang/Basic/DiagnosticDriverKinds.td
++++ b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+@@ -203,6 +203,8 @@ def warn_drv_missing_plugin_name : Warning<
+ def warn_drv_missing_plugin_arg : Warning<
+   "missing plugin argument for plugin %0 in %1">,
+   InGroup<InvalidCommandLineArgument>;
++def err_drv_invalid_libcxx_deployment : Error<
++  "invalid deployment target for -stdlib=libc++ (requires %0 or later)">;
+ def err_drv_invalid_argument_to_option : Error<
+   "invalid argument '%0' to -%1">;
+ def err_drv_missing_sanitizer_ignorelist : Error<
+diff --git a/clang/lib/Driver/ToolChains/Darwin.cpp b/clang/lib/Driver/ToolChains/Darwin.cpp
+index ffa45d49b489..eba602529a08 100644
+--- a/clang/lib/Driver/ToolChains/Darwin.cpp
++++ b/clang/lib/Driver/ToolChains/Darwin.cpp
+@@ -2869,6 +2869,7 @@ Darwin::TranslateArgs(const DerivedArgList &Args, StringRef BoundArch,
+   // First get the generic Apple args, before moving onto Darwin-specific ones.
+   DerivedArgList *DAL =
+       MachO::TranslateArgs(Args, BoundArch, DeviceOffloadKind);
++  const OptTable &Opts = getDriver().getOpts();
+ 
+   // If no architecture is bound, none of the translations here are relevant.
+   if (BoundArch.empty())
+@@ -2900,6 +2901,26 @@ Darwin::TranslateArgs(const DerivedArgList &Args, StringRef BoundArch,
+     }
+   }
+ 
++  if (!Args.getLastArg(options::OPT_stdlib_EQ) &&
++      GetCXXStdlibType(Args) == ToolChain::CST_Libcxx)
++    DAL->AddJoinedArg(nullptr, Opts.getOption(options::OPT_stdlib_EQ),
++                      "libc++");
++
++  // Validate the C++ standard library choice.
++  CXXStdlibType Type = GetCXXStdlibType(*DAL);
++  if (Type == ToolChain::CST_Libcxx) {
++    // Check whether the target provides libc++.
++    StringRef where;
++
++    // Complain about targeting iOS < 5.0 in any way.
++    if (isTargetIOSBased() && isIPhoneOSVersionLT(5, 0))
++      where = "iOS 5.0";
++
++    if (where != StringRef()) {
++      getDriver().Diag(clang::diag::err_drv_invalid_libcxx_deployment) << where;
++    }
++  }
++
+   auto Arch = tools::darwin::getArchTypeForMachOArchName(BoundArch);
+   if ((Arch == llvm::Triple::arm || Arch == llvm::Triple::thumb)) {
+     if (Args.hasFlag(options::OPT_fomit_frame_pointer,
+diff --git a/clang/test/Driver/darwin-header-search-libcxx.cpp b/clang/test/Driver/darwin-header-search-libcxx.cpp
+index cc8ec9ceb89b..32474495bbb5 100644
+--- a/clang/test/Driver/darwin-header-search-libcxx.cpp
++++ b/clang/test/Driver/darwin-header-search-libcxx.cpp
+@@ -159,16 +159,3 @@
+ // RUN:               --check-prefix=CHECK-LIBCXX-MISSING-BOTH %s
+ // CHECK-LIBCXX-MISSING-BOTH: ignoring nonexistent directory "[[TOOLCHAIN]]/usr/bin/../include/c++/v1"
+ // CHECK-LIBCXX-MISSING-BOTH: ignoring nonexistent directory "[[SYSROOT]]/usr/include/c++/v1"
+-
+-// Make sure that on Darwin, we use libc++ header search paths by default even when
+-// -stdlib= isn't passed.
+-//
+-// RUN: %clang -### %s -fsyntax-only 2>&1 \
+-// RUN:     --target=x86_64-apple-darwin \
+-// RUN:     -ccc-install-dir %S/Inputs/basic_darwin_toolchain_no_libcxx/usr/bin \
+-// RUN:     -isysroot %S/Inputs/basic_darwin_sdk_usr_cxx_v1 \
+-// RUN:   | FileCheck -DSYSROOT=%S/Inputs/basic_darwin_sdk_usr_cxx_v1 \
+-// RUN:               -DTOOLCHAIN=%S/Inputs/basic_darwin_toolchain_no_libcxx \
+-// RUN:               --check-prefix=CHECK-LIBCXX-STDLIB-UNSPECIFIED %s
+-// CHECK-LIBCXX-STDLIB-UNSPECIFIED: "-cc1"
+-// CHECK-LIBCXX-STDLIB-UNSPECIFIED: "-internal-isystem" "[[SYSROOT]]/usr/include/c++/v1"
+diff --git a/clang/test/Driver/darwin-stdlib-dont-pass-in-c.c b/clang/test/Driver/darwin-stdlib-dont-pass-in-c.c
+deleted file mode 100644
+index 3213223ff763..000000000000
+--- a/clang/test/Driver/darwin-stdlib-dont-pass-in-c.c
++++ /dev/null
+@@ -1,8 +0,0 @@
+-// This test ensures that the Driver doesn't pass -stdlib= down to CC1 when compiling C code.
+-
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch arm64 -miphoneos-version-min=7.0 %s -### 2>&1 | FileCheck %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -mmacosx-version-min=10.9 %s -### 2>&1 | FileCheck %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7s -miphoneos-version-min=7.0 %s -### 2>&1 | FileCheck %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7k %s -### 2>&1 | FileCheck %s
+-
+-// CHECK-NOT: "-stdlib="
+diff --git a/clang/test/Driver/darwin-stdlib.cpp b/clang/test/Driver/darwin-stdlib.cpp
+index 500a5d534f21..fdfdfaf2a2d5 100644
+--- a/clang/test/Driver/darwin-stdlib.cpp
++++ b/clang/test/Driver/darwin-stdlib.cpp
+@@ -1,29 +1,10 @@
+-// Make sure that the Driver passes down -stdlib=libc++ to CC1 when specified explicitly.
+-//
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch arm64  -miphoneos-version-min=7.0 -stdlib=libc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBCXX %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/              -mmacosx-version-min=10.9  -stdlib=libc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBCXX %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7s -miphoneos-version-min=7.0 -stdlib=libc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBCXX %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7k                            -stdlib=libc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBCXX %s
+-// CHECK-LIBCXX: "-stdlib=libc++"
+-// CHECK-LIBCXX-NOT: "-stdlib=libstdc++"
++// This test will fail if CLANG_DEFAULT_CXX_STDLIB is set to libstdc++.
++// XFAIL: default-cxx-stdlib=libstdc++
+ 
+-// Make sure that the Driver passes down -stdlib=libstdc++ to CC1 when specified explicitly. Note that this
+-// shouldn't really be used on Darwin because libstdc++ is not supported anymore, but we still pin down the
+-// Driver behavior for now.
+-//
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch arm64  -miphoneos-version-min=7.0 -stdlib=libstdc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBSTDCXX %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/              -mmacosx-version-min=10.9  -stdlib=libstdc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBSTDCXX %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7s -miphoneos-version-min=7.0 -stdlib=libstdc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBSTDCXX %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7k                            -stdlib=libstdc++ %s -### 2>&1 | FileCheck --check-prefix=CHECK-LIBSTDCXX %s
+-// CHECK-LIBSTDCXX: "-stdlib=libstdc++"
+-// CHECK-LIBSTDCXX-NOT: "-stdlib=libc++"
++// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch arm64 -miphoneos-version-min=7.0 %s -### 2>&1 | FileCheck %s
++// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -mmacosx-version-min=10.9 %s -### 2>&1 | FileCheck %s
++// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7s -miphoneos-version-min=7.0 %s -### 2>&1 | FileCheck %s
++// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7k %s -### 2>&1 | FileCheck %s
+ 
+-// Make sure that the Driver does not spuriously pass down any -stdlib=<...> option to CC1 if none is
+-// specified on the command-line. In that case, CC1 should use the default standard library, which is
+-// going to be libc++.
+-//
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch arm64  -miphoneos-version-min=7.0 %s -### 2>&1 | FileCheck --check-prefix=CHECK-NONE %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/              -mmacosx-version-min=10.9  %s -### 2>&1 | FileCheck --check-prefix=CHECK-NONE %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7s -miphoneos-version-min=7.0 %s -### 2>&1 | FileCheck --check-prefix=CHECK-NONE %s
+-// RUN: %clang -target x86_64-apple-darwin -ccc-install-dir %S/Inputs/darwin_toolchain_tree/bin/ -arch armv7k                            %s -### 2>&1 | FileCheck --check-prefix=CHECK-NONE %s
+-// CHECK-NONE-NOT: "-stdlib="
++// CHECK: "-stdlib=libc++"
++// CHECK-NOT: "-stdlib=libstdc++"
+-- 
+2.40.0.348.gf938b09366-goog
+

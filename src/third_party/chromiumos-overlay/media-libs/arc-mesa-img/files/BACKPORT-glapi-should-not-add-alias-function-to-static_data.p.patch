@@ -1,0 +1,39 @@
+From 6c1d7f4d466826acbd521feb719b716be139aa9b Mon Sep 17 00:00:00 2001
+From: Qiang Yu <yuq825@gmail.com>
+Date: Sat, 4 Dec 2021 10:46:53 +0800
+Subject: [PATCH 01/13] glapi: should not add alias function to static_data.py
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Alias function should not be assigned an offset, otherwise new added
+function will get error:
+
+  Exception: entries are not ordered by slots
+
+Fixes: 757bc6d37a6 ("mesa: Add support for EXT_clear_texture")
+
+Reviewed-by: Marek Olšák <marek.olsak@amd.com>
+Signed-off-by: Qiang Yu <yuq825@gmail.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/14223>
+(cherry picked from commit bcaf9704ad74aa59cbc7584c42fba525d49fc630)
+---
+ src/mapi/glapi/gen/static_data.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/src/mapi/glapi/gen/static_data.py b/src/mapi/glapi/gen/static_data.py
+index 711624ca793..6accff1b231 100644
+--- a/src/mapi/glapi/gen/static_data.py
++++ b/src/mapi/glapi/gen/static_data.py
+@@ -1689,8 +1689,6 @@ offsets = {
+     "VertexAttribs2hvNV": 1653,
+     "VertexAttribs3hvNV": 1654,
+     "VertexAttribs4hvNV": 1655,
+-    "ClearTexImageEXT": 1656,
+-    "ClearTexSubImageEXT": 1657,
+ }
+ 
+ functions = [
+-- 
+2.25.1
+

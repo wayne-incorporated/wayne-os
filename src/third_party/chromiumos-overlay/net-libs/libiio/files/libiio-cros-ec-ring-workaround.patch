@@ -1,0 +1,53 @@
+From 8539d5dcf2d04cfc1985e3272fb20b3109ebb492 Mon Sep 17 00:00:00 2001
+From: Enrico Granata <egranata@chromium.org>
+Date: Mon, 6 May 2019 11:05:23 -0700
+Subject: [PATCH] CHROMIUM: HACK: ignore error in set up of cros_ec_sensor_ring
+ iio_device
+
+cros-ec-ring exposes attributes that are tricky for libiio to parse due to
+its use of extended_name on a few of its channels. Since this driver is
+slated for removal, and the correct fix for this general issue is tricky
+and likely to require design work, the path of least friction is a
+temporary hack in our internal repo to allow the iio_context to proceed
+to being created even if cros-ec-ring causes a parse error
+
+BUG=chromium:958236
+TEST=run mems_setup with the sensor ring driver loaded,
+     observe it ignore the device instead of failing
+
+Conflicts: Use IIO_DEBUG instead of DEBUG.
+
+Change-Id: I51f825c6797a23f469703aaba4a5551bf5a60b61
+Signed-off-by: Enrico Granata <egranata@chromium.org>
+Reviewed-on: https://chromium-review.googlesource.com/1597153
+Commit-Ready: ChromeOS CL Exonerator Bot <chromiumos-cl-exonerator@appspot.gserviceaccount.com>
+Reviewed-by: Gwendal Grignou <gwendal@chromium.org>
+---
+ local.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/local.c b/local.c
+index d05afb6f..40b89957 100644
+--- a/local.c
++++ b/local.c
+@@ -1765,8 +1765,18 @@ static int create_device(void *d, const char *path)
+ 		set_channel_name(chn);
+ 		ret = handle_scan_elements(chn);
+ 		free_protected_attrs(chn);
+-		if (ret < 0)
+-			goto err_free_scan_elements;
++		if (ret < 0) {
++			if (dev->name &&
++			    !strcmp("cros-ec-ring", dev->name)) {
++				IIO_DEBUG("ignoring cros-ec-ring\n");
++
++				/* pretend the operation completed successfully
++				 * even though we can't process the attributes
++				 * of the sensor ring */
++				ret = 0;
++				goto err_free_scan_elements;
++			}
++		}
+ 	}
+ 
+ 	ret = detect_and_move_global_attrs(dev);

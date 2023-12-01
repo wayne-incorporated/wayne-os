@@ -1,0 +1,377 @@
+From 16ae0cfa1e8e07e17fdc7ad93e544a828d933072 Mon Sep 17 00:00:00 2001
+From: Gabor Marton <gabor.marton@ericsson.com>
+Date: Wed, 1 Dec 2021 16:47:22 +0100
+Subject: [PATCH] [Analyzer][solver] Simplification: Do a fixpoint iteration
+ before the eq class merge
+
+This reverts commit f02c5f3478318075d1a469203900e452ba651421 and
+addresses the issue mentioned in D114619 differently.
+
+Repeating the issue here:
+Currently, during symbol simplification we remove the original member
+symbol from the equivalence class (`ClassMembers` trait). However, we
+keep the reverse link (`ClassMap` trait), in order to be able the query
+the related constraints even for the old member. This asymmetry can lead
+to a problem when we merge equivalence classes:
+```
+ClassA: [a, b]   // ClassMembers trait,
+a->a, b->a       // ClassMap trait, a is the representative symbol
+```
+Now let,s delete `a`:
+```
+ClassA: [b]
+a->a, b->a
+```
+Let's merge ClassA into the trivial class `c`:
+```
+ClassA: [c, b]
+c->c, b->c, a->a
+```
+Now, after the merge operation, `c` and `a` are actually in different
+equivalence classes, which is inconsistent.
+
+This issue manifests in a test case (added in D103317):
+```
+void recurring_symbol(int b) {
+  if (b * b != b)
+    if ((b * b) * b * b != (b * b) * b)
+      if (b * b == 1)
+}
+```
+Before the simplification we have these equivalence classes:
+```
+trivial EQ1: [b * b != b]
+trivial EQ2: [(b * b) * b * b != (b * b) * b]
+```
+
+During the simplification with `b * b == 1`, EQ1 is merged with `1 != b`
+`EQ1: [b * b != b, 1 != b]` and we remove the complex symbol, so
+`EQ1: [1 != b]`
+Then we start to simplify the only symbol in EQ2:
+`(b * b) * b * b != (b * b) * b --> 1 * b * b != 1 * b --> b * b != b`
+But `b * b != b` is such a symbol that had been removed previously from
+EQ1, thus we reach the above mentioned inconsistency.
+
+This patch addresses the issue by making it impossible to synthesise a
+symbol that had been simplified before. We achieve this by simplifying
+the given symbol to the absolute simplest form.
+
+Differential Revision: https://reviews.llvm.org/D114887
+---
+ .../Core/RangeConstraintManager.cpp           | 93 ++++++++++++++++---
+ .../expr-inspection-printState-eq-classes.c   |  4 +-
+ ...symbol-simplification-disequality-info.cpp | 57 ++++++------
+ ...-simplification-fixpoint-one-iteration.cpp | 17 ++--
+ ...simplification-fixpoint-two-iterations.cpp | 25 +++--
+ 5 files changed, 128 insertions(+), 68 deletions(-)
+
+diff --git a/clang/lib/StaticAnalyzer/Core/RangeConstraintManager.cpp b/clang/lib/StaticAnalyzer/Core/RangeConstraintManager.cpp
+index 3f8d9e4298a0..23c67c64f975 100644
+--- a/clang/lib/StaticAnalyzer/Core/RangeConstraintManager.cpp
++++ b/clang/lib/StaticAnalyzer/Core/RangeConstraintManager.cpp
+@@ -601,6 +601,10 @@ public:
+   LLVM_NODISCARD static inline Optional<bool>
+   areEqual(ProgramStateRef State, SymbolRef First, SymbolRef Second);
+ 
++  /// Remove one member from the class.
++  LLVM_NODISCARD ProgramStateRef removeMember(ProgramStateRef State,
++                                              const SymbolRef Old);
++
+   /// Iterate over all symbols and try to simplify them.
+   LLVM_NODISCARD static inline ProgramStateRef simplify(SValBuilder &SVB,
+                                                         RangeSet::Factory &F,
+@@ -2132,6 +2136,34 @@ inline Optional<bool> EquivalenceClass::areEqual(ProgramStateRef State,
+   return llvm::None;
+ }
+ 
++LLVM_NODISCARD ProgramStateRef
++EquivalenceClass::removeMember(ProgramStateRef State, const SymbolRef Old) {
++
++  SymbolSet ClsMembers = getClassMembers(State);
++  assert(ClsMembers.contains(Old));
++
++  // We don't remove `Old`'s Sym->Class relation for two reasons:
++  // 1) This way constraints for the old symbol can still be found via it's
++  // equivalence class that it used to be the member of.
++  // 2) Performance and resource reasons. We can spare one removal and thus one
++  // additional tree in the forest of `ClassMap`.
++
++  // Remove `Old`'s Class->Sym relation.
++  SymbolSet::Factory &F = getMembersFactory(State);
++  ClassMembersTy::Factory &EMFactory = State->get_context<ClassMembers>();
++  ClsMembers = F.remove(ClsMembers, Old);
++  // Ensure another precondition of the removeMember function (we can check
++  // this only with isEmpty, thus we have to do the remove first).
++  assert(!ClsMembers.isEmpty() &&
++         "Class should have had at least two members before member removal");
++  // Overwrite the existing members assigned to this class.
++  ClassMembersTy ClassMembersMap = State->get<ClassMembers>();
++  ClassMembersMap = EMFactory.add(ClassMembersMap, *this, ClsMembers);
++  State = State->set<ClassMembers>(ClassMembersMap);
++
++  return State;
++}
++
+ // Re-evaluate an SVal with top-level `State->assume` logic.
+ LLVM_NODISCARD ProgramStateRef reAssume(ProgramStateRef State,
+                                         const RangeSet *Constraint,
+@@ -2159,6 +2191,42 @@ LLVM_NODISCARD ProgramStateRef reAssume(ProgramStateRef State,
+                                      Constraint->getMaxValue(), true);
+ }
+ 
++// Simplify the given symbol with the help of the SValBuilder. In
++// SValBuilder::symplifySval, we traverse the symbol tree and query the
++// constraint values for the sub-trees and if a value is a constant we do the
++// constant folding. Compound symbols might collapse to simpler symbol tree
++// that is still possible to further simplify. Thus, we do the simplification on
++// a new symbol tree until we reach the simplest form, i.e. the fixpoint.
++//
++// Consider the following symbol `(b * b) * b * b` which has this tree:
++//       *
++//      / \
++//     *   b
++//    /  \
++//   /    b
++// (b * b)
++// Now, if the `b * b == 1` new constraint is added then during the first
++// iteration we have the following transformations:
++//       *                  *
++//      / \                / \
++//     *   b     -->      b   b
++//    /  \
++//   /    b
++//  1
++// We need another iteration to reach the final result `1`.
++LLVM_NODISCARD
++static SVal simplifyUntilFixpoint(SValBuilder &SVB, ProgramStateRef State,
++                                  const SymbolRef Sym) {
++  SVal Val = SVB.makeSymbolVal(Sym);
++  SVal SimplifiedVal = SVB.simplifySVal(State, Val);
++  // Do the simplification until we can.
++  while (SimplifiedVal != Val) {
++    Val = SimplifiedVal;
++    SimplifiedVal = SVB.simplifySVal(State, Val);
++  }
++  return SimplifiedVal;
++}
++
+ // Iterate over all symbols and try to simplify them. Once a symbol is
+ // simplified then we check if we can merge the simplified symbol's equivalence
+ // class to this class. This way, we simplify not just the symbols but the
+@@ -2170,7 +2238,8 @@ EquivalenceClass::simplify(SValBuilder &SVB, RangeSet::Factory &F,
+   SymbolSet ClassMembers = Class.getClassMembers(State);
+   for (const SymbolRef &MemberSym : ClassMembers) {
+ 
+-    const SVal SimplifiedMemberVal = simplifyToSVal(State, MemberSym);
++    const SVal SimplifiedMemberVal =
++        simplifyUntilFixpoint(SVB, State, MemberSym);
+     const SymbolRef SimplifiedMemberSym = SimplifiedMemberVal.getAsSymbol();
+ 
+     // The symbol is collapsed to a constant, check if the current State is
+@@ -2196,6 +2265,8 @@ EquivalenceClass::simplify(SValBuilder &SVB, RangeSet::Factory &F,
+         continue;
+ 
+       assert(find(State, MemberSym) == find(State, SimplifiedMemberSym));
++      // Remove the old and more complex symbol.
++      State = find(State, MemberSym).removeMember(State, MemberSym);
+ 
+       // Query the class constraint again b/c that may have changed during the
+       // merge above.
+@@ -2207,25 +2278,19 @@ EquivalenceClass::simplify(SValBuilder &SVB, RangeSet::Factory &F,
+       // About performance and complexity: Let us assume that in a State we
+       // have N non-trivial equivalence classes and that all constraints and
+       // disequality info is related to non-trivial classes. In the worst case,
+-      // we can simplify only one symbol of one class in each iteration.
++      // we can simplify only one symbol of one class in each iteration. The
++      // number of symbols in one class cannot grow b/c we replace the old
++      // symbol with the simplified one. Also, the number of the equivalence
++      // classes can decrease only, b/c the algorithm does a merge operation
++      // optionally. We need N iterations in this case to reach the fixpoint.
++      // Thus, the steps needed to be done in the worst case is proportional to
++      // N*N.
+       //
+-      // The number of the equivalence classes can decrease only, because the
+-      // algorithm does a merge operation optionally.
+-      // ASSUMPTION G: Let us assume that the
+-      // number of symbols in one class cannot grow because we replace the old
+-      // symbol with the simplified one.
+-      // If assumption G holds then we need N iterations in this case to reach
+-      // the fixpoint. Thus, the steps needed to be done in the worst case is
+-      // proportional to N*N.
+       // This worst case scenario can be extended to that case when we have
+       // trivial classes in the constraints and in the disequality map. This
+       // case can be reduced to the case with a State where there are only
+       // non-trivial classes. This is because a merge operation on two trivial
+       // classes results in one non-trivial class.
+-      //
+-      // Empirical measurements show that if we relax assumption G (i.e. if we
+-      // do not replace the complex symbol just add the simplified one) then
+-      // the runtime and memory consumption does not grow noticeably.
+       State = reAssume(State, ClassConstraint, SimplifiedMemberVal);
+       if (!State)
+         return nullptr;
+diff --git a/clang/test/Analysis/expr-inspection-printState-eq-classes.c b/clang/test/Analysis/expr-inspection-printState-eq-classes.c
+index c56fcd627b0a..08a1c6cbd60b 100644
+--- a/clang/test/Analysis/expr-inspection-printState-eq-classes.c
++++ b/clang/test/Analysis/expr-inspection-printState-eq-classes.c
+@@ -16,6 +16,6 @@ void test_equivalence_classes(int a, int b, int c, int d) {
+ }
+ 
+ // CHECK:      "equivalence_classes": [
+-// CHECK-NEXT:   [ "((reg_$0<int a>) + (reg_$1<int b>)) != (reg_$2<int c>)", "(reg_$0<int a>) != (reg_$2<int c>)" ],
+-// CHECK-NEXT:   [ "(reg_$0<int a>) + (reg_$1<int b>)", "reg_$0<int a>", "reg_$2<int c>", "reg_$3<int d>" ]
++// CHECK-NEXT:     [ "(reg_$0<int a>) != (reg_$2<int c>)" ],
++// CHECK-NEXT:     [ "reg_$0<int a>", "reg_$2<int c>", "reg_$3<int d>" ]
+ // CHECK-NEXT: ],
+diff --git a/clang/test/Analysis/symbol-simplification-disequality-info.cpp b/clang/test/Analysis/symbol-simplification-disequality-info.cpp
+index 45d8c05bcfc5..69238b583eb8 100644
+--- a/clang/test/Analysis/symbol-simplification-disequality-info.cpp
++++ b/clang/test/Analysis/symbol-simplification-disequality-info.cpp
+@@ -12,18 +12,18 @@ void test(int a, int b, int c, int d) {
+   if (a + b + c == d)
+     return;
+   clang_analyzer_printState();
+-  // CHECK:      "disequality_info": [
+-  // CHECK-NEXT:   {
+-  // CHECK-NEXT:     "class": [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)" ],
+-  // CHECK-NEXT:     "disequal_to": [
+-  // CHECK-NEXT:       [ "reg_$3<int d>" ]]
+-  // CHECK-NEXT:   },
+-  // CHECK-NEXT:   {
+-  // CHECK-NEXT:     "class": [ "reg_$3<int d>" ],
+-  // CHECK-NEXT:     "disequal_to": [
+-  // CHECK-NEXT:       [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)" ]]
+-  // CHECK-NEXT:   }
+-  // CHECK-NEXT: ],
++  // CHECK:       "disequality_info": [
++  // CHECK-NEXT:    {
++  // CHECK-NEXT:      "class": [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)" ],
++  // CHECK-NEXT:      "disequal_to": [
++  // CHECK-NEXT:        [ "reg_$3<int d>" ]]
++  // CHECK-NEXT:    },
++  // CHECK-NEXT:    {
++  // CHECK-NEXT:      "class": [ "reg_$3<int d>" ],
++  // CHECK-NEXT:      "disequal_to": [
++  // CHECK-NEXT:        [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)" ]]
++  // CHECK-NEXT:    }
++  // CHECK-NEXT:  ],
+ 
+ 
+   // Simplification starts here.
+@@ -32,33 +32,32 @@ void test(int a, int b, int c, int d) {
+   clang_analyzer_printState();
+   // CHECK:      "disequality_info": [
+   // CHECK-NEXT:   {
+-  // CHECK-NEXT:     "class": [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)", "(reg_$0<int a>) + (reg_$2<int c>)" ],
++  // CHECK-NEXT:     "class": [ "(reg_$0<int a>) + (reg_$2<int c>)" ],
+   // CHECK-NEXT:     "disequal_to": [
+   // CHECK-NEXT:       [ "reg_$3<int d>" ]]
+   // CHECK-NEXT:   },
+   // CHECK-NEXT:   {
+   // CHECK-NEXT:     "class": [ "reg_$3<int d>" ],
+   // CHECK-NEXT:     "disequal_to": [
+-  // CHECK-NEXT:       [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)", "(reg_$0<int a>) + (reg_$2<int c>)" ]]
+-  // CHECK-NEXT:   }
+-  // CHECK-NEXT: ],
++  // CHECK-NEXT:        [ "(reg_$0<int a>) + (reg_$2<int c>)" ]]
++  // CHECK-NEXT:    }
++  // CHECK-NEXT:  ],
+ 
+   if (c != 0)
+     return;
+   clang_analyzer_printState();
+-
+-  // CHECK:      "disequality_info": [
+-  // CHECK-NEXT:   {
+-  // CHECK-NEXT:     "class": [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)", "(reg_$0<int a>) + (reg_$2<int c>)", "reg_$0<int a>" ],
+-  // CHECK-NEXT:     "disequal_to": [
+-  // CHECK-NEXT:       [ "reg_$3<int d>" ]]
+-  // CHECK-NEXT:   },
+-  // CHECK-NEXT:   {
+-  // CHECK-NEXT:     "class": [ "reg_$3<int d>" ],
+-  // CHECK-NEXT:     "disequal_to": [
+-  // CHECK-NEXT:       [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)", "(reg_$0<int a>) + (reg_$2<int c>)", "reg_$0<int a>" ]]
+-  // CHECK-NEXT:   }
+-  // CHECK-NEXT: ],
++  // CHECK:       "disequality_info": [
++  // CHECK-NEXT:    {
++  // CHECK-NEXT:      "class": [ "reg_$0<int a>" ],
++  // CHECK-NEXT:      "disequal_to": [
++  // CHECK-NEXT:        [ "reg_$3<int d>" ]]
++  // CHECK-NEXT:    },
++  // CHECK-NEXT:    {
++  // CHECK-NEXT:      "class": [ "reg_$3<int d>" ],
++  // CHECK-NEXT:      "disequal_to": [
++  // CHECK-NEXT:        [ "reg_$0<int a>" ]]
++  // CHECK-NEXT:    }
++  // CHECK-NEXT:  ],
+ 
+   // Keep the symbols and the constraints! alive.
+   (void)(a * b * c * d);
+diff --git a/clang/test/Analysis/symbol-simplification-fixpoint-one-iteration.cpp b/clang/test/Analysis/symbol-simplification-fixpoint-one-iteration.cpp
+index aec0da1b82f1..73922d420a8c 100644
+--- a/clang/test/Analysis/symbol-simplification-fixpoint-one-iteration.cpp
++++ b/clang/test/Analysis/symbol-simplification-fixpoint-one-iteration.cpp
+@@ -24,15 +24,14 @@ void test(int a, int b, int c) {
+   if (b != 0)
+     return;
+   clang_analyzer_printState();
+-  // CHECK:      "constraints": [
+-  // CHECK-NEXT:   { "symbol": "((reg_$0<int a>) + (reg_$1<int b>)) != (reg_$2<int c>)", "range": "{ [0, 0] }" },
+-  // CHECK-NEXT:   { "symbol": "(reg_$0<int a>) != (reg_$2<int c>)", "range": "{ [0, 0] }" },
+-  // CHECK-NEXT:   { "symbol": "reg_$1<int b>", "range": "{ [0, 0] }" }
+-  // CHECK-NEXT: ],
+-  // CHECK-NEXT: "equivalence_classes": [
+-  // CHECK-NEXT:   [ "((reg_$0<int a>) + (reg_$1<int b>)) != (reg_$2<int c>)", "(reg_$0<int a>) != (reg_$2<int c>)" ],
+-  // CHECK-NEXT:   [ "(reg_$0<int a>) + (reg_$1<int b>)", "reg_$0<int a>", "reg_$2<int c>" ]
+-  // CHECK-NEXT: ],
++  // CHECK:        "constraints": [
++  // CHECK-NEXT:     { "symbol": "(reg_$0<int a>) != (reg_$2<int c>)", "range": "{ [0, 0] }" },
++  // CHECK-NEXT:     { "symbol": "reg_$1<int b>", "range": "{ [0, 0] }" }
++  // CHECK-NEXT:   ],
++  // CHECK-NEXT:   "equivalence_classes": [
++  // CHECK-NEXT:     [ "(reg_$0<int a>) != (reg_$2<int c>)" ],
++  // CHECK-NEXT:     [ "reg_$0<int a>", "reg_$2<int c>" ]
++  // CHECK-NEXT:   ],
+   // CHECK-NEXT: "disequality_info": null,
+ 
+   // Keep the symbols and the constraints! alive.
+diff --git a/clang/test/Analysis/symbol-simplification-fixpoint-two-iterations.cpp b/clang/test/Analysis/symbol-simplification-fixpoint-two-iterations.cpp
+index f1b057be3abd..679ed3fda7a7 100644
+--- a/clang/test/Analysis/symbol-simplification-fixpoint-two-iterations.cpp
++++ b/clang/test/Analysis/symbol-simplification-fixpoint-two-iterations.cpp
+@@ -27,20 +27,17 @@ void test(int a, int b, int c, int d) {
+   if (b != 0)
+     return;
+   clang_analyzer_printState();
+-  // CHECK:      "constraints": [
+-  // CHECK-NEXT:   { "symbol": "(((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)) != (reg_$3<int d>)", "range": "{ [0, 0] }" },
+-  // CHECK-NEXT:   { "symbol": "((reg_$0<int a>) + (reg_$2<int c>)) != (reg_$3<int d>)", "range": "{ [0, 0] }" },
+-  // CHECK-NEXT:   { "symbol": "(reg_$0<int a>) != (reg_$3<int d>)", "range": "{ [0, 0] }" },
+-  // CHECK-NEXT:   { "symbol": "(reg_$2<int c>) + (reg_$1<int b>)", "range": "{ [0, 0] }" },
+-  // CHECK-NEXT:   { "symbol": "reg_$1<int b>", "range": "{ [0, 0] }" },
+-  // CHECK-NEXT:   { "symbol": "reg_$2<int c>", "range": "{ [0, 0] }" }
+-  // CHECK-NEXT: ],
+-  // CHECK-NEXT: "equivalence_classes": [
+-  // CHECK-NEXT:   [ "(((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)) != (reg_$3<int d>)", "((reg_$0<int a>) + (reg_$2<int c>)) != (reg_$3<int d>)", "(reg_$0<int a>) != (reg_$3<int d>)" ],
+-  // CHECK-NEXT:   [ "((reg_$0<int a>) + (reg_$1<int b>)) + (reg_$2<int c>)", "(reg_$0<int a>) + (reg_$2<int c>)", "reg_$0<int a>", "reg_$3<int d>" ],
+-  // CHECK-NEXT:   [ "(reg_$2<int c>) + (reg_$1<int b>)", "reg_$2<int c>" ]
+-  // CHECK-NEXT: ],
+-  // CHECK-NEXT: "disequality_info": null,
++  // CHECK:       "constraints": [
++  // CHECK-NEXT:    { "symbol": "(reg_$0<int a>) != (reg_$3<int d>)", "range": "{ [0, 0] }" },
++  // CHECK-NEXT:    { "symbol": "reg_$1<int b>", "range": "{ [0, 0] }" },
++  // CHECK-NEXT:    { "symbol": "reg_$2<int c>", "range": "{ [0, 0] }" }
++  // CHECK-NEXT:  ],
++  // CHECK-NEXT:  "equivalence_classes": [
++  // CHECK-NEXT:    [ "(reg_$0<int a>) != (reg_$3<int d>)" ],
++  // CHECK-NEXT:    [ "reg_$0<int a>", "reg_$3<int d>" ],
++  // CHECK-NEXT:    [ "reg_$2<int c>" ]
++  // CHECK-NEXT:  ],
++  // CHECK-NEXT:  "disequality_info": null,
+ 
+   // Keep the symbols and the constraints! alive.
+   (void)(a * b * c * d);
+-- 
+2.35.0.rc0.227.g00780c9af4-goog
+

@@ -1,0 +1,66 @@
+#!/bin/sh
+# Copyright 2012 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Converts a floating point number of seconds to a properly rounded
+# number of integer milliseconds.
+seconds_to_ms() {
+  echo "$1" | awk '{ print int($1 * 1000.0 + 0.5)}'
+}
+
+EVENT="$1"
+shift
+if [ $# -eq 0 ]; then
+  set -- time
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    time)
+      TAG=uptime
+      FIELD=1
+    ;;
+    # Emit time in milliseconds instead of fractional seconds.
+    time-ms)
+      TAG=uptime
+      FIELD=1
+      EMIT_MS=1
+    ;;
+    read-sectors)
+      TAG=disk
+      FIELD=3
+    ;;
+    write-sectors)
+      TAG=disk
+      FIELD=7
+    ;;
+    *)
+      shift
+      continue
+    ;;
+  esac
+
+  if [ "$2" = "before" ] ; then
+    BEFORE="$3"
+    shift 2
+  fi
+
+  # The 'boot-complete' upstart job tests for whether an event has
+  # been recorded by calling this script, so it's not an error if
+  # the requested event doesn't exist.
+  EVENTFILE="/tmp/${TAG}-${EVENT}"
+  if [ -f "${EVENTFILE}" ]; then
+    result="$(awk -v field="${FIELD}" -v before="${BEFORE}"            \
+      '(!before || $field < before) {result=$field} END{print result}' \
+      "${EVENTFILE}"
+    )"
+    if [ -n "${EMIT_MS}" ]; then
+      result="$(seconds_to_ms "${result}")"
+    fi
+    echo "${result}"
+  fi
+
+  BEFORE=""
+  shift
+done

@@ -1,0 +1,54 @@
+From e6bcc30418c7acc6c0a0259d37e61bbdabcbe053 Mon Sep 17 00:00:00 2001
+From: Keiichi Watanabe <keiichiw@chromium.org>
+Date: Mon, 18 Jun 2018 03:58:53 -0400
+Subject: [PATCH] BACKPORT: FROMGIT: media: v4l2-ctrl: Add control for VP9
+ profile
+
+Add a new control V4L2_CID_MPEG_VIDEO_VP9_PROFILE for VP9 profiles. This
+control allows selecting the desired profile for VP9 encoder and querying
+for supported profiles by VP9 encoder/decoder.
+
+Though this control is similar to V4L2_CID_MPEG_VIDEO_VP8_PROFILE, we need
+to separate this control from it because supported profiles usually differ
+between VP8 and VP9.
+
+Signed-off-by: Keiichi Watanabe <keiichiw@chromium.org>
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+Signed-off-by: Mauro Carvalho Chehab <mchehab+samsung@kernel.org>
+(cherry picked from commit 2a75364d09b05f257f4cd1f718e06e0247eb1dd3 git://git.linuxtv.org/media_tree.git)
+
+Conflicts:
+	drivers/media/v4l2-core/v4l2-ctrls.c
+	include/uapi/linux/v4l2-controls.h
+
+In v4l2-controls.h, the value assigned to V4L2_CID_MPEG_VIDEO_VP9_PROFILE
+in upstream (i.e. V4L2_CID_MPEG_BASE+512) is already used by another
+control that is not uptreamed. So, I shifted the values assigned to
+ChromeOS-specific controls.
+
+BUG=chromium:819930
+TEST=compile
+
+Change-Id: I7240db6966ab8d7c9b2e3aa3f2bbe6744ee05e37
+Signed-off-by: Keiichi Watanabe <keiichiw@chromium.org>
+---
+
+--- a/include/uapi/linux/v4l2-controls.h
++++ b/include/uapi/linux/v4l2-controls.h
+@@ -593,6 +593,13 @@ enum v4l2_mpeg_video_vp8_profile {
+ };
+ /* Deprecated alias for compatibility reasons. */
+ #define V4L2_CID_MPEG_VIDEO_VPX_PROFILE	V4L2_CID_MPEG_VIDEO_VP8_PROFILE
++#define V4L2_CID_MPEG_VIDEO_VP9_PROFILE			(V4L2_CID_MPEG_BASE+512)
++enum v4l2_mpeg_video_vp9_profile {
++	V4L2_MPEG_VIDEO_VP9_PROFILE_0				= 0,
++	V4L2_MPEG_VIDEO_VP9_PROFILE_1				= 1,
++	V4L2_MPEG_VIDEO_VP9_PROFILE_2				= 2,
++	V4L2_MPEG_VIDEO_VP9_PROFILE_3				= 3,
++};
+ 
+ /* Control IDs not existing in upstream */
+ #define V4L2_CID_MPEG_VIDEO_VP8_FRAME_HDR		(V4L2_CID_MPEG_BASE+590)
+-- 
+2.18.0.865.gffc8e1a3cd6-goog
+

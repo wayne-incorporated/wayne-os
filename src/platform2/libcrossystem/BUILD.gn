@@ -1,0 +1,98 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/deps.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_libcrossystem_headers",
+    ":libcrossystem",
+    ":libcrossystem-test",
+    ":libcrossystem-test_pc",
+    ":libcrossystem_pc",
+    ":libcrossystem_static",
+  ]
+  if (use.test) {
+    deps += [ ":libcrossystem_tests" ]
+  }
+}
+
+default_pkg_deps = [
+  "libbrillo",
+  "libchrome",
+  "vboot_host",
+]
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = default_pkg_deps
+}
+
+libcrossystem_sources = [
+  "crossystem.cc",
+  "crossystem_impl.cc",
+]
+
+static_library("libcrossystem_static") {
+  sources = libcrossystem_sources
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "lib"
+}
+
+shared_library("libcrossystem") {
+  sources = libcrossystem_sources
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "lib"
+}
+
+install_config("install_libcrossystem_headers") {
+  sources = [ "crossystem.h" ]
+  install_path = "/usr/include/libcrossystem"
+}
+
+generate_pkg_config("libcrossystem-test_pc") {
+  name = "libcrossystem-test"
+  output_name = "libcrossystem-test"
+  description = "libcrossystem test library"
+  version = "0.1"
+
+  requires = []
+  requires_private = [ "libcrossystem" ] + default_pkg_deps
+  libs = [ "-lcrossystem-test" ]
+  install = true
+}
+
+shared_library("libcrossystem-test") {
+  sources = [ "crossystem_fake.cc" ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  deps = [ ":libcrossystem-test_pc" ]
+  install_path = "lib"
+}
+
+generate_pkg_config("libcrossystem_pc") {
+  name = "libcrossystem"
+  output_name = "libcrossystem"
+  description = "Library to get Chromium OS system properties"
+  version = "0.1"
+
+  requires = []
+  requires_private = default_pkg_deps
+  libs = [ "-lcrossystem" ]
+  install = true
+}
+
+if (use.test) {
+  executable("libcrossystem_tests") {
+    sources = [ "crossystem_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults_pkg_deps",
+    ]
+    run_test = true
+    deps = [
+      ":libcrossystem-test",
+      ":libcrossystem_static",
+      "//common-mk/testrunner",
+    ]
+  }
+}

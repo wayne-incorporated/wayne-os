@@ -1,0 +1,1 @@
+st-touch-fw-updater-0.0.1.002.ebuild

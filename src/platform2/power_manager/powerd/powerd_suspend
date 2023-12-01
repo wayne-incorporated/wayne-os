@@ -1,0 +1,415 @@
+#!/bin/sh
+
+# Copyright 2010 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This script is responsible for suspending and resuming the system.  It is run
+# as root by powerd_setuid_helper, which is run by powerd.
+
+. /usr/share/misc/shflags
+
+DEFINE_integer wakeup_count -1 \
+  "wakeup event count from start of suspend. -1 to disable" w
+DEFINE_boolean suspend_to_idle false \
+  "indicates that the system should suspend to idle (freeze)" i
+DEFINE_boolean suspend_to_disk false \
+  "indicates that the system should suspend to disk (hibernate)" d
+
+# Exit codes returned by this script and reported via the
+# Power.SuspendResult histogram:
+
+# The system successfully suspended and resumed.
+readonly RESULT_SUCCESS=0
+
+# A suspend failure occurred in the kernel after writing to /sys/power/state
+# (i.e. the write to /sys/power/state failed with a non-EBUSY reason).
+readonly RESULT_FAILURE=1
+
+# The suspend attempt was canceled as the result of a wakeup event occurring
+# between powerd's read from /sys/power/wakeup_count and this script's write to
+# it (i.e. the write to wakeup_count failed).
+readonly RESULT_CANCELED_EARLY=2
+
+# The suspend attempt was canceled as the result of a wakeup event occurring
+# between the write to /sys/power/wakeup_count and the write to
+# /sys/power/state (i.e. the write to /sys/power/state failed with EBUSY).
+readonly RESULT_CANCELED_LATE=3
+
+# Histogram-only max value.
+readonly RESULT_MAX=4
+
+# Directory where this script and send_metrics_on_resume (running as root)
+# write temporary state files.
+readonly ROOT_RUN_DIR=/run/power_manager/root
+
+# For testing: write RTC resume timestamp to this file if it exists
+readonly TIMESTAMP_FILE="${ROOT_RUN_DIR}"/hwclock-on-resume
+
+# File used to record the power status (AC vs. battery) before suspending.  Read
+# by send_metrics_on_resume (but only when run after resuming; this doesn't
+# need to persist across reboots).
+readonly POWER_STATUS_ON_SUSPEND_FILE="${ROOT_RUN_DIR}"/power-status-on-suspend
+
+# File containing resume-related timing information.  Written by
+# send_metrics_on_resume and read by autotests; doesn't need to persist
+# across reboots.
+readonly LAST_RESUME_TIMINGS_FILE="${ROOT_RUN_DIR}"/last_resume_timings
+
+# Directory where this script (running as root) writes files that must
+# persist across reboots.
+readonly ROOT_SPOOL_DIR=/var/spool/power_manager/root
+
+# File containing the time at which we started suspending.  Read by
+# send_metrics_on_resume.
+readonly SUSPEND_TO_RAM_TIME_FILE="${ROOT_SPOOL_DIR}"/suspend-to-ram-time
+
+# File containing suspend-related information to log on failure.
+readonly SUSPEND_STATS_FILE=/sys/kernel/debug/suspend_stats
+
+# Compact if order 3 page count is less than this.
+readonly COMPACT_ORDER3_THRESHOLD=500
+
+# For testing: do not compact before suspending if this file exists.
+readonly NO_COMPACT_FILE="${ROOT_RUN_DIR}"/no-compact
+
+log_msg() {
+  logger -t "powerd_suspend" --id="$$" -- "$@"
+}
+
+log_msg_from_file() {
+  logger -t "powerd_suspend" --id="$$" -f "$1"
+}
+
+log_wakeup_count() {
+  log_msg "wakeup_count is $(cat /sys/power/wakeup_count)"
+}
+
+log_suspend_stats() {
+  log_msg "--- begin ${SUSPEND_STATS_FILE} ---"
+  local tempfile="$(mktemp --tmpdir powerd_suspend_stats.XXXXXXXXXX)"
+  # Omit blank lines and replace tabs with spaces so syslog won't escape them
+  # to "#011".
+  grep -e '\S' "${SUSPEND_STATS_FILE}" | tr '\t' ' ' >"${tempfile}"
+  log_msg_from_file "${tempfile}"
+  log_msg "--- end ${SUSPEND_STATS_FILE} ---"
+  rm "${tempfile}"
+}
+
+igb_devices=""
+
+# The Intel gigabit driver (igb) prevents Intel platforms (the only platforms
+# that use this driver currently) from going into suspend-to-idle i.e. S0ix
+# (see b/189345571). So in order to enter S0ix, need to unbind its devices while
+# suspending, and rebind again at resume.
+unbind_igb_devices() {
+  lsmod | grep -qw "^igb"
+  if [ $? -ne 0 ]; then
+    return
+  fi
+
+  for pcidev in `readlink /sys/class/net/*/device`; do
+    pcidev="$(basename ${pcidev})"
+    pcidrvr="$(readlink /sys/bus/pci/devices/${pcidev}/driver)"
+    pcidrvr="$(basename ${pcidrvr})"
+
+    if [ "${pcidrvr}" = "igb" ]; then
+      log_msg "Temporarily unbinding igb driver from ${pcidev} for suspend"
+      echo "${pcidev}" > /sys/bus/pci/drivers/igb/unbind
+      igb_devices="${igb_devices} ${pcidev}"
+    fi
+  done
+}
+
+bind_igb_devices() {
+  for pcidev in ${igb_devices}; do
+    log_msg "Re-binding igb driver to ${pcidev} after resume"
+    echo "${pcidev}" > /sys/bus/pci/drivers/igb/bind
+  done
+}
+
+# Powers "on" or "off" the built-in modem via EC.
+ec_power_modem() {
+  local op="$1"
+
+  case "${op}" in
+    on)
+      ectool wireless 0x4 0x4
+      ;;
+    off)
+      ectool wireless 0x0 0x4
+      ;;
+    *)
+      log_msg "Invalid operation 'ec_power_modem ${op}'"
+      return 1
+      ;;
+  esac
+
+  if [ $? -eq 0 ]; then
+    log_msg "Power ${op} built-in modem"
+    return 0
+  else
+    log_msg "Failed to power ${op} built-in modem"
+    return 1
+  fi
+}
+
+to_hex() {
+  echo "obase=16; $(($1))" | bc
+}
+
+
+# Exit Sniff mode for all ACL connections.
+#
+# This workaround is to make sure BlueZ stack and the controller are aligned
+# on connections state after resume, since the 'sniff mode change' event could
+# have been masked out while the system was is suspend mode
+bt_exit_sniff() {
+  local file
+  for file in /sys/class/bluetooth/hci[0-9]; do
+    local hcidev="$(basename "${file}")"
+    # The command of "hcitool con" shows something like
+    # Connections:
+    #    > ACL 04:52:C7:83:95:10 handle 256 state 1 lm MASTER AUTH ENCRYPT
+    #    > ACL 04:52:C7:C3:65:B5 handle 512 state 1 lm MASTER AUTH ENCRYPT
+
+    handles="$(echo "$(hcitool con)" | awk '/ACL/ {print $5}')"
+    for handle in $handles; do
+      lo_byte="$(to_hex $((handle % 256)))"
+      hi_byte="$(to_hex $((handle / 256)))"
+      log_msg "Exiting Sniff mode for connection handle ${lo_byte} ${hi_byte}"
+      timeout -k 2 2 hcitool -i "${hcidev}" cmd 02 04 "${lo_byte}" \
+          "${hi_byte}"
+     done
+   done
+}
+
+# Writes the wakeup count that was passed to this script to
+# /sys/power/wakeup_count.  Returns success if the write fails, indicating
+# that one or more wakeup events occurred in the meantime.
+saw_wakeup_event() {
+  if [ "${FLAGS_wakeup_count}" -eq -1 ] ||
+    echo "${FLAGS_wakeup_count}" > /sys/power/wakeup_count; then
+    return 1
+  else
+    log_msg "Aborting suspend, wake event received"
+    log_wakeup_count
+    return 0
+  fi
+}
+
+
+# Sends suspend result (one of the above RESULT_* values) to UMA.
+send_uma_result() {
+  metrics_client -e Power.SuspendResult "$1" "${RESULT_MAX}" &
+}
+
+# Gets the allocatable order 3 page count. Using order 3 threshold because
+# there are many order 3 allocation by network modules when running low memory
+# suspending stress test. /proc/pagetypeinfo provides available high order
+# pages count, example:
+# Free pages count per migrate type at order    0    1    2    3   4 ... 10
+# ...
+# Node    0, zone    DMA32, type    Unmovable   1    9   29    5   2 ...  0
+# Node    0, zone    DMA32, type  Reclaimable 160  204   17    8   0 ...  0
+# Node    0, zone    DMA32, type      Movable   0 1163 1530 1236 298 ...  0
+# Node    0, zone    DMA32, type      Reserve   0    0    0    0   0 ...  2
+# Movable order 3 field 1236: there are 1236 order 3 pages ((2 ^ 3) * 4KB
+# consecutive memory).
+order3_available() {
+  awk '(NF == 17) &&
+    ($6 == "Unmovable" || $6 == "Movable" || $6 == "Reclaimable") {
+    size = 1
+    for (i = 10; i <= 17; i++) {
+      sum += $i * size
+      size *= 2
+    }
+  }
+  END { print sum }' /proc/pagetypeinfo
+}
+
+# When system is suspending, memory compaction and swap are disabled. If
+# memory is fragmented at this time, high order allocation would fail.
+# When memory fragmentation is detected (too few allocatable order 3 pages),
+# compact memory before suspending. For 4.4 or earlier kernel without
+# kcompactd.
+# TODO(crbug.com/827053): Check if compaction before suspending is necessary
+# on newer kernel.
+try_compact_memory() {
+  local order3="$(order3_available)"
+  log_msg "Available order 3 pages: ${order3}"
+  if uname -r | grep -q "^3\.\|^4\.4\." && [ ! -f ${NO_COMPACT_FILE} ] && \
+    [ "${order3}" -le "${COMPACT_ORDER3_THRESHOLD}" ]; then
+    log_msg "Compacting memory before suspend"
+    echo 1 > /proc/sys/vm/compact_memory
+    log_msg "Available order 3 pages after compaction: $(order3_available)"
+  fi
+}
+
+# Encourage people to use powerd_dbus_suspend instead of running this
+# script directly so that e.g. suspend delays will happen.
+if [ -z "${POWERD_SETUID_HELPER}" ]; then
+  echo "This script is called by powerd. Please run powerd_dbus_suspend" 1>&2
+  echo "to manually exercise the full suspend path." 1>&2
+  exit 1
+fi
+
+# Note: Don't change or remove this line without also updating
+# send_metrics_on_resume.
+log_msg "Going to suspend-to-RAM state: args=$@"
+
+# Parse command line.
+FLAGS "$@" || exit 1
+eval set -- "${FLAGS_ARGV}"
+
+# The metrics library requires a max value of 2 rather than 1
+# (http://crbug.com/338015).
+metrics_client -e Power.SuspendAttempt 0 2 &
+
+# Log the time before going to suspend (no-op if no RTC).
+cp /sys/class/rtc/rtc0/since_epoch "${SUSPEND_TO_RAM_TIME_FILE}" \
+  2> /dev/null || true
+
+# Remove last_resume_timings to ensure the file is fresh on resume.
+rm -f "${LAST_RESUME_TIMINGS_FILE}"
+
+# Store the current power status.
+power_supply_info 2> /dev/null \
+  | grep -Eq '^[[:space:]]+online:[[:space:]]+no$'
+if [ $? -eq 0 ]; then
+  echo OnBattery > "${POWER_STATUS_ON_SUSPEND_FILE}"
+else
+  echo OnAC > "${POWER_STATUS_ON_SUSPEND_FILE}"
+fi
+
+result="${RESULT_FAILURE}"
+
+if saw_wakeup_event; then
+  # Note: The client/cros/power_suspend.py module in autotest depends on
+  # this message.
+  log_msg "Cancel suspend at kernel"
+
+  # This file is usually removed by send_metrics_on_resume, but that script
+  # isn't run if the suspend attempt is unsuccessful.
+  rm -f "${SUSPEND_TO_RAM_TIME_FILE}"
+
+  result="${RESULT_CANCELED_EARLY}"
+else
+  # Before suspending, power down problematic modems if necessary.
+  # `modem_shutdown` (along with `modem_startup`) exists only if board-specific
+  # overlays provide one. Future project should re-use the script name when
+  # powering down modems before suspending is required.
+  # See https://crrev.com/c/2963943 as an example.
+  if [ -x "/usr/sbin/modem_shutdown" ]; then
+    /usr/sbin/modem_shutdown
+  fi
+
+  # Compact memory if it is fragmented.
+  try_compact_memory
+
+  log_msg "Finalizing suspend"
+  # Make sure that hwclock is cached for when we wake up, this way we don't
+  # wait for io and get a more accurate time for wakeup
+  # -V prints a little version information and exits, loading .so but not
+  # making actual RTC accesses. Do *NOT* change this to a normal execution...
+  # it will trigger an RTC interrupt that may count as a wakeup reason, abort
+  # your suspend and cause you hours of pain and confusion!
+  if [ -f "${TIMESTAMP_FILE}" ]; then
+    /sbin/hwclock -V > /dev/null
+  fi
+
+  # For hibernate, invoke the hiberman helper process to take us all the way
+  # down.
+  if [ "${FLAGS_suspend_to_disk}" -eq 0 ]; then
+    error="Failed to hibernate"
+    /sbin/minijail0 -v /usr/sbin/hiberman hibernate
+
+  else
+    # Echo freeze to /sys/power/state on platforms that support suspend to idle.
+    action='mem'
+    if [ "${FLAGS_suspend_to_idle}" -eq 0 ]; then
+      action='freeze'
+      unbind_igb_devices
+    fi
+
+    # Suspend. This is piped through cat since we want to determine
+    # the causes of failures -- dash's "echo" command appears to not print
+    # anything in response to write errors.
+    error=$( (printf '%s' "${action}" | cat > /sys/power/state) 2>&1)
+  fi
+
+  if [ $? -eq 0 ]; then
+    # On resume:
+    result="${RESULT_SUCCESS}"
+
+    if [ -f "${TIMESTAMP_FILE}" ]; then
+      # Record the hwclock time at resume for the power_Resume test.
+      if /sbin/hwclock -r --utc > "${TIMESTAMP_FILE}" 2>&1; then
+        log_msg "Recorded hwclock time for test"
+      else
+        log_msg "/sbin/hwclock failed: $(cat "${TIMESTAMP_FILE}")"
+        log_msg "debug: $(/sbin/hwclock -r --verbose --utc 2>&1)"
+      fi
+    fi
+
+    # TODO (b/193451073): Move this to powerd to reduce the delay of blocking
+    # display turning on.
+    if [ -e /sys/firmware/log ]; then
+      # Grep /sys/firmware/log for WAK for x86 platforms.
+      wakeup_source="$(grep "PM1_STS: WAK" /sys/firmware/log | tail -n 1)"
+      # Try another pattern for MTK (ARM) platforms.
+      if [ -z "${wakeup_source}" ]; then
+        wakeup_source="$(grep "wake up by" /sys/firmware/log | tail -n 1)"
+      fi
+      # Found nothing in the end, the wakeup source is unknown.
+      if [ -z "${wakeup_source}" ]; then
+        wakeup_source='unknown'
+      fi
+      log_msg "wake source: ${wakeup_source}"
+    fi
+
+    # Send UMA metrics.
+    send_metrics_on_resume &
+  else
+    # The write will fail with EBUSY if additional wakeup events have
+    # occurred since the earlier write to /sys/power/wakeup_count. Since this
+    # can happen if e.g. a device fails to suspend, we check the wakeup count
+    # again to make sure it has actually gone up.
+    current_wakeup_count="$(cat /sys/power/wakeup_count)"
+    if echo "${error}" | grep -q 'Device or resource busy' && \
+      [ "${FLAGS_wakeup_count}" -ne -1 ] && \
+      [ "${FLAGS_wakeup_count}" -ne "${current_wakeup_count}" ]; then
+      log_msg "Warning: Device or resource busy on write to /sys/power/state"
+      log_suspend_stats
+      log_wakeup_count
+      result="${RESULT_CANCELED_LATE}"
+    else
+      # Note: The client/cros/power_suspend.py module in autotest depends on
+      # this message.
+      log_msg "Error writing to /sys/power/state: ${error}"
+      log_suspend_stats
+      result="${RESULT_FAILURE}"
+    fi
+  fi
+
+  bind_igb_devices
+
+  # `modem_startup` (along with `modem_shutdown`) exists only if board-specific
+  # overlays provide one. Future project should re-use the script name when
+  # powering back on modems after suspending is required.
+  # See https://crrev.com/c/2963943 as an example.
+  if [ -x "/usr/sbin/modem_startup" ]; then
+    /usr/sbin/modem_startup
+  fi
+
+  bt_exit_sniff
+fi
+
+send_uma_result "${result}"
+
+# Refresh eventlog to help feedback reports pick up the latest snapshot.
+/usr/share/userfeedback/scripts/eventlog &
+
+log_msg "Resume finished"
+
+return "${result}"

@@ -1,0 +1,206 @@
+#!/bin/bash
+
+# Copyright 2012 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This is a wrapper around a lot of different DBus calls, written in sh; this is
+# meant to replace parts of flimflam-test, and also to be callable from crosh.
+
+. /usr/lib/connectivity-common.sh
+. /usr/lib/modem-common.sh
+
+# Wait for a modem to reset itself and come back with a new DBus name
+# args:
+#   $1 - dbus name of the modem before reset
+#   $2 - timeout in seconds
+wait_for_modem_reset() {
+  local modem
+  local oldmodem="$1"
+  local timeout="$2"
+  local status="Timed out"
+  echo -n "Waiting..."
+  while test ${timeout} -gt 0; do
+    modem=$(default_modem)
+    if [ -n "${modem}" -a "${modem}" != "${oldmodem}" ]; then
+      status="Done"
+      break
+    fi
+    sleep 1
+    timeout=$((timeout - 1))
+    echo -n "."
+  done
+  echo "${status}"
+}
+
+activate() {
+  $(arg_or_default modem $(default_modem))
+  [ -z "${modem}" ] && error_exit "No modem found."
+  # Work around braindead crosh quoting semantics (i.e., there are none,
+  # arguments are tokenized on spaces). Sigh.
+  local carrier=$(echo "$@")
+
+  mmcli -m "${modem}" --cdma-activate="${carrier}"
+}
+
+connect() {
+  $(arg_or_default modem $(default_modem))
+  [ -z "${modem}" ] && error_exit "No modem found."
+  # Work around braindead quoting again...
+  local args=$(echo "$@")
+
+  [ -n "${args}" ] && args="number=${args}"
+  mmcli -m "${modem}" --simple-connect="${args}"
+}
+
+factory_reset() {
+  $(arg_or_default modem $(default_modem))
+  [ -z "${modem}" ] && error_exit "No modem found."
+  $(arg_or_prompt spc 000000)
+
+  # TODO(benchan): Evaluate if a warning should be given when factory
+  # resetting under certain modem configurations.
+  mmcli -m "${modem}" --factory-reset="${spc}"
+}
+
+reset() {
+  $(arg_or_default modem $(default_modem))
+  [ -z "${modem}" ] && error_exit "No modem found."
+
+  mmcli -m "${modem}" --reset
+  wait_for_modem_reset "${modem}" 40
+}
+
+status() {
+  mmcli -m any 2>/dev/null
+  all_modem_status 2>/dev/null
+}
+
+status_feedback() {
+  mmcli -m any 2>/dev/null | mask_mmcli_fields
+  all_modem_status 2>/dev/null | mask_modem_properties
+}
+
+ussd() {
+  local modem
+  local operation="$1"
+  local data="$2"
+
+  $(arg_or_default modem $(default_modem))
+  [ -z "${modem}" ] && error_exit "No modem found."
+
+  if [ -z "${operation}" ]; then
+    echo "Valid USSD operations are: status, initiate, respond, cancel"
+    return
+  fi
+
+  case "${operation}" in
+    status)
+      mmcli -m "${modem}" --3gpp-ussd-status
+      ;;
+    initiate)
+      [ -z "${data}" ] && error_exit "Missing USSD data."
+      mmcli -m "${modem}" --3gpp-ussd-initiate="${data}"
+      ;;
+    respond)
+      [ -z "${data}" ] && error_exit "Missing USSD data."
+      mmcli -m "${modem}" --3gpp-ussd-respond="${data}"
+      ;;
+    cancel)
+      mmcli -m "${modem}" --3gpp-ussd-cancel
+      ;;
+    *)
+      error_exit "'${operation}' is not valid USSD operation."
+      ;;
+  esac
+}
+
+set_logging() {
+  local level="$1"
+  local manager
+
+  if [ -z "${level}" ]; then
+    echo "Valid logging levels are: debug, info, warn, error"
+    return
+  fi
+
+  case "${level}" in
+    debug|info|warn|error)
+      set_modem_manager_logging "${level}"
+      ;;
+    *)
+      error_exit "'${level}' is not a valid logging level."
+      ;;
+  esac
+}
+
+usage() {
+  echo "Usage: $(basename $0) <command> [args...]"
+  echo "  activate [-modem <modem>] [<carrier>]        Activate modem"
+  echo "  connect [-modem <modem>] [phone number]      Connect modem"
+  echo "  esim use_test_certs <true/false>             Use test certs for TLS"
+  echo "  esim set_test_mode <true/false>              Display test profiles"
+  echo "  esim refresh_profiles [-euicc <euicc>]       Get list of profiles " \
+    "from eSIM"
+  echo "  esim request_pending_profiles [-euicc <euicc>] [smds] " \
+    "Get list of pending profiles from SMDS"
+  echo "  esim status                                  Display eSIM status"
+  echo "  esim install [-euicc <euicc>] <activation> [<confirmation>]" \
+    "Install eSIM profile"
+  echo "  esim install [-euicc <euicc>] <iccid> [<confirmation>]" \
+    "Install an eSIM profile fetched by request_pending_profiles"
+  echo "  esim uninstall [-euicc <euicc>] <iccid>      Uninstall eSIM"\
+    "profile (Dev mode only)"
+  echo "  esim enable [-euicc <euicc>] <iccid>         Enable eSIM profile"
+  echo "  esim disable [-euicc <euicc>] <iccid>        Disable eSIM profile"
+  echo "  factory-reset [-modem <modem>] [<spc>]       Factory-reset the modem"
+  echo "  force-flash <device_id>                      Force-flash the modem"
+  echo "  reset [-modem <modem>]                       Reset the modem"
+  echo "  set-logging (debug|info|warn|error)          Set logging level"
+  echo "  status                                       Display modem status"
+  echo "  ussd [-modem <modem>] status                " \
+    "Show status of ongoing USSD session"
+  echo "  ussd [-modem <modem>] initiate <command>     Initiate a USSD session"
+  echo "  ussd [-modem <modem>] respond <response>    " \
+    "Respond to a USSD request"
+  echo "  ussd [-modem <modem>] cancel                " \
+    "Cancel ongoing USSD session"
+  exit 0
+}
+
+$(needarg cmd)
+case "${cmd}" in
+  activate)
+    activate "$@"
+    ;;
+  connect)
+    connect "$@"
+    ;;
+  esim)
+    esim "$@"
+    ;;
+  factory-reset)
+    factory_reset "$@"
+    ;;
+  force-flash)
+    force_flash "$@"
+    ;;
+  reset)
+    reset "$@"
+    ;;
+  set-logging)
+    set_logging "$@"
+    ;;
+  status)
+    status "$@"
+    ;;
+  status-feedback)
+    status_feedback "$@"
+    ;;
+  ussd)
+    ussd "$@"
+    ;;
+  *)
+    usage
+    ;;
+esac

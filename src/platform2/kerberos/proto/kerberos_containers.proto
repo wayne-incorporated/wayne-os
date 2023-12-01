@@ -1,0 +1,22 @@
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package kerberos;
+
+// Data for a single account. Used internally and for serialization.
+message AccountData {
+  // Principal name (user@REALM.COM). Accounts are keyed by principal name.
+  optional string principal_name = 1;
+
+  // Whether the account is managed by policy.
+  optional bool is_managed = 2;
+
+  // Whether the account uses the Chrome OS login password for authentication.
+  optional bool use_login_password = 3;
+}
+
+// List of all accounts. Used for serialization.
+message AccountDataList {
+  repeated AccountData accounts = 1;
+}

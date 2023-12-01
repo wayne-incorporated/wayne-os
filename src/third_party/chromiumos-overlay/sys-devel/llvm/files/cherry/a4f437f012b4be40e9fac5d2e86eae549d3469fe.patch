@@ -1,0 +1,154 @@
+From a4f437f012b4be40e9fac5d2e86eae549d3469fe Mon Sep 17 00:00:00 2001
+From: Craig Topper <craig.topper@sifive.com>
+Date: Fri, 26 May 2023 10:48:49 -0700
+Subject: [PATCH] SelectionDAG: Teach ComputeKnownBits about VSCALE
+
+This reverts commit 9b92f70d4758f75903ce93feaba5098130820d40.  The issue
+with the re-applied change was an implicit truncation due to the
+multiplication.  Although the operations were converted to `APInt`, the
+values were implicitly converted to `long` due to the typing rules.
+
+Fixes: #59594
+
+Differential Revision: https://reviews.llvm.org/D140347
+---
+ .../lib/CodeGen/SelectionDAG/SelectionDAG.cpp |  6 +++
+ .../vscale-and-sve-cnt-demandedbits.ll        | 37 ++++++++++++-------
+ .../CodeGen/RISCV/vscale-demanded-bits.ll     | 25 +++++++++++++
+ 3 files changed, 55 insertions(+), 13 deletions(-)
+ create mode 100644 llvm/test/CodeGen/RISCV/vscale-demanded-bits.ll
+
+diff --git a/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp b/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp
+index 473497af5674..cad941762492 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp
+@@ -3095,6 +3095,12 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
+     }
+     break;
+   }
++  case ISD::VSCALE: {
++    const Function &F = getMachineFunction().getFunction();
++    const APInt &Multiplier = Op.getConstantOperandAPInt(0);
++    Known = getVScaleRange(&F, BitWidth).multiply(Multiplier).toKnownBits();
++    break;
++  }
+   case ISD::CONCAT_VECTORS: {
+     if (Op.getValueType().isScalableVector())
+       break;
+diff --git a/llvm/test/CodeGen/AArch64/vscale-and-sve-cnt-demandedbits.ll b/llvm/test/CodeGen/AArch64/vscale-and-sve-cnt-demandedbits.ll
+index 895f5da9a1e1..dbdab799c835 100644
+--- a/llvm/test/CodeGen/AArch64/vscale-and-sve-cnt-demandedbits.ll
++++ b/llvm/test/CodeGen/AArch64/vscale-and-sve-cnt-demandedbits.ll
+@@ -14,9 +14,8 @@ define i32 @vscale_and_elimination() vscale_range(1,16) {
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    rdvl x8, #1
+ ; CHECK-NEXT:    lsr x8, x8, #4
+-; CHECK-NEXT:    and w9, w8, #0x1f
+-; CHECK-NEXT:    and w8, w8, #0xfffffffc
+-; CHECK-NEXT:    add w0, w9, w8
++; CHECK-NEXT:    and w9, w8, #0x1c
++; CHECK-NEXT:    add w0, w8, w9
+ ; CHECK-NEXT:    ret
+   %vscale = call i32 @llvm.vscale.i32()
+   %and_redundant = and i32 %vscale, 31
+@@ -85,8 +84,7 @@ define i64 @vscale_trunc_zext() vscale_range(1,16) {
+ ; CHECK-LABEL: vscale_trunc_zext:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    rdvl x8, #1
+-; CHECK-NEXT:    lsr x8, x8, #4
+-; CHECK-NEXT:    and x0, x8, #0xffffffff
++; CHECK-NEXT:    lsr x0, x8, #4
+ ; CHECK-NEXT:    ret
+   %vscale = call i32 @llvm.vscale.i32()
+   %zext = zext i32 %vscale to i64
+@@ -97,8 +95,7 @@ define i64 @vscale_trunc_sext() vscale_range(1,16) {
+ ; CHECK-LABEL: vscale_trunc_sext:
+ ; CHECK:       // %bb.0:
+ ; CHECK-NEXT:    rdvl x8, #1
+-; CHECK-NEXT:    lsr x8, x8, #4
+-; CHECK-NEXT:    sxtw x0, w8
++; CHECK-NEXT:    lsr x0, x8, #4
+ ; CHECK-NEXT:    ret
+   %vscale = call i32 @llvm.vscale.i32()
+   %sext = sext i32 %vscale to i64
+@@ -200,9 +197,8 @@ define i32 @vscale_with_multiplier() vscale_range(1,16) {
+ ; CHECK-NEXT:    mov w9, #5
+ ; CHECK-NEXT:    lsr x8, x8, #4
+ ; CHECK-NEXT:    mul x8, x8, x9
+-; CHECK-NEXT:    and w9, w8, #0x7f
+-; CHECK-NEXT:    and w8, w8, #0x3f
+-; CHECK-NEXT:    add w0, w9, w8
++; CHECK-NEXT:    and w9, w8, #0x3f
++; CHECK-NEXT:    add w0, w8, w9
+ ; CHECK-NEXT:    ret
+   %vscale = call i32 @llvm.vscale.i32()
+   %mul = mul i32 %vscale, 5
+@@ -219,9 +215,8 @@ define i32 @vscale_with_negative_multiplier() vscale_range(1,16) {
+ ; CHECK-NEXT:    mov x9, #-5
+ ; CHECK-NEXT:    lsr x8, x8, #4
+ ; CHECK-NEXT:    mul x8, x8, x9
+-; CHECK-NEXT:    orr w9, w8, #0xffffff80
+-; CHECK-NEXT:    and w8, w8, #0xffffffc0
+-; CHECK-NEXT:    add w0, w9, w8
++; CHECK-NEXT:    and w9, w8, #0xffffffc0
++; CHECK-NEXT:    add w0, w8, w9
+ ; CHECK-NEXT:    ret
+   %vscale = call i32 @llvm.vscale.i32()
+   %mul = mul i32 %vscale, -5
+@@ -231,6 +226,22 @@ define i32 @vscale_with_negative_multiplier() vscale_range(1,16) {
+   ret i32 %result
+ }
+ 
++define i32 @pow2_vscale_with_negative_multiplier() vscale_range(1,16) {
++; CHECK-LABEL: pow2_vscale_with_negative_multiplier:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    cntd x8
++; CHECK-NEXT:    neg x8, x8
++; CHECK-NEXT:    orr w9, w8, #0xfffffff0
++; CHECK-NEXT:    add w0, w8, w9
++; CHECK-NEXT:    ret
++  %vscale = call i32 @llvm.vscale.i32()
++  %mul = mul i32 %vscale, -2
++  %or_redundant = or i32 %mul, 4294967264
++  %or_required = or i32 %mul, 4294967280
++  %result = add i32 %or_redundant, %or_required
++  ret i32 %result
++}
++
+ declare i32 @llvm.vscale.i32()
+ declare i64 @llvm.aarch64.sve.cntb(i32 %pattern)
+ declare i64 @llvm.aarch64.sve.cnth(i32 %pattern)
+diff --git a/llvm/test/CodeGen/RISCV/vscale-demanded-bits.ll b/llvm/test/CodeGen/RISCV/vscale-demanded-bits.ll
+new file mode 100644
+index 000000000000..d010efc64e96
+--- /dev/null
++++ b/llvm/test/CodeGen/RISCV/vscale-demanded-bits.ll
+@@ -0,0 +1,25 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py
++; RUN: llc -mtriple riscv64 -mattr +v -filetype asm -o - %s | FileCheck %s
++
++declare i8 @llvm.vscale.i8()
++declare <vscale x 8 x i8> @llvm.experimental.stepvector.nxv8i8()
++
++define <vscale x 8 x i8> @f() #0 {
++; CHECK-LABEL: f:
++; CHECK:       # %bb.0: # %entry
++; CHECK-NEXT:    csrr a0, vlenb
++; CHECK-NEXT:    vsetvli a1, zero, e8, m1, ta, ma
++; CHECK-NEXT:    vid.v v8
++; CHECK-NEXT:    vadd.vx v8, v8, a0
++; CHECK-NEXT:    ret
++entry:
++  %0 = tail call i8 @llvm.vscale.i8()
++  %1 = shl i8 %0, 3
++  %.splat.insert = insertelement <vscale x 8 x i8> poison, i8 %1, i64 0
++  %.splat = shufflevector <vscale x 8 x i8> %.splat.insert, <vscale x 8 x i8> poison, <vscale x 8 x i32> zeroinitializer
++  %2 = tail call <vscale x 8 x i8> @llvm.experimental.stepvector.nxv8i8()
++  %3 = add <vscale x 8 x i8> %2, %.splat
++  ret <vscale x 8 x i8> %3
++}
++
++attributes #0 = { vscale_range(2,1024) }
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

@@ -1,0 +1,30 @@
+commit f767b8ebaa0b304aa79167c2407d1d1fc5618c63
+Author: Patrick Georgi <pgeorgi@google.com>
+Date:   Mon Jun 14 22:03:08 2021 +0200
+
+    ish/heci: initialize msg.payload before using it
+    
+    BUG=none
+    BRANCH=none
+    TEST=one class of error less with gcc 11
+    
+    Signed-off-by: Patrick Georgi <pgeorgi@google.com>
+    Change-Id: I7c0d2b28ae7805b390e485ff69ec0f6c2a7d5e98
+    Reviewed-on: https://chromium-review.googlesource.com/c/chromiumos/platform/ec/+/2959919
+    Reviewed-by: Daisuke Nojiri <dnojiri@chromium.org>
+    Tested-by: Patrick Georgi <pgeorgi@chromium.org>
+    Commit-Queue: Patrick Georgi <pgeorgi@chromium.org>
+
+diff --git a/chip/ish/ipc_heci.c b/chip/ish/ipc_heci.c
+index 3b8f4a31d1..9553e195c4 100644
+--- a/chip/ish/ipc_heci.c
++++ b/chip/ish/ipc_heci.c
+@@ -280,7 +280,7 @@ static int ipc_send_reset_notify(const ipc_handle_t handle)
+ 
+ static int ipc_send_cmpl_indication(struct ipc_if_ctx *ctx)
+ {
+-	struct ipc_msg msg;
++	struct ipc_msg msg = {0};
+ 
+ 	msg.drbl = IPC_BUILD_MNG_DB(MNG_RX_CMPL_INDICATION, 0);
+ 	ipc_write_raw(ctx, msg.drbl, msg.payload, IPC_DB_MSG_LENGTH(msg.drbl));

@@ -1,0 +1,371 @@
+From 7309babda7273e6af8fbf8a76150d9186374f3c8 Mon Sep 17 00:00:00 2001
+From: Marcin Wojtas <mw@semihalf.com>
+Date: Wed, 18 Aug 2021 14:38:16 +0000
+Subject: [PATCH] Use PKG_CONFIG
+
+---
+ config-scripts/cups-common.m4      |  4 +-
+ config-scripts/cups-directories.m4 |  6 +--
+ config-scripts/cups-dnssd.m4       | 12 ++---
+ config-scripts/cups-tls.m4         | 12 ++---
+ configure                          | 78 +++++++++++++++---------------
+ 5 files changed, 56 insertions(+), 56 deletions(-)
+
+diff --git a/config-scripts/cups-common.m4 b/config-scripts/cups-common.m4
+index f8bcdfd..6675d65 100644
+--- a/config-scripts/cups-common.m4
++++ b/config-scripts/cups-common.m4
+@@ -62,7 +62,7 @@ AS_IF([test "x$CC" = x], [
+ ])
+ 
+ dnl Check for pkg-config, which is used for some other tests later on...
+-AC_PATH_TOOL([PKGCONFIG], [pkg-config])
++AC_PATH_TOOL([PKG_CONFIG], [pkg-config])
+ 
+ dnl Check for libraries...
+ AC_SEARCH_LIBS([abs], [m], [AC_DEFINE(HAVE_ABS)])
+@@ -185,7 +185,7 @@ AC_CHECK_HEADER([zlib.h], [
+ AC_SUBST([INSTALL_GZIP])
+ AC_SUBST([LIBZ])
+ 
+-PKGCONFIG_LIBS_STATIC="$PKGCONFIG_LIBS_STATIC $LIBZ"
++PKG_CONFIG_LIBS_STATIC="$PKG_CONFIG_LIBS_STATIC $LIBZ"
+ 
+ dnl Flags for "ar" command...
+ AS_CASE([host_os_name], [darwin* | *bsd*], [
+diff --git a/config-scripts/cups-directories.m4 b/config-scripts/cups-directories.m4
+index a8ad4a2..d6008ff 100644
+--- a/config-scripts/cups-directories.m4
++++ b/config-scripts/cups-directories.m4
+@@ -61,7 +61,7 @@ AS_IF([test "$includedir" = "\${prefix}/include" -a "$prefix" = "/"], [
+     includedir="/usr/include"
+ ])
+ AS_IF([test "$includedir" != "/usr/include"], [
+-    PKGCONFIG_CFLAGS="$PKGCONFIG_CFLAGS -I$includedir"
++    PKG_CONFIG_CFLAGS="$PKG_CONFIG_CFLAGS -I$includedir"
+ ])
+ 
+ dnl Fix "localstatedir" variable if it hasn't been specified...
+@@ -103,9 +103,9 @@ AS_IF([test "$libdir" = "\${exec_prefix}/lib"], [
+     ])
+ ])
+ AS_IF([test "$libdir" = "/usr/lib"], [
+-    PKGCONFIG_LIBS="-lcups"
++    PKG_CONFIG_LIBS="-lcups"
+ ], [
+-    PKGCONFIG_LIBS="-L$libdir -lcups"
++    PKG_CONFIG_LIBS="-L$libdir -lcups"
+ ])
+ 
+ dnl Setup default locations...
+diff --git a/config-scripts/cups-dnssd.m4 b/config-scripts/cups-dnssd.m4
+index 2132414..a620ba1 100644
+--- a/config-scripts/cups-dnssd.m4
++++ b/config-scripts/cups-dnssd.m4
+@@ -63,7 +63,7 @@ AS_IF([test $with_dnssd = yes -o $with_dnssd = mdnsresponder], [
+ 		IPPFIND_BIN="ippfind"
+ 		IPPFIND_HTML="ippfind.html"
+ 		IPPFIND_MAN="ippfind.1"
+-		PKGCONFIG_LIBS_STATIC="$PKGCONFIG_LIBS_STATIC $DNSSDLIBS"
++		PKG_CONFIG_LIBS_STATIC="$PKG_CONFIG_LIBS_STATIC $DNSSDLIBS"
+ 	    ], [
+ 		AC_MSG_RESULT([no])
+ 		AS_IF([test $with_dnssd = mdnsresponder], [
+@@ -77,21 +77,21 @@ AS_IF([test $with_dnssd = yes -o $with_dnssd = mdnsresponder], [
+ 
+ dnl Then try Avahi...
+ AS_IF([test $with_dnssd = avahi -o $with_dnssd = yes], [
+-    AS_IF([test "x$PKGCONFIG" = x], [
++    AS_IF([test "x$PKG_CONFIG" = x], [
+ 	AS_IF([test $with_dnssd = avahi], [
+ 	    AC_MSG_ERROR([Avahi requires pkg-config.])
+ 	])
+     ], [
+ 	AC_MSG_CHECKING([for Avahi client])
+-	AS_IF([$PKGCONFIG --exists avahi-client], [
++	AS_IF([$PKG_CONFIG --exists avahi-client], [
+ 	    AC_MSG_RESULT([yes])
+-	    CFLAGS="$CFLAGS `$PKGCONFIG --cflags avahi-client`"
+-	    DNSSDLIBS="`$PKGCONFIG --libs avahi-client`"
++	    CFLAGS="$CFLAGS `$PKG_CONFIG --cflags avahi-client`"
++	    DNSSDLIBS="`$PKG_CONFIG --libs avahi-client`"
+ 	    DNSSD_BACKEND="dnssd"
+ 	    IPPFIND_BIN="ippfind"
+ 	    IPPFIND_HTML="ippfind.html"
+ 	    IPPFIND_MAN="ippfind.1"
+-		PKGCONFIG_REQUIRES="$PKGCONFIG_REQUIRES avahi-client"
++		PKG_CONFIG_REQUIRES="$PKG_CONFIG_REQUIRES avahi-client"
+ 	    AC_DEFINE([HAVE_AVAHI], [1], [Have Avahi client library?])
+ 	    AC_DEFINE([HAVE_DNSSD], [1], [Have DNS-SD support?])
+ 	], [
+diff --git a/config-scripts/cups-tls.m4 b/config-scripts/cups-tls.m4
+index 0d218a5..582a47f 100644
+--- a/config-scripts/cups-tls.m4
++++ b/config-scripts/cups-tls.m4
+@@ -51,15 +51,15 @@ AS_IF([test $with_tls = yes -o $with_tls = cdsa], [
+ dnl Then look for GNU TLS...
+ AS_IF([test $with_tls = yes -o $with_tls = gnutls], [
+     AC_PATH_TOOL([LIBGNUTLSCONFIG], [libgnutls-config])
+-    AS_IF([test "x$PKGCONFIG" != x], [
++    AS_IF([test "x$PKG_CONFIG" != x], [
+         AC_MSG_CHECKING([for gnutls package])
+-	AS_IF([$PKGCONFIG --exists gnutls], [
++	AS_IF([$PKG_CONFIG --exists gnutls], [
+ 	    AC_MSG_RESULT([yes])
+ 	    have_tls="1"
+ 	    with_tls="gnutls"
+-	    TLSLIBS="$($PKGCONFIG --libs gnutls)"
+-	    TLSFLAGS="$($PKGCONFIG --cflags gnutls)"
+-	    PKGCONFIG_REQUIRES="$PKGCONFIG_REQUIRES gnutls"
++	    TLSLIBS="$($PKG_CONFIG --libs gnutls)"
++	    TLSFLAGS="$($PKG_CONFIG --cflags gnutls)"
++	    PKG_CONFIG_REQUIRES="$PKG_CONFIG_REQUIRES gnutls"
+ 	    AC_DEFINE([HAVE_TLS], [1], [Do we support TLS?])
+ 	    AC_DEFINE([HAVE_GNUTLS], [1], [Do we have the GNU TLS library?])
+ 	], [
+@@ -71,7 +71,7 @@ AS_IF([test $with_tls = yes -o $with_tls = gnutls], [
+ 	with_tls="gnutls"
+ 	TLSLIBS="$($LIBGNUTLSCONFIG --libs)"
+ 	TLSFLAGS="$($LIBGNUTLSCONFIG --cflags)"
+-	PKGCONFIG_LIBS_STATIC="$PKGCONFIG_LIBS_STATIC $TLSLIBS"
++	PKG_CONFIG_LIBS_STATIC="$PKG_CONFIG_LIBS_STATIC $TLSLIBS"
+ 	AC_DEFINE([HAVE_TLS], [1], [Do we support TLS?])
+ 	AC_DEFINE([HAVE_GNUTLS], [1], [Do we have the GNU TLS library?])
+     ])
+diff --git a/configure b/configure
+index e56af1f..f6f4372 100755
+--- a/configure
++++ b/configure
+@@ -701,7 +701,7 @@ IPPTRANSFORM_BIN
+ ARFLAGS
+ LIBZ
+ INSTALL_GZIP
+-PKGCONFIG
++PKG_CONFIG
+ SED
+ RMDIR
+ RM
+@@ -5211,13 +5211,13 @@ if test -n "$ac_tool_prefix"; then
+ set dummy ${ac_tool_prefix}pkg-config; ac_word=$2
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+ printf %s "checking for $ac_word... " >&6; }
+-if test ${ac_cv_path_PKGCONFIG+y}
++if test ${ac_cv_path_PKG_CONFIG+y}
+ then :
+   printf %s "(cached) " >&6
+ else $as_nop
+-  case $PKGCONFIG in
++  case $PKG_CONFIG in
+   [\\/]* | ?:[\\/]*)
+-  ac_cv_path_PKGCONFIG="$PKGCONFIG" # Let the user override the test with a path.
++  ac_cv_path_PKG_CONFIG="$PKG_CONFIG" # Let the user override the test with a path.
+   ;;
+   *)
+   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+@@ -5231,7 +5231,7 @@ do
+   esac
+     for ac_exec_ext in '' $ac_executable_extensions; do
+   if as_fn_executable_p "$as_dir$ac_word$ac_exec_ext"; then
+-    ac_cv_path_PKGCONFIG="$as_dir$ac_word$ac_exec_ext"
++    ac_cv_path_PKG_CONFIG="$as_dir$ac_word$ac_exec_ext"
+     printf "%s\n" "$as_me:${as_lineno-$LINENO}: found $as_dir$ac_word$ac_exec_ext" >&5
+     break 2
+   fi
+@@ -5242,10 +5242,10 @@ IFS=$as_save_IFS
+   ;;
+ esac
+ fi
+-PKGCONFIG=$ac_cv_path_PKGCONFIG
+-if test -n "$PKGCONFIG"; then
+-  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $PKGCONFIG" >&5
+-printf "%s\n" "$PKGCONFIG" >&6; }
++PKG_CONFIG=$ac_cv_path_PKG_CONFIG
++if test -n "$PKG_CONFIG"; then
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $PKG_CONFIG" >&5
++printf "%s\n" "$PKG_CONFIG" >&6; }
+ else
+   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+ printf "%s\n" "no" >&6; }
+@@ -5253,19 +5253,19 @@ fi
+ 
+ 
+ fi
+-if test -z "$ac_cv_path_PKGCONFIG"; then
+-  ac_pt_PKGCONFIG=$PKGCONFIG
++if test -z "$ac_cv_path_PKG_CONFIG"; then
++  ac_pt_PKG_CONFIG=$PKG_CONFIG
+   # Extract the first word of "pkg-config", so it can be a program name with args.
+ set dummy pkg-config; ac_word=$2
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+ printf %s "checking for $ac_word... " >&6; }
+-if test ${ac_cv_path_ac_pt_PKGCONFIG+y}
++if test ${ac_cv_path_ac_pt_PKG_CONFIG+y}
+ then :
+   printf %s "(cached) " >&6
+ else $as_nop
+-  case $ac_pt_PKGCONFIG in
++  case $ac_pt_PKG_CONFIG in
+   [\\/]* | ?:[\\/]*)
+-  ac_cv_path_ac_pt_PKGCONFIG="$ac_pt_PKGCONFIG" # Let the user override the test with a path.
++  ac_cv_path_ac_pt_PKG_CONFIG="$ac_pt_PKG_CONFIG" # Let the user override the test with a path.
+   ;;
+   *)
+   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+@@ -5279,7 +5279,7 @@ do
+   esac
+     for ac_exec_ext in '' $ac_executable_extensions; do
+   if as_fn_executable_p "$as_dir$ac_word$ac_exec_ext"; then
+-    ac_cv_path_ac_pt_PKGCONFIG="$as_dir$ac_word$ac_exec_ext"
++    ac_cv_path_ac_pt_PKG_CONFIG="$as_dir$ac_word$ac_exec_ext"
+     printf "%s\n" "$as_me:${as_lineno-$LINENO}: found $as_dir$ac_word$ac_exec_ext" >&5
+     break 2
+   fi
+@@ -5290,17 +5290,17 @@ IFS=$as_save_IFS
+   ;;
+ esac
+ fi
+-ac_pt_PKGCONFIG=$ac_cv_path_ac_pt_PKGCONFIG
+-if test -n "$ac_pt_PKGCONFIG"; then
+-  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_pt_PKGCONFIG" >&5
+-printf "%s\n" "$ac_pt_PKGCONFIG" >&6; }
++ac_pt_PKG_CONFIG=$ac_cv_path_ac_pt_PKG_CONFIG
++if test -n "$ac_pt_PKG_CONFIG"; then
++  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_pt_PKG_CONFIG" >&5
++printf "%s\n" "$ac_pt_PKG_CONFIG" >&6; }
+ else
+   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+ printf "%s\n" "no" >&6; }
+ fi
+ 
+-  if test "x$ac_pt_PKGCONFIG" = x; then
+-    PKGCONFIG=""
++  if test "x$ac_pt_PKG_CONFIG" = x; then
++    PKG_CONFIG=""
+   else
+     case $cross_compiling:$ac_tool_warned in
+ yes:)
+@@ -5308,10 +5308,10 @@ yes:)
+ printf "%s\n" "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ ac_tool_warned=yes ;;
+ esac
+-    PKGCONFIG=$ac_pt_PKGCONFIG
++    PKG_CONFIG=$ac_pt_PKG_CONFIG
+   fi
+ else
+-  PKGCONFIG="$ac_cv_path_PKGCONFIG"
++  PKG_CONFIG="$ac_cv_path_PKG_CONFIG"
+ fi
+ 
+ 
+@@ -6028,7 +6028,7 @@ fi
+ 
+ 
+ 
+-PKGCONFIG_LIBS_STATIC="$PKGCONFIG_LIBS_STATIC $LIBZ"
++PKG_CONFIG_LIBS_STATIC="$PKG_CONFIG_LIBS_STATIC $LIBZ"
+ 
+ case host_os_name in #(
+   darwin* | *bsd*) :
+@@ -8562,21 +8562,21 @@ else
+   LIBGNUTLSCONFIG="$ac_cv_path_LIBGNUTLSCONFIG"
+ fi
+ 
+-    if test "x$PKGCONFIG" != x
++    if test "x$PKG_CONFIG" != x
+ then :
+ 
+         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for gnutls package" >&5
+ printf %s "checking for gnutls package... " >&6; }
+-	if $PKGCONFIG --exists gnutls
++	if $PKG_CONFIG --exists gnutls
+ then :
+ 
+ 	    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+ printf "%s\n" "yes" >&6; }
+ 	    have_tls="1"
+ 	    with_tls="gnutls"
+-	    TLSLIBS="$($PKGCONFIG --libs gnutls)"
+-	    TLSFLAGS="$($PKGCONFIG --cflags gnutls)"
+-	    PKGCONFIG_REQUIRES="$PKGCONFIG_REQUIRES gnutls"
++	    TLSLIBS="$($PKG_CONFIG --libs gnutls)"
++	    TLSFLAGS="$($PKG_CONFIG --cflags gnutls)"
++	    PKG_CONFIG_REQUIRES="$PKG_CONFIG_REQUIRES gnutls"
+ 
+ printf "%s\n" "#define HAVE_TLS 1" >>confdefs.h
+ 
+@@ -8599,7 +8599,7 @@ then :
+ 	with_tls="gnutls"
+ 	TLSLIBS="$($LIBGNUTLSCONFIG --libs)"
+ 	TLSFLAGS="$($LIBGNUTLSCONFIG --cflags)"
+-	PKGCONFIG_LIBS_STATIC="$PKGCONFIG_LIBS_STATIC $TLSLIBS"
++	PKG_CONFIG_LIBS_STATIC="$PKG_CONFIG_LIBS_STATIC $TLSLIBS"
+ 
+ printf "%s\n" "#define HAVE_TLS 1" >>confdefs.h
+ 
+@@ -9077,7 +9077,7 @@ printf "%s\n" "#define HAVE_MDNSRESPONDER 1" >>confdefs.h
+ 		IPPFIND_BIN="ippfind"
+ 		IPPFIND_HTML="ippfind.html"
+ 		IPPFIND_MAN="ippfind.1"
+-		PKGCONFIG_LIBS_STATIC="$PKGCONFIG_LIBS_STATIC $DNSSDLIBS"
++		PKG_CONFIG_LIBS_STATIC="$PKG_CONFIG_LIBS_STATIC $DNSSDLIBS"
+ 
+ else $as_nop
+ 
+@@ -9106,7 +9106,7 @@ fi
+ if test $with_dnssd = avahi -o $with_dnssd = yes
+ then :
+ 
+-    if test "x$PKGCONFIG" = x
++    if test "x$PKG_CONFIG" = x
+ then :
+ 
+ 	if test $with_dnssd = avahi
+@@ -9120,18 +9120,18 @@ else $as_nop
+ 
+ 	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Avahi client" >&5
+ printf %s "checking for Avahi client... " >&6; }
+-	if $PKGCONFIG --exists avahi-client
++	if $PKG_CONFIG --exists avahi-client
+ then :
+ 
+ 	    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+ printf "%s\n" "yes" >&6; }
+-	    CFLAGS="$CFLAGS `$PKGCONFIG --cflags avahi-client`"
+-	    DNSSDLIBS="`$PKGCONFIG --libs avahi-client`"
++	    CFLAGS="$CFLAGS `$PKG_CONFIG --cflags avahi-client`"
++	    DNSSDLIBS="`$PKG_CONFIG --libs avahi-client`"
+ 	    DNSSD_BACKEND="dnssd"
+ 	    IPPFIND_BIN="ippfind"
+ 	    IPPFIND_HTML="ippfind.html"
+ 	    IPPFIND_MAN="ippfind.1"
+-		PKGCONFIG_REQUIRES="$PKGCONFIG_REQUIRES avahi-client"
++		PKG_CONFIG_REQUIRES="$PKG_CONFIG_REQUIRES avahi-client"
+ 
+ printf "%s\n" "#define HAVE_AVAHI 1" >>confdefs.h
+ 
+@@ -9254,7 +9254,7 @@ fi
+ if test "$includedir" != "/usr/include"
+ then :
+ 
+-    PKGCONFIG_CFLAGS="$PKGCONFIG_CFLAGS -I$includedir"
++    PKG_CONFIG_CFLAGS="$PKG_CONFIG_CFLAGS -I$includedir"
+ 
+ fi
+ 
+@@ -9337,11 +9337,11 @@ fi
+ if test "$libdir" = "/usr/lib"
+ then :
+ 
+-    PKGCONFIG_LIBS="-lcups"
++    PKG_CONFIG_LIBS="-lcups"
+ 
+ else $as_nop
+ 
+-    PKGCONFIG_LIBS="-L$libdir -lcups"
++    PKG_CONFIG_LIBS="-L$libdir -lcups"
+ 
+ fi
+ 
+-- 
+2.33.0.rc2.250.ged5fa647cd-goog
+

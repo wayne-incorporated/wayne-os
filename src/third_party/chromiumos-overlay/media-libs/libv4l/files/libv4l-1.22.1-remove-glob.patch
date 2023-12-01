@@ -1,0 +1,64 @@
+The sandbox does not allow globbing a directory to find plugin shared
+library. This patch reverts the glob code and uses a list of full
+plugins' names (just like libv4l used to do it, before it switched to
+glob()).
+---
+ lib/libv4l2/v4l2-plugin.c | 24 ++++++++----------------
+ 1 file changed, 8 insertions(+), 16 deletions(-)
+
+diff --git a/lib/libv4l2/v4l2-plugin.c b/lib/libv4l2/v4l2-plugin.c
+index e2356cb6..72c9d205 100644
+--- a/lib/libv4l2/v4l2-plugin.c
++++ b/lib/libv4l2/v4l2-plugin.c
+@@ -46,33 +46,27 @@
+    and if it was not then v4l2_* functions proceed with their usual behavior.
+ */
+ 
+-#define PLUGINS_PATTERN LIBV4L2_PLUGIN_DIR "/*.so"
++static const char *plugin_names[] = {
++  LIBV4L2_PLUGIN_DIR "/libv4l-encplugin.so"
++};
+ 
+ void v4l2_plugin_init(int fd, void **plugin_lib_ret, void **plugin_priv_ret,
+ 		      const struct libv4l_dev_ops **dev_ops_ret)
+ {
+ 	char *error;
+-	int glob_ret, i;
++	int i;
+ 	void *plugin_library = NULL;
+ 	const struct libv4l_dev_ops *libv4l2_plugin = NULL;
+-	glob_t globbuf;
++	int num_plugins = sizeof(plugin_names) / sizeof(char *);
+ 
+ 	*dev_ops_ret = v4lconvert_get_default_dev_ops();
+ 	*plugin_lib_ret = NULL;
+ 	*plugin_priv_ret = NULL;
+ 
+-	glob_ret = glob(PLUGINS_PATTERN, 0, NULL, &globbuf);
++	for (i = 0; i < num_plugins; i++) {
++		V4L2_LOG("PLUGIN: dlopen(%s);\n", plugin_names[i]);
+ 
+-	if (glob_ret == GLOB_NOSPACE)
+-		return;
+-
+-	if (glob_ret == GLOB_ABORTED || glob_ret == GLOB_NOMATCH)
+-		goto leave;
+-
+-	for (i = 0; i < globbuf.gl_pathc; i++) {
+-		V4L2_LOG("PLUGIN: dlopen(%s);\n", globbuf.gl_pathv[i]);
+-
+-		plugin_library = dlopen(globbuf.gl_pathv[i], RTLD_LAZY);
++		plugin_library = dlopen(plugin_names[i], RTLD_LAZY);
+ 		if (!plugin_library)
+ 			continue;
+ 
+@@ -105,9 +99,6 @@
+ 		*dev_ops_ret = libv4l2_plugin;
+ 		break;
+ 	}
+-
+-leave:
+-	globfree(&globbuf);
+ }
+ 
+ void v4l2_plugin_cleanup(void *plugin_lib, void *plugin_priv,

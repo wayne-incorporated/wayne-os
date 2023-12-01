@@ -1,0 +1,23 @@
+Fixes the following build error:
+
+In file included from /build/brya/usr/include/aosp/utils/RefBase.h:221:
+/build/brya/usr/include/aosp/utils/LightRefBase.h:48:43: error: definition or redeclaration of 'memory_order_acquire' not allowed inside a function
+            std::atomic_thread_fence(std::memory_order_acquire);
+                                     ~~~~~^
+/usr/lib64/clang/14.0.0/include/stdatomic.h:73:62: note: expanded from macro 'atomic_thread_fence'
+#define atomic_thread_fence(order) __c11_atomic_thread_fence(order)
+                                                             ^~~~~
+
+diff --git a/platform2/aosp/system/core/libutils/include/utils/LightRefBase.h b/platform2/aosp/system/core/libutils/include/utils/LightRefBase.h
+index 40edf67..5a47f8b 100644
+--- a/platform2/aosp/system/core/libutils/include/utils/LightRefBase.h
++++ b/platform2/aosp/system/core/libutils/include/utils/LightRefBase.h
+@@ -45,7 +45,7 @@ public:
+     }
+     inline void decStrong(__attribute__((unused)) const void* id) const {
+         if (mCount.fetch_sub(1, std::memory_order_release) == 1) {
+-            std::atomic_thread_fence(std::memory_order_acquire);
++            atomic_thread_fence(std::memory_order_acquire);
+             delete static_cast<const T*>(this);
+         }
+     }

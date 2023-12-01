@@ -1,0 +1,29 @@
+From: Pranav Batra <batrapranav@chromium.org>
+
+In unpackBits() round width down instead of up and
+separately handle the remaining bits (b/217983652).
+
+--- a/prnt/hpcups/Job.cpp
++++ b/prnt/hpcups/Job.cpp
+@@ -148,7 +148,7 @@ void Job::unpackBits(BYTE *BlackImageData)
+ {
+ // Convert K from 1-bit raster to 8-bit raster.
+     unsigned char  bitflag[] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
+-    int    width = (m_job_attributes.media_attributes.printable_width + 7) / 8;
++    int    width = m_job_attributes.media_attributes.printable_width / 8;
+     for (int i = 0; i < width; i++)
+     {
+         for (int j = 0; j < 8; j++)
+@@ -157,6 +157,12 @@ void Job::unpackBits(BYTE *BlackImageData)
+                 m_pBlackRaster[i*8+j] = 1;
+         }
+     }
++    int bits = m_job_attributes.media_attributes.printable_width % 8;
++    for (int j = 0; j < bits; j++)
++    {
++        if (BlackImageData[width] & bitflag[j])
++            m_pBlackRaster[width*8+j] = 1;
++    }
+ }
+ 
+ DRIVER_ERROR Job::SendRasters(BYTE* BlackImageData, BYTE* ColorImageData)

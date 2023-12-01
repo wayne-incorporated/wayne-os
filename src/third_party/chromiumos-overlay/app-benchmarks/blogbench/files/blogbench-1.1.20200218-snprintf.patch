@@ -1,0 +1,36 @@
+We can't run test programs when cross-compiling. Just fill in the correct
+answer.
+--- Blogbench-d000aaf9390100bb3024e6b4aed9d945256259d5/configure.ac.old	2020-02-18 18:08:18.054966428 +0900
++++ Blogbench-d000aaf9390100bb3024e6b4aed9d945256259d5/configure.ac	2020-02-18 18:14:39.928334344 +0900
+@@ -107,30 +107,7 @@
+ AC_CHECK_FUNCS(sync)
+ 
+ AC_MSG_CHECKING(whether snprintf is C99 conformant)
+-AC_RUN_IFELSE([AC_LANG_SOURCE([[
+-#include <stdio.h>
+-#ifdef STDC_HEADERS
+-# include <stdlib.h>
+-# include <stddef.h>
+-#else
+-# if HAVE_STDLIB_H
+-#  include <stdlib.h>
+-# endif
+-#endif
+-#ifdef HAVE_UNISTD_H
+-# include <unistd.h>
+-#endif
+-
+-int main(void)
+-{
+-    char buf[4];
+-    
+-    (void) fprintf(fopen("conftestval", "w"), "%d\n",
+-        (int) snprintf(buf, sizeof buf, "12345678"));
+-    return 0;
+-}
+-]])],[CONF_SNPRINTF_TYPE=`cat conftestval`
+-],[],[])
++CONF_SNPRINTF_TYPE="8"
+ AC_MSG_RESULT(done)
+ if test "x$CONF_SNPRINTF_TYPE" = "x" ; then
+   AC_MSG_WARN(your operating system doesn't implement snprintf)

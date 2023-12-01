@@ -1,0 +1,1 @@
+sc7280-qc_blobs-0.0.12.ebuild

@@ -1,0 +1,237 @@
+commit 1f82d0f795d11376adf3e62fc35fd98bb46e82b0
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Mon Mar 14 14:19:37 2022 -0700
+
+    [msan] Add interceptors for Linux 64-bit stat variants
+    
+    glibc >= 2.33 uses shared functions for stat family functions.
+    D111984 added support for non-64 bit variants but they
+    do not appear to be enough as we have been noticing msan
+    errors on 64-bit stat variants on Chrome OS.
+    
+    Reviewed By: vitalybuka
+    
+    Differential Revision: https://reviews.llvm.org/D121652
+
+diff --git a/compiler-rt/lib/msan/msan_interceptors.cpp b/compiler-rt/lib/msan/msan_interceptors.cpp
+index dbe18ce37509..d745fa7563d9 100644
+--- a/compiler-rt/lib/msan/msan_interceptors.cpp
++++ b/compiler-rt/lib/msan/msan_interceptors.cpp
+@@ -666,6 +666,19 @@ INTERCEPTOR(int, fstat, int fd, void *buf) {
+ #define MSAN_MAYBE_INTERCEPT_FSTAT
+ #endif
+ 
++#if SANITIZER_STAT_LINUX
++INTERCEPTOR(int, fstat64, int fd, void *buf) {
++  ENSURE_MSAN_INITED();
++  int res = REAL(fstat64)(fd, buf);
++  if (!res)
++    __msan_unpoison(buf, __sanitizer::struct_stat64_sz);
++  return res;
++}
++#  define MSAN_MAYBE_INTERCEPT_FSTAT64 MSAN_INTERCEPT_FUNC(fstat64)
++#else
++#  define MSAN_MAYBE_INTERCEPT_FSTAT64
++#endif
++
+ #if SANITIZER_GLIBC
+ INTERCEPTOR(int, __fxstat, int magic, int fd, void *buf) {
+   ENSURE_MSAN_INITED();
+@@ -704,6 +717,19 @@ INTERCEPTOR(int, fstatat, int fd, char *pathname, void *buf, int flags) {
+ #  define MSAN_MAYBE_INTERCEPT_FSTATAT
+ #endif
+ 
++#if SANITIZER_STAT_LINUX
++INTERCEPTOR(int, fstatat64, int fd, char *pathname, void *buf, int flags) {
++  ENSURE_MSAN_INITED();
++  int res = REAL(fstatat64)(fd, pathname, buf, flags);
++  if (!res)
++    __msan_unpoison(buf, __sanitizer::struct_stat64_sz);
++  return res;
++}
++#  define MSAN_MAYBE_INTERCEPT_FSTATAT64 MSAN_INTERCEPT_FUNC(fstatat64)
++#else
++#  define MSAN_MAYBE_INTERCEPT_FSTATAT64
++#endif
++
+ #if SANITIZER_GLIBC
+ INTERCEPTOR(int, __fxstatat, int magic, int fd, char *pathname, void *buf,
+             int flags) {
+@@ -1691,8 +1717,10 @@ void InitializeInterceptors() {
+   INTERCEPT_FUNCTION(gettimeofday);
+   MSAN_MAYBE_INTERCEPT_FCVT;
+   MSAN_MAYBE_INTERCEPT_FSTAT;
++  MSAN_MAYBE_INTERCEPT_FSTAT64;
+   MSAN_MAYBE_INTERCEPT___FXSTAT;
+   MSAN_MAYBE_INTERCEPT_FSTATAT;
++  MSAN_MAYBE_INTERCEPT_FSTATAT64;
+   MSAN_MAYBE_INTERCEPT___FXSTATAT;
+   MSAN_MAYBE_INTERCEPT___FXSTAT64;
+   MSAN_MAYBE_INTERCEPT___FXSTATAT64;
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc b/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
+index eeeeb1622ff5..18b023078441 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
+@@ -6941,6 +6941,23 @@ INTERCEPTOR(int, stat, const char *path, void *buf) {
+ #define INIT_STAT
+ #endif
+ 
++#if SANITIZER_INTERCEPT_STAT64
++INTERCEPTOR(int, stat64, const char *path, void *buf) {
++  void *ctx;
++  COMMON_INTERCEPTOR_ENTER(ctx, stat64, path, buf);
++  if (common_flags()->intercept_stat)
++    COMMON_INTERCEPTOR_READ_STRING(ctx, path, 0);
++  int res = REAL(stat64)(path, buf);
++  if (!res)
++    COMMON_INTERCEPTOR_WRITE_RANGE(ctx, buf, __sanitizer::struct_stat64_sz);
++  return res;
++}
++#define INIT_STAT64 COMMON_INTERCEPT_FUNCTION(stat64)
++#else
++#define INIT_STAT64
++#endif
++
++
+ #if SANITIZER_INTERCEPT_LSTAT
+ INTERCEPTOR(int, lstat, const char *path, void *buf) {
+   void *ctx;
+@@ -6957,6 +6974,22 @@ INTERCEPTOR(int, lstat, const char *path, void *buf) {
+ #define INIT_LSTAT
+ #endif
+ 
++#if SANITIZER_INTERCEPT_STAT64
++INTERCEPTOR(int, lstat64, const char *path, void *buf) {
++  void *ctx;
++  COMMON_INTERCEPTOR_ENTER(ctx, lstat64, path, buf);
++  if (common_flags()->intercept_stat)
++    COMMON_INTERCEPTOR_READ_STRING(ctx, path, 0);
++  int res = REAL(lstat64)(path, buf);
++  if (!res)
++    COMMON_INTERCEPTOR_WRITE_RANGE(ctx, buf, __sanitizer::struct_stat64_sz);
++  return res;
++}
++#define INIT_LSTAT64 COMMON_INTERCEPT_FUNCTION(lstat64)
++#else
++#define INIT_LSTAT64
++#endif
++
+ #if SANITIZER_INTERCEPT___XSTAT
+ INTERCEPTOR(int, __xstat, int version, const char *path, void *buf) {
+   void *ctx;
+@@ -10516,8 +10549,10 @@ static void InitializeCommonInterceptors() {
+   INIT_RECV_RECVFROM;
+   INIT_SEND_SENDTO;
+   INIT_STAT;
++  INIT_STAT64;
+   INIT_EVENTFD_READ_WRITE;
+   INIT_LSTAT;
++  INIT_LSTAT64;
+   INIT___XSTAT;
+   INIT___XSTAT64;
+   INIT___LXSTAT;
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_platform_interceptors.h b/compiler-rt/lib/sanitizer_common/sanitizer_platform_interceptors.h
+index 14610f2df78d..4c9677d20c08 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_platform_interceptors.h
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_platform_interceptors.h
+@@ -465,6 +465,7 @@
+ #define SANITIZER_INTERCEPT_STAT                                        \
+   (SI_FREEBSD || SI_MAC || SI_ANDROID || SI_NETBSD || SI_SOLARIS ||     \
+    SI_STAT_LINUX)
++#define SANITIZER_INTERCEPT_STAT64 SI_STAT_LINUX
+ #define SANITIZER_INTERCEPT_LSTAT (SI_NETBSD || SI_FREEBSD || SI_STAT_LINUX)
+ #define SANITIZER_INTERCEPT___XSTAT \
+   ((!SANITIZER_INTERCEPT_STAT && SI_POSIX) || SI_STAT_LINUX)
+diff --git a/compiler-rt/test/msan/fstat64.cpp b/compiler-rt/test/msan/fstat64.cpp
+new file mode 100644
+index 000000000000..8e3a6d553bfc
+--- /dev/null
++++ b/compiler-rt/test/msan/fstat64.cpp
+@@ -0,0 +1,16 @@
++// REQUIRES: linux
++// RUN: %clangxx_msan -O0 %s -o %t && %run %t
++
++#include <stdlib.h>
++#include <sys/stat.h>
++
++int main(void) {
++  struct stat64 st;
++  if (fstat64(0, &st))
++    exit(1);
++
++  if (S_ISBLK(st.st_mode))
++    exit(0);
++
++  return 0;
++}
+diff --git a/compiler-rt/test/msan/fstatat64.cpp b/compiler-rt/test/msan/fstatat64.cpp
+new file mode 100644
+index 000000000000..253299c45669
+--- /dev/null
++++ b/compiler-rt/test/msan/fstatat64.cpp
+@@ -0,0 +1,18 @@
++// REQUIRES: linux
++// RUN: %clangxx_msan -O0 %s -o %t && %run %t
++
++#include <cassert>
++#include <cstdlib>
++#include <fcntl.h>
++#include <sys/stat.h>
++
++int main(void) {
++  struct stat64 st;
++  int dirfd = open("/dev", O_RDONLY);
++  if (fstatat64(dirfd, "null", &st, 0))
++    exit(1);
++
++  assert(S_ISCHR(st.st_mode));
++
++  return 0;
++}
+diff --git a/compiler-rt/test/msan/stat64.cpp b/compiler-rt/test/msan/stat64.cpp
+new file mode 100644
+index 000000000000..a1280a0de37d
+--- /dev/null
++++ b/compiler-rt/test/msan/stat64.cpp
+@@ -0,0 +1,16 @@
++// REQUIRES: linux
++// RUN: %clangxx_msan -O0 %s -o %t && %run %t
++
++#include <cassert>
++#include <cstdlib>
++#include <sys/stat.h>
++
++int main(void) {
++  struct stat64 st;
++  if (stat64("/dev/null", &st))
++    exit(1);
++
++  assert(S_ISCHR(st.st_mode));
++
++  return 0;
++}
+diff --git a/compiler-rt/test/sanitizer_common/TestCases/Posix/lstat64.cpp b/compiler-rt/test/sanitizer_common/TestCases/Posix/lstat64.cpp
+new file mode 100644
+index 000000000000..22ab3068274e
+--- /dev/null
++++ b/compiler-rt/test/sanitizer_common/TestCases/Posix/lstat64.cpp
+@@ -0,0 +1,19 @@
++// REQUIRES: linux
++// RUN: %clangxx -O0 -g %s -o %t && %run %t
++
++#include <assert.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++
++int main(void) {
++  struct stat64 st;
++
++  assert(!lstat64("/dev/null", &st));
++#if defined(__sun__) && defined(__svr4__)
++  assert(S_ISLNK(st.st_mode));
++#else
++  assert(S_ISCHR(st.st_mode));
++#endif
++
++  return 0;
++}

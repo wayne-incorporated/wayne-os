@@ -1,0 +1,30 @@
+From d8b8911d58dba73fd7a28210d8d3e780ae881179 Mon Sep 17 00:00:00 2001
+From: Julian Lettner <julian.lettner@apple.com>
+Date: Thu, 23 Feb 2023 18:12:52 -0800
+Subject: [PATCH] Revert "[Darwin] Apply workaround to make symbolication in
+ iOS simulators work"
+
+This reverts commit ebd8eee62a431a6744c3f187fcda58e5dea08499.
+---
+ compiler-rt/test/sanitizer_common/ios_commands/iossim_run.py | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/compiler-rt/test/sanitizer_common/ios_commands/iossim_run.py b/compiler-rt/test/sanitizer_common/ios_commands/iossim_run.py
+index 47e7048f96e4..da61c024968a 100755
+--- a/compiler-rt/test/sanitizer_common/ios_commands/iossim_run.py
++++ b/compiler-rt/test/sanitizer_common/ios_commands/iossim_run.py
+@@ -22,11 +22,6 @@ for e in [
+   if e in os.environ:
+     os.environ["SIMCTL_CHILD_" + e] = os.environ[e]
+ 
+-find_atos_cmd = 'xcrun -sdk iphonesimulator -f atos'
+-atos_path = subprocess.run(find_atos_cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.decode().strip()
+-for san in ['ASAN', 'TSAN', 'UBSAN', 'LSAN']:
+-  os.environ[f'SIMCTL_CHILD_{san}_SYMBOLIZER_PATH'] = atos_path
+-
+ prog = sys.argv[1]
+ exit_code = None
+ if prog == 'rm':
+-- 
+2.40.0.348.gf938b09366-goog
+

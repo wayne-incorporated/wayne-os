@@ -1,0 +1,139 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":bootlockboxd",
+    ":bootlockboxtool",
+    ":install_minijail_conf",
+    ":install_policy",
+    ":install_systemd",
+    ":install_tmpfiles_config",
+  ]
+  if (use.test) {
+    deps += [ ":boot_lockbox_test" ]
+  }
+  if (!use.systemd) {
+    deps += [ ":install_init" ]
+  }
+}
+
+install_config("install_systemd") {
+  sources = [ "org.chromium.BootLockbox.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+pkg_config("bootlockbox_dependent_config") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "system_api",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+  libs = [ "hwsec" ]
+}
+
+# Main programs.
+executable("bootlockboxtool") {
+  install_path = "/usr/sbin"
+
+  sources = [ "boot_lockbox_tool.cc" ]
+
+  all_dependent_configs = [ ":bootlockbox_dependent_config" ]
+  pkg_deps = [ "libbootlockbox-client" ]
+  deps = [ ":libnvram-boot-lockbox" ]
+}
+
+executable("bootlockboxd") {
+  install_path = "/usr/sbin"
+
+  sources = [
+    "boot_lockbox_dbus_adaptor.cc",
+    "boot_lockbox_service.cc",
+    "boot_lockboxd.cc",
+    "metrics.cc",
+  ]
+
+  all_dependent_configs = [ ":bootlockbox_dependent_config" ]
+  pkg_deps = [
+    "libmetrics",
+    "vboot_host",
+  ]
+  libs = [ "hwsec-profiling" ]
+  deps = [
+    ":bootlockbox-adaptors",
+    ":libnvram-boot-lockbox",
+  ]
+}
+
+if (use.test) {
+  executable("boot_lockbox_test") {
+    run_test = true
+    sources = [
+      "boot_lockbox_dbus_adaptor.cc",
+      "boot_lockbox_service_test.cc",
+      "fake_hwsec_space.cc",
+      "hwsec_space_impl_test.cc",
+      "nvram_boot_lockbox_test.cc",
+    ]
+    libs = [ "hwsec_test" ]
+    configs += [ "//common-mk:test" ]
+
+    all_dependent_configs = [ ":bootlockbox_dependent_config" ]
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+    ]
+    deps = [
+      ":libnvram-boot-lockbox",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+generate_dbus_adaptors("bootlockbox-adaptors") {
+  dbus_service_config = "dbus_adaptors/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/dbus_adaptors"
+  sources = [ "dbus_adaptors/org.chromium.BootLockboxInterface.xml" ]
+}
+
+static_library("libnvram-boot-lockbox") {
+  sources = [
+    "hwsec_space_impl.cc",
+    "nvram_boot_lockbox.cc",
+  ]
+  all_dependent_configs = [ ":bootlockbox_dependent_config" ]
+  pkg_deps = [ "libbootlockbox-client" ]
+  libs = [ "hwsec-foundation" ]
+}
+
+install_config("install_init") {
+  sources = [ "init/bootlockboxd.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "minijail/bootlockboxd.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_policy") {
+  _arch = getenv("ARCH")
+  sources = [ "seccomp/bootlockboxd-seccomp-${_arch}.policy" ]
+  install_path = "/usr/share/policy"
+
+  outputs = [ "bootlockboxd-seccomp.policy" ]
+}
+
+install_config("install_tmpfiles_config") {
+  sources = [ "tmpfiles.d/bootlockbox.conf" ]
+  install_path = "/usr/lib/tmpfiles.d"
+}

@@ -1,0 +1,99 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+# Library that provides core functionality for the cros_healthd daemon.
+pkg_config("libcros_healthd_pkg_deps") {
+  pkg_deps = [
+    "dbus-1",
+    "iioservice_ipc",
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "libmojo",
+    "mojo_service_manager",
+  ]
+}
+
+source_set("libcros_healthd") {
+  configs += [ ":libcros_healthd_pkg_deps" ]
+  deps = [
+    "events:libcros_healthd_events",
+    "fetchers:libcros_healthd_fetchers",
+    "network_diagnostics:libnetwork_diagnostics_adapter",
+    "routines:libdiag_routine",
+    "system:libcros_healthd_system",
+    "wilco_ec:libcros_healthd_wilco_ec",
+    "//diagnostics/base",
+    "//diagnostics/mojom/external:cros_healthd_internal",
+    "//diagnostics/mojom/external:network_diagnostics_mojo_bindings",
+    "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+  ]
+  sources = [
+    "cros_healthd_daemon.cc",
+    "cros_healthd_diagnostics_service.cc",
+    "cros_healthd_mojo_service.cc",
+    "cros_healthd_routine_factory_impl.cc",
+    "event_aggregator.cc",
+    "fetch_aggregator.cc",
+    "routine_adapter.cc",
+    "routine_parameter_fetcher.cc",
+  ]
+}
+
+executable("cros_healthd") {
+  sources = [ "main.cc" ]
+  configs += [ ":libcros_healthd_pkg_deps" ]
+  install_path = "bin"
+  assert_no_deps = [ "//diagnostics/cros_healthd/delegate/*" ]
+  deps = [
+    ":libcros_healthd",
+    "executor:libcros_healthd_executor",
+    "minijail:libcros_healthd_minijail",
+    "system:libcros_healthd_system",
+  ]
+}
+
+if (use.test) {
+  pkg_config("cros_healthd_test_pkg_deps") {
+    pkg_deps = [
+      "iioservice_ipc",
+      "libchrome",
+      "libchrome-test",
+      "mojo_service_manager",
+    ]
+  }
+
+  executable("cros_healthd_test") {
+    run_test = true
+    sources = [
+      "cros_healthd_diagnostics_service_test.cc",
+      "fake_cros_healthd_routine_factory.cc",
+      "routine_parameter_fetcher_test.cc",
+    ]
+    configs += [ ":cros_healthd_test_pkg_deps" ]
+    deps = [
+      ":libcros_healthd",
+      "//diagnostics/base",
+      "//diagnostics/base:healthd_testrunner",
+      "//diagnostics/base:test",
+      "//diagnostics/cros_healthd/delegate/fetchers:test",
+      "//diagnostics/cros_healthd/delegate/routines:test",
+      "//diagnostics/cros_healthd/delegate/utils:test",
+      "//diagnostics/cros_healthd/events:libcros_healthd_events_test",
+      "//diagnostics/cros_healthd/executor/utils:test",
+      "//diagnostics/cros_healthd/fetchers:libcros_healthd_fetchers_test",
+      "//diagnostics/cros_healthd/network:network_test",
+      "//diagnostics/cros_healthd/network_diagnostics:network_diagnostics_test",
+      "//diagnostics/cros_healthd/routines:libroutine_test_utils",
+      "//diagnostics/cros_healthd/routines:routine_test",
+      "//diagnostics/cros_healthd/system:libcros_healthd_system_test",
+      "//diagnostics/cros_healthd/system:libcros_healthd_system_test_utils",
+      "//diagnostics/cros_healthd/utils:libcros_healthd_utils_test",
+      "//diagnostics/cros_healthd/utils:libcros_healthd_utils_test_utils",
+      "//diagnostics/cros_healthd/wilco_ec:libcros_healthd_wilco_ec_test",
+    ]
+  }
+}

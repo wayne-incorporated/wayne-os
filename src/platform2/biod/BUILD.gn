@@ -1,0 +1,220 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":bio_crypto_init",
+    ":bio_fw_updater",
+    ":bio_wash",
+    ":biod",
+    ":biod_client_tool",
+    ":install_init",
+    ":install_policy",
+    ":install_systemd",
+    ":libbiod",
+  ]
+  if (use.test) {
+    deps += [ ":biod_test_runner" ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":biod_crypto_validation_value_fuzzer",
+      ":biod_storage_fuzzer",
+    ]
+  }
+}
+
+pkg_config("target_defaults") {
+  # TODO(crbug.com/993557): Remove |fp_on_power_button| USE flag when nocturne
+  # is EOL.
+  if (use.fp_on_power_button) {
+    defines = [ "FP_ON_POWER_BUTTON" ]
+  }
+
+  # NOSORT
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libcros_config",
+    "libec",
+    "libmetrics",
+    "libpower_manager-client",
+    "fmap",
+    "openssl",
+
+    # system_api depends on protobuf (or protobuf-lite). It must appear
+    # before protobuf here or the linker flags won't be in the right
+    # order.
+    "system_api",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+static_library("libbiod") {
+  sources = [
+    "biod_config.cc",
+    "biod_crypto.cc",
+    "biod_metrics.cc",
+    "biod_storage.cc",
+    "biod_system.cc",
+    "biometrics_daemon.cc",
+    "biometrics_manager_wrapper.cc",
+    "cros_fp_auth_stack_manager.cc",
+    "cros_fp_biometrics_manager.cc",
+    "cros_fp_device.cc",
+    "cros_fp_firmware.cc",
+    "cros_fp_record_manager.cc",
+    "crypto_init/bio_crypto_init.cc",
+    "power_button_filter.cc",
+    "power_manager_client.cc",
+    "session_state_manager.cc",
+    "uinput_device.cc",
+    "updater/cros_fp_updater.cc",
+    "updater/update_utils.cc",
+    "utils.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  pkg_deps = [ "vboot_host" ]
+}
+
+static_library("fake_libbiod") {
+  sources = [ "fake_power_manager_client.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("biod") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libbiod" ]
+}
+
+executable("bio_crypto_init") {
+  sources = [
+    "crypto_init/bio_crypto_init.cc",
+    "tools/bio_crypto_init_main.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libbiod" ]
+}
+
+executable("bio_wash") {
+  sources = [ "tools/bio_wash.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libbiod" ]
+}
+
+executable("biod_client_tool") {
+  sources = [ "tools/biod_client_tool.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "/usr/local/bin"
+  libs = [ "biod_proxy" ]
+}
+
+executable("bio_fw_updater") {
+  sources = [ "tools/bio_fw_updater.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "sbin"
+  deps = [ ":libbiod" ]
+}
+
+install_config("install_policy") {
+  _seccomp_src_dir = "init/seccomp"
+  _arch = getenv("ARCH")
+  sources = [
+    "${_seccomp_src_dir}/bio-crypto-init-seccomp-${_arch}.policy",
+    "${_seccomp_src_dir}/biod-seccomp-${_arch}.policy",
+  ]
+  install_path = "/usr/share/policy"
+  outputs = [
+    "bio-crypto-init-seccomp.policy",
+    "biod-seccomp.policy",
+  ]
+}
+
+install_config("install_init") {
+  sources = [
+    "init/bio_crypto_init.conf",
+    "init/biod.conf",
+  ]
+  install_path = "/etc/init"
+}
+
+install_config("install_systemd") {
+  sources = [ "dbus/org.chromium.BiometricsDaemon.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+if (use.test) {
+  pkg_config("libchrome_test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+  executable("biod_test_runner") {
+    sources = [
+      "biod_config_test.cc",
+      "biod_crypto_test.cc",
+      "biod_metrics_test.cc",
+      "biod_storage_test.cc",
+      "biod_system_test.cc",
+      "biometrics_manager_wrapper_test.cc",
+      "cros_fp_auth_stack_manager_test.cc",
+      "cros_fp_biometrics_manager_test.cc",
+      "cros_fp_device_test.cc",
+      "cros_fp_firmware_test.cc",
+      "cros_fp_record_manager_test.cc",
+      "crypto_init/bio_crypto_init_test.cc",
+      "power_button_filter_test.cc",
+      "power_manager_client_test.cc",
+      "session_state_manager_test.cc",
+      "session_test.cc",
+      "updater/cros_fp_updater_test.cc",
+      "updater/update_utils_test.cc",
+      "utils_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":libchrome_test_config",
+      ":target_defaults",
+    ]
+    run_test = true
+    deps = [
+      ":fake_libbiod",
+      ":libbiod",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [ "dbus-1" ]
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("libchrome_test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+  executable("biod_storage_fuzzer") {
+    sources = [ "biod_storage_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":libchrome_test_config",
+      ":target_defaults",
+    ]
+    deps = [ ":libbiod" ]
+  }
+  executable("biod_crypto_validation_value_fuzzer") {
+    sources = [ "biod_crypto_validation_value_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":libchrome_test_config",
+      ":target_defaults",
+    ]
+    deps = [ ":libbiod" ]
+  }
+}

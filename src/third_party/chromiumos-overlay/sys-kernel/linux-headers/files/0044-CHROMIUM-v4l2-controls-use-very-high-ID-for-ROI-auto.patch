@@ -1,0 +1,48 @@
+From d4c499c54ab8964beabed5cad377ba398b71a8f4 Mon Sep 17 00:00:00 2001
+From: Sergey Senozhatsky <senozhatsky@chromium.org>
+Date: Thu, 24 Jun 2021 11:47:32 +0900
+Subject: [PATCH] CHROMIUM: v4l2-controls: use very high ID for ROI
+ auto-controls
+
+UVC 1.5 ROI patches did not go into upstream, so new V4L2_CIDs can
+be added, which will cause ID collision on our side. In fact, this
+has happened already on v5.10, where `V4L2_CID_CAMERA_CLASS_BASE+34`
+is being used for camera orientation CID.
+
+Allocate V4L2_CID_REGION_OF_INTEREST_AUTO a very high ID.
+
+BUG=b:186835892
+TEST=tested ROI (v4l2-ctl) on hatch
+
+Signed-off-by: Sergey Senozhatsky <senozhatsky@chromium.org>
+Change-Id: I04578c3cfac20d5656d16f7f25ef246f73b2dcc8
+---
+ include/uapi/linux/v4l2-controls.h | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/include/uapi/linux/v4l2-controls.h b/include/uapi/linux/v4l2-controls.h
+index d1d37f3b7be9..f76d2d8e69ba 100644
+--- a/include/uapi/linux/v4l2-controls.h
++++ b/include/uapi/linux/v4l2-controls.h
+@@ -894,7 +894,17 @@ enum v4l2_auto_focus_range {
+ 
+ #define V4L2_CID_PAN_SPEED			(V4L2_CID_CAMERA_CLASS_BASE+32)
+ #define V4L2_CID_TILT_SPEED			(V4L2_CID_CAMERA_CLASS_BASE+33)
+-#define V4L2_CID_REGION_OF_INTEREST_AUTO	(V4L2_CID_CAMERA_CLASS_BASE+34)
++
++/*
++ * senozhatsky@ b:191930245
++ *
++ * These are FROMLIST defines. Use very high value to avoid collisions
++ * with upstream patches. Controls classes are USHRT_MAX apart from each
++ * other, but the lower 0x900 are not being used. This leaves us with the
++ * USHRT_MAX - 0x900 values. Use SHRT_MAX.
++ */
++#define V4L2_CID_REGION_OF_INTEREST_AUTO	\
++	(V4L2_CID_CAMERA_CLASS_BASE + SHRT_MAX)
+ #define V4L2_CID_REGION_OF_INTEREST_AUTO_EXPOSURE		(1 << 0)
+ #define V4L2_CID_REGION_OF_INTEREST_AUTO_IRIS			(1 << 1)
+ #define V4L2_CID_REGION_OF_INTEREST_AUTO_WHITE_BALANCE		(1 << 2)
+-- 
+2.31.0
+

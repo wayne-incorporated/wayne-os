@@ -1,0 +1,39 @@
+From 13522f542bef9e8675f67f76eaba581ca8625750 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 08:31:06 -0300
+Subject: [PATCH 075/163] nss: Suppress nss_module.c warning on clang
+
+---
+ nss/nss_module.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/nss/nss_module.c b/nss/nss_module.c
+index f00bbd9e1a..852dc991b4 100644
+--- a/nss/nss_module.c
++++ b/nss/nss_module.c
+@@ -33,6 +33,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sysdep.h>
++#include <libc-diag.h>
+ 
+ /* Suffix after .so of NSS service modules.  This is a bit of magic,
+    but we assume LIBNSS_FILES_SO looks like "libnss_files.so.2" and we
+@@ -40,8 +41,14 @@
+    except through the auto-generated lib-names.h and some static
+    pointer manipulation.  The "-1" accounts for the trailing NUL
+    included in the sizeof.  */
++
++/* clang issues an warning adding 'unsigned long' to a string does not append
++   to the string, however it is exactly what code means here.  */
++DIAG_PUSH_NEEDS_COMMENT_CLANG;
++DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wstring-plus-int");
+ static const char *const __nss_shlib_revision
+ 	= LIBNSS_FILES_SO + sizeof("libnss_files.so") - 1;
++DIAG_POP_NEEDS_COMMENT_CLANG;
+ 
+ /* A single-linked list used to implement a mapping from service names
+    to NSS modules.  (Most systems only use five or so modules, so a
+-- 
+2.37.2
+

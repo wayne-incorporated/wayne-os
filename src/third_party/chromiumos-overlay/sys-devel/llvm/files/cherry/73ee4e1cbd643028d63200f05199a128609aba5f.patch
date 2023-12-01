@@ -1,0 +1,83 @@
+From 73ee4e1cbd643028d63200f05199a128609aba5f Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Mon, 6 Dec 2021 11:11:19 -0800
+Subject: [PATCH] [clang][ARM] only check -mtp=cp15 for non-asm sources
+
+This diagnostic is really to highlight lack of support for hard thread
+pointers in post-RA instruction scheduling for non-armv6k+ targets;
+something that isn't run for assembler sources.
+
+Fixes: https://github.com/ClangBuiltLinux/linux/issues/1502
+Link: https://lore.kernel.org/all/814585495.6773.1636629846970@jenkins.jenkins/
+
+Reviewed By: ardb
+
+Differential Revision: https://reviews.llvm.org/D114124
+---
+ clang/lib/Driver/ToolChains/Arch/ARM.cpp | 7 ++++---
+ clang/lib/Driver/ToolChains/Arch/ARM.h   | 2 +-
+ clang/test/Driver/clang-translation.c    | 4 ++++
+ 3 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.cpp b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+index e03bed0a6de6..4013cf230026 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.cpp
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+@@ -159,14 +159,15 @@ bool arm::isHardTPSupported(const llvm::Triple &Triple) {
+ 
+ // Select mode for reading thread pointer (-mtp=soft/cp15).
+ arm::ReadTPMode arm::getReadTPMode(const Driver &D, const ArgList &Args,
+-                                   const llvm::Triple &Triple) {
++                                   const llvm::Triple &Triple, bool ForAS) {
+   if (Arg *A = Args.getLastArg(options::OPT_mtp_mode_EQ)) {
+     arm::ReadTPMode ThreadPointer =
+         llvm::StringSwitch<arm::ReadTPMode>(A->getValue())
+             .Case("cp15", ReadTPMode::Cp15)
+             .Case("soft", ReadTPMode::Soft)
+             .Default(ReadTPMode::Invalid);
+-    if (ThreadPointer == ReadTPMode::Cp15 && !isHardTPSupported(Triple)) {
++    if (ThreadPointer == ReadTPMode::Cp15 && !isHardTPSupported(Triple) &&
++        !ForAS) {
+       D.Diag(diag::err_target_unsupported_tp_hard) << Triple.getArchName();
+       return ReadTPMode::Invalid;
+     }
+@@ -488,7 +489,7 @@ void arm::getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
+     }
+   }
+ 
+-  if (getReadTPMode(D, Args, Triple) == ReadTPMode::Cp15)
++  if (getReadTPMode(D, Args, Triple, ForAS) == ReadTPMode::Cp15)
+     Features.push_back("+read-tp-hard");
+ 
+   const Arg *ArchArg = Args.getLastArg(options::OPT_march_EQ);
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.h b/clang/lib/Driver/ToolChains/Arch/ARM.h
+index fc5b8c87bef9..881b63bd36b9 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.h
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.h
+@@ -55,7 +55,7 @@ void setFloatABIInTriple(const Driver &D, const llvm::opt::ArgList &Args,
+                          llvm::Triple &triple);
+ bool isHardTPSupported(const llvm::Triple &Triple);
+ ReadTPMode getReadTPMode(const Driver &D, const llvm::opt::ArgList &Args,
+-                         const llvm::Triple &Triple);
++                         const llvm::Triple &Triple, bool ForAS);
+ void setArchNameInTriple(const Driver &D, const llvm::opt::ArgList &Args,
+                          types::ID InputType, llvm::Triple &Triple);
+ 
+diff --git a/clang/test/Driver/clang-translation.c b/clang/test/Driver/clang-translation.c
+index 32dd43b8352f..7d24d4c9d51c 100644
+--- a/clang/test/Driver/clang-translation.c
++++ b/clang/test/Driver/clang-translation.c
+@@ -126,6 +126,10 @@
+ // RUN: FileCheck -check-prefix=ARM_THREAD_POINTER-HARD %s
+ // ARM_THREAD_POINTER-HARD: "-target-feature" "+read-tp-hard"
+ 
++// RUN: %clang -target armv5t-linux -mtp=cp15 -x assembler -### %s 2>&1 | \
++// RUN: FileCheck -check-prefix=ARMv5_THREAD_POINTER_ASSEMBLER %s
++// ARMv5_THREAD_POINTER_ASSEMBLER-NOT: hardware TLS register is not supported for the armv5 sub-architecture
++
+ // RUN: %clang -target armv6-linux -mthumb -mtp=cp15 -### -S %s 2>&1 | \
+ // RUN: FileCheck -check-prefix=THUMBv6_THREAD_POINTER_UNSUPP %s
+ // RUN: %clang -target thumbv6-linux -mthumb -mtp=cp15 -### -S %s 2>&1 | \
+-- 
+2.35.1.265.g69c8d7142f-goog
+

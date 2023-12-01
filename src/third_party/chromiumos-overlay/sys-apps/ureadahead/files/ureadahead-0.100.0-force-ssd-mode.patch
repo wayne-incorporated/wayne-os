@@ -1,0 +1,208 @@
+Author: Alan Ding <alanding@google.com>
+Date:   Tue May 18 15:21:14 2021 -0700
+
+    ureadahead: Add --force-ssd-mode option for vms
+    
+    Adds command line option: --force-ssd-mode (off by default).
+    Querying sysfs to detect whether disk is rotational does not work for
+    virtual devices in vm, and if set will write pack header with rotational
+    field set to 0. This option will remove running unnecessary code
+    intended for hdd; any attempts to set highest priority (IOPRIO_CLASS_RT)
+    requiring CAP_SYS_ADMIN capability which ARCVM SELinux will deny.
+    
+    There is no functional effect if option is not used.
+
+diff --git a/src/trace.c b/src/trace.c
+index 854a570..f337f0a 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -92,13 +92,13 @@ static int       read_trace        (const void *parent,
+ 				    int dfd, const char *path,
+ 				    const char *path_prefix_filter,
+ 				    const PathPrefixOption *path_prefix,
+-				    PackFile **files, size_t *num_files);
++				    PackFile **files, size_t *num_files, int force_ssd_mode);
+ static void      fix_path          (char *pathname);
+ static int       trace_add_path    (const void *parent, const char *pathname,
+-				    PackFile **files, size_t *num_files);
++				    PackFile **files, size_t *num_files, int force_ssd_mode);
+ static int       ignore_path       (const char *pathname);
+ static PackFile *trace_file        (const void *parent, dev_t dev,
+-				    PackFile **files, size_t *num_files);
++				    PackFile **files, size_t *num_files, int force_ssd_mode);
+ static int       trace_add_chunks  (const void *parent,
+ 				    PackFile *file, PackPath *path,
+ 				    int fd, off_t size);
+@@ -123,7 +123,8 @@ trace (int daemonise,
+        const char *pack_file,
+        const char *path_prefix_filter,
+        const PathPrefixOption *path_prefix,
+-       int debug_tracing)
++       int debug_tracing,
++	   int force_ssd_mode)
+ {
+ 	int                 dfd;
+ 	FILE                *fp;
+@@ -262,7 +263,7 @@ trace (int daemonise,
+ 
+ 	/* Read trace log */
+ 	if (read_trace (NULL, dfd, "trace", path_prefix_filter, path_prefix,
+-			&files, &num_files) < 0)
++			&files, &num_files, force_ssd_mode) < 0)
+ 		goto error;
+ 
+ 	/*
+@@ -349,7 +350,8 @@ read_trace (const void *parent,
+ 	    const char *path_prefix_filter,  /* May be null */
+ 	    const PathPrefixOption *path_prefix,
+ 	    PackFile ** files,
+-	    size_t *    num_files)
++	    size_t *    num_files,
++		int         force_ssd_mode)
+ {
+ 	int   fd;
+ 	FILE *fp;
+@@ -423,7 +425,7 @@ read_trace (const void *parent,
+ 				ptr = rewritten;
+ 			}
+ 		}
+-		trace_add_path (parent, ptr, files, num_files);
++		trace_add_path (parent, ptr, files, num_files, force_ssd_mode);
+ 
+ 		nih_free (line);  /* also frees |rewritten| */
+ 	}
+@@ -486,7 +488,8 @@ static int
+ trace_add_path (const void *parent,
+ 		const char *pathname,
+ 		PackFile ** files,
+-		size_t *    num_files)
++		size_t *    num_files,
++		int         force_ssd_mode)
+ {
+ 	static NihHash *path_hash = NULL;
+ 	struct stat     statbuf;
+@@ -580,7 +583,7 @@ trace_add_path (const void *parent,
+ 	 * Lookup file based on the dev_t, potentially creating a new
+ 	 * pack file in the array.
+ 	 */
+-	file = trace_file (parent, statbuf.st_dev, files, num_files);
++	file = trace_file (parent, statbuf.st_dev, files, num_files, force_ssd_mode);
+ 
+ 	/* Grow the PackPath array and fill in the details for the new
+ 	 * path.
+@@ -670,7 +673,8 @@ static PackFile *
+ trace_file (const void *parent,
+ 	    dev_t       dev,
+ 	    PackFile ** files,
+-	    size_t *    num_files)
++	    size_t *    num_files,
++		int         force_ssd_mode)
+ {
+ 	nih_local char *filename = NULL;
+ 	int             rotational;
+@@ -684,30 +688,34 @@ trace_file (const void *parent,
+ 		if ((*files)[i].dev == dev)
+ 			return &(*files)[i];
+ 
+-	/* Query sysfs to see whether this disk is rotational; this
+-	 * obviously won't work for virtual devices and the like, so
+-	 * default to TRUE for now.
+-	 */
+-	filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
+-					  major (dev), minor (dev)));
+-	if (access (filename, R_OK) < 0) {
+-		/* For devices managed by the scsi stack, the minor device number has to be
+-		 * masked to find the queue/rotational file.
++	if (force_ssd_mode) {
++		rotational = FALSE;
++	} else {
++		/* Query sysfs to see whether this disk is rotational; this
++		 * obviously won't work for virtual devices and the like, so
++		 * default to TRUE for now.
+ 		 */
+-		nih_free (filename);
+ 		filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
+-						  major (dev), minor (dev) & 0xffff0));
+-	}
++						major (dev), minor (dev)));
++		if (access (filename, R_OK) < 0) {
++			/* For devices managed by the scsi stack, the minor device number has to be
++			 * masked to find the queue/rotational file.
++			 */
++			nih_free (filename);
++			filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
++							major (dev), minor (dev) & 0xffff0));
++		}
+ 
+-	if (get_value (AT_FDCWD, filename, &rotational) < 0) {
+-		NihError *err;
++		if (get_value (AT_FDCWD, filename, &rotational) < 0) {
++			NihError *err;
+ 
+-		err = nih_error_get ();
+-		nih_warn (_("Unable to obtain rotationalness for device %u:%u: %s"),
+-			  major (dev), minor (dev), err->message);
+-		nih_free (err);
++			err = nih_error_get ();
++			nih_warn (_("Unable to obtain rotationalness for device %u:%u: %s"),
++				major (dev), minor (dev), err->message);
++			nih_free (err);
+ 
+-		rotational = TRUE;
++			rotational = TRUE;
++		}
+ 	}
+ 
+ 	/* Grow the PackFile array and fill in the details for the new
+diff --git a/src/trace.h b/src/trace.h
+index f809cc6..8d60b0a 100644
+--- a/src/trace.h
++++ b/src/trace.h
+@@ -38,7 +38,8 @@ int trace (int daemonise, int timeout,
+            const char *pack_file,  /* May be null */
+            const char *path_prefix_filter,  /* May be null */
+            const PathPrefixOption *path_prefix,
+-           int debug_tracing);
++           int debug_tracing,
++           int force_ssd_mode);
+ 
+ NIH_END_EXTERN
+ 
+diff --git a/src/ureadahead.c b/src/ureadahead.c
+index d1bf5a1..61130d4 100644
+--- a/src/ureadahead.c
++++ b/src/ureadahead.c
+@@ -118,6 +118,14 @@ static char *path_prefix_filter = NULL;
+  */
+ static int no_debug_tracing = FALSE;
+ 
++/**
++ * force_ssd_mode:
++ *
++ * Querying sysfs to detect whether disk is rotational does not work for virtual
++ * devices in vm, this will write pack header with rotational field set to 0.
++ */
++static int force_ssd_mode = FALSE;
++
+ static int
+ path_prefix_option (NihOption  *option,
+                     const char *arg)
+@@ -221,6 +229,8 @@ static NihOption options[] = {
+ 	  NULL, "PACK_FILE", &pack_file, dup_string_handler },
+ 	{ 0, "no-debug-tracing", N_("do not enable debug tracing events"),
+ 	  NULL, NULL, &no_debug_tracing, NULL },
++	{ 0, "force-ssd-mode", N_("force ssd setting in pack file during tracing"),
++	  NULL, NULL, &force_ssd_mode, NULL },
+ 
+ 	NIH_OPTION_LAST
+ };
+@@ -311,7 +321,8 @@ main (int   argc,
+ 
+ 	/* Trace to generate new pack files */
+ 	if (trace (daemonise, timeout, filename, pack_file,
+-		   path_prefix_filter, &path_prefix, (no_debug_tracing == FALSE)) < 0) {
++		   path_prefix_filter, &path_prefix, (no_debug_tracing == FALSE),
++		   force_ssd_mode) < 0) {
+ 		NihError *err;
+ 
+ 		err = nih_error_get ();

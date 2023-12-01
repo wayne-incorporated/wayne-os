@@ -1,0 +1,31 @@
+From 62c5c7632a5b0c1fc1fb9cf1f4ba1ec6102807c5 Mon Sep 17 00:00:00 2001
+From: Gwendal Grignou <gwendal@gmail.com>
+Date: Tue, 12 Jul 2022 14:49:55 +0000
+Subject: [PATCH] test_option: Remove check for EOF
+
+Since NIH build output based on terminaal size, it is possible that
+a line is cut when the terminal is around 80 columns:
+On a wide terminal,
+"This is free software; see the source forcopying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+
+Is not split, one smaller one, it is split (warranty in my case).
+---
+ nih/tests/test_option.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/nih/tests/test_option.c b/nih/tests/test_option.c
+index aa5dfbe..71c529d 100644
+--- a/nih/tests/test_option.c
++++ b/nih/tests/test_option.c
+@@ -1592,7 +1592,6 @@ test_version (void)
+ 		TEST_FILE_EQ (output, "Copyright Message\n");
+ 		TEST_FILE_EQ (output, "\n");
+ 		TEST_FILE_EQ_N (output, "This is free software;");
+-		TEST_FILE_END (output);
+ 
+ 		fclose (output);
+ 	}
+-- 
+2.31.0
+

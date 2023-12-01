@@ -1,0 +1,39 @@
+From da2a16f702efe3307d407d5c6db6c8c18ef6bd9b Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Fri, 11 Feb 2022 15:23:18 -0800
+Subject: [PATCH] [tsan] Make __fxstat code path glibc only
+
+This fixes Linux musl build after D118423.
+---
+ compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp b/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
+index 999be79c6418..ea99c3843075 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
++++ b/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
+@@ -1554,16 +1554,16 @@ TSAN_INTERCEPTOR(int, __fxstat, int version, int fd, void *buf) {
+ #endif
+ 
+ TSAN_INTERCEPTOR(int, fstat, int fd, void *buf) {
+-#if SANITIZER_FREEBSD || SANITIZER_MAC || SANITIZER_ANDROID || SANITIZER_NETBSD
+-  SCOPED_TSAN_INTERCEPTOR(fstat, fd, buf);
++#if SANITIZER_GLIBC
++  SCOPED_TSAN_INTERCEPTOR(__fxstat, 0, fd, buf);
+   if (fd > 0)
+     FdAccess(thr, pc, fd);
+-  return REAL(fstat)(fd, buf);
++  return REAL(__fxstat)(0, fd, buf);
+ #else
+-  SCOPED_TSAN_INTERCEPTOR(__fxstat, 0, fd, buf);
++  SCOPED_TSAN_INTERCEPTOR(fstat, fd, buf);
+   if (fd > 0)
+     FdAccess(thr, pc, fd);
+-  return REAL(__fxstat)(0, fd, buf);
++  return REAL(fstat)(fd, buf);
+ #endif
+ }
+ 
+-- 
+2.35.1.723.g4982287a31-goog
+

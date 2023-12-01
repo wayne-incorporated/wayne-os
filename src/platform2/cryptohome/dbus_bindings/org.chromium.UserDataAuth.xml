@@ -1,0 +1,860 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+  Copyright 2019 The ChromiumOS Authors
+  Use of this source code is governed by a BSD-style license that can be
+  found in the LICENSE file.
+-->
+
+<!--
+  The object and interface defined in this file is used with the service name
+  "org.chromium.UserDataAuth"
+
+  This is the new interface for the cryptohome API interface refactor.
+
+  The protobufs specified in this file can be found in:
+  platform2/system_api/dbus/cryptohome/UserDataAuth.proto
+-->
+
+<!--
+  NOTE: If you update this file, remember to modify the dbus permission
+  configuration file as well, otherwise callers cannot access the new
+  methods.
+  See cryptohome/etc/org.chromium.UserDataAuth.conf.
+-->
+
+<!--
+TODO(b/126307305): We'll need to add documentations of what each methods in this file
+do.
+-->
+
+<node name="/org/chromium/UserDataAuth"
+      xmlns:tp="http://telepathy.freedesktop.org/wiki/DbusSpec#extensions-v0">
+
+
+  <interface name="org.chromium.UserDataAuthInterface">
+    <method name="IsMounted">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::IsMountedRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::IsMountedReply" />
+      </arg>
+    </method>
+
+    <method name="Unmount">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UnmountRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UnmountReply" />
+      </arg>
+    </method>
+
+    <method name="Remove">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::RemoveRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::RemoveReply" />
+      </arg>
+    </method>
+
+    <method name="ListKeys">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ListKeysRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ListKeysReply" />
+      </arg>
+    </method>
+
+    <method name="GetWebAuthnSecret">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetWebAuthnSecretRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetWebAuthnSecretReply" />
+      </arg>
+    </method>
+
+    <method name="GetWebAuthnSecretHash">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetWebAuthnSecretHashRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetWebAuthnSecretHashReply" />
+      </arg>
+    </method>
+
+    <method name="GetHibernateSecret">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetHibernateSecretRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetHibernateSecretReply" />
+      </arg>
+    </method>
+    <!-- This API provides information regarding encryption features
+         (such as Keylocker) currently in use in cryptohomed.
+         At the moment it is used by hibernate manager to determine
+         special treatments for hardware encryption features.
+    -->
+    <method name="GetEncryptionInfo">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetEncryptionInfoRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetEncryptionInfoReply" />
+      </arg>
+    </method>
+
+    <method name="StartMigrateToDircrypto">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::StartMigrateToDircryptoRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::StartMigrateToDircryptoReply" />
+      </arg>
+    </method>
+
+    <signal name="DircryptoMigrationProgress">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="status" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::DircryptoMigrationProgress" />
+      </arg>
+    </signal>
+
+    <method name="NeedsDircryptoMigration">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::NeedsDircryptoMigrationRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::NeedsDircryptoMigrationReply" />
+      </arg>
+    </method>
+
+    <method name="GetSupportedKeyPolicies">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetSupportedKeyPoliciesRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetSupportedKeyPoliciesReply" />
+      </arg>
+    </method>
+
+    <method name="GetAccountDiskUsage">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetAccountDiskUsageRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetAccountDiskUsageReply" />
+      </arg>
+    </method>
+
+    <!--This API will be used to call for start of an AuthSession.
+        TODO(crbug.com/1152113): This API is still a work in progress.
+         May be called asynchronously.  All arguments are protobufs:
+         request: StartAuthSessionRequest
+         reply: BaseReply with StartAuthSession
+    -->
+    <method name="StartAuthSession">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::StartAuthSessionRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::StartAuthSessionReply" />
+      </arg>
+    </method>
+
+    <method name="InvalidateAuthSession">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InvalidateAuthSessionRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InvalidateAuthSessionReply" />
+      </arg>
+    </method>
+
+    <method name="ExtendAuthSession">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ExtendAuthSessionRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ExtendAuthSessionReply" />
+      </arg>
+    </method>
+
+    <!--This API will be used to call for get status of an AuthSession.
+         May be called asynchronously.  All arguments are protobufs:
+         request: GetAuthSessionStatusRequest
+         reply: GetAuthSessionStatusReply
+    -->
+    <method name="GetAuthSessionStatus">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetAuthSessionStatusRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetAuthSessionStatusReply" />
+      </arg>
+    </method>
+
+    <!-- Creates an on-disk representation of a persistent user. -->
+    <method name="CreatePersistentUser">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::CreatePersistentUserRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::CreatePersistentUserReply"/>
+      </arg>
+
+    </method>
+    <method name="AuthenticateAuthFactor">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::AuthenticateAuthFactorRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::AuthenticateAuthFactorReply" />
+      </arg>
+    </method>
+
+    <!-- Prepares user datastore for a guest session. -->
+    <method name="PrepareGuestVault">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareGuestVaultRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareGuestVaultReply"/>
+      </arg>
+    </method>
+
+    <!-- Prepares user datastore for an ephemeral session. -->
+    <method name="PrepareEphemeralVault">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareEphemeralVaultRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareEphemeralVaultReply"/>
+      </arg>
+    </method>
+
+    <!-- Prepares user datastore for a persistent session. -->
+    <method name="PreparePersistentVault">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PreparePersistentVaultRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PreparePersistentVaultReply"/>
+      </arg>
+    </method>
+
+    <!-- Prepares user datastore for a migration. -->
+    <method name="PrepareVaultForMigration">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareVaultForMigrationRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareVaultForMigrationReply"/>
+      </arg>
+    </method>
+
+    <!-- Adds an auth factor for a user. -->
+    <method name="AddAuthFactor">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::AddAuthFactorRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::AddAuthFactorReply"/>
+      </arg>
+    </method>
+
+    <!-- Updates an existing auth factor, including its metadata and secret, for a user -->
+    <method name="UpdateAuthFactor">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UpdateAuthFactorRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UpdateAuthFactorReply"/>
+      </arg>
+    </method>
+
+    <!-- Updates an existing auth factor's metadata without new auth secrets, for a user -->
+    <method name="UpdateAuthFactorMetadata">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UpdateAuthFactorMetadataRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UpdateAuthFactorMetadataReply"/>
+      </arg>
+    </method>
+
+    <!-- Removes an auth factor for a user. -->
+    <method name="RemoveAuthFactor">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::RemoveAuthFactorRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::RemoveAuthFactorReply"/>
+      </arg>
+    </method>
+
+    <!-- Lists the available auth factors for a user. -->
+    <method name="ListAuthFactors">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ListAuthFactorsRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ListAuthFactorsReply"/>
+      </arg>
+    </method>
+
+    <!-- The request extracts AuthFactor specified by the label and
+    returns it along with optional extended information. -->
+    <method name="GetAuthFactorExtendedInfo">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetAuthFactorExtendedInfoRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetAuthFactorExtendedInfoReply"/>
+      </arg>
+    </method>
+
+    <!-- Prepare a specific asynchronous auth factor for an auth session. -->
+    <method name="PrepareAuthFactor">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareAuthFactorRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareAuthFactorReply"/>
+      </arg>
+    </method>
+
+    <!-- Terminate a specific asynchronous auth factor for an auth session. -->
+    <method name="TerminateAuthFactor">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::TerminateAuthFactorRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::TerminateAuthFactorReply"/>
+      </arg>
+    </method>
+
+    <!-- The request is intended to be sent to the recovery server. The server's
+         response can be used to authenticate against the recovery auth factor. -->
+    <method name="GetRecoveryRequest">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetRecoveryRequestRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetRecoveryRequestReply"/>
+      </arg>
+    </method>
+
+    <method name="ResetApplicationContainer">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg type="ay" name="request" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ResetApplicationContainerRequest" />
+      </arg>
+      <arg type="ay" name="reply" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::ResetApplicationContainerReply" />
+      </arg>
+    </method>
+
+    <!-- Create a VaultKeyset for legacy testing purposes. The functionality
+    is used from the cryptohome-test-tool CLI for testing only. -->
+    <method name="CreateVaultKeyset">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::CreateVaultKeysetRequest"/>
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::CreateVaultKeysetReply"/>
+      </arg>
+    </method>
+
+    <!-- Emitted to update the remaining time on an authfactor lockout time -->
+    <signal name="AuthFactorStatusUpdate">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="status" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::AuthFactorStatusUpdate" />
+      </arg>
+    </signal>
+
+    <!-- LowDiskSpace: Emitted when the system is running low on disk space
+                       for home directories. -->
+    <signal name="LowDiskSpace">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="status" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::LowDiskSpace" />
+      </arg>
+    </signal>
+
+    <!-- AuthScanResult: Emitted when a async auth factor such as
+         fingerprint has been detected. -->
+    <signal name="AuthScanResult">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="status" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::AuthScanResult" />
+      </arg>
+    </signal>
+
+    <!-- PrepareAuthFactorProgress: Emitted when AuthFactor preparation has
+         a new progress. -->
+    <signal name="PrepareAuthFactorProgress">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="status" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::PrepareAuthFactorProgress" />
+      </arg>
+    </signal>
+  </interface>
+
+  <interface name="org.chromium.ArcQuota">
+    <method name="GetArcDiskFeatures">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetArcDiskFeaturesRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetArcDiskFeaturesReply" />
+      </arg>
+    </method>
+    <method name="GetCurrentSpaceForArcUid">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetCurrentSpaceForArcUidRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetCurrentSpaceForArcUidReply" />
+      </arg>
+    </method>
+
+    <method name="GetCurrentSpaceForArcGid">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetCurrentSpaceForArcGidRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetCurrentSpaceForArcGidReply" />
+      </arg>
+    </method>
+
+    <method name="GetCurrentSpaceForArcProjectId">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetCurrentSpaceForArcProjectIdRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetCurrentSpaceForArcProjectIdReply" />
+      </arg>
+    </method>
+
+    <method name="SetMediaRWDataFileProjectId">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="fd" type="h" direction="in" />
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::SetMediaRWDataFileProjectIdRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::SetMediaRWDataFileProjectIdReply" />
+      </arg>
+    </method>
+
+    <method name="SetMediaRWDataFileProjectInheritanceFlag">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="fd" type="h" direction="in" />
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::SetMediaRWDataFileProjectInheritanceFlagRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::SetMediaRWDataFileProjectInheritanceFlagReply" />
+      </arg>
+    </method>
+  </interface>
+
+  <interface name="org.chromium.CryptohomePkcs11Interface">
+    <method name="Pkcs11IsTpmTokenReady">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11IsTpmTokenReadyRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11IsTpmTokenReadyReply" />
+      </arg>
+    </method>
+
+    <method name="Pkcs11GetTpmTokenInfo">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11GetTpmTokenInfoRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11GetTpmTokenInfoReply" />
+      </arg>
+    </method>
+
+    <method name="Pkcs11Terminate">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11TerminateRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11TerminateReply" />
+      </arg>
+    </method>
+    <method name="Pkcs11RestoreTpmTokens">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11RestoreTpmTokensRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::Pkcs11RestoreTpmTokensReply" />
+      </arg>
+    </method>
+  </interface>
+
+  <!-- Note that both install attributes and firmware management parameters are
+  grouped under this interface. -->
+  <interface name="org.chromium.InstallAttributesInterface">
+    <method name="InstallAttributesGet">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesGetRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesGetReply" />
+      </arg>
+    </method>
+
+    <method name="InstallAttributesSet">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesSetRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesSetReply" />
+      </arg>
+    </method>
+
+    <method name="InstallAttributesFinalize">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesFinalizeRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesFinalizeReply" />
+      </arg>
+    </method>
+
+    <method name="InstallAttributesGetStatus">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesGetStatusRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::InstallAttributesGetStatusReply" />
+      </arg>
+    </method>
+
+    <method name="GetFirmwareManagementParameters">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetFirmwareManagementParametersRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetFirmwareManagementParametersReply" />
+      </arg>
+    </method>
+
+    <method name="RemoveFirmwareManagementParameters">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::RemoveFirmwareManagementParametersRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::RemoveFirmwareManagementParametersReply" />
+      </arg>
+    </method>
+
+    <method name="SetFirmwareManagementParameters">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::SetFirmwareManagementParametersRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::SetFirmwareManagementParametersReply" />
+      </arg>
+    </method>
+  </interface>
+
+  <interface name="org.chromium.CryptohomeMiscInterface">
+    <method name="GetSystemSalt">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetSystemSaltRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetSystemSaltReply" />
+      </arg>
+    </method>
+
+    <method name="UpdateCurrentUserActivityTimestamp">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UpdateCurrentUserActivityTimestampRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::UpdateCurrentUserActivityTimestampReply" />
+      </arg>
+    </method>
+
+    <method name="GetSanitizedUsername">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetSanitizedUsernameRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetSanitizedUsernameReply" />
+      </arg>
+    </method>
+
+    <method name="GetLoginStatus">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <arg name="request" type="ay" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetLoginStatusRequest" />
+      </arg>
+      <arg name="reply" type="ay" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetLoginStatusReply" />
+      </arg>
+    </method>
+
+    <method name="LockToSingleUserMountUntilReboot">
+      <annotation name="org.chromium.DBus.Method.Kind"
+                  value="async"/>
+      <annotation name="org.freedesktop.DBus.GLib.Async" value="true"/>
+      <arg type="ay" name="request" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::LockToSingleUserMountUntilRebootRequest" />
+      </arg>
+      <arg type="ay" name="reply" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::LockToSingleUserMountUntilRebootReply" />
+      </arg>
+    </method>
+
+    <!-- Get the device id required for Remote Server unlock. -->
+    <method name="GetRsuDeviceId">
+      <annotation name="org.freedesktop.DBus.GLib.Async" value="true"/>
+      <arg type="ay" name="request" direction="in">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetRsuDeviceIdRequest" />
+      </arg>
+      <arg type="ay" name="reply" direction="out">
+        <annotation name="org.chromium.DBus.Argument.ProtobufClass"
+                    value="user_data_auth::GetRsuDeviceIdReply" />
+      </arg>
+    </method>
+  </interface>
+</node>

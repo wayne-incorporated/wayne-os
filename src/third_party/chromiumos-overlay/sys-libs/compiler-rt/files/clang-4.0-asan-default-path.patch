@@ -1,0 +1,14 @@
+By default, the ASAN message goes to STDERR. This causes problem if we cannot
+log the ASAN message, and we can not figure out why the ASAN check fails.
+This change set the ASAN message goes to /va/log/asan${pid} by default.
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_flags.inc
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_flags.inc
+@@ -48,7 +48,7 @@ COMMON_FLAG(bool, handle_ioctl, false, "Intercept and handle ioctl requests.")
+ COMMON_FLAG(int, malloc_context_size, 1,
+             "Max number of stack frames kept for each allocation/deallocation.")
+ COMMON_FLAG(
+-    const char *, log_path, "stderr",
++    const char *, log_path, "/var/log/asan/asan",
+     "Write logs to \"log_path.pid\". The special values are \"stdout\" and "
+     "\"stderr\". The default is \"stderr\".")
+ COMMON_FLAG(

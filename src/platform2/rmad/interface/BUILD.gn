@@ -1,0 +1,38 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "protobuf",
+    "re2",
+    "system_api",
+  ]
+}
+
+source_set("libinterface") {
+  sources = [ "rmad_interface_impl.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//rmad/metrics:libmetrics",
+    "//rmad/state_handler:libstate_handler",
+    "//rmad/system:libsystem",
+    "//rmad/udev:libudev",
+    "//rmad/utils:libutils",
+  ]
+}
+
+if (use.test) {
+  source_set("libinterface_test") {
+    sources = [ "rmad_interface_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [ ":libinterface" ]
+  }
+}

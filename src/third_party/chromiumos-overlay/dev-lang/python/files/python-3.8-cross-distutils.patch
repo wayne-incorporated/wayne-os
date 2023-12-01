@@ -1,0 +1,82 @@
+Extensions should be installed to the targets libdir. This is important if e.g. host
+has a 64bit /usr/lib64, but the target is 32bit and has $ROOT/usr/lib. Make sure we
+respect the target's lib structure by getting the libdir name from Makefile.
+
+--- a/Lib/distutils/command/build_ext.py
++++ b/Lib/distutils/command/build_ext.py
+@@ -234,7 +234,8 @@ class build_ext(Command):
+         if (sysconfig.get_config_var('Py_ENABLE_SHARED')):
+             if not sysconfig.python_build:
+                 # building third party extensions
+-                self.library_dirs.append(sysconfig.get_config_var('LIBDIR'))
++                sysroot = os.getenv('SYSROOT', '')
++                self.library_dirs.append(sysroot + sysconfig.get_config_var('LIBDIR'))
+             else:
+                 # building python standard extensions
+                 self.library_dirs.append('.')
+--- a/Lib/distutils/command/install.py
++++ b/Lib/distutils/command/install.py
+@@ -312,6 +312,8 @@ class install(Command):
+         # everything else.
+         self.config_vars['base'] = self.install_base
+         self.config_vars['platbase'] = self.install_platbase
++        if not self.user and self.home is None:
++            self.config_vars['libdirname'] = self.install_libdirname
+ 
+         if DEBUG:
+             from pprint import pprint
+@@ -427,6 +429,10 @@ class install(Command):
+ 
+             self.install_base = self.prefix
+             self.install_platbase = self.exec_prefix
++            self.install_libdirname = os.path.basename(get_config_vars('LIBDIR')[0])
++            if self.install_libdirname is None:
++                self.install_libdirname = '@@GENTOO_LIBDIR@@'
++
+             self.select_scheme("unix_prefix")
+ 
+     def finalize_other(self):
+--- a/Lib/distutils/sysconfig.py
++++ b/Lib/distutils/sysconfig.py
+@@ -10,6 +10,8 @@ Email:        <fdrake@acm.org>
+ """
+ 
+ import _imp
++import glob
++import imp
+ import os
+ import re
+ import sys
+@@ -18,11 +20,20 @@ from .errors import DistutilsPlatformError
+ from .util import get_platform, get_host_platform
+ 
+ # These are needed in a couple of spots, so just compute them once.
++SYSROOT = os.getenv('SYSROOT', '')
+ PREFIX = os.path.normpath(sys.prefix)
+ EXEC_PREFIX = os.path.normpath(sys.exec_prefix)
+ BASE_PREFIX = os.path.normpath(sys.base_prefix)
+ BASE_EXEC_PREFIX = os.path.normpath(sys.base_exec_prefix)
+ 
++# Make sure we respect the user specified SYSROOT environment variable.
++# This is the first step to get distutils to crosscompile stuff.
++if SYSROOT:
++    PREFIX = os.path.normpath(SYSROOT + os.path.sep + PREFIX)
++    EXEC_PREFIX = os.path.normpath(SYSROOT + os.path.sep + EXEC_PREFIX)
++    BASE_PREFIX = os.path.normpath(SYSROOT + os.path.sep + BASE_PREFIX)
++    BASE_EXEC_PREFIX = os.path.normpath(SYSROOT + os.path.sep + BASE_EXEC_PREFIX)
++
+ # Path to the base directory of the project. On Windows the binary may
+ # live in project/PCbuild/win32 or project/PCbuild/amd64.
+ # set for cross builds
+@@ -455,6 +466,11 @@ def _init_posix():
+     ))
+     _temp = __import__(name, globals(), locals(), ['build_time_vars'], 0)
+     build_time_vars = _temp.build_time_vars
++    lib_dir = get_python_lib(plat_specific=1, standard_lib=1)
++    sysconfig_path = glob.glob(os.path.join(lib_dir, '_sysconfigdata_*.py'))
++    if sysconfig_path:
++        sysconfig_module = imp.load_source('_sysconfigdata', sysconfig_path[0])
++        build_time_vars = sysconfig_module.build_time_vars
+     global _config_vars
+     _config_vars = {}
+     _config_vars.update(build_time_vars)

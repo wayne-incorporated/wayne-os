@@ -1,0 +1,27 @@
+From d89b55bf9a3f0d41b49b8d232a1697c249bcd8d9 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 26 Jul 2022 08:36:48 -0300
+Subject: [PATCH 096/163] assert: Replace atomic_exchange_acq with compiler
+ builtin
+
+---
+ assert/assert.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/assert/assert.c b/assert/assert.c
+index 133a183bc3..d04501b04e 100644
+--- a/assert/assert.c
++++ b/assert/assert.c
+@@ -74,7 +74,8 @@ __assert_fail_base (const char *fmt, const char *assertion, const char *file,
+ 
+ 	  /* We have to free the old buffer since the application might
+ 	     catch the SIGABRT signal.  */
+-	  struct abort_msg_s *old = atomic_exchange_acq (&__abort_msg, buf);
++	  struct abort_msg_s *old = atomic_exchange_acquire (&__abort_msg,
++							     buf);
+ 
+ 	  if (old != NULL)
+ 	    __munmap (old, old->size);
+-- 
+2.37.2
+

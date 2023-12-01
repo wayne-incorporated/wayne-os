@@ -1,0 +1,44 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [ ":mcastd" ]
+}
+
+proto_library("patchpanel_ipc_protos") {
+  proto_in_dir = ".."
+  proto_out_dir = "include/patchpanel"
+  sources = [ "${proto_in_dir}/ipc.proto" ]
+}
+
+executable("mcastd") {
+  sources = [
+    "../dns/big_endian.cc",
+    "../dns/dns_query.cc",
+    "../dns/dns_response.cc",
+    "../dns/dns_util.cc",
+    "../dns/io_buffer.cc",
+    "../multicast_forwarder.cc",
+    "../net_util.cc",
+    "../socket.cc",
+    "../system.cc",
+    "main.cc",
+  ]
+  cflags = [ "-Wconversion" ]
+  install_path = "bin"
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libnet-base",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+  deps = [ ":patchpanel_ipc_protos" ]
+}

@@ -1,0 +1,52 @@
+From d2ab6713338f9150a687c82482d76992de07bc9b Mon Sep 17 00:00:00 2001
+From: Mike Gerow <gerow@google.com>
+Date: Wed, 15 Jun 2022 16:06:20 -0700
+Subject: [PATCH 8/8] [crosvm] fix SMBIOS table entry for crosvm
+
+As with a lot of other cases, we do this by removing a conditional that
+previously detected the cloudhv case, which crosvm doesn't look like.
+b/236184260 is the bug tracking the fix for that.
+
+b/236175862
+
+Change-Id: I8564d0235f080d4ec984ea138edd0685edcc3ee3
+---
+ OvmfPkg/SmbiosPlatformDxe/EntryPoint.c | 20 ++++----------------
+ 1 file changed, 4 insertions(+), 16 deletions(-)
+
+diff --git a/OvmfPkg/SmbiosPlatformDxe/EntryPoint.c b/OvmfPkg/SmbiosPlatformDxe/EntryPoint.c
+index e55d135504..7e2e9909ec 100644
+--- a/OvmfPkg/SmbiosPlatformDxe/EntryPoint.c
++++ b/OvmfPkg/SmbiosPlatformDxe/EntryPoint.c
+@@ -28,24 +28,12 @@ SmbiosTablePublishEntry (
+ {
+   EFI_STATUS  Status;
+   UINT8       *SmbiosTables;
+-  UINT16      HostBridgeDevId;
+ 
++  // TODO(b/236184260): Add conditional back once we can reliably identify crosvm.
+   Status = EFI_NOT_FOUND;
+-  //
+-  // Add SMBIOS data if found
+-  //
+-  HostBridgeDevId = PcdGet16 (PcdOvmfHostBridgePciDevId);
+-  if (HostBridgeDevId == CLOUDHV_DEVICE_ID) {
+-    SmbiosTables = GetCloudHvSmbiosTables ();
+-    if (SmbiosTables != NULL) {
+-      Status = InstallAllStructures (SmbiosTables);
+-    }
+-  } else {
+-    SmbiosTables = GetQemuSmbiosTables ();
+-    if (SmbiosTables != NULL) {
+-      Status = InstallAllStructures (SmbiosTables);
+-      FreePool (SmbiosTables);
+-    }
++  SmbiosTables = GetCloudHvSmbiosTables ();
++  if (SmbiosTables != NULL) {
++    Status = InstallAllStructures (SmbiosTables);
+   }
+ 
+   return Status;
+-- 
+2.39.1.456.gfc5497dd1b-goog
+

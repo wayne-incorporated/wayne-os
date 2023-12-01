@@ -1,0 +1,83 @@
+From f2052e9e9c3d31163769d519405485264a9a9187 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 26 Jul 2022 10:35:10 -0300
+Subject: [PATCH 106/163] math: Suppress more aliases builtin type conflicts
+
+---
+ math/Makefile | 32 ++++++++++++++++++++++++++++----
+ 1 file changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/math/Makefile b/math/Makefile
+index 933d8f310c..6e5dcb686d 100644
+--- a/math/Makefile
++++ b/math/Makefile
+@@ -635,6 +635,30 @@ ifneq ($(long-double-fcts),yes)
+ math-CPPFLAGS += -DNO_LONG_DOUBLE
+ # GCC 10 diagnoses aliases with types conflicting with built-in
+ # functions.
++CFLAGS-carg.c += -fno-builtin-cargl
++CFLAGS-conj.c += -fno-builtin-conjl
++CFLAGS-cimag.c += -fno-builtin-cimagl
++CFLAGS-creal.c += -fno-builtin-creall
++CFLAGS-cabs.c += -fno-builtin-cabsl
++CFLAGS-w_acos_compat.c += -fno-builtin-acosl
++CFLAGS-w_asin_compat.c += -fno-builtin-asinl
++CFLAGS-w_acosh_compat.c += -fno-builtin-acoshl
++CFLAGS-w_atan2_compat.c += -fno-builtin-atan2l
++CFLAGS-w_atanh_compat.c += -fno-builtin-atanhl
++CFLAGS-w_cosh_compat.c += -fno-builtin-coshl
++CFLAGS-w_exp_compat.c += -fno-builtin-expl
++CFLAGS-w_exp2_compat.c += -fno-builtin-exp2l
++CFLAGS-w_fmod_compat.c += -fno-builtin-fmodl
++CFLAGS-w_hypot_compat.c += -fno-builtin-hypotl
++CFLAGS-w_log_compat.c += -fno-builtin-logl
++CFLAGS-w_log2_compat.c += -fno-builtin-log2l
++CFLAGS-w_log10_compat.c += -fno-builtin-log10l
++CFLAGS-w_pow_compat.c += -fno-builtin-powl
++CFLAGS-w_remainder_compat.c += -fno-builtin-remainderl
++CFLAGS-w_sinh_compat.c += -fno-builtin-sinhl
++CFLAGS-w_sqrt_compat.c += -fno-builtin-sqrtl
++CFLAGS-w_tgamma_compat.c += -fno-builtin-tgammal
++CFLAGS-e_hypot.c += -fno-builtin-hypotl
+ CFLAGS-w_acos.c += -fno-builtin-acosl
+ CFLAGS-w_acosh.c += -fno-builtin-acoshl
+ CFLAGS-w_asin.c += -fno-builtin-asinl
+@@ -677,7 +701,7 @@ CFLAGS-s_dfma.c += -fno-builtin-dfmal
+ CFLAGS-s_dmul.c += -fno-builtin-dmull
+ CFLAGS-s_dsqrt.c += -fno-builtin-dsqrtl
+ CFLAGS-s_dsub.c += -fno-builtin-dsubl
+-CFLAGS-s_erf.c += -fno-builtin-erfl
++CFLAGS-s_erf.c += -fno-builtin-erfl -fno-builtin-erfcl
+ CFLAGS-s_erfc.c += -fno-builtin-erfcl
+ CFLAGS-e_exp.c += -fno-builtin-expl
+ CFLAGS-w_exp10.c += -fno-builtin-exp10l
+@@ -719,7 +743,7 @@ CFLAGS-s_isnan.c += -fno-builtin-isnanl
+ CFLAGS-w_j0.c += -fno-builtin-j0l
+ CFLAGS-w_j1.c += -fno-builtin-j1l
+ CFLAGS-w_jn.c += -fno-builtin-jnl
+-CFLAGS-s_ldexp.c += -fno-builtin-ldexpl
++CFLAGS-s_ldexp.c += -fno-builtin-ldexpl -fno-builtin-scalbnl
+ CFLAGS-w_lgamma.c += -fno-builtin-lgammal
+ CFLAGS-w_lgamma_r.c += -fno-builtin-lgammal_r
+ CFLAGS-w_llogb.c += -fno-builtin-llogbl
+@@ -735,7 +759,7 @@ CFLAGS-s_lround.c += -fno-builtin-lroundl
+ CFLAGS-s_modf.c += -fno-builtin-modfl
+ CFLAGS-s_nan.c += -fno-builtin-nanl
+ CFLAGS-s_nearbyint.c += -fno-builtin-nearbyintl
+-CFLAGS-s_nextafter.c += -fno-builtin-nextafterl
++CFLAGS-s_nextafter.c += -fno-builtin-nextafterl -fno-builtin-nexttowardl -fno-builtin-nexttoward
+ CFLAGS-s_nextdown.c += -fno-builtin-nextdownl
+ CFLAGS-s_nexttoward.c += -fno-builtin-nexttoward -fno-builtin-nexttowardl
+ CFLAGS-s_nexttowardf.c += -fno-builtin-nexttowardf
+@@ -752,7 +776,7 @@ CFLAGS-s_scalbn.c += -fno-builtin-scalbnl
+ CFLAGS-s_setpayload.c += -fno-builtin-setpayloadl
+ CFLAGS-s_setpayloadsig.c += -fno-builtin-setpayloadsigl
+ CFLAGS-s_significand.c += -fno-builtin-significandl
+-CFLAGS-s_sin.c += -fno-builtin-sinl
++CFLAGS-s_sin.c += -fno-builtin-sinl -fno-builtin-cosl
+ CFLAGS-s_sincos.c += -fno-builtin-sincosl
+ CFLAGS-w_sinh.c += -fno-builtin-sinhl
+ CFLAGS-w_sqrt.c += -fno-builtin-sqrtl
+-- 
+2.37.2
+

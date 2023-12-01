@@ -1,0 +1,142 @@
+commit ba18bc4925d8cbd4a9354629617cbcafbbd48941
+Author: Christopher Di Bella <cjdb@google.com>
+Date:   Mon Nov 2 10:59:38 2020 -0800
+
+    [Sema] adds -Wfree-nonheap-object member var checks
+    
+    Checks to make sure that stdlib's (std::)free is being appropriately
+    used for member variables.
+    
+    Differential Revision: https://reviews.llvm.org/D90269
+
+diff --git a/clang/lib/Sema/SemaChecking.cpp b/clang/lib/Sema/SemaChecking.cpp
+index 3d5e2d70d8c..bad9b14c1fa 100644
+--- a/clang/lib/Sema/SemaChecking.cpp
++++ b/clang/lib/Sema/SemaChecking.cpp
+@@ -10107,19 +10107,9 @@ void Sema::CheckStrncatArguments(const CallExpr *CE,
+ }
+ 
+ namespace {
+-void CheckFreeArgumentsAddressof(Sema &S, const std::string &CalleeName,
+-                                 const UnaryOperator *UnaryExpr) {
+-  if (UnaryExpr->getOpcode() != UnaryOperator::Opcode::UO_AddrOf)
+-    return;
+-
+-  const auto *Lvalue = dyn_cast<DeclRefExpr>(UnaryExpr->getSubExpr());
+-  if (Lvalue == nullptr)
+-    return;
+-
+-  const auto *Var = dyn_cast<VarDecl>(Lvalue->getDecl());
+-  if (Var == nullptr)
+-    return;
+-
++void CheckFreeArgumentsOnLvalue(Sema &S, const std::string &CalleeName,
++                                const UnaryOperator *UnaryExpr,
++                                const VarDecl *Var) {
+   StorageClass Class = Var->getStorageClass();
+   if (Class == StorageClass::SC_Extern ||
+       Class == StorageClass::SC_PrivateExtern ||
+@@ -10130,6 +10120,27 @@ void CheckFreeArgumentsAddressof(Sema &S, const std::string &CalleeName,
+       << CalleeName << Var;
+ }
+ 
++void CheckFreeArgumentsOnLvalue(Sema &S, const std::string &CalleeName,
++                                const UnaryOperator *UnaryExpr, const Decl *D) {
++  if (const auto *Field = dyn_cast<FieldDecl>(D))
++    S.Diag(UnaryExpr->getBeginLoc(), diag::warn_free_nonheap_object)
++        << CalleeName << Field;
++}
++
++void CheckFreeArgumentsAddressof(Sema &S, const std::string &CalleeName,
++                                 const UnaryOperator *UnaryExpr) {
++  if (UnaryExpr->getOpcode() != UnaryOperator::Opcode::UO_AddrOf)
++    return;
++
++  if (const auto *Lvalue = dyn_cast<DeclRefExpr>(UnaryExpr->getSubExpr()))
++    if (const auto *Var = dyn_cast<VarDecl>(Lvalue->getDecl()))
++      return CheckFreeArgumentsOnLvalue(S, CalleeName, UnaryExpr, Var);
++
++  if (const auto *Lvalue = dyn_cast<MemberExpr>(UnaryExpr->getSubExpr()))
++    return CheckFreeArgumentsOnLvalue(S, CalleeName, UnaryExpr,
++                                      Lvalue->getMemberDecl());
++}
++
+ void CheckFreeArgumentsStackArray(Sema &S, const std::string &CalleeName,
+                                   const DeclRefExpr *Lvalue) {
+   if (!Lvalue->getType()->isArrayType())
+diff --git a/clang/test/Sema/warn-free-nonheap-object.c b/clang/test/Sema/warn-free-nonheap-object.c
+index e149e834957..1618a559b43 100644
+--- a/clang/test/Sema/warn-free-nonheap-object.c
++++ b/clang/test/Sema/warn-free-nonheap-object.c
+@@ -4,6 +4,11 @@ typedef __SIZE_TYPE__ size_t;
+ void *malloc(size_t);
+ void free(void *);
+ 
++struct S {
++  int I;
++  char *P;
++};
++
+ int GI;
+ void test() {
+   {
+@@ -31,4 +36,9 @@ void test() {
+     free(A);  // expected-warning {{attempt to call free on non-heap object 'A'}}
+     free(&A); // expected-warning {{attempt to call free on non-heap object 'A'}}
+   }
++  {
++    struct S s;
++    free(&s.I); // expected-warning {{attempt to call free on non-heap object 'I'}}
++    free(s.P);
++  }
+ }
+diff --git a/clang/test/Sema/warn-free-nonheap-object.cpp b/clang/test/Sema/warn-free-nonheap-object.cpp
+index 0578d9e9cd6..9347709a23c 100644
+--- a/clang/test/Sema/warn-free-nonheap-object.cpp
++++ b/clang/test/Sema/warn-free-nonheap-object.cpp
+@@ -13,10 +13,25 @@ int GI;
+ struct S {
+   operator char *() { return ptr; }
+ 
++  void CFree() {
++    ::free(&ptr); // expected-warning {{attempt to call free on non-heap object 'ptr'}}
++    ::free(&I);   // expected-warning {{attempt to call free on non-heap object 'I'}}
++    ::free(ptr);
++  }
++
++  void CXXFree() {
++    std::free(&ptr); // expected-warning {{attempt to call std::free on non-heap object 'ptr'}}
++    std::free(&I);   // expected-warning {{attempt to call std::free on non-heap object 'I'}}
++    std::free(ptr);
++  }
++
+ private:
+   char *ptr = (char *)std::malloc(10);
++  static int I;
+ };
+ 
++int S::I = 0;
++
+ void test1() {
+   {
+     free(&GI); // expected-warning {{attempt to call free on non-heap object 'GI'}}
+@@ -51,6 +66,10 @@ void test1() {
+     free(s);
+     free(&s); // expected-warning {{attempt to call free on non-heap object 's'}}
+   }
++  {
++    S s;
++    s.CFree();
++  }
+ }
+ 
+ void test2() {
+@@ -87,4 +106,8 @@ void test2() {
+     std::free(s);
+     std::free(&s); // expected-warning {{attempt to call std::free on non-heap object 's'}}
+   }
++  {
++    S s;
++    s.CXXFree();
++  }
+ }

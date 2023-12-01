@@ -1,0 +1,25 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+if (use.test) {
+  pkg_config("testrunner_config") {
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+      "libchrome-test",
+    ]
+  }
+
+  static_library("testrunner") {
+    sources = [ "../testrunner.cc" ]
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":testrunner_config",
+    ]
+  }
+}

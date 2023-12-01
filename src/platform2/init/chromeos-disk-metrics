@@ -1,0 +1,162 @@
+#!/bin/sh -u
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+. /usr/share/cros/disk_utils.sh
+. /usr/share/misc/storage-info-common.sh
+. /usr/share/misc/shflags
+
+DEFINE_boolean 'test' "${FLAGS_FALSE}" "For unit testing."
+
+# Parse command line.
+FLAGS "$@" || exit 1
+eval set -- "${FLAGS_ARGV}"
+
+# This file is used for userfeedback as well.
+STORAGE_INFO_FILE="/var/log/storage_info.txt"
+INVALID="-1"
+
+# Report disk health from SMART (S.M.A.R.T.) parameters.
+# usage:
+#   report_smart_metrics <uncorrectable-errors> <transfer-errors>
+#     <percentage-used> <available-reserved-space> <sectors-written>
+#     <sectors-read>
+report_smart_metrics() {
+  if [ -n "$1" ]; then
+    if [ "$1" -ne "${INVALID}" ]; then
+      metrics_client Platform.SmartUncorrectableErrors "$1" 1 1000000 20
+    fi
+  fi
+  if [ -n "$2" ]; then
+    if [ "$2" -ne "${INVALID}" ]; then
+      metrics_client Platform.SmartTransferErrors "$2" 1 1000000 20
+    fi
+  fi
+  if [ -n "$3" ]; then
+    if [ "$3" -ne "${INVALID}" ]; then
+      metrics_client Platform.SATA.PercentageUsed "$3" 0 255 50
+    fi
+  fi
+  if [ -n "$4" ]; then
+    if [ "$4" -ne "${INVALID}" ]; then
+      metrics_client Platform.SATA.AvailableReservedSpace "$4" 0 100 50
+    fi
+  fi
+  if [ -n "$5" ]; then
+    if [ "$5" -ne "${INVALID}" ]; then
+      # Logical Sectors Written is the total number of 512-byte sectors written.
+      # The maximum value set here equates to 100 TiB.
+      metrics_client Platform.SATA.LogicalSectorsWritten "$5" 0 214748364800 50
+    fi
+  fi
+  if [ -n "$6" ]; then
+    if [ "$6" -ne "${INVALID}" ]; then
+      # Logical Sectors Read is the total number of 512-byte sectors read.
+      # The maximum value set here equates to 100 TiB.
+      metrics_client Platform.SATA.LogicalSectorsRead "$6" 0 214748364800 50
+    fi
+  fi
+}
+
+# Sata information.
+GET_SMART_INFO='
+  $2 == "Reported_Uncorrect" { uncorr = $8 }
+  $2 == "UDMA_CRC_Error_Count" { txfer = $8 }
+  $6 == "Percentage" && $7 == "Used" { life = $4 }
+  $2 == "Available_Reservd_Space" { rsrved = $8 }
+  $6 == "Logical" && $7 == "Sectors" && $8 == "Written" { written = $4 }
+  $6 == "Logical" && $7 == "Sectors" && $8 == "Read" { read = $4 }
+  END { print uncorr, txfer, life, rsrved, written, read }
+'
+
+sata_disk_metrics() {
+  # Extract revelevant SMART information from this file, if any.
+  report_smart_metrics $(awk -v uncorr="${INVALID}" -v txfer="${INVALID}" \
+                         -v life="${INVALID}" -v rsrved="${INVALID}" \
+                         -v written="${INVALID}" -v read="${INVALID}" \
+                         "${GET_SMART_INFO}" "${STORAGE_INFO_FILE}")
+}
+
+emmc_disk_metrics() {
+  local life type
+
+  # Extract revelevant eMMC information from this file, if any.
+  for type in 'A' 'B'; do
+    life="$(sed -ne "/DEVICE_LIFE_TIME_EST_TYP_${type}/s/.*: \(0x.*\)]$/\1/p" \
+            "${STORAGE_INFO_FILE}")"
+    if [ -n "${life}" ]; then
+      metrics_client -s "Platform.Emmc.LifeUsed.Type${type}" \
+                     "$(printf "%d" "${life}")"
+    fi
+  done
+}
+
+sindin8de2_disk_metrics() {
+  # Sandisk SDIN8DE2-*G 4.51 stores eMMC device health in vendor registers:
+  # 94: MLC Device health.
+  # 87: SLC Device health.
+  local offset_A=94
+  local offset_B=87
+  local offset life type
+
+  if grep -qe "^name.*SEM..G" "${STORAGE_INFO_FILE}"; then
+    for type in 'A' 'B'; do
+      eval "offset=\"\${offset_${type}}\""
+
+      life="$(sed -ne "/Vendor Specific Fields \[VENDOR_SPECIFIC_FIELD\[${offset}\]\]:/s/.*: \(0x.*\)$/\1/p" \
+        "${STORAGE_INFO_FILE}")"
+      if [ -n "${life}" ]; then
+        metrics_client -s "Platform.Emmc.LifeUsed.Type${type}" \
+          "$(printf "%d" "${life}")"
+      fi
+    done
+  fi
+}
+
+nvme_disk_metrics() {
+  local used
+
+  # Extract revelevant NVMe information from this file, if any.
+  used="$(sed -ne "/Percentage Used/s/[^0-9]*//p" \
+          "${STORAGE_INFO_FILE}" | sed -ne "s/%//p")"
+  if [ -n "${used}" ]; then
+    metrics_client -s "Platform.Storage.Nvme.PercentageUsed" \
+                     "$(printf "%d" "${used}")"
+  fi
+}
+
+ufs_disk_metrics() {
+  local life method type
+
+  # Extract revelevant UFS information from this file, if any.
+  for method in 'a' 'b'; do
+    life="$(sed -ne "/life_time_estimation_${method}/s/.*:\(0x.*\)$/\1/p" \
+            "${STORAGE_INFO_FILE}")"
+    if [ -n "${life}" ]; then
+      type="$(echo "${method}" | sed 's/.*/\u&/')"
+      metrics_client -s "Platform.Storage.Ufs.LifeUsed.Type${type}" \
+                     "$(printf "%d" "${life}")"
+    fi
+  done
+}
+
+# Invoke main if not in test mode, otherwise let the test code call.
+main() {
+  if [ "${FLAGS_test}" -eq "${FLAGS_TRUE}" ]; then
+    return
+  fi
+  if [ $# -ne 0 ]; then
+    flags_help
+    exit 1
+  fi
+  rm -f "${STORAGE_INFO_FILE}"
+  get_storage_info > "${STORAGE_INFO_FILE}"
+  metrics_client -e Platform.StatefulFormat "$(get_stateful_format_enum)" 2
+  sata_disk_metrics
+  emmc_disk_metrics
+  sindin8de2_disk_metrics
+  nvme_disk_metrics
+  ufs_disk_metrics
+}
+main "$@"

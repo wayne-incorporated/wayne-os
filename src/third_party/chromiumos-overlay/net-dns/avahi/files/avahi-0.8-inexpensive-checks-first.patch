@@ -1,0 +1,56 @@
+From 6c5fb154e327929fec0bc39413bd2a527a01404e Mon Sep 17 00:00:00 2001
+From: Benjamin Gordon <bmgordon@chromium.org>
+Date: Mon, 22 May 2023 12:50:49 -0600
+Subject: [PATCH 2/3] core/rr: Do inexpensive inequality checks first
+
+AvahiKey equality comparisons need to check the type, class, and domain.
+Checking the domain requires full string decoding and comparison, but
+the other two can be done with simple integer inequality.  This was
+previously checking the string first.  By switching the order, empirical
+testing indicates that we eliminate ~55% of the calls to
+avahi_domain_equal during key lookups.
+---
+ avahi-core/rr.c | 20 ++++++++++++++------
+ 1 file changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/avahi-core/rr.c b/avahi-core/rr.c
+index 7fa0bee..437f2c6 100644
+--- a/avahi-core/rr.c
++++ b/avahi-core/rr.c
+@@ -327,9 +327,13 @@ int avahi_key_equal(const AvahiKey *a, const AvahiKey *b) {
+     if (a == b)
+         return 1;
+ 
+-    return avahi_domain_equal(a->name, b->name) &&
+-        a->type == b->type &&
+-        a->clazz == b->clazz;
++    if (a->type != b->type)
++        return 0;
++
++    if (a->clazz != b->clazz)
++        return 0;
++
++    return avahi_domain_equal(a->name, b->name);
+ }
+ 
+ int avahi_key_pattern_match(const AvahiKey *pattern, const AvahiKey *k) {
+@@ -341,9 +345,13 @@ int avahi_key_pattern_match(const AvahiKey *pattern, const AvahiKey *k) {
+     if (pattern == k)
+         return 1;
+ 
+-    return avahi_domain_equal(pattern->name, k->name) &&
+-        (pattern->type == k->type || pattern->type == AVAHI_DNS_TYPE_ANY) &&
+-        (pattern->clazz == k->clazz || pattern->clazz == AVAHI_DNS_CLASS_ANY);
++    if (pattern->type != AVAHI_DNS_TYPE_ANY && pattern->type != k->type)
++        return 0;
++
++    if (pattern->clazz != AVAHI_DNS_CLASS_ANY && pattern->clazz != k->clazz)
++        return 0;
++
++    return avahi_domain_equal(pattern->name, k->name);
+ }
+ 
+ int avahi_key_is_pattern(const AvahiKey *k) {
+-- 
+2.40.1.698.g37aff9b760-goog
+

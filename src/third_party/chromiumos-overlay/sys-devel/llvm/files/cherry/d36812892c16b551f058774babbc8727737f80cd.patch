@@ -1,0 +1,124 @@
+commit d36812892c16b551f058774babbc8727737f80cd
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Mon Jan 25 11:12:17 2021 -0800
+
+    [GVN] do not repeat PRE on failure to split critical edge
+    
+    Fixes an infinite loop encountered in GVN.
+    
+    GVN will delay PRE if it encounters critical edges, attempt to split
+    them later via calls to SplitCriticalEdge(), then restart.
+    
+    The caller of GVN::splitCriticalEdges() assumed a return value of true
+    meant that critical edges were split, that the IR had changed, and that
+    PRE should be re-attempted, upon which we loop infinitely.
+    
+    This was exposed after D88438, by compiling the Linux kernel for s390,
+    but the test case is reproducible on x86.
+    
+    Fixes: https://github.com/ClangBuiltLinux/linux/issues/1261
+    
+    Reviewed By: void
+    
+    Differential Revision: https://reviews.llvm.org/D94996
+
+diff --git a/llvm/lib/Transforms/Scalar/GVN.cpp b/llvm/lib/Transforms/Scalar/GVN.cpp
+index 72248babba7e..c6b6d75aefe8 100644
+--- a/llvm/lib/Transforms/Scalar/GVN.cpp
++++ b/llvm/lib/Transforms/Scalar/GVN.cpp
+@@ -2673,9 +2673,11 @@ BasicBlock *GVN::splitCriticalEdges(BasicBlock *Pred, BasicBlock *Succ) {
+   BasicBlock *BB = SplitCriticalEdge(
+       Pred, Succ,
+       CriticalEdgeSplittingOptions(DT, LI, MSSAU).unsetPreserveLoopSimplify());
+-  if (MD)
+-    MD->invalidateCachedPredecessors();
+-  InvalidBlockRPONumbers = true;
++  if (BB) {
++    if (MD)
++      MD->invalidateCachedPredecessors();
++    InvalidBlockRPONumbers = true;
++  }
+   return BB;
+ }
+ 
+@@ -2684,14 +2686,20 @@ BasicBlock *GVN::splitCriticalEdges(BasicBlock *Pred, BasicBlock *Succ) {
+ bool GVN::splitCriticalEdges() {
+   if (toSplit.empty())
+     return false;
++
++  bool Changed = false;
+   do {
+     std::pair<Instruction *, unsigned> Edge = toSplit.pop_back_val();
+-    SplitCriticalEdge(Edge.first, Edge.second,
+-                      CriticalEdgeSplittingOptions(DT, LI, MSSAU));
++    Changed |= SplitCriticalEdge(Edge.first, Edge.second,
++                                 CriticalEdgeSplittingOptions(DT, LI, MSSAU)) !=
++               nullptr;
+   } while (!toSplit.empty());
+-  if (MD) MD->invalidateCachedPredecessors();
+-  InvalidBlockRPONumbers = true;
+-  return true;
++  if (Changed) {
++    if (MD)
++      MD->invalidateCachedPredecessors();
++    InvalidBlockRPONumbers = true;
++  }
++  return Changed;
+ }
+ 
+ /// Executes one iteration of GVN
+diff --git a/llvm/test/Transforms/GVN/critical-edge-split-failure.ll b/llvm/test/Transforms/GVN/critical-edge-split-failure.ll
+new file mode 100644
+index 000000000000..662efd45bf25
+--- /dev/null
++++ b/llvm/test/Transforms/GVN/critical-edge-split-failure.ll
+@@ -0,0 +1,49 @@
++; RUN: opt -gvn -S -o - %s | FileCheck %s
++; RUN: opt -passes=gvn -S -o - %s | FileCheck %s
++
++%struct.sk_buff = type opaque
++
++@l2tp_recv_dequeue_session = external dso_local local_unnamed_addr global i32, align 4
++@l2tp_recv_dequeue_skb = external dso_local local_unnamed_addr global %struct.sk_buff*, align 8
++@l2tp_recv_dequeue_session_2 = external dso_local local_unnamed_addr global i32, align 4
++@l2tp_recv_dequeue_session_0 = external dso_local local_unnamed_addr global i32, align 4
++
++declare void @llvm.assume(i1 noundef)
++
++define dso_local void @l2tp_recv_dequeue() local_unnamed_addr {
++entry:
++  %0 = load i32, i32* @l2tp_recv_dequeue_session, align 4
++  %conv = sext i32 %0 to i64
++  %1 = inttoptr i64 %conv to %struct.sk_buff*
++  %2 = load i32, i32* @l2tp_recv_dequeue_session_2, align 4
++  %tobool.not = icmp eq i32 %2, 0
++  br label %for.cond
++
++for.cond:                                         ; preds = %if.end, %entry
++  %storemerge = phi %struct.sk_buff* [ %1, %entry ], [ null, %if.end ]
++  store %struct.sk_buff* %storemerge, %struct.sk_buff** @l2tp_recv_dequeue_skb, align 8
++  br i1 %tobool.not, label %if.end, label %if.then
++
++if.then:                                          ; preds = %for.cond
++  %ns = bitcast %struct.sk_buff* %storemerge to i32*
++  %3 = load i32, i32* %ns, align 4
++  store i32 %3, i32* @l2tp_recv_dequeue_session_0, align 4
++; Splitting the critical edge from if.then to if.end will fail, but should not
++; cause an infinite loop in GVN. If we can one day split edges of callbr
++; indirect targets, great!
++; CHECK: callbr void asm sideeffect "", "X,~{dirflag},~{fpsr},~{flags}"(i8* blockaddress(@l2tp_recv_dequeue, %if.end))
++; CHECK-NEXT: to label %asm.fallthrough.i [label %if.end]
++  callbr void asm sideeffect "", "X,~{dirflag},~{fpsr},~{flags}"(i8* blockaddress(@l2tp_recv_dequeue, %if.end))
++          to label %asm.fallthrough.i [label %if.end]
++
++asm.fallthrough.i:                                ; preds = %if.then
++  br label %if.end
++
++if.end:                                           ; preds = %asm.fallthrough.i, %if.then, %for.cond
++  %ns1 = bitcast %struct.sk_buff* %storemerge to i32*
++  %4 = load i32, i32* %ns1, align 4
++  %tobool2.not = icmp eq i32 %4, 0
++  tail call void @llvm.assume(i1 %tobool2.not)
++  br label %for.cond
++}
++

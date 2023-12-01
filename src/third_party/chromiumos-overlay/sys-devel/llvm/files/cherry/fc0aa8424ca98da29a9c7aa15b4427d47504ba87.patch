@@ -1,0 +1,131 @@
+From fc0aa8424ca98da29a9c7aa15b4427d47504ba87 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Wed, 23 Feb 2022 10:15:42 -0800
+Subject: [PATCH] [ELF] Check COMMON symbols for PROVIDE and don't redefine
+ COMMON symbols edata/end/etext
+
+In GNU ld, the definition precedence is: regular symbol assignment > relocatable object definition > `PROVIDE` symbol assignment.
+
+GNU ld's internal linker scripts define the non-reserved (by C and C++)
+edata/end/etext with `PROVIDE` so the relocatable object definition takes
+precedence. This makes sense because `int end;` is valid.
+
+We currently redefine such symbols if they are COMMON, but not if they are
+regular definitions, so `int end;` with -fcommon is essentially a UB in ld.lld.
+Fix this (also improve consistency and match GNU ld) by using the
+`isDefined` code path for `isCommon`. In GNU ld, reserved identifiers like
+`__ehdr_start` do not use `PROVIDE`, while we treat them all as `PROVIDE`, this
+seems fine.
+
+Reviewed By: peter.smith
+
+Differential Revision: https://reviews.llvm.org/D120389
+---
+ lld/ELF/LinkerScript.cpp   |  2 +-
+ lld/ELF/Writer.cpp         |  2 +-
+ lld/test/ELF/edata-etext.s | 54 +++++++++++++++++++++++++++++++++++---
+ 3 files changed, 53 insertions(+), 5 deletions(-)
+
+diff --git a/lld/ELF/LinkerScript.cpp b/lld/ELF/LinkerScript.cpp
+index 402fa2f4ffbf..4b80d6af6e26 100644
+--- a/lld/ELF/LinkerScript.cpp
++++ b/lld/ELF/LinkerScript.cpp
+@@ -203,7 +203,7 @@ static bool shouldDefineSym(SymbolAssignment *cmd) {
+   // If a symbol was in PROVIDE(), we need to define it only
+   // when it is a referenced undefined symbol.
+   Symbol *b = symtab->find(cmd->name);
+-  if (b && !b->isDefined())
++  if (b && !b->isDefined() && !b->isCommon())
+     return true;
+   return false;
+ }
+diff --git a/lld/ELF/Writer.cpp b/lld/ELF/Writer.cpp
+index cd43e79b8276..bf9e315ec0d2 100644
+--- a/lld/ELF/Writer.cpp
++++ b/lld/ELF/Writer.cpp
+@@ -165,7 +165,7 @@ void elf::combineEhSections() {
+ static Defined *addOptionalRegular(StringRef name, SectionBase *sec,
+                                    uint64_t val, uint8_t stOther = STV_HIDDEN) {
+   Symbol *s = symtab->find(name);
+-  if (!s || s->isDefined())
++  if (!s || s->isDefined() || s->isCommon())
+     return nullptr;
+ 
+   s->resolve(Defined{nullptr, StringRef(), STB_GLOBAL, stOther, STT_NOTYPE, val,
+diff --git a/lld/test/ELF/edata-etext.s b/lld/test/ELF/edata-etext.s
+index 673475e3e7ee..19cf2e5eb67d 100644
+--- a/lld/test/ELF/edata-etext.s
++++ b/lld/test/ELF/edata-etext.s
+@@ -1,7 +1,10 @@
+ # REQUIRES: x86
+-# RUN: llvm-mc -filetype=obj -triple=x86_64-pc-linux %s -o %t.o
+-# RUN: ld.lld %t.o -o %t
+-# RUN: llvm-objdump -t --section-headers %t | FileCheck %s
++# RUN: rm -rf %t && split-file %s %t
++# RUN: llvm-mc -filetype=obj -triple=x86_64-pc-linux %t/a.s -o %t/a.o
++# RUN: llvm-mc -filetype=obj -triple=x86_64-pc-linux %t/b.s -o %t/b.o
++# RUN: llvm-mc -filetype=obj -triple=x86_64-pc-linux %t/c.s -o %t/c.o
++# RUN: ld.lld %t/a.o -o %t/a
++# RUN: llvm-objdump -t --section-headers %t/a | FileCheck %s
+ 
+ ## This checks that:
+ ## 1) Address of _etext is the first location after the last read-only loadable segment.
+@@ -32,6 +35,23 @@
+ # RELOCATABLE-NEXT:  0000000000000000 *UND* 0000000000000000 _end
+ # RELOCATABLE-NEXT:  0000000000000000 *UND* 0000000000000000 _etext
+ 
++## If a relocatable object file defines non-reserved identifiers (by C and C++)
++## edata/end/etext, don't redefine them. Note: GNU ld redefines the reserved
++## _edata while we don't for simplicty.
++# RUN: ld.lld %t/b.o -o %t/b
++# RUN: llvm-objdump -t %t/b | FileCheck %s --check-prefix=CHECK2
++# RUN: ld.lld %t/c.o -o %t/c
++# RUN: llvm-objdump -t %t/c | FileCheck %s --check-prefix=CHECK2
++## PROVIDE does not redefine defined symbols, even if COMMON.
++# RUN: ld.lld %t/c.o %t/lds -o %t/c
++# RUN: llvm-objdump -t %t/c | FileCheck %s --check-prefix=CHECK2
++
++# CHECK2:       [[#%x,]] g     O .bss   0000000000000001 _edata
++# CHECK2-NEXT:  [[#%x,]] g     O .bss   0000000000000001 edata
++# CHECK2-NEXT:  [[#%x,]] g     O .bss   0000000000000001 end
++# CHECK2-NEXT:  [[#%x,]] g     O .bss   0000000000000001 etext
++
++#--- a.s
+ .global _edata,_end,_etext,_start,edata,end,etext
+ .text
+ _start:
+@@ -41,3 +61,31 @@ _start:
+ .bss
+   .align 4
+   .space 6
++
++#--- b.s
++.bss
++.macro def x
++  .globl \x
++  .type \x, @object
++  \x: .byte 0
++  .size \x, 1
++.endm
++def _edata
++def edata
++def end
++def etext
++
++#--- c.s
++.comm _edata,1,1
++.comm edata,1,1
++.comm end,1,1
++.comm etext,1,1
++
++#--- lds
++SECTIONS {
++  .text : { *(.text) }
++
++  PROVIDE(etext = .);
++  PROVIDE(edata = .);
++  PROVIDE(end = .);
++}
+-- 
+2.35.1.616.g0bdcbb4464-goog
+

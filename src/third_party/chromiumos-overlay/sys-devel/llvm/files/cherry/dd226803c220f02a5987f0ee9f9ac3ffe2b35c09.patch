@@ -1,0 +1,21 @@
+commit dd226803c220f02a5987f0ee9f9ac3ffe2b35c09
+Author: Stefan Pintilie <stefanp@ca.ibm.com>
+Date:   Fri May 28 11:17:46 2021 -0500
+
+    Revert "[NFCI][LoopDeletion] Do not call complex analysis for known non-zero BTC"
+    
+    This reverts commit 7d418dadf6b1e6fd9bcccf7c5b5e1db74992ee70.
+
+diff --git a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+index da9a767d6fea..acc2056c4a54 100644
+--- a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
++++ b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+@@ -314,8 +314,6 @@ breakBackedgeIfNotTaken(Loop *L, DominatorTree &DT, ScalarEvolution &SE,
+     return LoopDeletionResult::Unmodified;
+ 
+   auto *BTC = SE.getBackedgeTakenCount(L);
+-  if (!isa<SCEVCouldNotCompute>(BTC) && SE.isKnownNonZero(BTC))
+-    return LoopDeletionResult::Unmodified;
+   if (!BTC->isZero() && !canProveExitOnFirstIteration(L, DT, SE, LI))
+     return LoopDeletionResult::Unmodified;
+ 

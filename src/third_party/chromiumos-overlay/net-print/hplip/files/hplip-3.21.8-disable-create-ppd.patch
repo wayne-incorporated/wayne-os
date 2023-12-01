@@ -1,0 +1,53 @@
+From 2cd1f8898857b5df1a0d6a0d8aaf70fb348e86d8 Mon Sep 17 00:00:00 2001
+From: David Valleau <valleau@chromium.org>
+Date: Wed, 18 Jul 2018 13:10:32 -0700
+Subject: [PATCH] Adding configure flag "run-create-ppd"
+
+This flag can be used to prevent the creation of static PPD files, which
+was causing the build to fail for Chrome OS.
+---
+ configure.in | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/configure.in b/configure.in
+index ef78cce..f5e6717 100755
+--- a/configure.in
++++ b/configure.in
+@@ -239,6 +239,17 @@ else
+    AC_MSG_RESULT(no)
+ fi
+ 
++AC_MSG_CHECKING([for run create ppd])
++AC_ARG_ENABLE(run_create_ppd,
++  [  --enable-run-create-ppd    enable run_create_ppd (default=yes)],
++  run_create_ppd=$enableval, run_create_ppd=yes)
++if test "$run_create_ppd" = "yes"; then
++   AC_MSG_RESULT(yes)
++else
++   AC_MSG_RESULT(no)
++fi
++AM_CONDITIONAL(RUN_CREATE_PPD, test x$run_create_ppd = xyes)
++
+ AC_MSG_CHECKING([for class driver])
+ AC_ARG_ENABLE(class_driver,
+   [  --enable-class-driver    enable class driver (default=no)],
+@@ -269,10 +280,14 @@ if test "$class_driver" = "yes"; then
+    epm_scan=\#
+    epm_class_driver=
+    epm_class_install=yes
+-   test "$(sh ./createPPD.sh -f)" = 0
++   if test "$run_create_ppd" = "yes"; then
++      test "$(sh ./createPPD.sh -f)" = 0
++   fi
+ else
+    AC_MSG_RESULT(no)
+-   test "$(sh ./createPPD.sh -q)" = 0
++   if test "$run_create_ppd" = "yes"; then
++      test "$(sh ./createPPD.sh -q)" = 0
++   fi
+ fi
+ AM_CONDITIONAL(HPLIP_CLASS_DRIVER, test x$class_driver = xyes)
+ 
+-- 
+2.18.0.203.gfac676dfb9-goog
+

@@ -1,0 +1,96 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":foomatic_shell" ]
+  if (use.test) {
+    deps += [ ":foomatic_shell_test" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":foomatic_shell_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+  ]
+}
+
+executable("foomatic_shell") {
+  sources = [
+    "grammar.cc",
+    "grammar.h",
+    "main.cc",
+    "parser.cc",
+    "parser.h",
+    "process_launcher.cc",
+    "process_launcher.h",
+    "scanner.cc",
+    "scanner.h",
+    "shell.cc",
+    "shell.h",
+    "verifier.cc",
+    "verifier.h",
+  ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+}
+
+if (use.test) {
+  executable("foomatic_shell_test") {
+    sources = [
+      "grammar.cc",
+      "grammar.h",
+      "parser.cc",
+      "parser.h",
+      "parser_test.cc",
+      "process_launcher.cc",
+      "process_launcher.h",
+      "process_launcher_test.cc",
+      "scanner.cc",
+      "scanner.h",
+      "scanner_test.cc",
+      "shell.cc",
+      "shell.h",
+      "shell_test.cc",
+      "verifier.cc",
+      "verifier.h",
+      "verifier_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    run_test = true
+    deps = [ "//common-mk/testrunner" ]
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("libchrome_test_config") {
+    pkg_deps = [
+      "libchrome",
+      "libchrome-test",
+    ]
+  }
+  executable("foomatic_shell_fuzzer") {
+    sources = [
+      "grammar.h",
+      "parser.cc",
+      "parser.h",
+      "parser_fuzzer.cc",
+      "scanner.cc",
+      "scanner.h",
+    ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":libchrome_test_config",
+    ]
+  }
+}

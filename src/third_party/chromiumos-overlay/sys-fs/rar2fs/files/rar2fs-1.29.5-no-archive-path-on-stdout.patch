@@ -1,0 +1,30 @@
+From 7dcd0612973759ac66fc5ed9a3ef53aa6b1eac5e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fran=C3=A7ois=20Degros?= <fdegros@chromium.org>
+Date: Wed, 20 Jan 2021 14:39:58 +1100
+Subject: [PATCH] Don't print archive file path on stdout
+
+Messages printed by rar2fs on stdout or stderr can be logged in system
+logs by the calling system. The file path can contain PII and should not
+be logged in system logs readable by everyone on the system.
+---
+ src/rar2fs.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/rar2fs.c b/src/rar2fs.c
+index 5728548..122f653 100644
+--- a/src/rar2fs.c
++++ b/src/rar2fs.c
+@@ -5771,8 +5771,8 @@ int main(int argc, char *argv[])
+                 const int ret = collect_files(src_path_full);
+                 if (ret < 0) {
+                         const int err = -ret;
+-                        printf("%s: cannot open '%s': %s\n", argv[0],
+-                               src_path_full, error_to_string(err));
++                        printf("%s: cannot open RAR: %s\n", argv[0],
++                               error_to_string(err));
+                         return err;
+                 }
+         }
+-- 
+2.33.0.rc1.237.g0d66db33f3-goog
+

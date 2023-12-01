@@ -1,0 +1,78 @@
+From cf9f19c04366d5a4cd280ffa1eecb260652ed8bf Mon Sep 17 00:00:00 2001
+From: Yi Kong <yikong@google.com>
+Date: Tue, 8 Mar 2022 14:08:11 +0800
+Subject: [PATCH] Rename `disable-noundef-analysis` flag to
+ `-[no-]enable-noundef-analysis`
+
+Upstream renamed this in r453474, but it cannot be cleanly cherrypicked
+back due to large number of conflicts in tests. Instead add aliases from
+the old name so that the tests can pass without modification.
+---
+ clang/include/clang/Basic/CodeGenOptions.def |  2 +-
+ clang/include/clang/Driver/Options.td        | 14 +++++++++++---
+ clang/lib/CodeGen/CGCall.cpp                 |  4 ++--
+ 3 files changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/clang/include/clang/Basic/CodeGenOptions.def b/clang/include/clang/Basic/CodeGenOptions.def
+index 0da875525c0c..c5a0bed565a3 100644
+--- a/clang/include/clang/Basic/CodeGenOptions.def
++++ b/clang/include/clang/Basic/CodeGenOptions.def
+@@ -64,7 +64,7 @@ CODEGENOPT(DisableLifetimeMarkers, 1, 0) ///< Don't emit any lifetime markers
+ CODEGENOPT(DisableO0ImplyOptNone , 1, 0) ///< Don't annonate function with optnone at O0
+ CODEGENOPT(ExperimentalStrictFloatingPoint, 1, 0) ///< Enables the new, experimental
+                                                   ///< strict floating point.
+-CODEGENOPT(DisableNoundefAttrs, 1, 0) ///< Disable emitting `noundef` attributes on IR call arguments and return values
++CODEGENOPT(EnableNoundefAttrs, 1, 0) ///< Disable emitting `noundef` attributes on IR call arguments and return values
+ CODEGENOPT(LegacyPassManager, 1, 0) ///< Use the legacy pass manager.
+ CODEGENOPT(DebugPassManager, 1, 0) ///< Prints debug information for the new
+                                    ///< pass manager.
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index fbdac93a8313..9ba38c5452a0 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -5403,9 +5403,17 @@ defm clear_ast_before_backend : BoolOption<"",
+   PosFlag<SetTrue, [], "Clear">,
+   NegFlag<SetFalse, [], "Don't clear">,
+   BothFlags<[], " the Clang AST before running backend code generation">>;
+-def disable_noundef_analysis : Flag<["-"], "disable-noundef-analysis">, Group<f_Group>,
+-  HelpText<"Disable analyzing function argument and return types for mandatory definedness">,
+-  MarshallingInfoFlag<CodeGenOpts<"DisableNoundefAttrs">>;
++defm enable_noundef_analysis : BoolOption<"",
++  "enable-noundef-analysis",
++  CodeGenOpts<"EnableNoundefAttrs">,
++  DefaultTrue,
++  PosFlag<SetTrue, [], "Enable">,
++  NegFlag<SetFalse, [], "Disable">,
++  BothFlags<[], " analyzing function argument and return types for mandatory definedness">>;
++def disable_noundef_analysis : Flag<["-"], "disable-noundef-analysis">,
++    Group<f_Group>, Alias<no_enable_noundef_analysis>;
++def no_disable_noundef_analysis : Flag<["-"], "no-disable-noundef-analysis">,
++    Group<f_Group>, Alias<enable_noundef_analysis>;
+ def discard_value_names : Flag<["-"], "discard-value-names">,
+   HelpText<"Discard value names in LLVM IR">,
+   MarshallingInfoFlag<CodeGenOpts<"DiscardValueNames">>;
+diff --git a/clang/lib/CodeGen/CGCall.cpp b/clang/lib/CodeGen/CGCall.cpp
+index a37ff8844e88..2d0d00edc030 100644
+--- a/clang/lib/CodeGen/CGCall.cpp
++++ b/clang/lib/CodeGen/CGCall.cpp
+@@ -2243,7 +2243,7 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
+                      getLangOpts().Sanitize.has(SanitizerKind::Return);
+ 
+   // Determine if the return type could be partially undef
+-  if (!CodeGenOpts.DisableNoundefAttrs && HasStrictReturn) {
++  if (CodeGenOpts.EnableNoundefAttrs && HasStrictReturn) {
+     if (!RetTy->isVoidType() && RetAI.getKind() != ABIArgInfo::Indirect &&
+         DetermineNoUndef(RetTy, getTypes(), DL, RetAI))
+       RetAttrs.addAttribute(llvm::Attribute::NoUndef);
+@@ -2377,7 +2377,7 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
+     }
+ 
+     // Decide whether the argument we're handling could be partially undef
+-    if (!CodeGenOpts.DisableNoundefAttrs &&
++    if (CodeGenOpts.EnableNoundefAttrs &&
+         DetermineNoUndef(ParamType, getTypes(), DL, AI)) {
+       Attrs.addAttribute(llvm::Attribute::NoUndef);
+     }
+-- 
+2.35.1.616.g0bdcbb4464-goog
+

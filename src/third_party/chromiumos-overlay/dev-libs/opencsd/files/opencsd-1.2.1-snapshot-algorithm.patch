@@ -1,0 +1,25 @@
+commit 942ee053f1e8fd2917ee425a31e29efd3126839e
+Author: Manoj Gupta <manojgupta@google.com>
+Date:   Wed Apr 27 10:07:23 2022 -0700
+
+    tests: Include <algorithm> in snapshot_parser_util.h
+    
+    std::lexicographical_compare usage in snapshot_parser_util.h
+    requires <algorithm>.
+    This fixes a build breakage when using ToT libc++ which
+    no longer transitively include <algorithm>.
+    
+    Signed-off-by: Manoj Gupta <manojgupta@google.com>
+
+diff --git a/decoder/tests/snapshot_parser_lib/include/snapshot_parser_util.h b/decoder/tests/snapshot_parser_lib/include/snapshot_parser_util.h
+index 815afe9..d4fd6cd 100644
+--- a/decoder/tests/snapshot_parser_lib/include/snapshot_parser_util.h
++++ b/decoder/tests/snapshot_parser_lib/include/snapshot_parser_util.h
+@@ -35,6 +35,7 @@
+ #ifndef ARM_SNAPSHOT_PARSER_UTIL_H_INCLUDED
+ #define ARM_SNAPSHOT_PARSER_UTIL_H_INCLUDED
+ 
++#include <algorithm>
+ #include <string>
+ #include <sstream>
+ #include <iomanip>

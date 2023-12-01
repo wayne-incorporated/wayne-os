@@ -1,0 +1,73 @@
+{
+  "_comment": "See http://www.chromium.org/chromium-os/building-chromium-os/disk-layout-format",
+  "metadata":{
+    "rootdev_base": "/sys/devices/pci0000:00/0000:00:17.0/ata*/host*/target*/*/block/sd* /sys/devices/pci0000:00/0000:00:1c.*/0000:*:00.0/nvme/nvme0/nvme0n1 /sys/devices/pci0000:00/0000:00:1a.0/mmc_host/mmc*/mmc*:000*/block/mmcblk*"
+  },
+  "parent": "disk_layout_v3.json",
+  "layouts": {
+    # base is the fixed device layout template.
+    # Increase fs_size to hold the needed firmware images.
+    "base": [
+      {
+        "num": 3,
+        "fs_size": "3100 MiB"
+      },
+      {
+        # User data, fills all remaining space on drive.
+        "num": 1,
+        "size": "5 GiB"
+      }
+    ],
+    "usb": [
+      {
+        "num": 3,
+        "fs_size": "3100 MiB",
+        "size": "3400 MiB"
+      },
+      {
+        "num": 1,
+        "size": "5 GiB"
+      }
+    ],
+    "usb-updatable": [
+      {
+        "num": 3,
+        "fs_size": "3100 MiB",
+        "size": "3400 MiB"
+      },
+      {
+        "num": 5,
+        "size": "3400 MiB"
+      },
+      {
+        "num": 1,
+        "size": "5 GiB"
+      }
+    ],
+    "recovery": [
+      {
+        # Shrunken rootfs partition to support smaller USB sticks,
+        # and smaller recovery downloads.
+        # Installation will expand this to size from base.
+        # The offset to the beginning of this partition, and the FS
+        # size must match base exactly to allow secure boot.
+        "num": 3,
+        "fs_size": "3100 MiB",
+        "size": "3400 MiB"
+      }
+    ],
+    "factory_install": [
+      {
+        "num": 3,
+        "size": "620 MiB",
+        "fs_size": "600 MiB"
+      }
+    ],
+    "16gb-rootfs": [
+      {
+        "num": 1,
+        "size": "5 GiB"
+      }
+    ]
+  }
+}

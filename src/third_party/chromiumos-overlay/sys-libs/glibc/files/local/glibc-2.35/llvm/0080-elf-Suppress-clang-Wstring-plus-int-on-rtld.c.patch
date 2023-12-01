@@ -1,0 +1,33 @@
+From 8e97e0773c0a3b156029e81a98a877d69e8e77ff Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 10 Mar 2022 09:48:32 -0300
+Subject: [PATCH 080/163] elf: Suppress clang -Wstring-plus-int on rtld.c
+
+---
+ elf/rtld.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/elf/rtld.c b/elf/rtld.c
+index 5c8e881e66..747c6f2c03 100644
+--- a/elf/rtld.c
++++ b/elf/rtld.c
+@@ -2693,10 +2693,16 @@ warning: debug option `%s' unknown; try LD_DEBUG=help\n", copy);
+       _dl_printf ("\
+ Valid options for the LD_DEBUG environment variable are:\n\n");
+ 
++      /* clang issues an warning adding 'const unsigned char' to a string
++	 does not append to the string, however it is exactly what code
++	 means here.  */
++      DIAG_PUSH_NEEDS_COMMENT_CLANG;
++      DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wstring-plus-int");
+       for (cnt = 0; cnt < ndebopts; ++cnt)
+ 	_dl_printf ("  %.*s%s%s\n", debopts[cnt].len, debopts[cnt].name,
+ 		    "         " + debopts[cnt].len - 3,
+ 		    debopts[cnt].helptext);
++      DIAG_POP_NEEDS_COMMENT_CLANG;
+ 
+       _dl_printf ("\n\
+ To direct the debugging output into a file instead of standard output\n\
+-- 
+2.37.2
+

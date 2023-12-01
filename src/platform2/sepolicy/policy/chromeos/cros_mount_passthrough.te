@@ -1,0 +1,8 @@
+type cros_mount_passthrough, domain, chromeos_domain;
+type cros_mount_passthrough_jail, domain, chromeos_domain;
+
+permissive cros_mount_passthrough;
+permissive cros_mount_passthrough_jail;
+
+domain_auto_trans({cros_init cros_init_scripts}, cros_mount_passthrough_jailed_exec, cros_mount_passthrough_jail)
+chain_minijail0_preload(cros_mount_passthrough_jail, cros_mount_passthrough_exec, cros_mount_passthrough)

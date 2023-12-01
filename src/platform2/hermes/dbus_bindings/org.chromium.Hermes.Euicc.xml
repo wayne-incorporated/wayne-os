@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Copyright 2020 The Chromium Authors
+  Use of this source code is governed by a BSD-style license that can be
+  found in the LICENSE file.
+-->
+<node>
+  <interface name="org.chromium.Hermes.Euicc">
+    <method name="RefreshInstalledProfiles">
+      <tp:docstring>
+        Reload the profiles installed on a eUICC.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="should_not_switch_slot" type="b" direction="in" >
+        <tp:docstring>
+          If set to true, the active slot before and after fetching profiles
+          will be unchanged.
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="RequestInstalledProfiles">
+      <tp:docstring>
+        Reload the profiles installed on a eUICC.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+    </method>
+    <method name="InstallProfileFromActivationCode">
+      <tp:docstring>
+        Install a profile onto the eUICC using an activation code.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="activation_code" type="s" direction="in">
+        <tp:docstring>
+          Activation code of the profile to install.
+        </tp:docstring>
+      </arg>
+      <arg name="confirmation_code" type="s" direction="in">
+        <tp:docstring>
+          Confirmation code of the profile to install, or "" if none.
+        </tp:docstring>
+      </arg>
+      <arg name="profile" type="o" direction="out">
+        <tp:docstring>
+          Profile object representing the newly-installed profile.
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="InstallPendingProfile">
+      <tp:docstring>
+        Install a profile onto the eUICC using a pending Profile from SM-DS.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="pending_profile" type="o" direction="in" />
+      <arg name="confirmation_code" type="s" direction="in">
+        <tp:docstring>
+          Confirmation code of the profile to install, or "" if none.
+        </tp:docstring>
+      </arg>
+      <arg name="profile" type="o" direction="out">
+        <tp:docstring>
+          Profile object representing the newly-installed profile.
+          Same as the input "pending_profile"
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="UninstallProfile">
+      <tp:docstring>
+        Uninstall a profile from the eUICC.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="profile" type="o" direction="in">
+        <tp:docstring>
+          D-Bus path of the Profile object to uninstall.
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="RequestPendingProfiles">
+      <tp:docstring>
+        Request Events/Profiles from SM-DS. Will update the PendingProfiles
+        property as needed prior to returning.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="root_smds" type="s" direction="in">
+        <tp:docstring>
+          Root smds or "" for lpa.ds.gsma.com
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="RefreshSmdxProfiles">
+      <tp:docstring>
+        Request Events/Profiles from SM-DX. Will update the Profiles
+        property as needed prior to returning.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="activation_code" type="s" direction="in">
+        <tp:docstring>
+          Root smdx or "" for lpa.ds.gsma.com
+        </tp:docstring>
+      </arg>
+      <arg name="should_not_switch_slot" type="b" direction="in" >
+      <tp:docstring>
+        If set to true, the active slot before and after fetching profiles
+        will be unchanged.
+      </tp:docstring>
+      </arg>
+      <arg name="profiles" type="ao" direction="out">
+        <tp:docstring>
+          Profile object representing the found profiles.
+        </tp:docstring>
+      </arg>
+      <arg name="last_scan_error" type="s" direction="out">
+        <tp:docstring>
+           returned if the SMDX scan encountered a problem at any of the SMDX servers. The property will be similar to the errors returned over DBus during profile installation from an SMDP.
+        </tp:docstring>
+      </arg>
+    </method>
+    <method name="SetTestMode">
+      <tp:docstring>
+        Set/unset test mode. If set to true, the LPA will list test profiles
+        and allow operations on them.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="is_test_mode" type="b" direction="in" />
+    </method>
+    <method name="IsTestEuicc">
+      <tp:docstring>
+        Returns true if the eUICC has a test CI.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+      <arg name="is_test_euicc" type="b" direction="out" />
+    </method>
+    <method name="UseTestCerts">
+      <tp:docstring>
+        Set to true if downloading profiles from an SMDX with a
+        test certificate. Use this method to download profiles to
+        an esim from a test CI.
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple" />
+      <arg name="use_test_certs" type="b" direction="in" />
+    </method>
+    <method name="ResetMemory">
+      <tp:docstring>
+        Erase profiles on eUICC.
+      </tp:docstring>
+      <arg name="reset_options" type="i" direction="in" />
+      <tp:docstring>
+        "reset_options" can take two values as defined in SGP.22
+        1 - deleteOperationalProfiles
+        2 - deleteFieldLoadedTestProfiles
+      </tp:docstring>
+      <annotation name="org.chromium.DBus.Method.Kind" value="async" />
+    </method>
+
+    <property name="Eid" type="s" access="read" />
+    <property name="InstalledProfiles" type="ao" access="read" />
+    <property name="IsActive" type="b" access="read" />
+    <property name="PendingProfiles" type="ao" access="read" />
+    <property name="Profiles" type="ao" access="read" />
+    <property name="PhysicalSlot" type="i" access="read" />
+    <property name="ProfilesRefreshedAtLeastOnce" type="b" access="read" />
+  </interface>
+</node>

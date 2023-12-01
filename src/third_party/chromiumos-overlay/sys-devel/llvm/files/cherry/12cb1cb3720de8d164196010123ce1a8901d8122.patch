@@ -1,0 +1,659 @@
+From 12cb1cb3720de8d164196010123ce1a8901d8122 Mon Sep 17 00:00:00 2001
+From: Erich Keane <erich.keane@intel.com>
+Date: Tue, 17 Jan 2023 06:12:40 -0800
+Subject: [PATCH] Revert "[clang] Instantiate concepts with sugared template
+ arguments"
+
+This reverts commit b8064374b217db061213c561ec8f3376681ff9c8.
+
+Based on the report here:
+https://github.com/llvm/llvm-project/issues/59271
+
+this produces a significant increase in memory use of the compiler and a
+large compile-time regression.  This patch reverts this so that we don't
+branch for release with that issue.
+---
+ clang/lib/Sema/SemaConcept.cpp                |   2 +-
+ clang/lib/Sema/SemaExprCXX.cpp                | 204 +++++++++---------
+ clang/lib/Sema/SemaTemplate.cpp               |  12 +-
+ clang/lib/Sema/SemaTemplateDeduction.cpp      |  10 +-
+ clang/lib/Serialization/ASTReaderDecl.cpp     |   2 +-
+ clang/test/AST/ast-dump-concepts.cpp          |  10 +-
+ .../expr.prim.req/compound-requirement.cpp    |  10 +-
+ .../expr.prim.req/nested-requirement.cpp      |   2 +-
+ .../expr.prim.req/simple-requirement.cpp      |   4 +-
+ .../expr.prim.req/type-requirement.cpp        |  12 +-
+ .../temp.constr/temp.constr.normal/p1.cpp     |   2 +-
+ clang/test/CXX/temp/temp.param/p10-2a.cpp     |   4 +-
+ .../SemaTemplate/concepts-recursive-inst.cpp  |  19 +-
+ .../SemaTemplate/cxx2a-constraint-caching.cpp |  12 +-
+ .../instantiate-requires-expr.cpp             |  16 +-
+ clang/test/SemaTemplate/pr52970.cpp           |   2 +-
+ 16 files changed, 150 insertions(+), 173 deletions(-)
+
+diff --git a/clang/lib/Sema/SemaConcept.cpp b/clang/lib/Sema/SemaConcept.cpp
+index fa5509f0f14f..f20e4751f41a 100644
+--- a/clang/lib/Sema/SemaConcept.cpp
++++ b/clang/lib/Sema/SemaConcept.cpp
+@@ -1141,7 +1141,7 @@ static bool substituteParameterMappings(Sema &S, NormalizedConstraint &N,
+   TemplateArgumentList TAL{TemplateArgumentList::OnStack,
+                            CSE->getTemplateArguments()};
+   MultiLevelTemplateArgumentList MLTAL = S.getTemplateInstantiationArgs(
+-      CSE->getNamedConcept(), /*Final=*/true, &TAL,
++      CSE->getNamedConcept(), /*Final=*/false, &TAL,
+       /*RelativeToPrimary=*/true,
+       /*Pattern=*/nullptr,
+       /*ForConstraintInstantiation=*/true);
+diff --git a/clang/lib/Sema/SemaExprCXX.cpp b/clang/lib/Sema/SemaExprCXX.cpp
+index 4e9541abb0af..e3eef9323b2f 100644
+--- a/clang/lib/Sema/SemaExprCXX.cpp
++++ b/clang/lib/Sema/SemaExprCXX.cpp
+@@ -1482,57 +1482,53 @@ Sema::BuildCXXTypeConstructExpr(TypeSourceInfo *TInfo,
+   // C++2b:
+   //   Otherwise, if the type contains a placeholder type, it is replaced by the
+   //   type determined by placeholder type deduction.
+-  if (const DeducedType *Deduced = Ty->getContainedDeducedType();
+-      Deduced && !Deduced->isDeduced()) {
+-    if (isa<DeducedTemplateSpecializationType>(Deduced)) {
+-      Ty = DeduceTemplateSpecializationFromInitializer(TInfo, Entity, Kind,
+-                                                       Exprs);
+-      if (Ty.isNull())
+-        return ExprError();
+-      Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
+-    } else {
+-      assert(isa<AutoType>(Deduced));
+-      MultiExprArg Inits = Exprs;
+-      if (ListInitialization) {
+-        auto *ILE = cast<InitListExpr>(Exprs[0]);
+-        Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
+-      }
+-
+-      if (Inits.empty())
+-        return ExprError(
+-            Diag(TyBeginLoc, diag::err_auto_expr_init_no_expression)
+-            << Ty << FullRange);
+-      if (Inits.size() > 1) {
+-        Expr *FirstBad = Inits[1];
+-        return ExprError(Diag(FirstBad->getBeginLoc(),
+-                              diag::err_auto_expr_init_multiple_expressions)
+-                         << Ty << FullRange);
+-      }
+-      if (getLangOpts().CPlusPlus2b) {
+-        if (Ty->getAs<AutoType>())
+-          Diag(TyBeginLoc, diag::warn_cxx20_compat_auto_expr) << FullRange;
+-      }
+-      Expr *Deduce = Inits[0];
+-      if (isa<InitListExpr>(Deduce))
+-        return ExprError(
+-            Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
+-            << ListInitialization << Ty << FullRange);
+-      QualType DeducedType;
+-      TemplateDeductionInfo Info(Deduce->getExprLoc());
+-      TemplateDeductionResult Result =
+-          DeduceAutoType(TInfo->getTypeLoc(), Deduce, DeducedType, Info);
+-      if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
+-        return ExprError(Diag(TyBeginLoc, diag::err_auto_expr_deduction_failure)
+-                         << Ty << Deduce->getType() << FullRange
+-                         << Deduce->getSourceRange());
+-      if (DeducedType.isNull()) {
+-        assert(Result == TDK_AlreadyDiagnosed);
+-        return ExprError();
+-      }
++  DeducedType *Deduced = Ty->getContainedDeducedType();
++  if (Deduced && isa<DeducedTemplateSpecializationType>(Deduced)) {
++    Ty = DeduceTemplateSpecializationFromInitializer(TInfo, Entity,
++                                                     Kind, Exprs);
++    if (Ty.isNull())
++      return ExprError();
++    Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
++  } else if (Deduced) {
++    MultiExprArg Inits = Exprs;
++    if (ListInitialization) {
++      auto *ILE = cast<InitListExpr>(Exprs[0]);
++      Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
++    }
+ 
+-      Ty = DeducedType;
+-      Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
++    if (Inits.empty())
++      return ExprError(Diag(TyBeginLoc, diag::err_auto_expr_init_no_expression)
++                       << Ty << FullRange);
++    if (Inits.size() > 1) {
++      Expr *FirstBad = Inits[1];
++      return ExprError(Diag(FirstBad->getBeginLoc(),
++                            diag::err_auto_expr_init_multiple_expressions)
++                       << Ty << FullRange);
+     }
++    if (getLangOpts().CPlusPlus2b) {
++      if (Ty->getAs<AutoType>())
++        Diag(TyBeginLoc, diag::warn_cxx20_compat_auto_expr) << FullRange;
++    }
++    Expr *Deduce = Inits[0];
++    if (isa<InitListExpr>(Deduce))
++      return ExprError(
++          Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
++          << ListInitialization << Ty << FullRange);
++    QualType DeducedType;
++    TemplateDeductionInfo Info(Deduce->getExprLoc());
++    TemplateDeductionResult Result =
++        DeduceAutoType(TInfo->getTypeLoc(), Deduce, DeducedType, Info);
++    if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
++      return ExprError(Diag(TyBeginLoc, diag::err_auto_expr_deduction_failure)
++                       << Ty << Deduce->getType() << FullRange
++                       << Deduce->getSourceRange());
++    if (DeducedType.isNull()) {
++      assert(Result == TDK_AlreadyDiagnosed);
++      return ExprError();
++    }
++
++    Ty = DeducedType;
++    Entity = InitializedEntity::InitializeTemporary(TInfo, Ty);
+   }
+ 
+   if (Ty->isDependentType() || CallExpr::hasAnyTypeDependentArguments(Exprs)) {
+@@ -2019,62 +2015,59 @@ ExprResult Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
+                                                      DirectInitRange.getEnd());
+ 
+   // C++11 [dcl.spec.auto]p6. Deduce the type which 'auto' stands in for.
+-  if (const DeducedType *Deduced = AllocType->getContainedDeducedType();
+-      Deduced && !Deduced->isDeduced()) {
+-    if (isa<DeducedTemplateSpecializationType>(Deduced)) {
+-      if (ArraySize)
+-        return ExprError(
+-            Diag(*ArraySize ? (*ArraySize)->getExprLoc() : TypeRange.getBegin(),
+-                 diag::err_deduced_class_template_compound_type)
+-            << /*array*/ 2
+-            << (*ArraySize ? (*ArraySize)->getSourceRange() : TypeRange));
+-
+-      InitializedEntity Entity =
+-          InitializedEntity::InitializeNew(StartLoc, AllocType);
+-      AllocType = DeduceTemplateSpecializationFromInitializer(
+-          AllocTypeInfo, Entity, Kind, Exprs);
+-      if (AllocType.isNull())
+-        return ExprError();
+-    } else {
+-      assert(isa<AutoType>(Deduced));
+-      MultiExprArg Inits = Exprs;
+-      bool Braced = (initStyle == CXXNewExpr::ListInit);
+-      if (Braced) {
+-        auto *ILE = cast<InitListExpr>(Exprs[0]);
+-        Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
+-      }
++  auto *Deduced = AllocType->getContainedDeducedType();
++  if (Deduced && isa<DeducedTemplateSpecializationType>(Deduced)) {
++    if (ArraySize)
++      return ExprError(
++          Diag(*ArraySize ? (*ArraySize)->getExprLoc() : TypeRange.getBegin(),
++               diag::err_deduced_class_template_compound_type)
++          << /*array*/ 2
++          << (*ArraySize ? (*ArraySize)->getSourceRange() : TypeRange));
+ 
+-      if (initStyle == CXXNewExpr::NoInit || Inits.empty())
+-        return ExprError(Diag(StartLoc, diag::err_auto_new_requires_ctor_arg)
+-                         << AllocType << TypeRange);
+-      if (Inits.size() > 1) {
+-        Expr *FirstBad = Inits[1];
+-        return ExprError(Diag(FirstBad->getBeginLoc(),
+-                              diag::err_auto_new_ctor_multiple_expressions)
+-                         << AllocType << TypeRange);
+-      }
+-      if (Braced && !getLangOpts().CPlusPlus17)
+-        Diag(Initializer->getBeginLoc(), diag::ext_auto_new_list_init)
+-            << AllocType << TypeRange;
+-      Expr *Deduce = Inits[0];
+-      if (isa<InitListExpr>(Deduce))
+-        return ExprError(
+-            Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
+-            << Braced << AllocType << TypeRange);
+-      QualType DeducedType;
+-      TemplateDeductionInfo Info(Deduce->getExprLoc());
+-      TemplateDeductionResult Result = DeduceAutoType(
+-          AllocTypeInfo->getTypeLoc(), Deduce, DeducedType, Info);
+-      if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
+-        return ExprError(Diag(StartLoc, diag::err_auto_new_deduction_failure)
+-                         << AllocType << Deduce->getType() << TypeRange
+-                         << Deduce->getSourceRange());
+-      if (DeducedType.isNull()) {
+-        assert(Result == TDK_AlreadyDiagnosed);
+-        return ExprError();
+-      }
+-      AllocType = DeducedType;
++    InitializedEntity Entity
++      = InitializedEntity::InitializeNew(StartLoc, AllocType);
++    AllocType = DeduceTemplateSpecializationFromInitializer(
++        AllocTypeInfo, Entity, Kind, Exprs);
++    if (AllocType.isNull())
++      return ExprError();
++  } else if (Deduced) {
++    MultiExprArg Inits = Exprs;
++    bool Braced = (initStyle == CXXNewExpr::ListInit);
++    if (Braced) {
++      auto *ILE = cast<InitListExpr>(Exprs[0]);
++      Inits = MultiExprArg(ILE->getInits(), ILE->getNumInits());
++    }
++
++    if (initStyle == CXXNewExpr::NoInit || Inits.empty())
++      return ExprError(Diag(StartLoc, diag::err_auto_new_requires_ctor_arg)
++                       << AllocType << TypeRange);
++    if (Inits.size() > 1) {
++      Expr *FirstBad = Inits[1];
++      return ExprError(Diag(FirstBad->getBeginLoc(),
++                            diag::err_auto_new_ctor_multiple_expressions)
++                       << AllocType << TypeRange);
++    }
++    if (Braced && !getLangOpts().CPlusPlus17)
++      Diag(Initializer->getBeginLoc(), diag::ext_auto_new_list_init)
++          << AllocType << TypeRange;
++    Expr *Deduce = Inits[0];
++    if (isa<InitListExpr>(Deduce))
++      return ExprError(
++          Diag(Deduce->getBeginLoc(), diag::err_auto_expr_init_paren_braces)
++          << Braced << AllocType << TypeRange);
++    QualType DeducedType;
++    TemplateDeductionInfo Info(Deduce->getExprLoc());
++    TemplateDeductionResult Result =
++        DeduceAutoType(AllocTypeInfo->getTypeLoc(), Deduce, DeducedType, Info);
++    if (Result != TDK_Success && Result != TDK_AlreadyDiagnosed)
++      return ExprError(Diag(StartLoc, diag::err_auto_new_deduction_failure)
++                       << AllocType << Deduce->getType() << TypeRange
++                       << Deduce->getSourceRange());
++    if (DeducedType.isNull()) {
++      assert(Result == TDK_AlreadyDiagnosed);
++      return ExprError();
+     }
++    AllocType = DeducedType;
+   }
+ 
+   // Per C++0x [expr.new]p5, the type being constructed may be a
+@@ -9025,7 +9018,8 @@ Sema::BuildExprRequirement(
+     //     be satisfied.
+     TemplateParameterList *TPL =
+         ReturnTypeRequirement.getTypeConstraintTemplateParameterList();
+-    QualType MatchedType = Context.getReferenceQualifiedType(E);
++    QualType MatchedType =
++        Context.getReferenceQualifiedType(E).getCanonicalType();
+     llvm::SmallVector<TemplateArgument, 1> Args;
+     Args.push_back(TemplateArgument(MatchedType));
+ 
+@@ -9033,7 +9027,7 @@ Sema::BuildExprRequirement(
+ 
+     TemplateArgumentList TAL(TemplateArgumentList::OnStack, Args);
+     MultiLevelTemplateArgumentList MLTAL(Param, TAL.asArray(),
+-                                         /*Final=*/true);
++                                         /*Final=*/false);
+     MLTAL.addOuterRetainedLevels(TPL->getDepth());
+     Expr *IDC = Param->getTypeConstraint()->getImmediatelyDeclaredConstraint();
+     ExprResult Constraint = SubstExpr(IDC, MLTAL);
+diff --git a/clang/lib/Sema/SemaTemplate.cpp b/clang/lib/Sema/SemaTemplate.cpp
+index 17f0d0263a3d..8466ed0da390 100644
+--- a/clang/lib/Sema/SemaTemplate.cpp
++++ b/clang/lib/Sema/SemaTemplate.cpp
+@@ -4875,13 +4875,13 @@ Sema::CheckConceptTemplateId(const CXXScopeSpec &SS,
+ 
+   auto *CSD = ImplicitConceptSpecializationDecl::Create(
+       Context, NamedConcept->getDeclContext(), NamedConcept->getLocation(),
+-      SugaredConverted);
++      CanonicalConverted);
+   ConstraintSatisfaction Satisfaction;
+   bool AreArgsDependent =
+       TemplateSpecializationType::anyDependentTemplateArguments(
+-          *TemplateArgs, SugaredConverted);
+-  MultiLevelTemplateArgumentList MLTAL(NamedConcept, SugaredConverted,
+-                                       /*Final=*/true);
++          *TemplateArgs, CanonicalConverted);
++  MultiLevelTemplateArgumentList MLTAL(NamedConcept, CanonicalConverted,
++                                       /*Final=*/false);
+   LocalInstantiationScope Scope(*this);
+ 
+   EnterExpressionEvaluationContext EECtx{
+@@ -6117,7 +6117,7 @@ bool Sema::CheckTemplateArgumentList(
+ 
+   if (!PartialTemplateArgs) {
+     TemplateArgumentList StackTemplateArgs(TemplateArgumentList::OnStack,
+-                                           SugaredConverted);
++                                           CanonicalConverted);
+     // Setup the context/ThisScope for the case where we are needing to
+     // re-instantiate constraints outside of normal instantiation.
+     DeclContext *NewContext = Template->getDeclContext();
+@@ -6137,7 +6137,7 @@ bool Sema::CheckTemplateArgumentList(
+     CXXThisScopeRAII(*this, RD, ThisQuals, RD != nullptr);
+ 
+     MultiLevelTemplateArgumentList MLTAL = getTemplateInstantiationArgs(
+-        Template, /*Final=*/true, &StackTemplateArgs,
++        Template, /*Final=*/false, &StackTemplateArgs,
+         /*RelativeToPrimary=*/true,
+         /*Pattern=*/nullptr,
+         /*ForConceptInstantiation=*/true);
+diff --git a/clang/lib/Sema/SemaTemplateDeduction.cpp b/clang/lib/Sema/SemaTemplateDeduction.cpp
+index b536e50be4c3..9e48a2a35a34 100644
+--- a/clang/lib/Sema/SemaTemplateDeduction.cpp
++++ b/clang/lib/Sema/SemaTemplateDeduction.cpp
+@@ -2869,10 +2869,10 @@ CheckDeducedArgumentConstraints(Sema &S, TemplateDeclT *Template,
+ 
+   bool NeedsReplacement = DeducedArgsNeedReplacement(Template);
+   TemplateArgumentList DeducedTAL{TemplateArgumentList::OnStack,
+-                                  SugaredDeducedArgs};
++                                  CanonicalDeducedArgs};
+ 
+   MultiLevelTemplateArgumentList MLTAL = S.getTemplateInstantiationArgs(
+-      Template, /*Final=*/true,
++      Template, /*Final=*/false,
+       /*InnerMost=*/NeedsReplacement ? nullptr : &DeducedTAL,
+       /*RelativeToPrimary=*/true, /*Pattern=*/
+       nullptr, /*ForConstraintInstantiation=*/true);
+@@ -2882,7 +2882,7 @@ CheckDeducedArgumentConstraints(Sema &S, TemplateDeclT *Template,
+   // not class-scope explicit specialization, so replace with Deduced Args
+   // instead of adding to inner-most.
+   if (NeedsReplacement)
+-    MLTAL.replaceInnermostTemplateArguments(SugaredDeducedArgs);
++    MLTAL.replaceInnermostTemplateArguments(CanonicalDeducedArgs);
+ 
+   if (S.CheckConstraintSatisfaction(Template, AssociatedConstraints, MLTAL,
+                                     Info.getLocation(),
+@@ -4656,8 +4656,8 @@ static bool CheckDeducedPlaceholderConstraints(Sema &S, const AutoType &Type,
+                                   /*PartialTemplateArgs=*/false,
+                                   SugaredConverted, CanonicalConverted))
+     return true;
+-  MultiLevelTemplateArgumentList MLTAL(Concept, SugaredConverted,
+-                                       /*Final=*/true);
++  MultiLevelTemplateArgumentList MLTAL(Concept, CanonicalConverted,
++                                       /*Final=*/false);
+   if (S.CheckConstraintSatisfaction(Concept, {Concept->getConstraintExpr()},
+                                     MLTAL, TypeLoc.getLocalSourceRange(),
+                                     Satisfaction))
+diff --git a/clang/lib/Serialization/ASTReaderDecl.cpp b/clang/lib/Serialization/ASTReaderDecl.cpp
+index b7828441785c..8173f7fb5e56 100644
+--- a/clang/lib/Serialization/ASTReaderDecl.cpp
++++ b/clang/lib/Serialization/ASTReaderDecl.cpp
+@@ -2271,7 +2271,7 @@ void ASTDeclReader::VisitImplicitConceptSpecializationDecl(
+   VisitDecl(D);
+   llvm::SmallVector<TemplateArgument, 4> Args;
+   for (unsigned I = 0; I < D->NumTemplateArgs; ++I)
+-    Args.push_back(Record.readTemplateArgument(/*Canonicalize=*/false));
++    Args.push_back(Record.readTemplateArgument(/*Canonicalize=*/true));
+   D->setTemplateArguments(Args);
+ }
+ 
+diff --git a/clang/test/AST/ast-dump-concepts.cpp b/clang/test/AST/ast-dump-concepts.cpp
+index b835ab5f8d88..06518a71987a 100644
+--- a/clang/test/AST/ast-dump-concepts.cpp
++++ b/clang/test/AST/ast-dump-concepts.cpp
+@@ -20,9 +20,8 @@ struct Foo {
+   // CHECK:      TemplateTypeParmDecl {{.*}} referenced Concept {{.*}} 'binary_concept'
+   // CHECK-NEXT: `-ConceptSpecializationExpr {{.*}} <col:13, col:31> 'bool' Concept {{.*}} 'binary_concept'
+   // CHECK-NEXT:   |-ImplicitConceptSpecializationDecl {{.*}} <line:13:9> col:9
+-  // CHECK-NEXT:   | |-TemplateArgument type 'R'
+-  // CHECK-NEXT:   | | `-TemplateTypeParmType {{.*}} 'R' dependent {{.*}}depth 1 index 0
+-  // CHECK-NEXT:   | |   `-TemplateTypeParm {{.*}} 'R'
++  // CHECK-NEXT:   | |-TemplateArgument type 'type-parameter-1-0'  
++  // CHECK-NEXT:   | | `-TemplateTypeParmType {{.*}} 'type-parameter-1-0' dependent {{.*}}depth 1 index 0
+   // CHECK-NEXT:   | `-TemplateArgument type 'int'
+   // CHECK-NEXT:   |   `-BuiltinType {{.*}} 'int'
+   // CHECK-NEXT:   |-TemplateArgument {{.*}} type 'R'
+@@ -36,9 +35,8 @@ struct Foo {
+   // CHECK:      TemplateTypeParmDecl {{.*}} referenced Concept {{.*}} 'unary_concept'
+   // CHECK-NEXT: `-ConceptSpecializationExpr {{.*}} <col:13> 'bool'
+   // CHECK-NEXT:   |-ImplicitConceptSpecializationDecl {{.*}} <line:10:9> col:9
+-  // CHECK-NEXT:   | `-TemplateArgument type 'R'
+-  // CHECK-NEXT:   |   `-TemplateTypeParmType {{.*}} 'R' dependent {{.*}}depth 1 index 0
+-  // CHECK-NEXT:   |     `-TemplateTypeParm {{.*}} 'R'
++  // CHECK-NEXT:   | `-TemplateArgument type 'type-parameter-1-0'
++  // CHECK-NEXT:   |   `-TemplateTypeParmType {{.*}} 'type-parameter-1-0' dependent {{.*}}depth 1 index 0
+   template <unary_concept R>
+   Foo(R);
+ 
+diff --git a/clang/test/CXX/expr/expr.prim/expr.prim.req/compound-requirement.cpp b/clang/test/CXX/expr/expr.prim/expr.prim.req/compound-requirement.cpp
+index 7f5bbc5b038b..b7366207882f 100644
+--- a/clang/test/CXX/expr/expr.prim/expr.prim.req/compound-requirement.cpp
++++ b/clang/test/CXX/expr/expr.prim/expr.prim.req/compound-requirement.cpp
+@@ -35,14 +35,14 @@ using r2i2 = r2<A>; // expected-error{{constraints not satisfied for class templ
+ using r2i3 = r2<D>;
+ using r2i4 = r2<const D>; // expected-error{{constraints not satisfied for class template 'r2' [with T = const D]}}
+ 
+-template<typename T> requires requires { { sizeof(T) }; } // expected-note{{because 'sizeof(T)' would be invalid: invalid application of 'sizeof' to an incomplete type 'void'}} expected-note{{because 'sizeof(T)' would be invalid: invalid application of 'sizeof' to an incomplete type 'class nonexistent'}}
++template<typename T> requires requires { { sizeof(T) }; } // expected-note{{because 'sizeof(T)' would be invalid: invalid application of 'sizeof' to an incomplete type 'void'}} expected-note{{because 'sizeof(T)' would be invalid: invalid application of 'sizeof' to an incomplete type 'nonexistent'}}
+ struct r3 {};
+ 
+ using r3i1 = r3<int>;
+ using r3i2 = r3<A>;
+ using r3i3 = r3<A &>;
+ using r3i4 = r3<void>; // expected-error{{constraints not satisfied for class template 'r3' [with T = void]}}
+-using r3i4 = r3<class nonexistent>; // expected-error{{constraints not satisfied for class template 'r3' [with T = class nonexistent]}}
++using r3i4 = r3<class nonexistent>; // expected-error{{constraints not satisfied for class template 'r3' [with T = nonexistent]}}
+ 
+ // Non-dependent expressions
+ 
+@@ -149,7 +149,7 @@ namespace std_example {
+   template<typename T> constexpr bool is_same_v<T, T> = true;
+ 
+   template<typename T, typename U> concept same_as = is_same_v<T, U>;
+-  // expected-note@-1 {{because 'is_same_v<int, typename T2::inner>' evaluated to false}}
++  // expected-note@-1 {{because 'is_same_v<int, int *>' evaluated to false}}
+ 
+   static_assert(C1<int>);
+   static_assert(C1<int*>);
+@@ -173,9 +173,9 @@ namespace std_example {
+     int operator *() { return 0; }
+   };
+   static_assert(C2<T1>);
+-  template<C2 T> struct C2_check {}; // expected-note{{because 'int' does not satisfy 'C2'}} expected-note{{because 'T2' does not satisfy 'C2'}}
++  template<C2 T> struct C2_check {}; // expected-note{{because 'int' does not satisfy 'C2'}} expected-note{{because 'std_example::T2' does not satisfy 'C2'}}
+   using c2c1 = C2_check<int>; // expected-error{{constraints not satisfied for class template 'C2_check' [with T = int]}}
+-  using c2c2 = C2_check<T2>; // expected-error{{constraints not satisfied for class template 'C2_check' [with T = T2]}}
++  using c2c2 = C2_check<T2>; // expected-error{{constraints not satisfied for class template 'C2_check' [with T = std_example::T2]}}
+ 
+   template<typename T>
+   void g(T t) noexcept(sizeof(T) == 1) {}
+diff --git a/clang/test/CXX/expr/expr.prim/expr.prim.req/nested-requirement.cpp b/clang/test/CXX/expr/expr.prim/expr.prim.req/nested-requirement.cpp
+index 3abff0bb32e1..e7428b5061c2 100644
+--- a/clang/test/CXX/expr/expr.prim/expr.prim.req/nested-requirement.cpp
++++ b/clang/test/CXX/expr/expr.prim/expr.prim.req/nested-requirement.cpp
+@@ -27,7 +27,7 @@ using r4i = X<void>::r4<int>; // expected-error{{constraints not satisfied for c
+ 
+ // C++ [expr.prim.req.nested] Examples
+ namespace std_example {
+-  template<typename U> concept C1 = sizeof(U) == 1; // expected-note{{because 'sizeof(decltype(+t)) == 1' (4 == 1) evaluated to false}}
++  template<typename U> concept C1 = sizeof(U) == 1; // expected-note{{because 'sizeof(int) == 1' (4 == 1) evaluated to false}}
+   template<typename T> concept D =
+     requires (T t) {
+       requires C1<decltype (+t)>; // expected-note{{because 'decltype(+t)' (aka 'int') does not satisfy 'C1'}}
+diff --git a/clang/test/CXX/expr/expr.prim/expr.prim.req/simple-requirement.cpp b/clang/test/CXX/expr/expr.prim/expr.prim.req/simple-requirement.cpp
+index abfadfa34884..7515f5c62d5e 100644
+--- a/clang/test/CXX/expr/expr.prim/expr.prim.req/simple-requirement.cpp
++++ b/clang/test/CXX/expr/expr.prim/expr.prim.req/simple-requirement.cpp
+@@ -39,14 +39,14 @@ using r2i4 = r2<const D>; // expected-error{{constraints not satisfied for class
+ 
+ template<typename T> requires requires { sizeof(T); }
+ // expected-note@-1{{because 'sizeof(T)' would be invalid: invalid application of 'sizeof' to an incomplete type 'void'}}
+-// expected-note@-2{{because 'sizeof(T)' would be invalid: invalid application of 'sizeof' to an incomplete type 'class nonexistent'}}
++// expected-note@-2{{because 'sizeof(T)' would be invalid: invalid application of 'sizeof' to an incomplete type 'nonexistent'}}
+ struct r3 {};
+ 
+ using r3i1 = r3<int>;
+ using r3i2 = r3<A>;
+ using r3i3 = r3<A &>;
+ using r3i4 = r3<void>; // expected-error{{constraints not satisfied for class template 'r3' [with T = void]}}
+-using r3i4 = r3<class nonexistent>; // expected-error{{constraints not satisfied for class template 'r3' [with T = class nonexistent]}}
++using r3i4 = r3<class nonexistent>; // expected-error{{constraints not satisfied for class template 'r3' [with T = nonexistent]}}
+ 
+ template<typename T> requires requires (T t) { 0; "a"; (void)'a'; }
+ struct r4 {};
+diff --git a/clang/test/CXX/expr/expr.prim/expr.prim.req/type-requirement.cpp b/clang/test/CXX/expr/expr.prim/expr.prim.req/type-requirement.cpp
+index 28dff336d053..5433cfb21955 100644
+--- a/clang/test/CXX/expr/expr.prim/expr.prim.req/type-requirement.cpp
++++ b/clang/test/CXX/expr/expr.prim/expr.prim.req/type-requirement.cpp
+@@ -182,14 +182,14 @@ namespace std_example {
+   static_assert(C1<has_inner_and_type> && C2<has_inner_and_type> && C3<has_inner_and_type>);
+   template<C1 T> struct C1_check {};
+   // expected-note@-1 {{because 'int' does not satisfy 'C1'}}
+-  // expected-note@-2 {{because 'has_type' does not satisfy 'C1'}}
++  // expected-note@-2 {{because 'std_example::has_type' does not satisfy 'C1'}}
+   template<C2 T> struct C2_check {};
+-  // expected-note@-1 {{because 'has_inner' does not satisfy 'C2'}}
++  // expected-note@-1 {{because 'std_example::has_inner' does not satisfy 'C2'}}
+   template<C3 T> struct C3_check {};
+   // expected-note@-1 {{because 'void' does not satisfy 'C3'}}
+   using c1 = C1_check<int>; // expected-error{{constraints not satisfied for class template 'C1_check' [with T = int]}}
+-  using c2 = C1_check<has_type>; // expected-error{{constraints not satisfied for class template 'C1_check' [with T = has_type]}}
+-  using c3 = C2_check<has_inner>; // expected-error{{constraints not satisfied for class template 'C2_check' [with T = has_inner]}}
++  using c2 = C1_check<has_type>; // expected-error{{constraints not satisfied for class template 'C1_check' [with T = std_example::has_type]}}
++  using c3 = C2_check<has_inner>; // expected-error{{constraints not satisfied for class template 'C2_check' [with T = std_example::has_inner]}}
+   using c4 = C3_check<void>; // expected-error{{constraints not satisfied for class template 'C3_check' [with T = void]}}
+ }
+ 
+@@ -199,10 +199,10 @@ template <typename T> concept C = requires { requires requires { T::a; }; };
+ // expected-note@-1 {{because 'T::a' would be invalid: no member named 'a' in 'PR48656::T1'}}
+ 
+ template <C...> struct A {};
+-// expected-note@-1 {{because 'T1' does not satisfy 'C'}}
++// expected-note@-1 {{because 'PR48656::T1' does not satisfy 'C'}}
+ 
+ struct T1 {};
+-template struct A<T1>; // expected-error {{constraints not satisfied for class template 'A' [with $0 = <T1>]}}
++template struct A<T1>; // expected-error {{constraints not satisfied for class template 'A' [with $0 = <PR48656::T1>]}}
+ 
+ struct T2 { static constexpr bool a = false; };
+ template struct A<T2>;
+diff --git a/clang/test/CXX/temp/temp.constr/temp.constr.normal/p1.cpp b/clang/test/CXX/temp/temp.constr/temp.constr.normal/p1.cpp
+index 02c97b4591a1..d80710937cdf 100644
+--- a/clang/test/CXX/temp/temp.constr/temp.constr.normal/p1.cpp
++++ b/clang/test/CXX/temp/temp.constr/temp.constr.normal/p1.cpp
+@@ -8,7 +8,7 @@ template<typename T> requires Bar<T> && true struct S<T> { };
+ 
+ template<typename T> concept True2 = sizeof(T) >= 0;
+ template<typename T> concept Foo2 = True2<T*>;
+-// expected-error@-1{{'type name' declared as a pointer to a reference of type 'T &'}}
++// expected-error@-1{{'type name' declared as a pointer to a reference of type 'type-parameter-0-0 &'}}
+ template<typename T> concept Bar2 = Foo2<T&>;
+ // expected-note@-1{{while substituting into concept arguments here; substitution failures not allowed in concept arguments}}
+ template<typename T> requires Bar2<T> struct S2 { };
+diff --git a/clang/test/CXX/temp/temp.param/p10-2a.cpp b/clang/test/CXX/temp/temp.param/p10-2a.cpp
+index 97e0ef35837b..4f5fdd3b4809 100644
+--- a/clang/test/CXX/temp/temp.param/p10-2a.cpp
++++ b/clang/test/CXX/temp/temp.param/p10-2a.cpp
+@@ -94,8 +94,8 @@ concept OneOf = (is_same_v<T, Ts> || ...);
+ // expected-note@-5 {{and 'is_same_v<short, char>' evaluated to false}}
+ // expected-note@-6 3{{because 'is_same_v<int, char[1]>' evaluated to false}}
+ // expected-note@-7 3{{and 'is_same_v<int, char[2]>' evaluated to false}}
+-// expected-note@-8 2{{because 'is_same_v<decltype(nullptr), char>' evaluated to false}}
+-// expected-note@-9 2{{and 'is_same_v<decltype(nullptr), int>' evaluated to false}}
++// expected-note@-8 2{{because 'is_same_v<std::nullptr_t, char>' evaluated to false}}
++// expected-note@-9 2{{and 'is_same_v<std::nullptr_t, int>' evaluated to false}}
+ 
+ template<OneOf<char[1], char[2]> T, OneOf<int, long, char> U>
+ // expected-note@-1 2{{because 'OneOf<char, char[1], char[2]>' evaluated to false}}
+diff --git a/clang/test/SemaTemplate/concepts-recursive-inst.cpp b/clang/test/SemaTemplate/concepts-recursive-inst.cpp
+index 651ce1a49055..d370f0e2a641 100644
+--- a/clang/test/SemaTemplate/concepts-recursive-inst.cpp
++++ b/clang/test/SemaTemplate/concepts-recursive-inst.cpp
+@@ -98,25 +98,18 @@ namespace GH50891 {
+   };
+ 
+   static_assert(Numeric<Deferred>); // #STATIC_ASSERT
+-  // expected-error@#OP_TO {{satisfaction of constraint 'Numeric<TO>' depends on itself}}
+-  // expected-note@#OP_TO {{while substituting template arguments into constraint expression here}}
+-  // FIXME: The following two refer to type-parameter-0-0, it would be nice to
+-  // see if we could instead diagnose with the sugared name.
+-  // expected-note@#FOO_CALL {{while checking constraint satisfaction for template}}
+-  // expected-note@#FOO_CALL {{while substituting deduced template arguments into function template}}
+-  // expected-note@#FOO_CALL {{in instantiation of requirement here}}
++  // expected-error@#NUMERIC{{satisfaction of constraint 'requires (T a) { foo(a); }' depends on itself}}
+   // expected-note@#NUMERIC {{while substituting template arguments into constraint expression here}}
+-  // expected-note@#OP_TO {{skipping 2 contexts in backtrace}}
++  // expected-note@#OP_TO {{while checking the satisfaction of concept 'Numeric<GH50891::Deferred>' requested here}}
++  // expected-note@#OP_TO {{while substituting template arguments into constraint expression here}}
+   // expected-note@#FOO_CALL {{while checking constraint satisfaction for template}}
+   // expected-note@#FOO_CALL {{in instantiation of function template specialization}}
+   // expected-note@#FOO_CALL {{in instantiation of requirement here}}
+   // expected-note@#NUMERIC {{while substituting template arguments into constraint expression here}}
+-  // expected-note@#STATIC_ASSERT{{while checking the satisfaction of concept 'Numeric<Deferred>' requested here}}
+ 
+-  // Fallout of that failure is that deferred does not satisfy numeric,
+-  // which is unfortunate, but about what we can accomplish here.
+   // expected-error@#STATIC_ASSERT {{static assertion failed}}
+-  // expected-note@#STATIC_ASSERT{{because 'Deferred' does not satisfy 'Numeric'}}
+-  // expected-note@#FOO_CALL {{because 'foo(a)' would be invalid}}
++  // expected-note@#STATIC_ASSERT{{while checking the satisfaction of concept 'Numeric<GH50891::Deferred>' requested here}}
++  // expected-note@#STATIC_ASSERT{{because substituted constraint expression is ill-formed: constraint depends on a previously diagnosed expression}}
++
+ } // namespace GH50891
+ 
+diff --git a/clang/test/SemaTemplate/cxx2a-constraint-caching.cpp b/clang/test/SemaTemplate/cxx2a-constraint-caching.cpp
+index 6b6db373cfb5..d44a42926891 100644
+--- a/clang/test/SemaTemplate/cxx2a-constraint-caching.cpp
++++ b/clang/test/SemaTemplate/cxx2a-constraint-caching.cpp
+@@ -14,13 +14,15 @@ constexpr bool foo() requires (f(T()), true) { return true; }
+ namespace a {
+   struct A {};
+   constexpr void f(A a) {}
++}
+ 
+-  static_assert(C<A>);
+-  static_assert(foo<A>());
++static_assert(C<a::A>);
++static_assert(foo<a::A>());
+ 
++namespace a {
+   // This makes calls to f ambiguous, but the second check will still succeed
+   // because the constraint satisfaction results are cached.
+   constexpr void f(A a, int = 2) {}
+-  static_assert(C<A>);
+-  static_assert(foo<A>());
+-} // namespace a
++}
++static_assert(C<a::A>);
++static_assert(foo<a::A>());
+diff --git a/clang/test/SemaTemplate/instantiate-requires-expr.cpp b/clang/test/SemaTemplate/instantiate-requires-expr.cpp
+index a9d8b8b7dac6..ba82fc1313fc 100644
+--- a/clang/test/SemaTemplate/instantiate-requires-expr.cpp
++++ b/clang/test/SemaTemplate/instantiate-requires-expr.cpp
+@@ -76,8 +76,8 @@ namespace type_requirement {
+   // expected-note@-2 {{because 'false_v<requires { typename contains_template<short>::temp<contains_template<short> >; }>' evaluated to false}}
+   struct r2 {};
+ 
+-  using r2i1 = r2<contains_template<int>>; // expected-error{{constraints not satisfied for class template 'r2' [with T = contains_template<int>]}}
+-  using r2i2 = r2<contains_template<short>>; // expected-error{{constraints not satisfied for class template 'r2' [with T = contains_template<short>]}}
++  using r2i1 = r2<contains_template<int>>; // expected-error{{constraints not satisfied for class template 'r2' [with T = type_requirement::contains_template<int>]}}
++  using r2i2 = r2<contains_template<short>>; // expected-error{{constraints not satisfied for class template 'r2' [with T = type_requirement::contains_template<short>]}}
+ 
+   // substitution error occurs, then requires expr is instantiated again
+ 
+@@ -108,7 +108,7 @@ namespace type_requirement {
+   // expected-note@-1 {{because 'false_v<requires { <<error-type>>; } && requires { <<error-type>>; }>' evaluated to false}}
+   struct r7 {};
+ 
+-  using r7i = r7<int, A>; // expected-error{{constraints not satisfied for class template 'r7' [with Ts = <int, A>]}}
++  using r7i = r7<int, A>; // expected-error{{constraints not satisfied for class template 'r7' [with Ts = <int, type_requirement::A>]}}
+ }
+ 
+ namespace expr_requirement {
+@@ -227,13 +227,3 @@ struct r6 {};
+ 
+ using r6i = r6<int>;
+ // expected-error@-1 {{constraints not satisfied for class template 'r6' [with T = int]}}
+-
+-namespace sugared_instantiation {
+-  template <class C1> concept C = requires { C1{}; };
+-  template <class D1> concept D = requires { new D1; };
+-
+-  // Test that 'deduced auto' doesn't get confused with 'undeduced auto'.
+-  auto f() { return 0; }
+-  static_assert(requires { { f() } -> C; });
+-  static_assert(requires { { f() } -> D; });
+-} // namespace sugared_instantiation
+diff --git a/clang/test/SemaTemplate/pr52970.cpp b/clang/test/SemaTemplate/pr52970.cpp
+index 6aabc419bd2b..7aac5ee85659 100644
+--- a/clang/test/SemaTemplate/pr52970.cpp
++++ b/clang/test/SemaTemplate/pr52970.cpp
+@@ -53,7 +53,7 @@ static_assert(!DotFollowingPointer::f(Bad{}), "");
+ #if __cplusplus >= 202002L
+ template <class T>
+ concept C = requires(T t) { t.begin(); };
+-  // cxx20-note@-1 {{because 't.begin()' would be invalid: member reference type 'Bad' (aka 'Holder<Incomplete> *') is a pointer}}
++  // cxx20-note@-1 {{because 't.begin()' would be invalid: member reference type 'Holder<Incomplete> *' is a pointer}}
+ 
+ static_assert(C<Good>);
+ static_assert(!C<Bad>);
+-- 
+2.40.0.348.gf938b09366-goog
+

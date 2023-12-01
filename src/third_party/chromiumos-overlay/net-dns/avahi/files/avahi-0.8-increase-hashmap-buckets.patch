@@ -1,0 +1,40 @@
+From 5916285037c6c80a5ae13103c52dc03f9a2f4ce2 Mon Sep 17 00:00:00 2001
+From: Benjamin Gordon <bmgordon@chromium.org>
+Date: Sat, 20 May 2023 11:10:24 -0600
+Subject: [PATCH 1/3] core/hashmap: Increase hashmap bucket count
+
+The hashmap is implemented as a fixed-sized array of buckets that each
+contain a linked list.  Each lookup needs to walk these lists and do an
+expensive string unescape option to compare keys.  Increasing the number
+of bucket reduces the number of key comparisons at the expense of
+increased memory use.
+
+Changing from 123 buckets to 251 uses an extra ~8KB per network
+interface in the empty case (the difference is less as the table fills
+up).  With a cache size of 1000, empirical testing indicates that it
+reduces the number of key comparisons by 40% for cache hits and 70%
+for cache misses.
+
+Increasing the number of buckets further made little difference for the
+current cache size.  It might be worth considering again if we increase
+the cache significantly beyond 1000 entries.
+---
+ avahi-core/hashmap.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/avahi-core/hashmap.c b/avahi-core/hashmap.c
+index 9b55bd3..a78d17e 100644
+--- a/avahi-core/hashmap.c
++++ b/avahi-core/hashmap.c
+@@ -31,7 +31,7 @@
+ #include "hashmap.h"
+ #include "util.h"
+ 
+-#define HASH_MAP_SIZE 123
++#define HASH_MAP_SIZE 251
+ 
+ typedef struct Entry Entry;
+ struct Entry {
+-- 
+2.40.1.698.g37aff9b760-goog
+

@@ -1,0 +1,29 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  pkg_deps = [ "libbrillo" ]
+}
+
+source_set("libssfc") {
+  sources = [ "ssfc_prober.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [
+    "//rmad/system:libsystem",
+    "//rmad/utils:libutils",
+  ]
+}
+
+if (use.test) {
+  source_set("libssfc_test") {
+    sources = [ "ssfc_prober_test.cc" ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [ ":libssfc" ]
+  }
+}

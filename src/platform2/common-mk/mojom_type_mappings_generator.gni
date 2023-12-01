@@ -1,0 +1,27 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# GN template to generate source files for the given mojom typemap.
+# How to use:
+# [platform2/pkg/BUILD.gn]
+# generate_mojom_type_mappings("foo_type_mappings") {
+#   sources = [
+#     "mojo/foo.typemap",
+#     "mojo/foo_sub.typemap",
+#   ]
+# }
+#
+
+template("generate_mojom_type_mappings") {
+  action(target_name) {
+    script = invoker.mojom_type_mappings_generator
+    inputs = [ "build/gn_helpers.py" ]
+    sources = invoker.sources
+    outputs = [ "$target_gen_dir/${target_name}_typemapping" ]
+    args = [
+             "--output",
+             "$target_gen_dir/${target_name}_typemapping",
+           ] + rebase_path(sources, root_build_dir)
+  }
+}

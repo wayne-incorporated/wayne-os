@@ -1,0 +1,116 @@
+From f82b7ea5dca318ecbd2070987ffe88dbdd8086e7 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 15 Mar 2022 18:08:21 -0300
+Subject: [PATCH 103/163] aarch64: Use 64-bit variable to access the special
+ registers
+
+---
+ sysdeps/aarch64/fpu/fpu_control.h             | 36 +++++++++++++------
+ sysdeps/aarch64/fpu/fraiseexcpt.c             |  2 +-
+ sysdeps/aarch64/sfp-machine.h                 |  2 +-
+ .../unix/sysv/linux/aarch64/cpu-features.c    |  2 +-
+ sysdeps/unix/sysv/linux/aarch64/sysconf.c     |  2 +-
+ 5 files changed, 29 insertions(+), 15 deletions(-)
+
+diff --git a/sysdeps/aarch64/fpu/fpu_control.h b/sysdeps/aarch64/fpu/fpu_control.h
+index 764ed5cdbb..8c1746ba8a 100644
+--- a/sysdeps/aarch64/fpu/fpu_control.h
++++ b/sysdeps/aarch64/fpu/fpu_control.h
+@@ -29,17 +29,31 @@
+ # define _FPU_GETFPSR(fpsr) (fpsr = __builtin_aarch64_get_fpsr ())
+ # define _FPU_SETFPSR(fpsr) __builtin_aarch64_set_fpsr (fpsr)
+ #else
+-# define _FPU_GETCW(fpcr) \
+-  __asm__ __volatile__ ("mrs	%0, fpcr" : "=r" (fpcr))
+-
+-# define _FPU_SETCW(fpcr) \
+-  __asm__ __volatile__ ("msr	fpcr, %0" : : "r" (fpcr))
+-
+-# define _FPU_GETFPSR(fpsr) \
+-  __asm__ __volatile__ ("mrs	%0, fpsr" : "=r" (fpsr))
+-
+-# define _FPU_SETFPSR(fpsr) \
+-  __asm__ __volatile__ ("msr	fpsr, %0" : : "r" (fpsr))
++# define _FPU_GETCW(fpcr)					\
++  ({ 								\
++   unsigned long int __fpcr;					\
++   __asm__ __volatile__ ("mrs	%0, fpcr" : "=r" (__fpcr));	\
++   fpcr = __fpcr;						\
++  })
++
++# define _FPU_SETCW(fpcr)					\
++  ({								\
++   unsigned long int __fpcr = fpcr;				\
++   __asm__ __volatile__ ("msr	fpcr, %0" : : "r" (__fpcr));    \
++  })
++
++# define _FPU_GETFPSR(fpsr)					\
++  ({								\
++   unsigned long int __fpsr;					\
++   __asm__ __volatile__ ("mrs	%0, fpsr" : "=r" (__fpsr));	\
++   fpsr = __fpsr;						\
++  })
++
++# define _FPU_SETFPSR(fpsr)					\
++  ({								\
++   unsigned long int __fpsr = fpsr;				\
++   __asm__ __volatile__ ("msr	fpsr, %0" : : "r" (__fpsr));    \
++  })
+ #endif
+ 
+ /* Reserved bits should be preserved when modifying register
+diff --git a/sysdeps/aarch64/fpu/fraiseexcpt.c b/sysdeps/aarch64/fpu/fraiseexcpt.c
+index bda6144492..2a98307652 100644
+--- a/sysdeps/aarch64/fpu/fraiseexcpt.c
++++ b/sysdeps/aarch64/fpu/fraiseexcpt.c
+@@ -23,7 +23,7 @@
+ int
+ __feraiseexcept (int excepts)
+ {
+-  int fpsr;
++  unsigned long int fpsr;
+   const float fp_zero = 0.0;
+   const float fp_one = 1.0;
+   const float fp_max = FLT_MAX;
+diff --git a/sysdeps/aarch64/sfp-machine.h b/sysdeps/aarch64/sfp-machine.h
+index a9ecdbf961..b4b34e98e9 100644
+--- a/sysdeps/aarch64/sfp-machine.h
++++ b/sysdeps/aarch64/sfp-machine.h
+@@ -74,7 +74,7 @@ do {						\
+     const float fp_1e32 = 1.0e32f;					\
+     const float fp_zero = 0.0;						\
+     const float fp_one = 1.0;						\
+-    unsigned fpsr;							\
++    unsigned long int fpsr;						\
+     if (_fex & FP_EX_INVALID)						\
+       {									\
+         __asm__ __volatile__ ("fdiv\ts0, %s0, %s0"			\
+diff --git a/sysdeps/unix/sysv/linux/aarch64/cpu-features.c b/sysdeps/unix/sysv/linux/aarch64/cpu-features.c
+index 41dda8d003..9242b2c60a 100644
+--- a/sysdeps/unix/sysv/linux/aarch64/cpu-features.c
++++ b/sysdeps/unix/sysv/linux/aarch64/cpu-features.c
+@@ -86,7 +86,7 @@ init_cpu_features (struct cpu_features *cpu_features)
+   cpu_features->midr_el1 = midr;
+ 
+   /* Check if ZVA is enabled.  */
+-  unsigned dczid;
++  uint64_t dczid;
+   asm volatile ("mrs %0, dczid_el0" : "=r"(dczid));
+ 
+   if ((dczid & DCZID_DZP_MASK) == 0)
+diff --git a/sysdeps/unix/sysv/linux/aarch64/sysconf.c b/sysdeps/unix/sysv/linux/aarch64/sysconf.c
+index 665a2bd624..3b4badc671 100644
+--- a/sysdeps/unix/sysv/linux/aarch64/sysconf.c
++++ b/sysdeps/unix/sysv/linux/aarch64/sysconf.c
+@@ -27,7 +27,7 @@ static long int linux_sysconf (int name);
+ long int
+ __sysconf (int name)
+ {
+-  unsigned ctr;
++  unsigned long int ctr;
+ 
+   /* Unfortunately, the registers that contain the actual cache info
+      (CCSIDR_EL1, CLIDR_EL1, and CSSELR_EL1) are protected by the Linux
+-- 
+2.37.2
+

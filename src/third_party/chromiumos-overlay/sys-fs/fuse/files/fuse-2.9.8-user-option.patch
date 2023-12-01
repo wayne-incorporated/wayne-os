@@ -1,0 +1,83 @@
+Changed fusermount to avoid calling getpwuid(3) if '-o user=<username>'
+is provided in the command line. This prevents glibc's implementation of
+getpwuid from invoking socket/connect syscalls, which allows ChromiumOS
+daemons to put more restrictive seccomp filters on fusermount.
+
+diff --git a/util/fusermount.c b/util/fusermount.c
+index 245aeea..e30f950 100644
+--- a/util/fusermount.c
++++ b/util/fusermount.c
+@@ -656,6 +656,21 @@ static int add_option(char **optsp, const char *opt, unsigned expand)
+ 	return 0;
+ }
+ 
++static int add_user_option(char **mnt_optsp, const char *user)
++{
++	if (getuid() != 0) {
++		if (user == NULL)
++			user = get_user_name();
++		if (user == NULL)
++			return -1;
++
++		if (add_option(mnt_optsp, "user=", strlen(user)) == -1)
++			return -1;
++		strcat(*mnt_optsp, user);
++	}
++	return 0;
++}
++
+ static int get_mnt_opts(int flags, char *opts, char **mnt_optsp)
+ {
+ 	int i;
+@@ -676,15 +691,6 @@ static int get_mnt_opts(int flags, char *opts, char **mnt_optsp)
+ 	l = strlen(*mnt_optsp);
+ 	if ((*mnt_optsp)[l-1] == ',')
+ 		(*mnt_optsp)[l-1] = '\0';
+-	if (getuid() != 0) {
+-		const char *user = get_user_name();
+-		if (user == NULL)
+-			return -1;
+-
+-		if (add_option(mnt_optsp, "user=", strlen(user)) == -1)
+-			return -1;
+-		strcat(*mnt_optsp, user);
+-	}
+ 	return 0;
+ }
+ 
+@@ -737,6 +743,7 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
+ 	char *subtype = NULL;
+ 	char *source = NULL;
+ 	char *type = NULL;
++	char *user = NULL;
+ 	int check_empty = 1;
+ 	int blkdev = 0;
+ 
+@@ -750,6 +757,7 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
+ 		unsigned len;
+ 		const char *fsname_str = "fsname=";
+ 		const char *subtype_str = "subtype=";
++		const char *user_str = "user=";
+ 		bool escape_ok = begins_with(s, fsname_str) ||
+ 				 begins_with(s, subtype_str);
+ 		for (len = 0; s[len]; len++) {
+@@ -764,6 +772,9 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
+ 		} else if (begins_with(s, subtype_str)) {
+ 			if (!get_string_opt(s, len, subtype_str, &subtype))
+ 				goto err;
++		} else if (begins_with(s, user_str)) {
++			if (!get_string_opt(s, len, user_str, &user))
++				goto err;
+ 		} else if (opt_eq(s, len, "blkdev")) {
+ 			if (getuid() != 0) {
+ 				fprintf(stderr,
+@@ -826,6 +837,9 @@ static int do_mount(const char *mnt, char **typep, mode_t rootmode,
+ 	}
+ 	*d = '\0';
+ 	res = get_mnt_opts(flags, optbuf, &mnt_opts);
++	if (res == -1)
++		goto err;
++	res = add_user_option(&mnt_opts, user);
+ 	if (res == -1)
+ 		goto err;
+ 

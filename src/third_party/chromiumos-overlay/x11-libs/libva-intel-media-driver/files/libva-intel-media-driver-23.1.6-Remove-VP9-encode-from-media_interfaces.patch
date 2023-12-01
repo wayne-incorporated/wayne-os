@@ -1,0 +1,76 @@
+From 0f8958bcf8bd8c0711c8fb6846e5d86ee5e7442a Mon Sep 17 00:00:00 2001
+From: "Ilja H. Friedel" <ihf@chromium.org>
+Date: Fri, 30 Jun 2023 15:51:08 -0700
+Subject: [PATCH] Remove VP9 endecode from media_interfaces
+
+---
+ .../media_interfaces_g11_jsl_ehl.cpp            | 17 -----------------
+ .../media_interfaces_mtl.cpp                    | 17 -----------------
+ 2 files changed, 34 deletions(-)
+
+diff --git a/media_driver/media_interface/media_interfaces_m11_jsl_ehl/media_interfaces_g11_jsl_ehl.cpp b/media_driver/media_interface/media_interfaces_m11_jsl_ehl/media_interfaces_g11_jsl_ehl.cpp
+index 4552f4fd9..beb940fb7 100644
+--- a/media_driver/media_interface/media_interfaces_m11_jsl_ehl/media_interfaces_g11_jsl_ehl.cpp
++++ b/media_driver/media_interface/media_interfaces_m11_jsl_ehl/media_interfaces_g11_jsl_ehl.cpp
+@@ -312,23 +312,6 @@ MOS_STATUS CodechalInterfacesG11JslEhl::Initialize(
+         }
+         else
+ #endif
+-#ifdef _VP9_ENCODE_VDENC_SUPPORTED
+-        if (info->Mode == CODECHAL_ENCODE_MODE_VP9)
+-        {
+-            encoder = MOS_New(Encode::Vp9, hwInterface, debugInterface, info);
+-            if (encoder == nullptr)
+-            {
+-                CODECHAL_PUBLIC_ASSERTMESSAGE("Encode state creation failed!");
+-                return MOS_STATUS_INVALID_PARAMETER;
+-            }
+-            else
+-            {
+-                m_codechalDevice = encoder;
+-            }
+-
+-        }
+-        else
+-#endif
+ #ifdef _JPEG_ENCODE_SUPPORTED
+         if (info->Mode == CODECHAL_ENCODE_MODE_JPEG)
+         {
+diff --git a/media_softlet/media_interface/media_interfaces_mtl/media_interfaces_mtl.cpp b/media_softlet/media_interface/media_interfaces_mtl/media_interfaces_mtl.cpp
+index ec89bced7..5006c3a91 100644
+--- a/media_softlet/media_interface/media_interfaces_mtl/media_interfaces_mtl.cpp
++++ b/media_softlet/media_interface/media_interfaces_mtl/media_interfaces_mtl.cpp
+@@ -392,10 +392,6 @@ MOS_STATUS CodechalInterfacesXe_Lpm_Plus::Initialize(
+     }
+ 
+     bool disableScalability = false;
+-#ifdef _VP9_ENCODE_VDENC_SUPPORTED
+-    if (info->Mode == CODECHAL_ENCODE_MODE_VP9)
+-        disableScalability = true;
+-#endif
+ 
+     CodechalHwInterfaceNext *hwInterface = MOS_New(Hw, osInterface, CodecFunction, mhwInterfaces, disableScalability);
+ 
+@@ -519,19 +515,6 @@ MOS_STATUS CodechalInterfacesXe_Lpm_Plus::Initialize(
+             }
+         }
+         else
+-#endif
+-#ifdef _VP9_ENCODE_VDENC_SUPPORTED
+-        if (info->Mode == CODECHAL_ENCODE_MODE_VP9)
+-        {
+-            m_codechalDevice = MOS_New(EncodeVp9VdencPipelineAdapterXe_Lpm_Plus, hwInterface, debugInterface);
+-            if (m_codechalDevice == nullptr)
+-            {
+-                CODECHAL_PUBLIC_ASSERTMESSAGE("Encode state creation failed!");
+-                return MOS_STATUS_INVALID_PARAMETER;
+-            }
+-            return MOS_STATUS_SUCCESS;
+-        }
+-        else
+ #endif
+         if (info->Mode == CODECHAL_ENCODE_MODE_MPEG2)
+         {
+-- 
+2.41.0.255.g8b1d071c50-goog
+

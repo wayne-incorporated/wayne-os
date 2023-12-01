@@ -1,0 +1,37 @@
+commit 164a02d0fa461c623446bb5e3ee15516bcfad13c
+Author: Fangrui Song <maskray@google.com>
+Date:   Fri Aug 7 13:42:09 2020 -0700
+
+    [ELF]: --icf: don't fold sections referencing sections with LCDA after D84610
+
+diff --git a/lld/ELF/ICF.cpp b/lld/ELF/ICF.cpp
+index c9d922f558d..f3c477c1d2c 100644
+--- a/lld/ELF/ICF.cpp
++++ b/lld/ELF/ICF.cpp
+@@ -468,9 +468,10 @@ template <class ELFT> void ICF<ELFT>::run() {
+   //
+   // If two .gcc_except_table have identical semantics (usually identical
+   // content with PC-relative encoding), we will lose folding opportunity.
++  uint32_t uniqueId = 0;
+   for (Partition &part : partitions)
+     part.ehFrame->iterateFDEWithLSDA<ELFT>(
+-        [&](InputSection &s) { s.eqClass[0] = 1; });
++        [&](InputSection &s) { s.eqClass[0] = ++uniqueId; });
+ 
+   // Collect sections to merge.
+   for (InputSectionBase *sec : inputSections) {
+diff --git a/lld/test/ELF/icf-eh-frame.s b/lld/test/ELF/icf-eh-frame.s
+index e90df5f96d9..0b895ec8cc2 100644
+--- a/lld/test/ELF/icf-eh-frame.s
++++ b/lld/test/ELF/icf-eh-frame.s
+@@ -41,3 +41,10 @@ _Z1dv:
+ .section .gcc_except_table,"a",@progbits
+ ## The actual content does not matter.
+ .Lexception0:
++
++## .rodata.Z1[ab]v reference .text.Z1[ab]v. Dont fold them.
++.section .rodata.Z1av,"a",@progbits
++  .long .text.Z1av - .
++
++.section .rodata.Z1bv,"a",@progbits
++  .long .text.Z1bv - .

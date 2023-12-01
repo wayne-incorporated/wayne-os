@@ -1,0 +1,89 @@
+From 81b6d9c86609219632e40d1f477e1f5ad7d36c44 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 18:08:41 -0300
+Subject: [PATCH 133/163] string: Suppress clang -Wsuspicious-bzero on tester
+
+---
+ string/tester.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/string/tester.c b/string/tester.c
+index eed76239f5..46a24e7417 100644
+--- a/string/tester.c
++++ b/string/tester.c
+@@ -370,28 +370,48 @@ test_strncat (void)
+      mechanism.  */
+   it = "strncat";
+   (void) strcpy (one, "ijk");
++  /* clang complains that size argument is too large for the destination
++     buffer.  */
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wfortify-source");
+   check (strncat (one, "lmn", 99) == one, 1);	/* Returned value. */
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   equal (one, "ijklmn", 2);		/* Basic test. */
+ 
+   (void) strcpy (one, "x");
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wfortify-source");
+   (void) strncat (one, "yz", 99);
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   equal (one, "xyz", 3);		/* Writeover. */
+   equal (one+4, "mn", 4);		/* Wrote too much? */
+ 
+   (void) strcpy (one, "gh");
+   (void) strcpy (two, "ef");
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wfortify-source");
+   (void) strncat (one, two, 99);
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   equal (one, "ghef", 5);			/* Basic test encore. */
+   equal (two, "ef", 6);			/* Stomped on source? */
+ 
+   (void) strcpy (one, "");
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wfortify-source");
+   (void) strncat (one, "", 99);
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   equal (one, "", 7);			/* Boundary conditions. */
+   (void) strcpy (one, "ab");
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wfortify-source");
+   (void) strncat (one, "", 99);
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   equal (one, "ab", 8);
+   (void) strcpy (one, "");
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wfortify-source");
+   (void) strncat (one, "cd", 99);
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   equal (one, "cd", 9);
+ 
+   (void) strcpy (one, "ab");
+@@ -404,7 +424,10 @@ test_strncat (void)
+   (void) strncat (one, "gh", 2);
+   equal (one, "abcdgh", 12);		/* Count and length equal. */
+ 
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wfortify-source");
+   (void) strncat (one, "ij", (size_t)-1);	/* set sign bit in count */
++  DIAG_POP_NEEDS_COMMENT_CLANG;
+   equal (one, "abcdghij", 13);
+ 
+   int ntest = 14;
+@@ -1408,7 +1431,12 @@ test_bzero (void)
+   equal(one+4, "ef", 3);
+ 
+   (void) strcpy(one, "abcdef");
++
++  DIAG_PUSH_NEEDS_COMMENT_CLANG;
++  /* clang complains about the 0 size argument for bzero.  */
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wsuspicious-bzero");
+   bzero(one+2, 0);
++  DIAG_POP_NEEDS_COMMENT_CLANG
+   equal(one, "abcdef", 4);		/* Zero-length copy. */
+ }
+ 
+-- 
+2.37.2
+

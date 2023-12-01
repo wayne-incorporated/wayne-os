@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "metrics/metrics_library.h"
 
 #include <base/check.h>
+#include <base/logging.h>
 
 namespace {
 
@@ -43,7 +44,7 @@ void VpdProcessImpl::EnsureJobExit(base::TimeDelta timeout) {
 
 bool VpdProcessImpl::RunInBackground(const KeyValuePairs& updates,
                                      bool ignore_cache,
-                                     const CompletionCallback& completion) {
+                                     CompletionCallback completion) {
   subprocess_.reset(new Subprocess(0 /*root*/, system_utils_));
 
   std::vector<std::string> argv = {"/usr/sbin/update_rw_vpd"};
@@ -63,7 +64,7 @@ bool VpdProcessImpl::RunInBackground(const KeyValuePairs& updates,
   }
 
   // |completion_| will be run when the job exits.
-  completion_ = completion;
+  completion_ = std::move(completion);
   return true;
 }
 

@@ -1,0 +1,592 @@
+commit 195f44278c4361a4a32377a98a1e3a15203d3647
+Author: Kristof Beyls <kristof.beyls@arm.com>
+Date:   Wed Oct 28 21:04:11 2020 +0000
+
+    [ARM] Implement harden-sls-retbr for ARM mode
+    
+    Some processors may speculatively execute the instructions immediately
+    following indirect control flow, such as returns, indirect jumps and
+    indirect function calls.
+    
+    To avoid a potential miss-speculatively executed gadget after these
+    instructions leaking secrets through side channels, this pass places a
+    speculation barrier immediately after every indirect control flow where
+    control flow doesn't return to the next instruction, such as returns and
+    indirect jumps, but not indirect function calls.
+    
+    Hardening of indirect function calls will be done in a later,
+    independent patch.
+    
+    This patch is implementing the same functionality as the AArch64 counter
+    part implemented in https://reviews.llvm.org/D81400.
+    For AArch64, returns and indirect jumps only occur on RET and BR
+    instructions and hence the function attribute to control the hardening
+    is called "harden-sls-retbr" there. On AArch32, there is a much wider
+    variety of instructions that can trigger an indirect unconditional
+    control flow change.  I've decided to stick with the name
+    "harden-sls-retbr" as introduced for the corresponding AArch64
+    mitigation.
+    
+    This patch implements this for ARM mode. A future patch will extend this
+    to also support Thumb mode.
+    
+    The inserted barriers are never on the correct, architectural execution
+    path, and therefore performance overhead of this is expected to be low.
+    To ensure these barriers are never on an architecturally executed path,
+    when the harden-sls-retbr function attribute is present, indirect
+    control flow is never conditionalized/predicated.
+    
+    On targets that implement that Armv8.0-SB Speculation Barrier extension,
+    a single SB instruction is emitted that acts as a speculation barrier.
+    On other targets, a DSB SYS followed by a ISB is emitted to act as a
+    speculation barrier.
+    
+    These speculation barriers are implemented as pseudo instructions to
+    avoid later passes to analyze them and potentially remove them.
+    
+    The mitigation is off by default and can be enabled by the
+    harden-sls-retbr subtarget feature.
+    
+    Differential Revision: https://reviews.llvm.org/D92395
+
+diff --git a/llvm/lib/Target/ARM/ARM.h b/llvm/lib/Target/ARM/ARM.h
+index 7398968bb24a..51dfaaa96892 100644
+--- a/llvm/lib/Target/ARM/ARM.h
++++ b/llvm/lib/Target/ARM/ARM.h
+@@ -55,6 +55,7 @@ InstructionSelector *
+ createARMInstructionSelector(const ARMBaseTargetMachine &TM, const ARMSubtarget &STI,
+                              const ARMRegisterBankInfo &RBI);
+ Pass *createMVEGatherScatterLoweringPass();
++FunctionPass *createARMSLSHardeningPass();
+ 
+ void LowerARMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
+                                   ARMAsmPrinter &AP);
+@@ -71,6 +72,7 @@ void initializeMVEVPTOptimisationsPass(PassRegistry &);
+ void initializeARMLowOverheadLoopsPass(PassRegistry &);
+ void initializeMVETailPredicationPass(PassRegistry &);
+ void initializeMVEGatherScatterLoweringPass(PassRegistry &);
++void initializeARMSLSHardeningPass(PassRegistry &);
+ 
+ } // end namespace llvm
+ 
+diff --git a/llvm/lib/Target/ARM/ARM.td b/llvm/lib/Target/ARM/ARM.td
+index 3fa65289744e..4d4ace51e13f 100644
+--- a/llvm/lib/Target/ARM/ARM.td
++++ b/llvm/lib/Target/ARM/ARM.td
+@@ -562,6 +562,16 @@ foreach i = {0-7} in
+                                               "Coprocessor "#i#" ISA is CDEv1",
+                                               [HasCDEOps]>;
+ 
++//===----------------------------------------------------------------------===//
++// Control codegen mitigation against Straight Line Speculation vulnerability.
++//===----------------------------------------------------------------------===//
++
++def FeatureHardenSlsRetBr : SubtargetFeature<"harden-sls-retbr",
++  "HardenSlsRetBr", "true",
++  "Harden against straight line speculation across RETurn and BranchRegister "
++  "instructions">;
++
++
+ //===----------------------------------------------------------------------===//
+ // ARM Processor subtarget features.
+ //
+diff --git a/llvm/lib/Target/ARM/ARMAsmPrinter.cpp b/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
+index f2ee03981f24..4cc85ad82d51 100644
+--- a/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
++++ b/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
+@@ -2180,6 +2180,25 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
+   case ARM::PATCHABLE_TAIL_CALL:
+     LowerPATCHABLE_TAIL_CALL(*MI);
+     return;
++  case ARM::SpeculationBarrierISBDSBEndBB: {
++    // Print DSB SYS + ISB
++    MCInst TmpInstDSB;
++    TmpInstDSB.setOpcode(ARM::DSB);
++    TmpInstDSB.addOperand(MCOperand::createImm(0xf));
++    EmitToStreamer(*OutStreamer, TmpInstDSB);
++    MCInst TmpInstISB;
++    TmpInstISB.setOpcode(ARM::ISB);
++    TmpInstISB.addOperand(MCOperand::createImm(0xf));
++    EmitToStreamer(*OutStreamer, TmpInstISB);
++    return;
++  }
++  case ARM::SpeculationBarrierSBEndBB: {
++    // Print SB
++    MCInst TmpInstSB;
++    TmpInstSB.setOpcode(ARM::SB);
++    EmitToStreamer(*OutStreamer, TmpInstSB);
++    return;
++  }
+   }
+ 
+   MCInst TmpInst;
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+index 2d937930d89f..7068da5eb004 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.cpp
+@@ -339,8 +339,10 @@ bool ARMBaseInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
+     // out.
+     bool CantAnalyze = false;
+ 
+-    // Skip over DEBUG values and predicated nonterminators.
+-    while (I->isDebugInstr() || !I->isTerminator()) {
++    // Skip over DEBUG values, predicated nonterminators and speculation
++    // barrier terminators.
++    while (I->isDebugInstr() || !I->isTerminator() ||
++           isSpeculationBarrierEndBBOpcode(I->getOpcode()) ){
+       if (I == MBB.instr_begin())
+         return false;
+       --I;
+@@ -389,6 +391,9 @@ bool ARMBaseInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
+         while (DI != MBB.instr_end()) {
+           MachineInstr &InstToDelete = *DI;
+           ++DI;
++          // Speculation barriers must not be deleted.
++          if (isSpeculationBarrierEndBBOpcode(InstToDelete.getOpcode()))
++            continue;
+           InstToDelete.eraseFromParent();
+         }
+       }
+@@ -672,14 +677,21 @@ bool ARMBaseInstrInfo::isPredicable(const MachineInstr &MI) const {
+   if (!isEligibleForITBlock(&MI))
+     return false;
+ 
++  const MachineFunction *MF = MI.getParent()->getParent();
+   const ARMFunctionInfo *AFI =
+-      MI.getParent()->getParent()->getInfo<ARMFunctionInfo>();
++      MF->getInfo<ARMFunctionInfo>();
+ 
+   // Neon instructions in Thumb2 IT blocks are deprecated, see ARMARM.
+   // In their ARM encoding, they can't be encoded in a conditional form.
+   if ((MI.getDesc().TSFlags & ARMII::DomainMask) == ARMII::DomainNEON)
+     return false;
+ 
++  // Make indirect control flow changes unpredicable when SLS mitigation is
++  // enabled.
++  const ARMSubtarget &ST = MF->getSubtarget<ARMSubtarget>();
++  if (ST.hardenSlsRetBr() && isIndirectControlFlowNotComingBack(MI))
++    return false;
++
+   if (AFI->isThumb2Function()) {
+     if (getSubtarget().restrictIT())
+       return isV8EligibleForIT(&MI);
+@@ -762,6 +774,12 @@ unsigned ARMBaseInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+       Size = alignTo(Size, 4);
+     return Size;
+   }
++  case ARM::SpeculationBarrierISBDSBEndBB:
++    // This gets lowered to 2 4-byte instructions.
++    return 8;
++  case ARM::SpeculationBarrierSBEndBB:
++    // This gets lowered to 1 4-byte instructions.
++    return 4;
+   }
+ }
+ 
+diff --git a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+index df237dffe4fb..51a4b44eae1d 100644
+--- a/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
++++ b/llvm/lib/Target/ARM/ARMBaseInstrInfo.h
+@@ -635,6 +635,17 @@ bool isIndirectBranchOpcode(int Opc) {
+   return Opc == ARM::BX || Opc == ARM::MOVPCRX || Opc == ARM::tBRIND;
+ }
+ 
++static inline bool isIndirectControlFlowNotComingBack(const MachineInstr &MI) {
++  int opc = MI.getOpcode();
++  return MI.isReturn() || isIndirectBranchOpcode(MI.getOpcode()) ||
++         isJumpTableBranchOpcode(opc);
++}
++
++static inline bool isSpeculationBarrierEndBBOpcode(int Opc) {
++  return Opc == ARM::SpeculationBarrierISBDSBEndBB ||
++         Opc == ARM::SpeculationBarrierSBEndBB;
++}
++
+ static inline bool isPopOpcode(int Opc) {
+   return Opc == ARM::tPOP_RET || Opc == ARM::LDMIA_RET ||
+          Opc == ARM::t2LDMIA_RET || Opc == ARM::tPOP || Opc == ARM::LDMIA_UPD ||
+diff --git a/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp b/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp
+index 86da5a24d340..77839710e03e 100644
+--- a/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp
++++ b/llvm/lib/Target/ARM/ARMConstantIslandPass.cpp
+@@ -553,6 +553,12 @@ void ARMConstantIslands::doInitialJumpTablePlacement(
+   MachineBasicBlock *LastCorrectlyNumberedBB = nullptr;
+   for (MachineBasicBlock &MBB : *MF) {
+     auto MI = MBB.getLastNonDebugInstr();
++    // Look past potential SpeculationBarriers at end of BB.
++    while (MI != MBB.end() &&
++           (isSpeculationBarrierEndBBOpcode(MI->getOpcode()) ||
++            MI->isDebugInstr()))
++      --MI;
++
+     if (MI == MBB.end())
+       continue;
+ 
+@@ -784,6 +790,7 @@ initializeFunctionInfo(const std::vector<MachineInstr*> &CPEMIs) {
+               NegOk = true;
+               IsSoImm = true;
+               unsigned CPI = I.getOperand(op).getIndex();
++              assert(CPI < CPEMIs.size());
+               MachineInstr *CPEMI = CPEMIs[CPI];
+               const Align CPEAlign = getCPEAlign(CPEMI);
+               const unsigned LogCPEAlign = Log2(CPEAlign);
+diff --git a/llvm/lib/Target/ARM/ARMInstrInfo.td b/llvm/lib/Target/ARM/ARMInstrInfo.td
+index c37734b716cc..840af9052376 100644
+--- a/llvm/lib/Target/ARM/ARMInstrInfo.td
++++ b/llvm/lib/Target/ARM/ARMInstrInfo.td
+@@ -6365,6 +6365,15 @@ def SPACE : PseudoInst<(outs GPR:$Rd), (ins i32imm:$size, GPR:$Rn),
+                        NoItinerary,
+                        [(set GPR:$Rd, (int_arm_space timm:$size, GPR:$Rn))]>;
+ 
++// SpeculationBarrierEndBB must only be used after an unconditional control
++// flow, i.e. after a terminator for which isBarrier is True.
++let hasSideEffects = 1, isCodeGenOnly = 1, isTerminator = 1, isBarrier = 1 in {
++  def SpeculationBarrierISBDSBEndBB
++      : PseudoInst<(outs), (ins), NoItinerary, []>, Sched<[]>;
++  def SpeculationBarrierSBEndBB
++      : PseudoInst<(outs), (ins), NoItinerary, []>, Sched<[]>;
++}
++
+ //===----------------------------------
+ // Atomic cmpxchg for -O0
+ //===----------------------------------
+diff --git a/llvm/lib/Target/ARM/ARMSLSHardening.cpp b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+new file mode 100644
+index 000000000000..b3c697893ed9
+--- /dev/null
++++ b/llvm/lib/Target/ARM/ARMSLSHardening.cpp
+@@ -0,0 +1,117 @@
++//===- ARMSLSHardening.cpp - Harden Straight Line Missspeculation ---------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This file contains a pass to insert code to mitigate against side channel
++// vulnerabilities that may happen under straight line miss-speculation.
++//
++//===----------------------------------------------------------------------===//
++
++#include "ARM.h"
++#include "ARMInstrInfo.h"
++#include "ARMSubtarget.h"
++#include "llvm/CodeGen/MachineBasicBlock.h"
++#include "llvm/CodeGen/MachineFunction.h"
++#include "llvm/CodeGen/MachineFunctionPass.h"
++#include "llvm/CodeGen/MachineInstr.h"
++#include "llvm/CodeGen/MachineInstrBuilder.h"
++#include "llvm/CodeGen/MachineOperand.h"
++#include "llvm/IR/DebugLoc.h"
++#include <cassert>
++
++using namespace llvm;
++
++#define DEBUG_TYPE "arm-sls-hardening"
++
++#define ARM_SLS_HARDENING_NAME "ARM sls hardening pass"
++
++namespace {
++
++class ARMSLSHardening : public MachineFunctionPass {
++public:
++  const TargetInstrInfo *TII;
++  const ARMSubtarget *ST;
++
++  static char ID;
++
++  ARMSLSHardening() : MachineFunctionPass(ID) {
++    initializeARMSLSHardeningPass(*PassRegistry::getPassRegistry());
++  }
++
++  bool runOnMachineFunction(MachineFunction &Fn) override;
++
++  StringRef getPassName() const override { return ARM_SLS_HARDENING_NAME; }
++
++  void getAnalysisUsage(AnalysisUsage &AU) const override {
++    AU.setPreservesCFG();
++    MachineFunctionPass::getAnalysisUsage(AU);
++  }
++
++private:
++  bool hardenReturnsAndBRs(MachineBasicBlock &MBB) const;
++};
++
++} // end anonymous namespace
++
++char ARMSLSHardening::ID = 0;
++
++INITIALIZE_PASS(ARMSLSHardening, "arm-sls-hardening",
++                ARM_SLS_HARDENING_NAME, false, false)
++
++static void insertSpeculationBarrier(const ARMSubtarget *ST,
++                                     MachineBasicBlock &MBB,
++                                     MachineBasicBlock::iterator MBBI,
++                                     DebugLoc DL,
++                                     bool AlwaysUseISBDSB = false) {
++  assert(MBBI != MBB.begin() &&
++         "Must not insert SpeculationBarrierEndBB as only instruction in MBB.");
++  assert(std::prev(MBBI)->isBarrier() &&
++         "SpeculationBarrierEndBB must only follow unconditional control flow "
++         "instructions.");
++  assert(std::prev(MBBI)->isTerminator() &&
++         "SpeculationBarrierEndBB must only follow terminators.");
++  const TargetInstrInfo *TII = ST->getInstrInfo();
++  unsigned BarrierOpc = ST->hasSB() && !AlwaysUseISBDSB
++                            ? ARM::SpeculationBarrierSBEndBB
++                            : ARM::SpeculationBarrierISBDSBEndBB;
++  if (MBBI == MBB.end() || !isSpeculationBarrierEndBBOpcode(MBBI->getOpcode()))
++    BuildMI(MBB, MBBI, DL, TII->get(BarrierOpc));
++}
++
++bool ARMSLSHardening::runOnMachineFunction(MachineFunction &MF) {
++  ST = &MF.getSubtarget<ARMSubtarget>();
++  TII = MF.getSubtarget().getInstrInfo();
++
++  bool Modified = false;
++  for (auto &MBB : MF)
++    Modified |= hardenReturnsAndBRs(MBB);
++
++  return Modified;
++}
++
++bool ARMSLSHardening::hardenReturnsAndBRs(MachineBasicBlock &MBB) const {
++  if (!ST->hardenSlsRetBr())
++    return false;
++  bool Modified = false;
++  MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator(), E = MBB.end();
++  MachineBasicBlock::iterator NextMBBI;
++  for (; MBBI != E; MBBI = NextMBBI) {
++    MachineInstr &MI = *MBBI;
++    NextMBBI = std::next(MBBI);
++    if (isIndirectControlFlowNotComingBack(MI)) {
++      assert(MI.isTerminator());
++      assert(!TII->isPredicated(MI));
++      insertSpeculationBarrier(ST, MBB, std::next(MBBI), MI.getDebugLoc());
++      Modified = true;
++    }
++  }
++  return Modified;
++}
++
++FunctionPass *llvm::createARMSLSHardeningPass() {
++  return new ARMSLSHardening();
++}
+diff --git a/llvm/lib/Target/ARM/ARMSubtarget.h b/llvm/lib/Target/ARM/ARMSubtarget.h
+index 695a53eec93e..bfde47290dcd 100644
+--- a/llvm/lib/Target/ARM/ARMSubtarget.h
++++ b/llvm/lib/Target/ARM/ARMSubtarget.h
+@@ -464,6 +464,10 @@ protected:
+   /// cannot be encoded. For example, ADD r0, r1, #FFFFFFFF -> SUB r0, r1, #1.
+   bool NegativeImmediates = true;
+ 
++  /// Harden against Straight Line Speculation for Returns and Indirect
++  /// Branches.
++  bool HardenSlsRetBr = false;
++
+   /// stackAlignment - The minimum alignment known to hold of the stack frame on
+   /// entry to the function and which must be maintained by every function.
+   Align stackAlignment = Align(4);
+@@ -905,6 +909,8 @@ public:
+   bool ignoreCSRForAllocationOrder(const MachineFunction &MF,
+                                    unsigned PhysReg) const override;
+   unsigned getGPRAllocationOrder(const MachineFunction &MF) const;
++
++  bool hardenSlsRetBr() const { return HardenSlsRetBr; }
+ };
+ 
+ } // end namespace llvm
+diff --git a/llvm/lib/Target/ARM/ARMTargetMachine.cpp b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+index cf4115f77fec..2e20070833e6 100644
+--- a/llvm/lib/Target/ARM/ARMTargetMachine.cpp
++++ b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+@@ -100,6 +100,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeARMTarget() {
+   initializeMVETailPredicationPass(Registry);
+   initializeARMLowOverheadLoopsPass(Registry);
+   initializeMVEGatherScatterLoweringPass(Registry);
++  initializeARMSLSHardeningPass(Registry);
+ }
+ 
+ static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
+@@ -538,6 +539,8 @@ void ARMPassConfig::addPreSched2() {
+     addPass(&PostMachineSchedulerID);
+     addPass(&PostRASchedulerID);
+   }
++
++  addPass(createARMSLSHardeningPass());
+ }
+ 
+ void ARMPassConfig::addPreEmitPass() {
+diff --git a/llvm/lib/Target/ARM/CMakeLists.txt b/llvm/lib/Target/ARM/CMakeLists.txt
+index 6a2ffdaef126..3894c0cfed68 100644
+--- a/llvm/lib/Target/ARM/CMakeLists.txt
++++ b/llvm/lib/Target/ARM/CMakeLists.txt
+@@ -48,6 +48,7 @@ add_llvm_target(ARMCodeGen
+   ARMOptimizeBarriersPass.cpp
+   ARMRegisterBankInfo.cpp
+   ARMSelectionDAGInfo.cpp
++  ARMSLSHardening.cpp
+   ARMSubtarget.cpp
+   ARMTargetMachine.cpp
+   ARMTargetObjectFile.cpp
+diff --git a/llvm/test/CodeGen/ARM/O3-pipeline.ll b/llvm/test/CodeGen/ARM/O3-pipeline.ll
+index bba384715bc6..6390e42570d7 100644
+--- a/llvm/test/CodeGen/ARM/O3-pipeline.ll
++++ b/llvm/test/CodeGen/ARM/O3-pipeline.ll
+@@ -159,6 +159,7 @@
+ ; CHECK-NEXT:      Machine Natural Loop Construction
+ ; CHECK-NEXT:      PostRA Machine Instruction Scheduler
+ ; CHECK-NEXT:      Post RA top-down list latency scheduler
++; CHECK-NEXT:      ARM sls hardening pass
+ ; CHECK-NEXT:      Analyze Machine Code For Garbage Collection
+ ; CHECK-NEXT:      Machine Block Frequency Analysis
+ ; CHECK-NEXT:      MachinePostDominator Tree Construction
+diff --git a/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+new file mode 100644
+index 000000000000..9a2335988790
+--- /dev/null
++++ b/llvm/test/CodeGen/ARM/speculation-hardening-sls.ll
+@@ -0,0 +1,142 @@
++; RUN: llc -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB,ISBDSBDAGISEL -dump-input-context=100
++; RUN: llc -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB,SBDAGISEL -dump-input-context=100
++; RUN: llc -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,NOHARDEN,NOHARDENARM -dump-input-context=100
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,ISBDSB
++; RUN: llc -global-isel -global-isel-abort=0 -mattr=harden-sls-retbr -mattr=+sb -verify-machineinstrs -mtriple=armv8-linux-gnueabi < %s | FileCheck %s --check-prefixes=CHECK,ARM,HARDEN,SB
++
++; Function Attrs: norecurse nounwind readnone
++define dso_local i32 @double_return(i32 %a, i32 %b) local_unnamed_addr {
++entry:
++  %cmp = icmp sgt i32 %a, 0
++  br i1 %cmp, label %if.then, label %if.else
++
++if.then:                                          ; preds = %entry
++  ; Make a very easy, very likely to predicate return (BX LR), to test that
++  ; it will not get predicated when sls-hardening is enabled.
++  %mul = mul i32 %b, %a
++  ret i32 %mul
++; CHECK-LABEL: double_return:
++; HARDEN:          {{bx lr$}}
++; NOHARDENARM:     {{bxge lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++
++if.else:                                          ; preds = %entry
++  %div3 = sdiv i32 %a, %b
++  %div2 = sdiv i32 %a, %div3
++  %div1 = sdiv i32 %a, %div2
++  ret i32 %div1
++
++; CHECK:       {{bx lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++; CHECK-NEXT: .Lfunc_end
++}
++
++@__const.indirect_branch.ptr = private unnamed_addr constant [2 x i8*] [i8* blockaddress(@indirect_branch, %return), i8* blockaddress(@indirect_branch, %l2)], align 8
++
++; Function Attrs: norecurse nounwind readnone
++define dso_local i32 @indirect_branch(i32 %a, i32 %b, i32 %i) {
++; CHECK-LABEL: indirect_branch:
++entry:
++  %idxprom = sext i32 %i to i64
++  %arrayidx = getelementptr inbounds [2 x i8*], [2 x i8*]* @__const.indirect_branch.ptr, i64 0, i64 %idxprom
++  %0 = load i8*, i8** %arrayidx, align 8
++  indirectbr i8* %0, [label %return, label %l2]
++; ARM:       bx r0
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++
++l2:                                               ; preds = %entry
++  br label %return
++; CHECK:       {{bx lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++
++return:                                           ; preds = %entry, %l2
++  %retval.0 = phi i32 [ 1, %l2 ], [ 0, %entry ]
++  ret i32 %retval.0
++; CHECK:       {{bx lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++; CHECK-NEXT: .Lfunc_end
++}
++
++define i32 @asmgoto() {
++entry:
++; CHECK-LABEL: asmgoto:
++  callbr void asm sideeffect "B $0", "X"(i8* blockaddress(@asmgoto, %d))
++            to label %asm.fallthrough [label %d]
++     ; The asm goto above produces a direct branch:
++; CHECK:           @APP
++; CHECK-NEXT:      {{^[ \t]+b }}
++; CHECK-NEXT:      @NO_APP
++     ; For direct branches, no mitigation is needed.
++; ISDDSB-NOT: dsb sy
++; SB-NOT:     {{ sb$}}
++
++asm.fallthrough:               ; preds = %entry
++  ret i32 0
++; CHECK:       {{bx lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++
++d:                             ; preds = %asm.fallthrough, %entry
++  ret i32 1
++; CHECK:       {{bx lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++; CHECK-NEXT: .Lfunc_end
++}
++
++; Check that indirect branches produced through switch jump tables are also
++; hardened:
++define dso_local i32 @jumptable(i32 %a, i32 %b) {
++; CHECK-LABEL: jumptable:
++entry:
++  switch i32 %b, label %sw.epilog [
++    i32 0, label %sw.bb
++    i32 1, label %sw.bb1
++    i32 3, label %sw.bb3
++    i32 4, label %sw.bb5
++  ]
++; ARM:             ldr pc, [{{r[0-9]}}, {{r[0-9]}}, lsl #2]
++; ISBDSB-NEXT:     dsb sy
++; ISBDSB-NEXT:     isb
++; SB-NEXT:         {{ sb$}}
++
++
++sw.bb:                                            ; preds = %entry
++  %add = shl nsw i32 %a, 1
++  br label %sw.bb1
++
++sw.bb1:                                           ; preds = %entry, %sw.bb
++  %a.addr.0 = phi i32 [ %a, %entry ], [ %add, %sw.bb ]
++  %add2 = shl nsw i32 %a.addr.0, 1
++  br label %sw.bb3
++
++sw.bb3:                                           ; preds = %entry, %sw.bb1
++  %a.addr.1 = phi i32 [ %a, %entry ], [ %add2, %sw.bb1 ]
++  %add4 = shl nsw i32 %a.addr.1, 1
++  br label %sw.bb5
++
++sw.bb5:                                           ; preds = %entry, %sw.bb3
++  %a.addr.2 = phi i32 [ %a, %entry ], [ %add4, %sw.bb3 ]
++  %add6 = shl nsw i32 %a.addr.2, 1
++  br label %sw.epilog
++
++sw.epilog:                                        ; preds = %sw.bb5, %entry
++  %a.addr.3 = phi i32 [ %a, %entry ], [ %add6, %sw.bb5 ]
++  ret i32 %a.addr.3
++; CHECK:       {{bx lr$}}
++; ISBDSB-NEXT: dsb sy
++; ISBDSB-NEXT: isb
++; SB-NEXT:     {{ sb$}}
++}

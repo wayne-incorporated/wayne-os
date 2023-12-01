@@ -1,0 +1,159 @@
+From 3c5e296ceea909346e20033e8b4e4421d58bc13d Mon Sep 17 00:00:00 2001
+From: Peter Qiu <zqiu@chromium.org>
+Date: Thu, 10 Jun 2021 16:49:39 +0000
+Subject: [PATCH 11/19] Add ability to disable hook scripts
+
+This allow dhcpcd to be installed without hook scripts and bypassing
+the hook script processing code.
+---
+ Makefile          |  9 ++++++++-
+ configure         | 17 ++++++++++++----
+ src/Makefile      |  2 +-
+ src/script-stub.c | 49 +++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 71 insertions(+), 6 deletions(-)
+ create mode 100644 src/script-stub.c
+
+diff --git a/Makefile b/Makefile
+index a39b0f89..56e188a4 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,11 @@
+-SUBDIRS=	src hooks
++TOP?=		.
++include ${TOP}/iconfig.mk
++
++SUBDIRS=	src
++
++ifneq ($(HOOKSCRIPTS),)
++SUBDIRS+= 	hooks
++endif
+ 
+ VERSION!=	sed -n 's/\#define VERSION[[:space:]]*"\(.*\)".*/\1/p' src/defs.h
+ 
+diff --git a/configure b/configure
+index b4d6c267..66a96040 100755
+--- a/configure
++++ b/configure
+@@ -78,7 +78,9 @@ for x do
+ 	CPPFLAGS) CPPFLAGS=$var;;
+ 	PKG_CONFIG) PKG_CONFIG=$var;;
+ 	--with-hook) HOOKSCRIPTS="$HOOKSCRIPTS${HOOKSCRIPTS:+ }$var";;
+-	--with-hooks|HOOKSCRIPTS) HOOKSCRIPTS=$var; HOOKSET=true;;
++	--with-hooks|HOOKSCRIPTS)
++		if [ "$opt" != "$var" ]; then HOOKSCRIPTS=$var; fi
++		HOOKSET=true;;
+ 	--build) BUILD=$var;;
+ 	--host) HOST=$var; HOSTCC=$var-;;
+ 	--target) TARGET=$var;;
+@@ -687,7 +689,7 @@ elif $XCC _inet_ntoa.c -lnsl -o _inet_ntoa 2>&3; then
+ 	echo "LDADD+=		-lnsl" >>$CONFIG_MK
+ elif $XCC _inet_ntoa.c -lsocket -o _inet_ntoa 2>&3; then
+ 	echo "yes (-lsocket)"
+-	echo "LDADD+=		-lsocket" >>$CONFIG_MK	
++	echo "LDADD+=		-lsocket" >>$CONFIG_MK
+ else
+ 	echo "no"
+ 	echo "libc support for inet_ntoa is required - aborting" >&2
+@@ -1430,7 +1432,7 @@ fi
+ echo "STATUSARG=	$STATUSARG" >>config.mk
+ 
+ HOOKS=
+-if ! $HOOKSET; then
++if $HOOKSET; then
+ 	printf "Checking for ntpd ... "
+ 	NTPD=$(_which ntpd)
+ 	if [ -n "$NTPD" ]; then
+@@ -1519,6 +1521,13 @@ if cd hooks; then
+ 	done
+ 	cd ..
+ fi
++
++if [ -z  "$HOOKS" ]; then
++	echo "DHCPCD_SRCS+=	script-stub.c" >>$CONFIG_MK
++else
++	echo "SCRIPTSINSTALL=	_scriptsinstall" >>$CONFIG_MK
++	echo "DHCPCD_SRCS+=	script.c" >>$CONFIG_MK
++fi
+ echo "HOOKSCRIPTS=	$HOOKS" >>$CONFIG_MK
+ echo "EGHOOKSCRIPTS=	$EGHOOKS" >>$CONFIG_MK
+ 
+@@ -1528,7 +1537,7 @@ echo "   SBINDIR =		$SBINDIR"
+ echo "   LIBDIR =		$LIBDIR"
+ echo "   LIBEXECDIR =		$LIBEXECDIR"
+ echo "   DBDIR =		$DBDIR"
+-echo "   RUNDIR =		$RUNDIR"	
++echo "   RUNDIR =		$RUNDIR"
+ echo "   MANDIR =		$MANDIR"
+ echo "   DATADIR =		$DATADIR"
+ echo "   HOOKSCRIPTS =	$HOOKS"
+diff --git a/src/Makefile b/src/Makefile
+index c916bcc1..d5b100a8 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -3,7 +3,7 @@
+ PROG=		dhcpcd
+ SRCS=		common.c control.c dhcpcd.c duid.c eloop.c logerr.c
+ SRCS+=		if.c if-options.c sa.c route.c
+-SRCS+=		dhcp-common.c script.c rpc-stub.c
++SRCS+=		dhcp-common.c rpc-stub.c
+ 
+ CFLAGS?=	-O2
+ SUBDIRS+=	${MKDIRS}
+diff --git a/src/script-stub.c b/src/script-stub.c
+new file mode 100644
+index 00000000..ed2a4747
+--- /dev/null
++++ b/src/script-stub.c
+@@ -0,0 +1,49 @@
++/*
++ * dhcpcd - DHCP client daemon
++ * Copyright (c) 2006-2015 Roy Marples <roy@marples.name>
++ * All rights reserved
++
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#include "common.h"
++#include "script.h"
++
++void
++if_printoptions(void)
++{
++	/* Stub implementation. */
++}
++
++int
++send_interface(struct fd_list *fd, const struct interface *ifp)
++{
++	/* Stub implementation. */
++	return 0;
++}
++
++int
++script_runreason(const struct interface *ifp, const char *reason)
++{
++	/* Stub implementation. */
++	return 0;
++}
+-- 
+2.33.0.800.g4c38ced690-goog
+

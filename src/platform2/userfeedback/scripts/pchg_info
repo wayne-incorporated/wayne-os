@@ -1,0 +1,55 @@
+#!/bin/sh
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+ECTOOL="/usr/sbin/ectool"
+
+usage() {
+  echo "Print peripheral device charger status."
+  echo "syntax: pchg_info"
+}
+
+error() {
+  echo "$0: ERROR: $*" >&2
+}
+
+# Print PCHG status using ectool.
+# $1: Port number.
+# On error, it prints error message but doesn't return error code.
+print_pchg_status() {
+  local port="$1"
+
+  echo "[PCHG${port}]"
+  if ! "${ECTOOL}" pchg "${port}"; then
+    error "Failed to get status."
+  fi
+}
+
+main() {
+  local port_count
+  local p=0
+
+  if [ $# -ne 0 ]; then
+    usage
+    return 1
+  fi
+
+  if [ ! -x "${ECTOOL}" ]; then
+    error "${ECTOOL} not found."
+    return 0
+  fi
+
+  port_count=$(${ECTOOL} pchg)
+  if [ -z "${port_count}" ] || [ "${port_count}" -eq 0 ]; then
+    echo "No PCHG ports found."
+    return 0
+  fi
+
+  while [ "${p}" -lt "${port_count}" ]; do
+    print_pchg_status "${p}"
+    : $(( p += 1 ))
+  done
+}
+
+main "$@"

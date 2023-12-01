@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,9 +11,13 @@
 echo "Entering $0 $*" >&2
 
 SCRIPT_ROOT=$(dirname "$(readlink -f "$0")")
+# shellcheck source=common.sh
 . "${SCRIPT_ROOT}/common.sh" || exit 1
+# shellcheck source=build_library/filesystem_util.sh
 . "${SCRIPT_ROOT}/build_library/filesystem_util.sh" || exit 1
+# shellcheck source=build_library/disk_layout_util.sh
 . "${SCRIPT_ROOT}/build_library/disk_layout_util.sh" || exit 1
+# shellcheck source=build_library/ext2_sb_util.sh
 . "${SCRIPT_ROOT}/build_library/ext2_sb_util.sh" || exit 1
 
 if [[ ${INSIDE_CHROOT} -ne 1 ]]; then
@@ -22,6 +26,7 @@ else
   INSTALL_ROOT=/usr/share/misc
 fi
 # Load functions and constants for chromeos-install
+# shellcheck source=../../platform2/chromeos-common-script/share/chromeos-common.sh
 . "${INSTALL_ROOT}/chromeos-common.sh" || exit 1
 
 locate_gpt

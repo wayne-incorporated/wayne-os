@@ -1,0 +1,15 @@
+Remove command that sets setuid bit on the fusermount binary.
+
+URL: crbug.com/508744
+From: Samuel Tan <samueltan@chromium.org>
+---
+--- fuse-2.8.6/util/Makefile.in	2011-09-13 01:53:05.000000000 -0700
++++ patched/util/Makefile.in	2015-07-09 16:44:49.895909954 -0700
+@@ -584,7 +584,6 @@ uninstall-am: uninstall-binPROGRAMS unin
+ 
+ 
+ install-exec-hook:
+-	-chmod u+s $(DESTDIR)$(bindir)/fusermount
+ 	@if test ! -e $(DESTDIR)/dev/fuse; then \
+ 		$(mkdir_p) $(DESTDIR)/dev; \
+ 		echo "mknod $(DESTDIR)/dev/fuse -m 0666 c 10 229 || true"; \

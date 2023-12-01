@@ -1,11 +1,10 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef LOGIN_MANAGER_MOCK_DEVICE_IDENTIFIER_GENERATOR_H_
 #define LOGIN_MANAGER_MOCK_DEVICE_IDENTIFIER_GENERATOR_H_
 
-#include <base/macros.h>
 #include <gmock/gmock.h>
 
 #include "login_manager/device_identifier_generator.h"
@@ -23,10 +22,10 @@ class MockDeviceIdentifierGenerator : public DeviceIdentifierGenerator {
 
   ~MockDeviceIdentifierGenerator() override {}
 
-  MOCK_METHOD(void, RequestStateKeys, (const StateKeyCallback&), (override));
+  MOCK_METHOD(void, RequestStateKeys, (StateKeyCallback), (override));
   MOCK_METHOD(void,
               RequestPsmDeviceActiveSecret,
-              (const PsmDeviceActiveSecretCallback&),
+              (PsmDeviceActiveSecretCallback),
               (override));
 };
 

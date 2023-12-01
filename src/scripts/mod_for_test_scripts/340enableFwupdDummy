@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,9 +8,13 @@ if [[ ! -f ${ROOT_FS_DIR}/etc/fwupd/daemon.conf ]]; then
   exit 0
 fi
 
+echo "Enabling verbose debug output for fwupd."
+
+sed -e 's/^\(VerboseDomains=\).*/\1*/' -i "${ROOT_FS_DIR}/etc/fwupd/daemon.conf"
+
 echo "Enabling dummy fwupd remote for tests."
 
-sed -e '/^DisabledPlugins=/s/^/#/' -i "${ROOT_FS_DIR}/etc/fwupd/daemon.conf"
+sed -e 's/^\(DisabledPlugins=\).*/\1/' -i "${ROOT_FS_DIR}/etc/fwupd/daemon.conf"
 
 cat > "${ROOT_FS_DIR}/usr/share/fwupd/remotes.d/vendor/fwupd-tests.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,7 +63,7 @@ cat > "${ROOT_FS_DIR}/usr/share/fwupd/remotes.d/vendor/fwupd-tests.xml" <<EOF
 EOF
 
 cat > "${ROOT_FS_DIR}/etc/fwupd/remotes.d/fwupd-tests.conf" <<EOF
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 

@@ -1,0 +1,42 @@
+diff --git a/CorebootModulePkg/SataControllerDxe/SataController.c b/CorebootModulePkg/SataControllerDxe/SataController.c
+index d35c6c3..be90000 100644
+--- a/CorebootModulePkg/SataControllerDxe/SataController.c
++++ b/CorebootModulePkg/SataControllerDxe/SataController.c
+@@ -393,6 +393,8 @@ SataControllerStart (
+   PCI_TYPE00                        PciData;
+   EFI_SATA_CONTROLLER_PRIVATE_DATA  *SataPrivateData;
+   UINT32                            Data32;
++  UINT32                            PortsImplemented;
++  UINT8                              MaxPortNumber;
+   UINTN                             ChannelDeviceCount;
+
+   DEBUG ((EFI_D_INFO, "SataControllerStart START\n"));
+@@ -456,7 +458,15 @@ SataControllerStart (
+     //   A maximum of 32 ports can be supported. A value of '0h', indicating one port, is the minimum requirement.
+     //
+     Data32 = AhciReadReg (PciIo, R_AHCI_CAP);
+-    SataPrivateData->IdeInit.ChannelCount = (UINT8) ((Data32 & B_AHCI_CAP_NPS) + 1);
++    PortsImplemented = AhciReadReg (PciIo, R_AHCI_PI);
++    MaxPortNumber = 31;
++    while (MaxPortNumber > 0) {
++      if (PortsImplemented & (1 << MaxPortNumber)) {
++        break;
++      }
++      MaxPortNumber --;
++    }
++    SataPrivateData->IdeInit.ChannelCount = (UINT8) (MaxPortNumber + 1);
+     SataPrivateData->DeviceCount = AHCI_MAX_DEVICES;
+     if ((Data32 & B_AHCI_CAP_SPM) == B_AHCI_CAP_SPM) {
+       SataPrivateData->DeviceCount = AHCI_MULTI_MAX_DEVICES;
+diff --git a/CorebootModulePkg/SataControllerDxe/SataController.h b/CorebootModulePkg/SataControllerDxe/SataController.h
+index e76df74..e20724f 100644
+--- a/CorebootModulePkg/SataControllerDxe/SataController.h
++++ b/CorebootModulePkg/SataControllerDxe/SataController.h
+@@ -38,6 +38,7 @@ extern EFI_COMPONENT_NAME2_PROTOCOL gSataControllerComponentName2;
+
+ #define AHCI_BAR_INDEX 0x05
+ #define R_AHCI_CAP 0x0
++#define R_AHCI_PI 0x0C
+ #define   B_AHCI_CAP_NPS (BIT4 | BIT3 | BIT2 | BIT1 | BIT0) // Number of Ports
+ #define   B_AHCI_CAP_SPM BIT17 // Supports Port Multiplier
+

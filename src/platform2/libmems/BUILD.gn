@@ -1,0 +1,101 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_headers",
+    ":install_pkg_config",
+    ":libmems",
+    ":libmems_test_support",
+  ]
+  if (use.test) {
+    deps += [ ":libmems_testrunner" ]
+  }
+}
+
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libiio",
+    "libudev",
+  ]
+}
+
+shared_library("libmems") {
+  sources = [
+    "common_types.cc",
+    "iio_channel_impl.cc",
+    "iio_context_impl.cc",
+    "iio_device.cc",
+    "iio_device_impl.cc",
+    "iio_device_trigger_impl.cc",
+    "iio_event.cc",
+    "iio_event_impl.cc",
+  ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "lib"
+}
+
+shared_library("libmems_test_support") {
+  sources = [ "test_fakes.cc" ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "lib"
+  deps = [ ":libmems" ]
+}
+
+install_config("install_headers") {
+  sources = [
+    "common_types.h",
+    "export.h",
+    "iio_channel.h",
+    "iio_channel_impl.h",
+    "iio_context.h",
+    "iio_context_impl.h",
+    "iio_device.h",
+    "iio_device_impl.h",
+    "iio_device_trigger_impl.h",
+    "test_fakes.h",
+  ]
+  install_path = "/usr/include/chromeos/libmems"
+}
+
+install_config("install_pkg_config") {
+  sources = [
+    "libmems.pc",
+    "libmems_test_support.pc",
+  ]
+  install_path = "${libdir}/pkgconfig"
+}
+
+if (use.test) {
+  pkg_config("libmems_testrunner_pkg_deps") {
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+      "libiio",
+    ]
+  }
+
+  executable("libmems_testrunner") {
+    sources = [
+      "iio_device_test.cc",
+      "iio_event_impl_test.cc",
+      "iio_event_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":libmems_testrunner_pkg_deps",
+      ":target_defaults_pkg_deps",
+    ]
+    run_test = true
+    deps = [
+      ":libmems",
+      ":libmems_test_support",
+      "//common-mk/testrunner",
+    ]
+  }
+}

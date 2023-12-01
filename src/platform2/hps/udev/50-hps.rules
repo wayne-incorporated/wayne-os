@@ -1,0 +1,12 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+ACTION=="add", KERNEL=="i2c-GOOG0020:00", \
+    RUN{program}+="/lib/udev/hps-dev.sh %p"
+
+# TODO(b/238258362): Use SECLABEL{selinux} once it is supported in udev.
+ACTION=="add", KERNEL=="cros-hps", SUBSYSTEM=="misc", \
+    MODE="0660", GROUP="hpsd", \
+    RUN{program}+="/usr/bin/chcon -t cros_hps_device $devnode", \
+    RUN{program}+="/sbin/initctl start --no-wait hpsd"

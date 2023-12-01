@@ -1,0 +1,36 @@
+diff --git a/libexfat/io.c b/libexfat/io.c
+index bc92c7c..1ceda8a 100644
+--- a/libexfat/io.c
++++ b/libexfat/io.c
+@@ -61,12 +61,29 @@ static bool is_open(int fd)
+ 
+ static int open_ro(const char* spec)
+ {
+-	return open(spec, O_RDONLY);
++	/* skip calling open() if fd path is provided */
++	int fd = -1;
++	int len = 0;
++	if (sscanf(spec, "/dev/fd/%u%n", &fd, &len) == 1 && len == strlen(spec)) {
++		printf("skipping open and using provided fd: %d\n", fd);
++		return fd;
++	}
++	else {
++		return open(spec, O_RDONLY);
++	}
+ }
+ 
+ static int open_rw(const char* spec)
+ {
+-	int fd = open(spec, O_RDWR);
++	/* skip calling open() if fd path is provided */
++	int fd = -1;
++	int len = 0;
++	if (sscanf(spec, "/dev/fd/%u%n", &fd, &len) == 1 && len == strlen(spec)) {
++		printf("skipping open and using provided fd: %d\n", fd);
++	}
++	else {
++		fd = open(spec, O_RDWR);
++	}
+ #ifdef __linux__
+ 	int ro = 0;
+ 

@@ -1,0 +1,52 @@
+From c779097beb42515a1c3d63f32d531afba4575cf2 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 1 Apr 2022 14:17:07 -0300
+Subject: [PATCH 153/163] Handle abort call for -fexceptions call
+
+clang might generate an abort call when cleanup functions (set by
+__attribute__ ((cleanup)) calls functions not marked as nothrow.
+We can mitigate by marking some internal functions as __THROW,
+but it is not possible for functions that issue used-provided
+callbacks (for instance pthread_once).
+---
+ sysdeps/generic/symbol-hacks.h | 7 +++++++
+ sysdeps/nptl/lowlevellock.h    | 4 ++--
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/generic/symbol-hacks.h b/sysdeps/generic/symbol-hacks.h
+index 1115e4c0a7..560116d575 100644
+--- a/sysdeps/generic/symbol-hacks.h
++++ b/sysdeps/generic/symbol-hacks.h
+@@ -6,6 +6,13 @@ asm ("memmove = __GI_memmove");
+ asm ("memset = __GI_memset");
+ asm ("memcpy = __GI_memcpy");
+ 
++/* clang might generate an abort call when cleanup functions (set by
++   __attribute__ ((cleanup)) calls functions not marked as nothrow.
++   We can mitigate by marking some internal functions as __THROW,
++   but it is not possible for functions that issue used-provided
++   callbacks (for instance pthread_once).  */
++asm ("abort = __GI_abort");
++
+ /* Some targets do not use __stack_chk_fail_local.  In libc.so,
+    redirect __stack_chk_fail to a hidden reference
+    __stack_chk_fail_local, to avoid the PLT reference.
+diff --git a/sysdeps/nptl/lowlevellock.h b/sysdeps/nptl/lowlevellock.h
+index b429d9aa78..0ef4367f33 100644
+--- a/sysdeps/nptl/lowlevellock.h
++++ b/sysdeps/nptl/lowlevellock.h
+@@ -125,9 +125,9 @@ libc_hidden_proto (__lll_lock_wait)
+ #define lll_cond_lock(futex, private) __lll_cond_lock (&(futex), private)
+ 
+ 
+-extern void __lll_lock_wake_private (int *futex);
++extern void __lll_lock_wake_private (int *futex) __THROW;
+ libc_hidden_proto (__lll_lock_wake_private)
+-extern void __lll_lock_wake (int *futex, int private);
++extern void __lll_lock_wake (int *futex, int private) __THROW;
+ libc_hidden_proto (__lll_lock_wake)
+ 
+ /* This is an expression rather than a statement even though its value is
+-- 
+2.37.2
+

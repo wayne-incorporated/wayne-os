@@ -1,0 +1,215 @@
+From b324285b47d0aa42af684420dc4dc2eebc8d7d91 Mon Sep 17 00:00:00 2001
+From: Paul Stewart <pstew@chromium.org>
+Date: Mon, 24 May 2021 15:25:39 +0000
+Subject: [PATCH 01/19] Optionally ARP for gateway IP address
+
+If the "arpgw" option is enabled in the config, we ARP for
+the gateway provided in the DHCP response as part of the
+process of testing our lease.  If this fails (ARP times
+out) we DECLINE our lease in the hope that a new lease will
+work better.  This can allow us to work around issues with
+infrastructures where IP address / MAC pairs are placed on
+a "dummy" VLAN under certain conditions.  Requesting a
+different IP can sometimes help resolve this.
+
+The code is setup so that for each dhcpcd instance, the
+"arpgw" function is allowed to only fail once.  This is
+to protect ourselves from mistakenly diagnosing a bad
+system, or from looping endlessly if the system is truly
+hosed.
+
+BUG=chromium-os:16885
+TEST=Manual -- confirm that positive case works, and
+manufacture a negative case.  Packet dumps of ARP traffic.
+ARP test adds ~0.02 seconds in the successful case.
+
+Verify by using the WiFi testbed tweaked to have the
+testbed server advertise default routes.  Recorded multiple
+runs for old dhcpcd, dhpcd with arpgw disabled and with
+arpgw enabled:
+
+old:     0.879 0.065 0.052 0.877 0.057 0.075 0.920 0.360 0.057 0.964 0.055 0.063
+new/off: 0.921 0.055 0.050 0.901 0.420 0.359 0.533 0.350 0.057 0.985 0.061 0.098
+new/on:  2.309 0.088 0.087 0.262 0.086 0.083 0.997 0.072 0.076 0.215 0.089 0.077
+
+Reviewed-on: http://gerrit.chromium.org/gerrit/3080
+Reviewed-on: http://gerrit.chromium.org/gerrit/3531
+---
+ src/arp.c        |  3 +-
+ src/arp.h        |  1 +
+ src/dhcp.c       | 74 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/if-options.c |  4 +++
+ src/if-options.h |  3 +-
+ 5 files changed, 83 insertions(+), 2 deletions(-)
+
+diff --git a/src/arp.c b/src/arp.c
+index cbcefa8d..84c501aa 100644
+--- a/src/arp.c
++++ b/src/arp.c
+@@ -290,7 +290,8 @@ arp_probe1(void *arg)
+ 	    ifp->name, inet_ntoa(astate->addr),
+ 	    astate->probes ? astate->probes : PROBE_NUM, PROBE_NUM,
+ 	    timespec_to_double(&tv));
+-	if (arp_request(ifp, 0, astate->addr.s_addr) == -1)
++	if (arp_request(ifp, astate->src_addr.s_addr,
++			astate->addr.s_addr) == -1)
+ 		logerr(__func__);
+ }
+ 
+diff --git a/src/arp.h b/src/arp.h
+index 1c0be043..86448c0c 100644
+--- a/src/arp.h
++++ b/src/arp.h
+@@ -68,6 +68,7 @@ struct arp_state {
+ 	void (*conflicted_cb)(struct arp_state *, const struct arp_msg *);
+ 	void (*free_cb)(struct arp_state *);
+ 
++	struct in_addr src_addr;
+ 	struct in_addr addr;
+ 	int probes;
+ 	int claims;
+diff --git a/src/dhcp.c b/src/dhcp.c
+index f099451a..1365957d 100644
+--- a/src/dhcp.c
++++ b/src/dhcp.c
+@@ -2047,6 +2047,70 @@ dhcp_rebind(void *arg)
+ }
+ 
+ #ifdef ARP
++static void
++dhcp_probe_gw_timeout(struct arp_state *astate) {
++	struct dhcp_state *state = D_STATE(astate->iface);
++
++	/* Allow ourselves to fail only once this way */
++	logerrx("%s: Probe gateway %s timed out ",
++		astate->iface->name, inet_ntoa(astate->addr));
++	astate->iface->options->options &= ~DHCPCD_ARPGW;
++
++	unlink(state->leasefile);
++	if (!state->lease.frominfo)
++		dhcp_decline(astate->iface);
++#ifdef IN_IFF_DUPLICATED
++	ia = ipv4_iffindaddr(astate->iface, &astate->addr, NULL);
++	if (ia)
++		ipv4_deladdr(astate->iface, &ia->addr, &ia->net);
++#endif
++	eloop_timeout_delete(astate->iface->ctx->eloop, NULL,
++	    astate->iface);
++	eloop_timeout_add_sec(astate->iface->ctx->eloop,
++	    DHCP_RAND_MAX, dhcp_discover, astate->iface);
++}
++
++static void
++dhcp_probe_gw_response(struct arp_state *astate, const struct arp_msg *amsg)
++{
++	/* Verify this is a response for the gateway probe. */
++	if (astate->src_addr.s_addr != 0 &&
++	    amsg &&
++	    amsg->tip.s_addr == astate->src_addr.s_addr &&
++	    amsg->sip.s_addr == astate->addr.s_addr) {
++		dhcp_close(astate->iface);
++		eloop_timeout_delete(astate->iface->ctx->eloop,
++				     NULL, astate->iface);
++#ifdef IN_IFF_TENTATIVE
++		ipv4_finaliseaddr(astate->iface);
++#else
++		dhcp_bind(astate->iface);
++#endif
++		arp_free(astate);
++	}
++}
++
++static int
++dhcp_probe_gw(struct interface *ifp)
++{
++	struct dhcp_state *state = D_STATE(ifp);
++	struct arp_state *astate;
++	struct in_addr gateway_addr;
++
++	if (get_option_addr(ifp->ctx, &gateway_addr,
++			    state->offer, state->offer_len, DHO_ROUTER) == 0) {
++		astate = arp_new(ifp, &gateway_addr);
++		if (astate) {
++			astate->src_addr.s_addr = state->offer->yiaddr;
++			astate->probed_cb = dhcp_probe_gw_timeout;
++			astate->conflicted_cb = dhcp_probe_gw_response;
++			arp_probe(astate);
++			return 1;
++		}
++	}
++	return 0;
++}
++
+ static void
+ dhcp_arp_probed(struct arp_state *astate)
+ {
+@@ -2072,6 +2136,12 @@ dhcp_arp_probed(struct arp_state *astate)
+ 		dhcpcd_startinterface(ifp);
+ 		return;
+ 	}
++
++	/* Probe the gateway specified in the lease offer. */
++	if ((ifo->options & DHCPCD_ARPGW) && (dhcp_probe_gw(astate->iface))) {
++		return;
++	}
++
+ #endif
+ 
+ 	/* Already bound so DAD has worked */
+@@ -3291,6 +3361,10 @@ rapidcommit:
+ 	eloop_timeout_delete(ifp->ctx->eloop, NULL, ifp);
+ 
+ #ifdef ARP
++	if ((ifo->options & DHCPCD_ARPGW) && (dhcp_probe_gw(ifp))) {
++		return;
++	}
++
+ 	dhcp_arp_bind(ifp);
+ #else
+ 	dhcp_bind(ifp);
+diff --git a/src/if-options.c b/src/if-options.c
+index 467bd367..ae3b4415 100644
+--- a/src/if-options.c
++++ b/src/if-options.c
+@@ -150,6 +150,7 @@ const struct option cf_options[] = {
+ 	{"nooption",        required_argument, NULL, 'O'},
+ 	{"printpidfile",    no_argument,       NULL, 'P'},
+ 	{"require",         required_argument, NULL, 'Q'},
++	{"arpgw",           no_argument,       NULL, 'R'},
+ 	{"static",          required_argument, NULL, 'S'},
+ 	{"test",            no_argument,       NULL, 'T'},
+ 	{"dumplease",       no_argument,       NULL, 'U'},
+@@ -1081,6 +1082,9 @@ parse_option(struct dhcpcd_ctx *ctx, const char *ifname, struct if_options *ifo,
+ 			return -1;
+ 		}
+ 		break;
++	case 'R':
++		ifo->options |= DHCPCD_ARPGW;
++		break;
+ 	case 'S':
+ 		ARG_REQUIRED;
+ 		p = strchr(arg, '=');
+diff --git a/src/if-options.h b/src/if-options.h
+index eddfeef9..0e55e38b 100644
+--- a/src/if-options.h
++++ b/src/if-options.h
+@@ -43,7 +43,7 @@
+ /* Don't set any optional arguments here so we retain POSIX
+  * compatibility with getopt */
+ #define IF_OPTS "146bc:de:f:gh:i:j:kl:m:no:pqr:s:t:u:v:wxy:z:" \
+-		"ABC:DEF:GHI:JKLMNO:PQ:S:TUVW:X:Z:"
++		"ABC:DEF:GHI:JKLMNO:PQ:RS:TUVW:X:Z:"
+ #define NOERR_IF_OPTS		":" IF_OPTS
+ 
+ #define DEFAULT_TIMEOUT		30
+@@ -118,6 +118,7 @@
+ #define DHCPCD_PRINT_PIDFILE		(1ULL << 59)
+ #define DHCPCD_ONESHOT			(1ULL << 60)
+ #define DHCPCD_INACTIVE			(1ULL << 61)
++#define DHCPCD_ARPGW			(1ULL << 62)
+ 
+ #define DHCPCD_NODROP	(DHCPCD_EXITING | DHCPCD_PERSISTENT)
+ 
+-- 
+2.33.0.800.g4c38ced690-goog
+

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,7 +36,7 @@ GeneratorJob::Factory::~Factory() {}
 std::unique_ptr<GeneratorJobInterface> GeneratorJob::Factory::Create(
     const std::string& filename,
     const base::FilePath& user_path,
-    const base::Optional<base::FilePath> ns_path,
+    const std::optional<base::FilePath> ns_path,
     uid_t desired_uid,
     SystemUtils* utils) {
   return std::unique_ptr<GeneratorJobInterface>(
@@ -44,7 +45,7 @@ std::unique_ptr<GeneratorJobInterface> GeneratorJob::Factory::Create(
 
 GeneratorJob::GeneratorJob(const std::string& filename,
                            const base::FilePath& user_path,
-                           const base::Optional<base::FilePath> ns_path,
+                           const std::optional<base::FilePath> ns_path,
                            uid_t desired_uid,
                            SystemUtils* utils)
     : filename_(filename),

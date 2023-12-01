@@ -1,0 +1,66 @@
+commit e8b376547b4b77671c36607ade025d3272699e7a
+Author: Wei Mi <wmi@google.com>
+Date:   Fri Sep 24 15:20:16 2021 -0700
+
+    Fixed a bug in https://reviews.llvm.org/rG8eb617d719bdc6a4ed7773925d2421b9bbdd4b7a.
+    
+    For compressed profile when reading an unknown section, the data reader pointer
+    adjustment was incorrect. This patch fixed that.
+---
+ llvm/include/llvm/ProfileData/SampleProfReader.h         |   2 +-
+ .../Inputs/unknown.section.compressed.extbin.profdata    | Bin 0 -> 401 bytes
+ llvm/test/tools/llvm-profdata/forward-compatible.test    |  15 +++++++++++++++
+ 3 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/llvm/include/llvm/ProfileData/SampleProfReader.h b/llvm/include/llvm/ProfileData/SampleProfReader.h
+index 169ba28965fb..e6d31f1b9098 100644
+--- a/llvm/include/llvm/ProfileData/SampleProfReader.h
++++ b/llvm/include/llvm/ProfileData/SampleProfReader.h
+@@ -787,7 +787,7 @@ private:
+   virtual std::error_code
+   readCustomSection(const SecHdrTableEntry &Entry) override {
+     // Update the data reader pointer to the end of the section.
+-    Data += Entry.Size;
++    Data = End;
+     return sampleprof_error::success;
+   };
+ 
+diff --git a/llvm/test/tools/llvm-profdata/Inputs/unknown.section.compressed.extbin.profdata b/llvm/test/tools/llvm-profdata/Inputs/unknown.section.compressed.extbin.profdata
+new file mode 100644
+index 000000000000..f08c7ba3d562
+Binary files /dev/null and b/llvm/test/tools/llvm-profdata/Inputs/unknown.section.compressed.extbin.profdata differ
+diff --git a/llvm/test/tools/llvm-profdata/forward-compatible.test b/llvm/test/tools/llvm-profdata/forward-compatible.test
+index 50c79a0d3e51..8d45ba7d8a73 100644
+--- a/llvm/test/tools/llvm-profdata/forward-compatible.test
++++ b/llvm/test/tools/llvm-profdata/forward-compatible.test
+@@ -1,11 +1,15 @@
+ RUN: llvm-profdata show -sample %S/Inputs/unknown.section.extbin.profdata | FileCheck %s
++RUN: llvm-profdata show -sample %S/Inputs/unknown.section.compressed.extbin.profdata | FileCheck %s
+ RUN: llvm-profdata show -sample -show-sec-info-only %S/Inputs/unknown.section.extbin.profdata | FileCheck %s -check-prefix=HDR
++RUN: llvm-profdata show -sample -show-sec-info-only %S/Inputs/unknown.section.compressed.extbin.profdata | FileCheck %s -check-prefix=HDR-COMPRESS
+ 
+ # The input unknown.section.extbin.profdata contains an unknown section type
+ # which uses an enum value which won't be used in the near future. Check
+ # llvm-profdata can read it without problem. This is to ensure adding new
+ # section in extbinary format for SampleFDO won't cause forward compatibility
+ # issue.
++# unknown.section.compressed.extbin.profdata is the compressed version of
++# unknown.section.extbin.profdata.
+ 
+ CHECK: Function: main: 366846, 0, 3 sampled lines
+ CHECK-NEXT: Samples collected in the function's body {
+@@ -24,3 +28,14 @@ HDR-NEXT: FunctionMetadata - Offset: 394, Size: 0, Flags: {}
+ HDR-NEXT: Header Size: 242
+ HDR-NEXT: Total Sections Size: 152
+ HDR-NEXT: File Size: 394
++
++HDR-COMPRESS: ProfileSummarySection - Offset: 242, Size: 89, Flags: {compressed}
++HDR-COMPRESS-NEXT: NameTableSection - Offset: 331, Size: 16, Flags: {compressed}
++HDR-COMPRESS-NEXT: UnknownSection - Offset: 347, Size: 11, Flags: {compressed}
++HDR-COMPRESS-NEXT: FuncOffsetTableSection - Offset: 388, Size: 13, Flags: {compressed}
++HDR-COMPRESS-NEXT: LBRProfileSection - Offset: 358, Size: 30, Flags: {compressed}
++HDR-COMPRESS-NEXT: ProfileSymbolListSection - Offset: 388, Size: 0, Flags: {compressed}
++HDR-COMPRESS-NEXT: FunctionMetadata - Offset: 401, Size: 0, Flags: {compressed}
++HDR-COMPRESS-NEXT: Header Size: 242
++HDR-COMPRESS-NEXT: Total Sections Size: 159
++HDR-COMPRESS-NEXT: File Size: 401

@@ -1,0 +1,58 @@
+From 9d1857f69f4ef00d9fd1b21660c20e00b993d06f Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Fri, 4 Feb 2022 10:15:11 -0800
+Subject: [PATCH] [msan] Guard FP_XSTATE_MAGIC1 usage with SANITIZER_GLIBC
+
+Fix build for Linux musl.
+
+Reviewed By: #sanitizers, dvyukov
+
+Differential Revision: https://reviews.llvm.org/D118970
+---
+ .../lib/sanitizer_common/sanitizer_platform_limits_posix.cpp   | 2 +-
+ compiler-rt/test/msan/Linux/signal_mcontext.cpp                | 2 +-
+ compiler-rt/test/msan/Linux/signal_mcontext2.cpp               | 3 ++-
+ 3 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
+index 82048f0eae2e..32b8f47ed633 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cpp
+@@ -217,7 +217,7 @@ namespace __sanitizer {
+   unsigned struct_sockaddr_sz = sizeof(struct sockaddr);
+ 
+   unsigned ucontext_t_sz(void *ctx) {
+-#    if SANITIZER_LINUX && SANITIZER_X64
++#    if SANITIZER_GLIBC && SANITIZER_X64
+     // See kernel arch/x86/kernel/fpu/signal.c for details.
+     const auto *fpregs = static_cast<ucontext_t *>(ctx)->uc_mcontext.fpregs;
+     // The member names differ across header versions, but the actual layout
+diff --git a/compiler-rt/test/msan/Linux/signal_mcontext.cpp b/compiler-rt/test/msan/Linux/signal_mcontext.cpp
+index 932b4b8c0977..b49451fbb730 100644
+--- a/compiler-rt/test/msan/Linux/signal_mcontext.cpp
++++ b/compiler-rt/test/msan/Linux/signal_mcontext.cpp
+@@ -10,7 +10,7 @@
+ 
+ void handler(int sig, siginfo_t *info, void *uctx) {
+   __msan_check_mem_is_initialized(uctx, sizeof(ucontext_t));
+-#if defined(__x86_64__)
++#if defined(__GLIBC__) && defined(__x86_64__)
+   auto *mctx = &static_cast<ucontext_t *>(uctx)->uc_mcontext;
+   if (auto *fpregs = mctx->fpregs) {
+     // The member names differ across header versions, but the actual layout
+diff --git a/compiler-rt/test/msan/Linux/signal_mcontext2.cpp b/compiler-rt/test/msan/Linux/signal_mcontext2.cpp
+index 6bb6740c6fa7..f65f909c87ef 100644
+--- a/compiler-rt/test/msan/Linux/signal_mcontext2.cpp
++++ b/compiler-rt/test/msan/Linux/signal_mcontext2.cpp
+@@ -1,6 +1,7 @@
+ // RUN: %clangxx_msan -fsanitize-memory-track-origins=2 -O1 %s -o %t && not %run %t 2>&1 | FileCheck %s
+ 
+-// REQUIRES: x86_64-target-arch
++// musl does not define FP_XSTATE_MAGIC1.
++// REQUIRES: x86_64-target-arch && glibc-2.27
+ 
+ #include <pthread.h>
+ #include <signal.h>
+-- 
+2.35.1.723.g4982287a31-goog
+

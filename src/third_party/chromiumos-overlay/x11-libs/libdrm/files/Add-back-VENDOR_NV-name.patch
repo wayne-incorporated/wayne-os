@@ -1,0 +1,38 @@
+From e333741b9e2ec539d6a8dcdd305b4c59a76f931b Mon Sep 17 00:00:00 2001
+From: Benjamin Gordon <bmgordon@chromium.org>
+Date: Fri, 1 Jun 2018 15:24:29 -0600
+Subject: [PATCH libdrm 7/7] CHROMIUM: drm_fourcc.h: Add back VENDOR_NV name
+
+Upstream libdrm commit ab5aaf6c8eb93462c15007e9b54f4447c1ea8148 renames
+DRM_FORMAT_MOD_VENDOR_NV to DRM_FORMAT_MOD_VENDOR_NVIDIA.  The old name
+is used in downstream packages like minigbm, so add it back as an alias
+for the new name.
+
+Old-BUG=b:80474314
+Old-TEST=build_packages --board=nyan_big
+
+BUG=b:112720782
+Signed-off-by: Kristian H. Kristensen <hoegsberg@chromium.org>
+
+Change-Id: I5cb0cc0e6144665103c38d32489fe68ac34429b2
+---
+ include/drm/drm_fourcc.h | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/include/drm/drm_fourcc.h b/include/drm/drm_fourcc.h
+index 649273d3..ea02d62e 100644
+--- a/include/drm/drm_fourcc.h
++++ b/include/drm/drm_fourcc.h
+@@ -371,6 +371,9 @@ extern "C" {
+ 
+ /* add more to the end as needed */
+ 
++/* For backwards compatibility prior to 2.4.92. */
++#define DRM_FORMAT_MOD_VENDOR_NV      DRM_FORMAT_MOD_VENDOR_NVIDIA
++
+ #define DRM_FORMAT_RESERVED	      ((1ULL << 56) - 1)
+ 
+ /* Vendor ID for downstream, interim ChromeOS specific modifiers. */
+-- 
+2.31.0
+

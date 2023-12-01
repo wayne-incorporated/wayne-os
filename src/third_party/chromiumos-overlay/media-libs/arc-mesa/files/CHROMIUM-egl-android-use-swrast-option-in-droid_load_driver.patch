@@ -1,0 +1,41 @@
+From bbfecf824a94c5813b36fa286973ca4f7bce90d3 Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@chromium.org>
+Date: Wed, 13 Mar 2019 10:49:20 -0700
+Subject: [PATCH 06/20] egl/android: use swrast option in droid_load_driver
+
+Change-Id: Id6fce25b5af000df778cfcbab3d99e92fb983a14
+---
+ src/egl/drivers/dri2/platform_android.c | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 67eea19dac52..58c9ea4e3f93 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -1373,7 +1373,22 @@ droid_load_driver(_EGLDisplay *disp, bool swrast)
+    struct dri2_egl_display *dri2_dpy = disp->DriverData;
+    const char *err;
+ 
+-   dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
++   char *driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
++   if (swrast) {
++         /* Use kms swrast only with vgem / virtio_gpu.
++          * virtio-gpu fallbacks to software rendering when 3D features
++          * are unavailable since 6c5ab, and kms_swrast is more
++          * feature complete than swrast.
++          */
++         if (strcmp(driver_name, "vgem") == 0 ||
++             strcmp(driver_name, "virtio_gpu") == 0)
++            dri2_dpy->driver_name = strdup("kms_swrast");
++         free(driver_name);
++   } else {
++         /* Use the given hardware driver */
++         dri2_dpy->driver_name = driver_name;
++   }
++
+    if (dri2_dpy->driver_name == NULL)
+       return false;
+ 
+-- 
+2.20.1
+

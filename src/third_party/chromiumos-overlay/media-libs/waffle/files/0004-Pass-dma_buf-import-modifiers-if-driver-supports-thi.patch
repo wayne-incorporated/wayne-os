@@ -1,0 +1,139 @@
+From 77c3c75d0cd4f82966b156bc7947e24a2c3b3eab Mon Sep 17 00:00:00 2001
+From: Haixia Shi <hshi@chromium.org>
+Date: Thu, 29 Sep 2016 16:32:21 -0700
+Subject: [PATCH] Pass dma_buf import modifiers if driver supports this
+ extension.
+
+---
+ src/waffle/egl/wegl_display.c   |  1 +
+ src/waffle/egl/wegl_display.h   |  1 +
+ src/waffle/gbm/wgbm_platform.h  |  1 +
+ src/waffle/null/wnull_buffer.c  | 14 +++++++++++++-
+ src/waffle/null/wnull_buffer.h  | 10 ++++++++++
+ src/waffle/null/wnull_display.c |  1 +
+ src/waffle/null/wnull_window.c  |  1 +
+ 7 files changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/src/waffle/egl/wegl_display.c b/src/waffle/egl/wegl_display.c
+index bbe433b..fe137a3 100644
+--- a/src/waffle/egl/wegl_display.c
++++ b/src/waffle/egl/wegl_display.c
+@@ -51,6 +51,7 @@ get_extensions(struct wegl_display *dpy)
+ 
+     dpy->KHR_create_context = waffle_is_extension_in_string(extensions, "EGL_KHR_create_context");
+     dpy->EXT_image_dma_buf_import = waffle_is_extension_in_string(extensions, "EGL_EXT_image_dma_buf_import");
++    dpy->EXT_image_dma_buf_import_modifiers = waffle_is_extension_in_string(extensions, "EGL_EXT_image_dma_buf_import_modifiers");
+ 
+     return true;
+ }
+diff --git a/src/waffle/egl/wegl_display.h b/src/waffle/egl/wegl_display.h
+index 4d8c581..418ed5f 100644
+--- a/src/waffle/egl/wegl_display.h
++++ b/src/waffle/egl/wegl_display.h
+@@ -39,6 +39,7 @@ struct wegl_display {
+     EGLDisplay egl;
+     bool KHR_create_context;
+     bool EXT_image_dma_buf_import;
++    bool EXT_image_dma_buf_import_modifiers;
+ };
+ 
+ DEFINE_CONTAINER_CAST_FUNC(wegl_display,
+diff --git a/src/waffle/gbm/wgbm_platform.h b/src/waffle/gbm/wgbm_platform.h
+index 1a08183..0d2a392 100644
+--- a/src/waffle/gbm/wgbm_platform.h
++++ b/src/waffle/gbm/wgbm_platform.h
+@@ -49,6 +49,7 @@
+     f(uint32_t            , gbm_bo_get_height            , (struct gbm_bo *bo)) \
+     f(uint32_t            , gbm_bo_get_stride            , (struct gbm_bo *bo)) \
+     f(uint32_t            , gbm_bo_get_format            , (struct gbm_bo *bo)) \
++    f(uint64_t            , gbm_bo_get_modifier   , (struct gbm_bo *bo)) \
+     f(union gbm_bo_handle , gbm_bo_get_handle            , (struct gbm_bo *bo)) \
+     f(struct gbm_device * , gbm_bo_get_device            , (struct gbm_bo *bo))
+ 
+diff --git a/src/waffle/null/wnull_buffer.c b/src/waffle/null/wnull_buffer.c
+index 00f1303..723cade 100644
+--- a/src/waffle/null/wnull_buffer.c
++++ b/src/waffle/null/wnull_buffer.c
+@@ -164,7 +164,7 @@ slbuf_get_image(struct slbuf *self)
+         if (fd < 0)
+             goto done;
+ 
+-        const EGLint attr[] = {
++        EGLint attr[17] = {
+             EGL_WIDTH, self->p->width,
+             EGL_HEIGHT, self->p->height,
+             EGL_LINUX_DRM_FOURCC_EXT, slbuf_drm_format(self),
+@@ -174,6 +174,18 @@ slbuf_get_image(struct slbuf *self)
+             EGL_NONE,
+         };
+ 
++        if (self->p->has_dma_buf_import_modifiers) {
++            struct gbm_bo *bo = slbuf_get_bo(self);
++            if (bo) {
++                uint64_t modifier = self->f->gbm_bo_get_modifier(bo);
++                attr[12] = EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT;
++                attr[13] = (uint32_t)(modifier & 0xffffffff);
++                attr[14] = EGL_LINUX_DRM_PLANE0_MODIFIER1_EXT;
++                attr[15] = (uint32_t)(modifier >> 32);
++                attr[16] = EGL_NONE;
++            }
++        }
++
+         self->image = self->f->eglCreateImageKHR(self->p->egl_display,
+                                                  EGL_NO_CONTEXT,
+                                                  EGL_LINUX_DMA_BUF_EXT,
+diff --git a/src/waffle/null/wnull_buffer.h b/src/waffle/null/wnull_buffer.h
+index 64be7cc..cf739b1 100644
+--- a/src/waffle/null/wnull_buffer.h
++++ b/src/waffle/null/wnull_buffer.h
+@@ -16,6 +16,15 @@
+ f(EGLImageKHR, eglCreateImageKHR , (EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list)) \
+ f(EGLBoolean , eglDestroyImageKHR, (EGLDisplay dpy, EGLImageKHR image)) \
+ 
++#if !defined (EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT)
++#define EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT 0x3286
++#define EGL_LINUX_DRM_PLANE0_MODIFIER1_EXT 0x3287
++#define EGL_LINUX_DRM_PLANE1_MODIFIER0_EXT 0x3288
++#define EGL_LINUX_DRM_PLANE1_MODIFIER1_EXT 0x3289
++#define EGL_LINUX_DRM_PLANE2_MODIFIER0_EXT 0x328a
++#define EGL_LINUX_DRM_PLANE2_MODIFIER1_EXT 0x328b
++#endif
++
+ 
+ struct slbuf_func {
+ #define DECLARE(type, name, args) type (*name) args;
+@@ -36,6 +45,7 @@ struct slbuf_param {
+     uint32_t gbm_flags;
+ 
+     EGLDisplay egl_display;
++    bool has_dma_buf_import_modifiers;
+ };
+ 
+ struct wnull_display;
+diff --git a/src/waffle/null/wnull_display.c b/src/waffle/null/wnull_display.c
+index 70aa565..fc4798e 100644
+--- a/src/waffle/null/wnull_display.c
++++ b/src/waffle/null/wnull_display.c
+@@ -236,6 +236,7 @@ wnull_display_connect(struct wcore_platform *wc_plat,
+     self->param.color = true;
+     self->param.gbm_device = self->drm->gbm_device;
+     self->param.egl_display = self->wegl.egl;
++    self->param.has_dma_buf_import_modifiers = self->wegl.EXT_image_dma_buf_import_modifiers;
+ 
+ #define ASSIGN(type, name, args) self->func.name = plat->name;
+     GBM_FUNCTIONS(ASSIGN);
+diff --git a/src/waffle/null/wnull_window.c b/src/waffle/null/wnull_window.c
+index 402e685..86b5132 100644
+--- a/src/waffle/null/wnull_window.c
++++ b/src/waffle/null/wnull_window.c
+@@ -233,6 +233,7 @@ wnull_window_create(struct wcore_platform *wc_plat,
+             break;
+     }
+     window->param.egl_display = dpy->wegl.egl;
++    window->param.has_dma_buf_import_modifiers = dpy->wegl.EXT_image_dma_buf_import_modifiers;
+ 
+     struct wgbm_platform *plat = wgbm_platform(wegl_platform(wc_plat));
+ #define ASSIGN(type, name, args) window->func.name = plat->name;
+-- 
+2.8.0.rc3.226.g39d4020
+

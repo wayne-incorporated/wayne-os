@@ -1,0 +1,44 @@
+From 31e1cdb737ad0e7ee8a2c72220395679775609e7 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Tue, 8 Mar 2022 16:40:35 -0300
+Subject: [PATCH 056/163] Rewrite find_cxx_header config configure.ac
+
+To work with clang++.
+---
+ configure    | 4 ++--
+ configure.ac | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/configure b/configure
+index 9b4ad842e5..2cb3dd2440 100755
+--- a/configure
++++ b/configure
+@@ -5581,8 +5581,8 @@ fi
+ # copy of those headers in Makerules.
+ if test -n "$CXX"; then
+   find_cxx_header () {
+-    echo "#include <$1>" | $CXX -M -MP -x c++ - 2>/dev/null \
+-	 | sed -n "\,$1:,{s/:\$//;p}"
++    echo "#include <$1>" | $CXX -H -fsyntax-only -x c++ - 2>&1 \
++	 | sed -rn "\,^\.? .,{s/^\.*\. //p}"
+   }
+   CXX_CSTDLIB_HEADER="$(find_cxx_header cstdlib)"
+   CXX_CMATH_HEADER="$(find_cxx_header cmath)"
+diff --git a/configure.ac b/configure.ac
+index d208a28794..1a9475bdad 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1136,8 +1136,8 @@ AC_SUBST(CXX_SYSINCLUDES)
+ # copy of those headers in Makerules.
+ if test -n "$CXX"; then
+   find_cxx_header () {
+-    echo "#include <$1>" | $CXX -M -MP -x c++ - 2>/dev/null \
+-	 | sed -n "\,$1:,{s/:\$//;p}"
++    echo "#include <$1>" | $CXX -H -fsyntax-only -x c++ - 2>&1 \
++	 | sed -rn "\,^\.? .,{s/[^\.]*\. //p}"
+   }
+   CXX_CSTDLIB_HEADER="$(find_cxx_header cstdlib)"
+   CXX_CMATH_HEADER="$(find_cxx_header cmath)"
+-- 
+2.37.2
+

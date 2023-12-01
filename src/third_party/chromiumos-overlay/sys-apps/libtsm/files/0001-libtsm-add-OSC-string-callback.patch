@@ -1,0 +1,138 @@
+From 5cdca563f16eb03d53aca49258fe1ab67adf93f4 Mon Sep 17 00:00:00 2001
+From: Dominik Behr <dbehr@chromium.org>
+Date: Fri, 29 Apr 2016 17:55:38 -0700
+Subject: [PATCH] libtsm: add OSC string callback
+
+Signed-off-by: Dominik Behr <dbehr@chromium.org>
+---
+ docs/libtsm.sym |  1 +
+ src/libtsm.h    |  9 +++++++++
+ src/tsm_vte.c   | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 56 insertions(+)
+
+diff --git a/docs/libtsm.sym b/docs/libtsm.sym
+index 3593646..f6d438f 100644
+--- a/docs/libtsm.sym
++++ b/docs/libtsm.sym
+@@ -111,4 +111,5 @@ global:
+ 	tsm_vte_hard_reset;
+ 	tsm_vte_input;
+ 	tsm_vte_handle_keyboard;
++	tsm_vte_set_osc_cb;
+ } LIBTSM_2;
+diff --git a/src/libtsm.h b/src/libtsm.h
+index 39dda26..d47e4f4 100644
+--- a/src/libtsm.h
++++ b/src/libtsm.h
+@@ -312,6 +312,15 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
+ 			     uint32_t ascii, unsigned int mods,
+ 			     uint32_t unicode);
+ 
++typedef void (*tsm_vte_osc_cb) (struct tsm_vte *vte,
++				const uint32_t *osc_string,
++				size_t osc_len,
++				void *data);
++
++void tsm_vte_set_osc_cb(struct tsm_vte *vte,
++			tsm_vte_osc_cb osc_cb,
++			void *data);
++
+ /** @} */
+ 
+ #ifdef __cplusplus
+diff --git a/src/tsm_vte.c b/src/tsm_vte.c
+index 70d34d9..17ed170 100644
+--- a/src/tsm_vte.c
++++ b/src/tsm_vte.c
+@@ -137,6 +137,8 @@ enum parser_action {
+ #define FLAG_PREPEND_ESCAPE			0x00010000 /* Prepend escape character to next output */
+ #define FLAG_TITE_INHIBIT_MODE			0x00020000 /* Prevent switching to alternate screen buffer */
+ 
++#define OSC_SIZE_INC	1024
++
+ struct vte_saved_state {
+ 	unsigned int cursor_x;
+ 	unsigned int cursor_y;
+@@ -181,6 +183,12 @@ struct tsm_vte {
+ 	struct vte_saved_state saved_state;
+ 	unsigned int alt_cursor_x;
+ 	unsigned int alt_cursor_y;
++
++	uint32_t *osc_string;
++	size_t osc_size;
++	size_t osc_pos;
++	tsm_vte_osc_cb osc_cb;
++	void *osc_cb_data;
+ };
+ 
+ enum vte_color {
+@@ -388,6 +396,8 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
+ 	vte->def_attr.fccode = COLOR_FOREGROUND;
+ 	vte->def_attr.bccode = COLOR_BACKGROUND;
+ 	to_rgb(vte, &vte->def_attr);
++	vte->osc_string = NULL;
++	vte->osc_cb_data = NULL;
+ 
+ 	ret = tsm_utf8_mach_new(&vte->mach);
+ 	if (ret)
+@@ -427,6 +437,10 @@ void tsm_vte_unref(struct tsm_vte *vte)
+ 	llog_debug(vte, "destroying vte object");
+ 	tsm_screen_unref(vte->con);
+ 	tsm_utf8_mach_free(vte->mach);
++	if (vte->osc_string) {
++		free(vte->osc_string);
++		vte->osc_string = NULL;
++	}
+ 	free(vte);
+ }
+ 
+@@ -1809,10 +1823,33 @@ static void do_action(struct tsm_vte *vte, uint32_t data, int action)
+ 		case ACTION_DCS_END:
+ 			break;
+ 		case ACTION_OSC_START:
++			if (!vte->osc_string) {
++				vte->osc_string = malloc(sizeof(*vte->osc_string) * OSC_SIZE_INC);
++				vte->osc_size = vte->osc_string ? OSC_SIZE_INC : 0;
++			}
++			vte->osc_pos = 0;
+ 			break;
+ 		case ACTION_OSC_COLLECT:
++			if (vte->osc_string) {
++				if (vte->osc_pos < vte->osc_size) {
++					vte->osc_string[vte->osc_pos] = data;
++					vte->osc_pos++;
++				}
++				if (vte->osc_pos >= vte->osc_size) {
++					uint32_t *tmp = realloc(vte->osc_string, sizeof(*tmp) * (vte->osc_size + OSC_SIZE_INC));
++					if (tmp) {
++						vte->osc_size += OSC_SIZE_INC;
++						vte->osc_string = tmp;
++					} else {
++						llog_warning(vte, "out of memory for OSC string");
++					}
++				}
++			}
+ 			break;
+ 		case ACTION_OSC_END:
++			if (vte->osc_cb && vte->osc_string && vte->osc_pos) {
++				vte->osc_cb(vte, vte->osc_string, vte->osc_pos, vte->osc_cb_data);
++			}
+ 			break;
+ 		default:
+ 			llog_warn(vte, "invalid action %d", action);
+@@ -2790,3 +2827,12 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
+ 	vte->flags &= ~FLAG_PREPEND_ESCAPE;
+ 	return false;
+ }
++
++SHL_EXPORT
++void tsm_vte_set_osc_cb(struct tsm_vte *vte,
++			tsm_vte_osc_cb osc_cb,
++			void *data)
++{
++	vte->osc_cb = osc_cb;
++	vte->osc_cb_data = data;
++}
+-- 
+2.8.0.rc3.226.g39d4020
+

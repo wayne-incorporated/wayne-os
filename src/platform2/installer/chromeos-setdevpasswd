@@ -1,0 +1,19 @@
+#!/bin/sh
+# Copyright 2011 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+set -e
+
+PASSWD_FILE='/mnt/stateful_partition/etc/devmode.passwd'
+
+# First get a password from the user before we go clobbering the content.
+# This way they can run the script and CTRL+C out of it without breaking
+# their existing password.
+pass=$(openssl passwd -1)
+
+mkdir -p "${PASSWD_FILE%/*}"
+# Make sure it's created with permissions only root can access.
+: > "${PASSWD_FILE}"
+chmod 600 "${PASSWD_FILE}"
+echo "chronos:${pass}" > "${PASSWD_FILE}"

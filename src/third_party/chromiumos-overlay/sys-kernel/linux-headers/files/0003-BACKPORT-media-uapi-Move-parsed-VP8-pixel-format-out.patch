@@ -1,0 +1,44 @@
+From aef10da7ba57f1fc1e49ea6e73a57d586d8aa07a Mon Sep 17 00:00:00 2001
+From: Ezequiel Garcia <ezequiel@collabora.com>
+Date: Thu, 4 Mar 2021 15:07:51 +0100
+Subject: [PATCH] BACKPORT: media: uapi: Move parsed VP8 pixel format out of
+ staging
+
+Since we are ready to stabilize the VP8 stateless API,
+move the parsed VP8 pixel format.
+
+Signed-off-by: Ezequiel Garcia <ezequiel@collabora.com>
+Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+Signed-off-by: Mauro Carvalho Chehab <mchehab+huawei@kernel.org>
+(cherry picked from commit 1fb03333eb926e315f9850098b5a3361832f07cb)
+
+Conflicts:
+   Documentation/userspace-api/media/v4l/pixfmt-compressed.rst
+   include/media/vp8-ctrls.h
+
+Dropped all conflicting changes.
+
+BUG=b:278157861
+TEST=check header
+
+Change-Id: If5c233a7931f0245905b53dead9d71ba487347a7
+Signed-off-by: Chen-Yu Tsai <wenst@chromium.org>
+---
+ include/uapi/linux/videodev2.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index c1e1e0f1a013..f556e4b335ed 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -634,6 +634,7 @@ struct v4l2_pix_format {
+ #define V4L2_PIX_FMT_VC1_ANNEX_G v4l2_fourcc('V', 'C', '1', 'G') /* SMPTE 421M Annex G compliant stream */
+ #define V4L2_PIX_FMT_VC1_ANNEX_L v4l2_fourcc('V', 'C', '1', 'L') /* SMPTE 421M Annex L compliant stream */
+ #define V4L2_PIX_FMT_VP8      v4l2_fourcc('V', 'P', '8', '0') /* VP8 */
++#define V4L2_PIX_FMT_VP8_FRAME v4l2_fourcc('V', 'P', '8', 'F') /* VP8 parsed frame */
+ #define V4L2_PIX_FMT_VP9      v4l2_fourcc('V', 'P', '9', '0') /* VP9 */
+ #define V4L2_PIX_FMT_HEVC     v4l2_fourcc('H', 'E', 'V', 'C') /* HEVC aka H.265 */
+ #define V4L2_PIX_FMT_H264_SLICE v4l2_fourcc('S', '2', '6', '4') /* H264 parsed slices */
+-- 
+2.39.2
+

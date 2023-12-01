@@ -1,0 +1,89 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/install_seccomp_policy.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":cros_camera_service",
+    ":install_cros_camera_conf",
+    ":install_cros_camera_policy",
+    ":install_dbus_cros_camera_conf",
+  ]
+
+  if (use.cheets) {
+    deps += [ ":install_init_camera_rc" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  configs = [ "//camera/build:cros_camera_common" ]
+  pkg_deps = [
+    "libbrillo",
+    "libcros_camera",
+    "libcros_camera_android_deps",
+    "libdrm",
+    "libmojo",
+    "libsync",
+    "libyuv",
+    "re2",
+  ]
+}
+
+executable("cros_camera_service") {
+  sources = [
+    "//camera/common/ipc_util.cc",
+    "//camera/common/utils/camera_config_impl.cc",
+    "//camera/common/utils/camera_hal_enumerator.cc",
+    "//camera/common/utils/cros_camera_mojo_utils.cc",
+    "//camera/mojo/CameraMetadataTagsVerifier.cc",
+    "camera3_callback_ops_delegate.cc",
+    "camera3_device_ops_delegate.cc",
+    "camera_device_adapter.cc",
+    "camera_hal_adapter.cc",
+    "camera_hal_server_impl.cc",
+    "camera_hal_test_adapter.cc",
+    "camera_module_callbacks_associated_delegate.cc",
+    "camera_module_delegate.cc",
+    "camera_trace_event.cc",
+    "cros_camera_main.cc",
+    "vendor_tag_ops_delegate.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  libs = [
+    "dl",
+    "rt",
+  ]
+  deps = [ "//ml_core/dlc:dlc_client" ]
+}
+
+install_config("install_cros_camera_conf") {
+  sources = [
+    "init/cros-camera-failsafe.conf",
+    "init/cros-camera.conf",
+  ]
+
+  install_path = "/etc/init"
+}
+
+install_config("install_dbus_cros_camera_conf") {
+  sources = [ "dbus/CrosCamera.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_seccomp_policy("install_cros_camera_policy") {
+  arch = getenv("ARCH")
+  sources = [ "seccomp_filter/cros-camera-${arch}.policy" ]
+  outputs = [ "cros-camera-seccomp.policy" ]
+  install_path = "/usr/share/policy"
+}
+
+if (use.cheets) {
+  install_config("install_init_camera_rc") {
+    sources = [ "init/init.camera.rc" ]
+    install_path = "/build/rootfs/opt/google/containers/android/vendor/etc/init"
+  }
+}

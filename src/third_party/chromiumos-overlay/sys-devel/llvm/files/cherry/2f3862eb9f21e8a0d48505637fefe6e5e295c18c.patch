@@ -1,0 +1,31 @@
+commit 2f3862eb9f21e8a0d48505637fefe6e5e295c18c
+Author: Roman Lebedev <lebedev.ri@gmail.com>
+Date:   Sun Jul 19 16:37:03 2020 +0300
+
+    Reland "[InstCombine] Lower infinite combine loop detection thresholds"
+    
+    This reverts commit 4500db8c59621a31c622862a2946457fdee481ce,
+    which was reverted because lower thresholds exposed a new issue (PR46680).
+    
+    Now that it was resolved by d12ec0f752e7f2c7f7252539da2d124264ec33f7,
+    we can reinstate lower limits and wait for a new bugreport before
+    reverting this again...
+
+diff --git a/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp b/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+index b3254c10a0b..8eac8637cb9 100644
+--- a/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
++++ b/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+@@ -123,8 +123,13 @@ STATISTIC(NumReassoc  , "Number of reassociations");
+ DEBUG_COUNTER(VisitCounter, "instcombine-visit",
+               "Controls which instructions are visited");
+ 
++// FIXME: these limits eventually should be as low as 2.
+ static constexpr unsigned InstCombineDefaultMaxIterations = 1000;
++#ifndef NDEBUG
++static constexpr unsigned InstCombineDefaultInfiniteLoopThreshold = 100;
++#else
+ static constexpr unsigned InstCombineDefaultInfiniteLoopThreshold = 1000;
++#endif
+ 
+ static cl::opt<bool>
+ EnableCodeSinking("instcombine-code-sinking", cl::desc("Enable code sinking"),

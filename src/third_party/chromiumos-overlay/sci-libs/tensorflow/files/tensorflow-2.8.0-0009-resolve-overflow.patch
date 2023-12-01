@@ -1,0 +1,23 @@
+This patch has been upstreamed to tenforflow and should be removed next
+uprev as it should no longer be required.
+
+This patch resolves an ubsan test failure that was being raised when an
+overflow event of an unsigned integer occurred. This patch changes the
+type of an intermediate variable to ensure an oevrflow event can not
+happen for any possible input.
+
+index cda1b5cf0ad..b1204cc5e34 100644
+--- a/tensorflow/lite/kernels/internal/reference/hard_swish.h
++++ b/tensorflow/lite/kernels/internal/reference/hard_swish.h
+@@ -23,9 +23,9 @@ namespace tflite {
+ namespace reference_ops {
+ 
+ inline int16_t SaturatingLeftShift(int16_t value, int amount) {
+-  int32_t result = static_cast<int32_t>(value) * (1 << amount);
+-  result = std::min<int32_t>(result, std::numeric_limits<int16_t>::max());
+-  result = std::max<int32_t>(result, std::numeric_limits<int16_t>::min());
++  int64_t result = static_cast<int64_t>(value) * (1 << amount);
++  result = std::min<int64_t>(result, std::numeric_limits<int16_t>::max());
++  result = std::max<int64_t>(result, std::numeric_limits<int16_t>::min());
+   return result;
+ }

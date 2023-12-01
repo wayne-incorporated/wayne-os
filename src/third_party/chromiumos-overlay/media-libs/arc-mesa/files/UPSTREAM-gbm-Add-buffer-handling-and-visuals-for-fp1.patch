@@ -1,0 +1,145 @@
+From 789b8fb17c8d0ad3aa8e0ca0a5323b4c2da9714d Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Thu, 24 Jan 2019 17:32:36 -0800
+Subject: [PATCH 10/12] UPSTREAM: gbm: Add buffer handling and visuals for fp16
+ formats
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Define and set a new loader cap DRI_LOADER_CAP_FP16, indicating that gbm can
+handle fp16 formats.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Adam Jackson <ajax@redhat.com>
+Reviewed-by: Marek Olšák <marek.olsak@amd.com>
+Reviewed-by: Emil Velikov <emil.velikov@collabora.com>
+(cherry picked from commit 4861d2a3956fd7394fa2da6337a0418cbb00dc82)
+
+Change-Id: I166427819684fac9168edb87fc63f60793ce771d
+---
+ include/GL/internal/dri_interface.h |  1 +
+ src/egl/drivers/dri2/egl_dri2.c     |  2 ++
+ src/gbm/backends/dri/gbm_dri.c      | 27 ++++++++++++++++++++++++++-
+ src/gbm/main/gbm.c                  |  3 +++
+ src/gbm/main/gbm.h                  |  9 +++++++++
+ 5 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/include/GL/internal/dri_interface.h b/include/GL/internal/dri_interface.h
+index 56d33c84e48..ba7c6700654 100644
+--- a/include/GL/internal/dri_interface.h
++++ b/include/GL/internal/dri_interface.h
+@@ -1055,6 +1055,7 @@ enum dri_loader_cap {
+     * only BGRA ordering can be exposed.
+     */
+    DRI_LOADER_CAP_RGBA_ORDERING,
++   DRI_LOADER_CAP_FP16,
+ };
+ 
+ struct __DRIdri2LoaderExtensionRec {
+diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
+index 26a99cdb5c0..e66e9731e62 100644
+--- a/src/egl/drivers/dri2/egl_dri2.c
++++ b/src/egl/drivers/dri2/egl_dri2.c
+@@ -2330,6 +2330,8 @@ dri2_num_fourcc_format_planes(EGLint format)
+    case DRM_FORMAT_ABGR2101010:
+    case DRM_FORMAT_RGBA1010102:
+    case DRM_FORMAT_BGRA1010102:
++   case DRM_FORMAT_XBGR16161616F:
++   case DRM_FORMAT_ABGR16161616F:
+    case DRM_FORMAT_YUYV:
+    case DRM_FORMAT_YVYU:
+    case DRM_FORMAT_UYVY:
+diff --git a/src/gbm/backends/dri/gbm_dri.c b/src/gbm/backends/dri/gbm_dri.c
+index b2143eb3fe6..9b2baf52eea 100644
+--- a/src/gbm/backends/dri/gbm_dri.c
++++ b/src/gbm/backends/dri/gbm_dri.c
+@@ -118,6 +118,18 @@ dri_get_buffers_with_format(__DRIdrawable * driDrawable,
+                                    count, out_count, surf->dri_private);
+ }
+ 
++static unsigned
++dri_get_capability(void *loaderPrivate, enum dri_loader_cap cap)
++{
++   /* Note: loaderPrivate is _EGLDisplay* */
++   switch (cap) {
++   case DRI_LOADER_CAP_FP16:
++      return 1;
++   default:
++      return 0;
++   }
++}
++
+ static int
+ image_get_buffers(__DRIdrawable *driDrawable,
+                   unsigned int format,
+@@ -215,11 +227,12 @@ static const __DRIimageLookupExtension image_lookup_extension = {
+ };
+ 
+ static const __DRIdri2LoaderExtension dri2_loader_extension = {
+-   .base = { __DRI_DRI2_LOADER, 3 },
++   .base = { __DRI_DRI2_LOADER, 4 },
+ 
+    .getBuffers              = dri_get_buffers,
+    .flushFrontBuffer        = dri_flush_front_buffer,
+    .getBuffersWithFormat    = dri_get_buffers_with_format,
++   .getCapability           = dri_get_capability,
+ };
+ 
+ static const __DRIimageLoaderExtension image_loader_extension = {
+@@ -544,6 +557,18 @@ static const struct gbm_dri_visual gbm_dri_visuals_table[] = {
+      { 0, 10, 20, 30 },
+      { 10, 10, 10, 2 },
+    },
++   {
++     GBM_FORMAT_XBGR16161616F, __DRI_IMAGE_FORMAT_XBGR16161616F,
++     { 0, 16, 32, -1 },
++     { 16, 16, 16, 0 },
++     true,
++   },
++   {
++     GBM_FORMAT_ABGR16161616F, __DRI_IMAGE_FORMAT_ABGR16161616F,
++     { 0, 16, 32, 48 },
++     { 16, 16, 16, 16 },
++     true,
++   },
+ };
+ 
+ static int
+diff --git a/src/gbm/main/gbm.c b/src/gbm/main/gbm.c
+index 250151871d9..28e92372654 100644
+--- a/src/gbm/main/gbm.c
++++ b/src/gbm/main/gbm.c
+@@ -271,6 +271,9 @@ gbm_bo_get_bpp(struct gbm_bo *bo)
+       case GBM_FORMAT_RGBA1010102:
+       case GBM_FORMAT_BGRA1010102:
+          return 32;
++      case GBM_FORMAT_XBGR16161616F:
++      case GBM_FORMAT_ABGR16161616F:
++         return 64;
+    }
+ }
+ 
+diff --git a/src/gbm/main/gbm.h b/src/gbm/main/gbm.h
+index 9b5288710a5..4c6ab377699 100644
+--- a/src/gbm/main/gbm.h
++++ b/src/gbm/main/gbm.h
+@@ -150,6 +150,15 @@ enum gbm_bo_format {
+ #define GBM_FORMAT_RGBA1010102	__gbm_fourcc_code('R', 'A', '3', '0') /* [31:0] R:G:B:A 10:10:10:2 little endian */
+ #define GBM_FORMAT_BGRA1010102	__gbm_fourcc_code('B', 'A', '3', '0') /* [31:0] B:G:R:A 10:10:10:2 little endian */
+ 
++/*
++ * Floating point 64bpp RGB
++ * IEEE 754-2008 binary16 half-precision float
++ * [15:0] sign:exponent:mantissa 1:5:10
++ */
++#define GBM_FORMAT_XBGR16161616F __gbm_fourcc_code('X', 'B', '4', 'H') /* [63:0] x:B:G:R 16:16:16:16 little endian */
++
++#define GBM_FORMAT_ABGR16161616F __gbm_fourcc_code('A', 'B', '4', 'H') /* [63:0] A:B:G:R 16:16:16:16 little endian */
++
+ /* packed YCbCr */
+ #define GBM_FORMAT_YUYV		__gbm_fourcc_code('Y', 'U', 'Y', 'V') /* [31:0] Cr0:Y1:Cb0:Y0 8:8:8:8 little endian */
+ #define GBM_FORMAT_YVYU		__gbm_fourcc_code('Y', 'V', 'Y', 'U') /* [31:0] Cb0:Y1:Cr0:Y0 8:8:8:8 little endian */
+-- 
+2.21.0
+

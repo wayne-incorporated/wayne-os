@@ -1,0 +1,65 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":iioservice_event",
+    ":iioservice_query",
+    ":iioservice_simpleclient",
+    ":install_policy",
+  ]
+}
+
+pkg_config("target_defaults_pkg_deps") {
+  pkg_deps = [
+    "iioservice_ipc",
+    "libbrillo",
+    "libchrome",
+    "libmojo",
+    "mojo_service_manager",
+  ]
+}
+
+static_library("libiioservice_simpleclient") {
+  sources = [
+    "daemon.cc",
+    "daemon_events_observer.cc",
+    "daemon_query.cc",
+    "daemon_samples_observer.cc",
+    "events_observer.cc",
+    "observer.cc",
+    "query_impl.cc",
+    "samples_observer.cc",
+    "sensor_client.cc",
+  ]
+  configs += [ ":target_defaults_pkg_deps" ]
+}
+
+executable("iioservice_simpleclient") {
+  sources = [ "iioservice_simpleclient.cc" ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "sbin"
+  deps = [ ":libiioservice_simpleclient" ]
+}
+
+executable("iioservice_event") {
+  sources = [ "iioservice_event.cc" ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "sbin"
+  deps = [ ":libiioservice_simpleclient" ]
+}
+
+executable("iioservice_query") {
+  sources = [ "iioservice_query.cc" ]
+  configs += [ ":target_defaults_pkg_deps" ]
+  install_path = "sbin"
+  deps = [ ":libiioservice_simpleclient" ]
+}
+
+install_config("install_policy") {
+  sources = [ "mojo_policy/iioservice_mojo_test.jsonc" ]
+  install_path = "/usr/local/etc/mojo/service_manager/policy"
+}

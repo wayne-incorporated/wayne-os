@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,8 +46,6 @@ bool ValidateAccountId(const std::string& account_id,
 //   - account_id() should be set except for ACCOUNT_TYPE_DEVICE.
 //   - component_id() should be set and valid except for POLICY_DOMAIN_CHROME.
 // |usage| is used for the following:
-//   - ACCOUNT_TYPE_SESSIONLESS_USER is only allowed for
-//     PolicyDescriptorUsage::kRetrieve.
 //   - Domain must not be POLICY_DOMAIN_CHROME and component_id() must be empty
 //     for PolicyDescriptorUsage::kList.
 bool ValidatePolicyDescriptor(const PolicyDescriptor& descriptor,

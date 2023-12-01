@@ -1,0 +1,28 @@
+From 757db1f9dfe07216f3e7b67a0feec3ef2c2abd4f Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 4 Aug 2022 17:46:00 -0300
+Subject: [PATCH 099/163] Replace atomic_exchange_acq with compiler builtin on
+ __libc_message
+
+---
+ sysdeps/posix/libc_fatal.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/posix/libc_fatal.c b/sysdeps/posix/libc_fatal.c
+index 2ee0010b8d..aa70e76118 100644
+--- a/sysdeps/posix/libc_fatal.c
++++ b/sysdeps/posix/libc_fatal.c
+@@ -140,8 +140,8 @@ __libc_message (enum __libc_message_action action, const char *fmt, ...)
+ 
+ 	      /* We have to free the old buffer since the application might
+ 		 catch the SIGABRT signal.  */
+-	      struct abort_msg_s *old = atomic_exchange_acq (&__abort_msg,
+-							     buf);
++	      struct abort_msg_s *old = atomic_exchange_acquire (&__abort_msg,
++								 buf);
+ 	      if (old != NULL)
+ 		__munmap (old, old->size);
+ 	    }
+-- 
+2.37.2
+

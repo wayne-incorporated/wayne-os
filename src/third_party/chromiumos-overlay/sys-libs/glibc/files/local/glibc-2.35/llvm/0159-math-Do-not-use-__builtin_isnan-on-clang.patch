@@ -1,0 +1,58 @@
+From ab9db1d8dc2f40d80130ae7475766c8fedaf6b0c Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 1 Apr 2022 17:01:22 -0300
+Subject: [PATCH 159/163] math: Do not use __builtin_isnan on clang
+
+It does not handle pseudo normal numbers.
+---
+ math/math.h                                 | 3 +--
+ sysdeps/ieee754/float128/float128_private.h | 2 +-
+ sysdeps/ieee754/float128/s_isnanf128.c      | 4 ++++
+ 3 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/math/math.h b/math/math.h
+index 678102402c..8e64e2eb4f 100644
+--- a/math/math.h
++++ b/math/math.h
+@@ -1004,8 +1004,7 @@ enum
+ 
+ /* Return nonzero value if X is a NaN.  We could use `fpclassify' but
+    we already have this functions `__isnan' and it is faster.  */
+-# if (__GNUC_PREREQ (4,4) && !defined __SUPPORT_SNAN__) \
+-     || __glibc_clang_prereq (2,8)
++# if (__GNUC_PREREQ (4,4) && !defined __SUPPORT_SNAN__)
+ #  define isnan(x) __builtin_isnan (x)
+ # else
+ #  define isnan(x) __MATH_TG ((x), __isnan, (x))
+diff --git a/sysdeps/ieee754/float128/float128_private.h b/sysdeps/ieee754/float128/float128_private.h
+index f9655df0df..ac3e2b32aa 100644
+--- a/sysdeps/ieee754/float128/float128_private.h
++++ b/sysdeps/ieee754/float128/float128_private.h
+@@ -346,7 +346,7 @@
+ #define frexpl frexpf128
+ #define getpayloadl getpayloadf128
+ #define isinfl isinff128_do_not_use
+-#define isnanl isnanf128_do_not_use
++#define isnanl isnanf128
+ #define ldexpl ldexpf128
+ #define llrintl llrintf128
+ #define llroundl llroundf128
+diff --git a/sysdeps/ieee754/float128/s_isnanf128.c b/sysdeps/ieee754/float128/s_isnanf128.c
+index 59f71533ce..b73a4e80d7 100644
+--- a/sysdeps/ieee754/float128/s_isnanf128.c
++++ b/sysdeps/ieee754/float128/s_isnanf128.c
+@@ -11,7 +11,11 @@
+ #include "../ldbl-128/s_isnanl.c"
+ #if !IS_IN (libm)
+ #include <float128-abi.h>
++#ifdef SHARED
+ hidden_ver (__isnanf128_impl, __isnanf128)
++#else
++strong_alias (__isnanf128_impl, __isnanf128)
++#endif
+ _weak_alias (__isnanf128_impl, isnanl)
+ versioned_symbol (libc, __isnanf128_impl, __isnanf128, GLIBC_2_34);
+ #if (SHLIB_COMPAT (libc, FLOAT128_VERSION_M, GLIBC_2_34))
+-- 
+2.37.2
+

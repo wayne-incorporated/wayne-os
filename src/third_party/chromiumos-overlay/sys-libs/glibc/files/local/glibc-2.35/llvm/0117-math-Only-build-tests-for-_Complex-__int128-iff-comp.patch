@@ -1,0 +1,175 @@
+From 2ec2e6124b031fd17257d659ba80563ef383f6a5 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 14:24:08 -0300
+Subject: [PATCH 117/163] math: Only build tests for _Complex __int128 iff
+ compiler supports it
+
+---
+ configure                | 28 ++++++++++++++++++++++++++++
+ configure.ac             | 17 +++++++++++++++++
+ math/Makefile            |  2 +-
+ math/gen-tgmath-tests.py | 38 +++++++++++++++++++++++++++++---------
+ 4 files changed, 75 insertions(+), 10 deletions(-)
+
+diff --git a/configure b/configure
+index e392abc956..25c19b7a38 100755
+--- a/configure
++++ b/configure
+@@ -6556,6 +6556,34 @@ $as_echo "$libc_cv_cc_float_store" >&6; }
+ config_vars="$config_vars
+ config-cflags-float-store = $libc_cv_cc_float_store"
+ 
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether compiler supports _Complex with __int128" >&5
++$as_echo_n "checking whether compiler supports _Complex with __int128... " >&6; }
++if ${libc_cv_complex_int128+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  cat > conftest.c <<EOF
++#ifndef __SIZEOF_INT128__
++# error "__int128 not supported"
++#endif
++_Complex __int128 var;
++EOF
++libc_cv_complex_int128=no
++if { ac_try='${CC-cc} $CFLAGS $CPPFLAGS -c conftest.c 1>&5'
++  { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_try\""; } >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
++  test $ac_status = 0; }; }
++then
++  libc_cv_complex_int128=yes
++fi
++rm -f conftest*
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libc_cv_complex_int128" >&5
++$as_echo "$libc_cv_complex_int128" >&6; }
++config_vars="$config_vars
++config-complex-int128 = $libc_cv_complex_int128"
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking if $CC accepts -fno-tree-loop-distribute-patterns with \
+ __attribute__ ((__optimize__))" >&5
+ $as_echo_n "checking if $CC accepts -fno-tree-loop-distribute-patterns with \
+diff --git a/configure.ac b/configure.ac
+index 3bc1ee3f9e..c1dc88f2b4 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1617,6 +1617,23 @@ LIBC_TRY_CC_OPTION([-Werror -ffloat-store],
+ LIBC_CONFIG_VAR([config-cflags-float-store],
+ 		[$libc_cv_cc_float_store])
+ 
++AC_CACHE_CHECK([whether compiler supports _Complex with __int128],
++	       [libc_cv_complex_int128], [dnl
++cat > conftest.c <<EOF
++#ifndef __SIZEOF_INT128__
++# error "__int128 not supported"
++#endif
++_Complex __int128 var;
++EOF
++libc_cv_complex_int128=no
++if AC_TRY_COMMAND([${CC-cc} $CFLAGS $CPPFLAGS -c conftest.c 1>&AS_MESSAGE_LOG_FD])
++then
++  libc_cv_complex_int128=yes
++fi
++rm -f conftest*])
++LIBC_CONFIG_VAR([config-complex-int128],
++                [$libc_cv_complex_int128])
++
+ AC_CACHE_CHECK(if $CC accepts -fno-tree-loop-distribute-patterns with \
+ __attribute__ ((__optimize__)), libc_cv_cc_loop_to_function, [dnl
+ cat > conftest.c <<EOF
+diff --git a/math/Makefile b/math/Makefile
+index 11af816129..e36a5f29bd 100644
+--- a/math/Makefile
++++ b/math/Makefile
+@@ -396,7 +396,7 @@ $(tgmath3-macro-tests:%=$(objpfx)%.o): CFLAGS += -fno-builtin
+ $(foreach m,$(tgmath3-macros),\
+ 	    $(objpfx)test-tgmath3-$(m).c): $(objpfx)test-tgmath3-%.c: \
+ 					   gen-tgmath-tests.py
+-	$(PYTHON) gen-tgmath-tests.py $* > $@
++	$(PYTHON) gen-tgmath-tests.py --complex-int128 $(config-complex-int128) $* > $@
+ 
+ # Verify that the list of supported macros is in sync between the
+ # Makefile and gen-tgmath-tests.py.
+diff --git a/math/gen-tgmath-tests.py b/math/gen-tgmath-tests.py
+index c841db6000..703491e1e9 100755
+--- a/math/gen-tgmath-tests.py
++++ b/math/gen-tgmath-tests.py
+@@ -54,6 +54,7 @@
+ # supported on any given configuration of glibc, the MANT_DIG value
+ # uniquely determines the format.
+ 
++import argparse
+ import string
+ import sys
+ 
+@@ -183,7 +184,7 @@ class Type(object):
+         return self.name
+ 
+     @staticmethod
+-    def init_types():
++    def init_types(complex_int128):
+         """Initialize all the known types."""
+         Type.create_type('_Float16', 'f16', 'FLT16_MANT_DIG',
+                          complex_name='__CFLOAT16',
+@@ -218,9 +219,11 @@ class Type(object):
+         Type.create_type('long long int', integer=True)
+         Type.create_type('unsigned long long int', integer=True)
+         Type.create_type('__int128', integer=True,
+-                         condition='defined __SIZEOF_INT128__')
++                         condition='defined __SIZEOF_INT128__',
++                         complex_ok=complex_int128)
+         Type.create_type('unsigned __int128', integer=True,
+-                         condition='defined __SIZEOF_INT128__')
++                         condition='defined __SIZEOF_INT128__',
++                         complex_ok=complex_int128)
+         Type.create_type('enum e', integer=True, complex_ok=False)
+         Type.create_type('_Bool', integer=True, complex_ok=False)
+         Type.create_type('bit_field', integer=True, complex_ok=False)
+@@ -785,15 +788,32 @@ class Tests(object):
+             print('error: macro list mismatch')
+             sys.exit(1)
+ 
+-def main():
++def get_parser():
++    def strbool(string):
++        return True if string.lower() == 'yes' else False
++
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--complex-int128', dest='complex_int128',
++                        help='Generate tests for _Complex __int128',
++                        type=strbool)
++    parser.add_argument('--check-list', action='store_true',
++                        help='Verify that the list of supported macros')
++    parser.add_argument('macro',
++                        help='macro to test',
++                        nargs='*')
++    return parser
++
++def main(argv):
+     """The main entry point."""
+-    Type.init_types()
++    parser = get_parser()
++    opts = parser.parse_args(argv)
++    Type.init_types(True if opts.complex_int128 == 'yes' else False)
+     t = Tests()
+-    if sys.argv[1] == 'check-list':
++    if opts.check_list:
+         macro = None
+-        macro_list = sys.argv[2:]
++        macro_list = opts.macro
+     else:
+-        macro = sys.argv[1]
++        macro = opts.macro
+         macro_list = []
+     t.add_all_tests(macro)
+     if macro:
+@@ -802,4 +822,4 @@ def main():
+         t.check_macro_list(macro_list)
+ 
+ if __name__ == '__main__':
+-    main()
++    main(sys.argv[1:])
+-- 
+2.37.2
+

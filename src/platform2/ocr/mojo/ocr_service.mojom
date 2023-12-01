@@ -1,0 +1,66 @@
+// Copyright 2020 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// API exposed by the OCR Service daemon. This API is normally consumed by
+// the browser and command line tools.
+
+// NOTE: This mojom should be kept in sync between Chromium and
+// Chromium OS repos.
+
+module chromeos.ocr.mojom;
+
+// Enumeration of each of the possible results of performing OCR.
+[Extensible]
+enum OcrResultEnum {
+  [Default] SUCCESS = 0,
+  LANGUAGE_NOT_SUPPORTED_ERROR = 1,
+  INPUT_FILE_ERROR = 2,
+  OUTPUT_FILE_ERROR = 3,
+  PROCESS_PAGE_ERROR = 4,
+};
+
+// Parameters for searchable PDF rendering.
+struct PdfRendererConfig {
+  // JPEG compression quality. The range is from 0 to 100.
+  // Used by Tesseract for converting some images that cannot be inlined
+  // to PDF objects.
+  uint8 jpg_quality = 85;
+  // Skip images if true.
+  bool textonly = false;
+};
+
+// Parameters for Tesseract OCR.
+struct OcrConfig{
+  // Input text language.
+  string language = "eng";
+  // Timeout for processing a page (in msec).
+  uint64 timeout_ms = 5000;
+};
+
+// Response type for Optical Character Recognition service.
+struct OpticalCharacterRecognitionServiceResponse {
+    // Whether tesseract OCR processed the image successfully
+    // or there was an error.
+    OcrResultEnum result;
+    // More detailed description of result.
+    string result_message;
+};
+
+// Optical Character Recognition interface exposed by OCR Service daemon.
+interface OpticalCharacterRecognitionService {
+  // Performs OCR on an input image file to generate a searchable PDF file.
+  //
+  // The request:
+  // * |input_fd_handle| - input image file descriptor
+  // * |output_fd_handle| - output PDF file descriptor
+  // * |ocr_config| - tesseract OCR configuration parameters
+  // * |pdf_renderer_config| - configuration for output PDF rendering
+  // The response:
+  // * |response| - processing routine status
+  GenerateSearchablePdfFromImage(handle input_fd_handle,
+                                 handle output_fd_handle,
+                                 OcrConfig ocr_config,
+                                 PdfRendererConfig pdf_renderer_config)
+      => (OpticalCharacterRecognitionServiceResponse response);
+};

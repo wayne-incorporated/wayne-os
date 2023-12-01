@@ -1,0 +1,25 @@
+commit b5eafda8d3ef02f9f78e090725564dd28e573322
+Author: David Blaikie <dblaikie@gmail.com>
+Date:   Sat Mar 21 21:17:33 2020 -0700
+
+    Revert "EHScopeStack::Cleanup has virtual functions so the destructor should be too."
+    
+    This type was already well designed - having a protected destructor, and
+    derived classes being final/public non-virtual destructors, the type
+    couldn't be destroyed polymorphically & accidentally cause slicing.
+    
+    This reverts commit 736385c0b49d42f398ffa1458883f0d182178ef4.
+
+diff --git a/clang/lib/CodeGen/EHScopeStack.h b/clang/lib/CodeGen/EHScopeStack.h
+index 4dd3da3e90e..0ed67aabcd6 100644
+--- a/clang/lib/CodeGen/EHScopeStack.h
++++ b/clang/lib/CodeGen/EHScopeStack.h
+@@ -148,7 +148,7 @@ public:
+     virtual void anchor();
+ 
+   protected:
+-    virtual ~Cleanup() = default;
++    ~Cleanup() = default;
+ 
+   public:
+     Cleanup(const Cleanup &) = default;

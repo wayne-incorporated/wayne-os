@@ -1,0 +1,38 @@
+From: Pranav Batra <batrapranav@chromium.org>
+
+Enable compilation of the hpcups and hpps fuzzers.
+
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -552,6 +552,14 @@ endif
+ endif # HPIJS_INSTALL
+ 
+ if HPCUPS_INSTALL
++# hpcups_fuzzer
++hpcups_fuzzerdir = $(cupsfilterdir)
++hpcups_fuzzer_PROGRAMS = hpcups_fuzzer
++hpcups_fuzzer_SOURCES = hpcups_fuzzer.cc stdin_util.cc $(hpcups_SOURCES)
++hpcups_fuzzer_CXXFLAGS = $(hpcups_CXXFLAGS) -D UNITTESTING
++hpcups_fuzzer_LDADD = $(hpcups_LDADD)
++hpcups_fuzzer_LDFLAGS = -fsanitize=fuzzer
++
+ # hpcups
+ #if NEW_HPCUPS
+ hpcupsdir = $(cupsfilterdir)
+@@ -629,6 +637,16 @@ dat2drv_CXXFLAGS = -std=c++11
+ endif
+ 
+ if HPPS_INSTALL
++# hpps_fuzzer
++hpps_fuzzerdir = $(cupsfilterdir)
++hpps_fuzzer_PROGRAMS = hpps_fuzzer
++hpps_fuzzer_SOURCES = hpps_fuzzer.cc stdin_util.cc $(hpps_SOURCES)
++hpps_fuzzer_CXXFLAGS = $(hpps_CXXFLAGS)
++hpps_fuzzer_CPPFLAGS = -D main=hpps_main
++hpps_fuzzer_LDADD = $(hpps_LDADD)
++hpps_fuzzer_LDFLAGS = -fsanitize=fuzzer
++
++# hpps
+ hppsdir = $(cupsfilterdir)
+ hpps_PROGRAMS = hpps
+ hpps_SOURCES = prnt/hpps/hppsfilter.c prnt/hpps/hppsfilter.h prnt/hpps/psutil.c prnt/hpps/psutil.h prnt/hpps/pserror.c prnt/hpps/pserror.h prnt/hpps/psbooklet.c prnt/hpps/patchlev.h prnt/hpps/psspec.c prnt/hpps/psspec.h

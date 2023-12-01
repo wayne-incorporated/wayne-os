@@ -1,0 +1,127 @@
+From 3e8a9e5a43503d9b03028a6bae122280a44e3813 Mon Sep 17 00:00:00 2001
+From: Haixia Shi <hshi@chromium.org>
+Date: Thu, 29 Sep 2016 21:11:44 -0700
+Subject: [PATCH] Add support for EXT_image_flush_external extension
+
+---
+ src/waffle/egl/wegl_display.c   |  1 +
+ src/waffle/egl/wegl_display.h   |  1 +
+ src/waffle/egl/wegl_platform.c  |  1 +
+ src/waffle/egl/wegl_platform.h  |  1 +
+ src/waffle/null/wnull_buffer.c  | 10 ++++++++++
+ src/waffle/null/wnull_buffer.h  |  4 ++++
+ src/waffle/null/wnull_display.c |  7 +++++++
+ 7 files changed, 25 insertions(+)
+
+diff --git a/src/waffle/egl/wegl_display.c b/src/waffle/egl/wegl_display.c
+index fe137a3..2f34d9f 100644
+--- a/src/waffle/egl/wegl_display.c
++++ b/src/waffle/egl/wegl_display.c
+@@ -52,6 +52,7 @@ get_extensions(struct wegl_display *dpy)
+     dpy->KHR_create_context = waffle_is_extension_in_string(extensions, "EGL_KHR_create_context");
+     dpy->EXT_image_dma_buf_import = waffle_is_extension_in_string(extensions, "EGL_EXT_image_dma_buf_import");
+     dpy->EXT_image_dma_buf_import_modifiers = waffle_is_extension_in_string(extensions, "EGL_EXT_image_dma_buf_import_modifiers");
++    dpy->EXT_image_flush_external = waffle_is_extension_in_string(extensions, "EGL_EXT_image_flush_external");
+ 
+     return true;
+ }
+diff --git a/src/waffle/egl/wegl_display.h b/src/waffle/egl/wegl_display.h
+index 418ed5f..73e5731 100644
+--- a/src/waffle/egl/wegl_display.h
++++ b/src/waffle/egl/wegl_display.h
+@@ -40,6 +40,7 @@ struct wegl_display {
+     bool KHR_create_context;
+     bool EXT_image_dma_buf_import;
+     bool EXT_image_dma_buf_import_modifiers;
++    bool EXT_image_flush_external;
+ };
+ 
+ DEFINE_CONTAINER_CAST_FUNC(wegl_display,
+diff --git a/src/waffle/egl/wegl_platform.c b/src/waffle/egl/wegl_platform.c
+index c3accba..d49de41 100644
+--- a/src/waffle/egl/wegl_platform.c
++++ b/src/waffle/egl/wegl_platform.c
+@@ -111,6 +111,7 @@ wegl_platform_init(struct wegl_platform *self)
+ 
+     OPTIONAL_EGL_SYMBOL(eglCreateImageKHR);
+     OPTIONAL_EGL_SYMBOL(eglDestroyImageKHR);
++    OPTIONAL_EGL_SYMBOL(eglImageFlushExternalEXT);
+ 
+ #undef OPTIONAL_EGL_SYMBOL
+ #undef RETRIEVE_EGL_SYMBOL
+diff --git a/src/waffle/egl/wegl_platform.h b/src/waffle/egl/wegl_platform.h
+index 7ae0490..6181229 100644
+--- a/src/waffle/egl/wegl_platform.h
++++ b/src/waffle/egl/wegl_platform.h
+@@ -72,6 +72,7 @@ struct wegl_platform {
+ 
+     EGLImageKHR (*eglCreateImageKHR) (EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list);
+     EGLBoolean (*eglDestroyImageKHR)(EGLDisplay dpy, EGLImageKHR image);
++    EGLBoolean (*eglImageFlushExternalEXT)(EGLDisplay dpy, EGLImageKHR image, const EGLint *attrib_list);
+ };
+ 
+ DEFINE_CONTAINER_CAST_FUNC(wegl_platform,
+diff --git a/src/waffle/null/wnull_buffer.c b/src/waffle/null/wnull_buffer.c
+index 723cade..a3b9ba1 100644
+--- a/src/waffle/null/wnull_buffer.c
++++ b/src/waffle/null/wnull_buffer.c
+@@ -331,6 +331,16 @@ slbuf_flush(struct slbuf *self)
+         self->f->glFlush();
+ }
+ 
++bool
++slbuf_flush_external(struct slbuf *self)
++{
++    if (!self->f->eglImageFlushExternalEXT)
++        return false;
++    const EGLint attrs[] = { EGL_NONE };
++    return self->f->eglImageFlushExternalEXT(self->p->egl_display,
++                                             self->image, attrs);
++}
++
+ static GLuint
+ shader(struct slbuf_func *f, GLenum type, const char *src)
+ {
+diff --git a/src/waffle/null/wnull_buffer.h b/src/waffle/null/wnull_buffer.h
+index cf739b1..244a1a5 100644
+--- a/src/waffle/null/wnull_buffer.h
++++ b/src/waffle/null/wnull_buffer.h
+@@ -15,6 +15,7 @@
+ #define EGL_FUNCTIONS(f) \
+ f(EGLImageKHR, eglCreateImageKHR , (EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint *attrib_list)) \
+ f(EGLBoolean , eglDestroyImageKHR, (EGLDisplay dpy, EGLImageKHR image)) \
++f(EGLBoolean , eglImageFlushExternalEXT, (EGLDisplay dpy, EGLImageKHR image, const EGLint *attrib_list)) \
+ 
+ #if !defined (EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT)
+ #define EGL_LINUX_DRM_PLANE0_MODIFIER0_EXT 0x3286
+@@ -84,6 +85,9 @@ void
+ slbuf_flush(struct slbuf *self);
+ 
+ bool
++slbuf_flush_external(struct slbuf *self);
++
++bool
+ slbuf_get_drmfb(struct slbuf *self, uint32_t *fb);
+ 
+ uint32_t
+diff --git a/src/waffle/null/wnull_display.c b/src/waffle/null/wnull_display.c
+index fc4798e..528edbf 100644
+--- a/src/waffle/null/wnull_display.c
++++ b/src/waffle/null/wnull_display.c
+@@ -528,6 +528,13 @@ wnull_display_present_buffer(struct wnull_display *self,
+         }
+     }
+ 
++    if (self->wegl.EXT_image_flush_external) {
++        if (!slbuf_flush_external(show)) {
++            prt("external flush failed\n");
++            return false;
++        }
++    }
++
+     slbuf_finish(show);
+ 
+     uint32_t fb;
+-- 
+2.8.0.rc3.226.g39d4020
+

@@ -1,0 +1,23 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//camera/build/cc_embed_data.gni")
+import("//common-mk/pkg_config.gni")
+
+pkg_config("target_defaults") {
+  configs = [ "//camera/build:cros_camera_common" ]
+  pkg_deps = [ "libcros_camera_android_deps" ]
+}
+
+source_set("face_detection") {
+  sources = [
+    "//camera/features/face_detection/face_detection_stream_manipulator.cc",
+  ]
+  libs = [ "facessd_cros" ]
+  public_configs = [ ":target_defaults" ]
+
+  # -fPIC needed by the libcros_camera.so shared library.
+  configs += [ "//common-mk:pic" ]
+  deps = [ "//camera/common:libcros_camera_mojom" ]
+}

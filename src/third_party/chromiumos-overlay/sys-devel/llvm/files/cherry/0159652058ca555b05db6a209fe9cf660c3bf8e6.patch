@@ -1,0 +1,376 @@
+commit 0159652058ca555b05db6a209fe9cf660c3bf8e6
+Author: Stefan Pintilie <stefanp@ca.ibm.com>
+Date:   Fri May 28 11:35:25 2021 -0500
+
+    Revert "Return "[LoopDeletion] Break backedge if we can prove that the loop is exited on 1st iteration" (try 2)"
+    
+    This reverts commit be1a23203b1de655b8c7dac7549818d975a0cbbf.
+
+diff --git a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+index 41be776ec141..fd0e983b6199 100644
+--- a/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
++++ b/llvm/lib/Transforms/Scalar/LoopDeletion.cpp
+@@ -17,7 +17,6 @@
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/Statistic.h"
+ #include "llvm/Analysis/GlobalsModRef.h"
+-#include "llvm/Analysis/LoopIterator.h"
+ #include "llvm/Analysis/LoopPass.h"
+ #include "llvm/Analysis/MemorySSA.h"
+ #include "llvm/Analysis/OptimizationRemarkEmitter.h"
+@@ -136,168 +135,6 @@ static bool isLoopNeverExecuted(Loop *L) {
+   return true;
+ }
+ 
+-static const SCEV *
+-getSCEVOnFirstIteration(Value *V, Loop *L, ScalarEvolution &SE,
+-                        DenseMap<Value *, const SCEV *> &FirstIterSCEV) {
+-  // Fist, check in cache.
+-  auto Existing = FirstIterSCEV.find(V);
+-  if (Existing != FirstIterSCEV.end())
+-    return Existing->second;
+-  const SCEV *S = nullptr;
+-  // TODO: Once ScalarEvolution supports getValueOnNthIteration for anything
+-  // else but AddRecs, it's a good use case for it. So far, just consider some
+-  // simple cases, like arithmetic operations.
+-  Value *LHS, *RHS;
+-  using namespace PatternMatch;
+-  if (match(V, m_Add(m_Value(LHS), m_Value(RHS)))) {
+-    const SCEV *LHSS = getSCEVOnFirstIteration(LHS, L, SE, FirstIterSCEV);
+-    const SCEV *RHSS = getSCEVOnFirstIteration(RHS, L, SE, FirstIterSCEV);
+-    S = SE.getAddExpr(LHSS, RHSS);
+-  } else if (match(V, m_Sub(m_Value(LHS), m_Value(RHS)))) {
+-    const SCEV *LHSS = getSCEVOnFirstIteration(LHS, L, SE, FirstIterSCEV);
+-    const SCEV *RHSS = getSCEVOnFirstIteration(RHS, L, SE, FirstIterSCEV);
+-    S = SE.getMinusSCEV(LHSS, RHSS);
+-  } else if (match(V, m_Mul(m_Value(LHS), m_Value(RHS)))) {
+-    const SCEV *LHSS = getSCEVOnFirstIteration(LHS, L, SE, FirstIterSCEV);
+-    const SCEV *RHSS = getSCEVOnFirstIteration(RHS, L, SE, FirstIterSCEV);
+-    S = SE.getMulExpr(LHSS, RHSS);
+-  } else
+-    S = SE.getSCEV(V);
+-  assert(S && "Case not handled?");
+-  FirstIterSCEV[V] = S;
+-  return S;
+-}
+-
+-// Try to prove that one of conditions that dominates the latch must exit on 1st
+-// iteration.
+-static bool canProveExitOnFirstIteration(Loop *L, DominatorTree &DT,
+-                                         ScalarEvolution &SE, LoopInfo &LI) {
+-  BasicBlock *Latch = L->getLoopLatch();
+-
+-  if (!Latch)
+-    return false;
+-
+-  LoopBlocksRPO RPOT(L);
+-  RPOT.perform(&LI);
+-
+-  BasicBlock *Header = L->getHeader();
+-  // Blocks that are reachable on the 1st iteration.
+-  SmallPtrSet<BasicBlock *, 4> LiveBlocks;
+-  // Edges that are reachable on the 1st iteration.
+-  DenseSet<BasicBlockEdge> LiveEdges;
+-  LiveBlocks.insert(L->getHeader());
+-
+-  auto MarkLiveEdge = [&](BasicBlock *From, BasicBlock *To) {
+-    assert(LiveBlocks.count(From) && "Must be live!");
+-    LiveBlocks.insert(To);
+-    LiveEdges.insert({ From, To });
+-  };
+-
+-  auto MarkAllSuccessorsLive = [&](BasicBlock *BB) {
+-    for (auto *Succ : successors(BB))
+-      MarkLiveEdge(BB, Succ);
+-  };
+-
+-  // Check if there is only one predecessor on 1st iteration. Note that because
+-  // we iterate in RPOT, we have already visited all its (non-latch)
+-  // predecessors.
+-  auto GetSolePredecessorOnFirstIteration = [&](BasicBlock * BB)->BasicBlock * {
+-    if (BB == Header)
+-      return L->getLoopPredecessor();
+-    BasicBlock *OnlyPred = nullptr;
+-    for (auto *Pred : predecessors(BB))
+-      if (OnlyPred != Pred && LiveEdges.count({ Pred, BB })) {
+-        // 2 live preds.
+-        if (OnlyPred)
+-          return nullptr;
+-        OnlyPred = Pred;
+-      }
+-
+-    assert(OnlyPred && "No live predecessors?");
+-    return OnlyPred;
+-  };
+-  DenseMap<Value *, const SCEV *> FirstIterSCEV;
+-  SmallPtrSet<BasicBlock *, 4> Visited;
+-
+-  // Use the following algorithm to prove we never take the latch on the 1st
+-  // iteration:
+-  // 1. Traverse in topological order, so that whenever we visit a block, all
+-  //    its predecessors are already visited.
+-  // 2. If we can prove that the block may have only 1 predecessor on the 1st
+-  //    iteration, map all its phis onto input from this predecessor.
+-  // 3a. If we can prove which successor of out block is taken on the 1st
+-  //     iteration, mark this successor live.
+-  // 3b. If we cannot prove it, conservatively assume that all successors are
+-  //     live.
+-  for (auto *BB : RPOT) {
+-    Visited.insert(BB);
+-
+-    // This block is not reachable on the 1st iterations.
+-    if (!LiveBlocks.count(BB))
+-      continue;
+-
+-    // Skip inner loops.
+-    if (LI.getLoopFor(BB) != L) {
+-      MarkAllSuccessorsLive(BB);
+-      continue;
+-    }
+-
+-    // If RPOT exists, we should never visit a block before all of its
+-    // predecessors are visited. The only situation when this can be broken is
+-    // irreducible CFG. Do not deal with such cases.
+-    if (BB != Header)
+-      for (auto *Pred : predecessors(BB))
+-        if (!Visited.count(Pred))
+-          return false;
+-
+-    // If this block has only one live pred, map its phis onto their SCEVs.
+-    if (auto *OnlyPred = GetSolePredecessorOnFirstIteration(BB))
+-      for (auto &PN : BB->phis()) {
+-        if (!SE.isSCEVable(PN.getType()))
+-          continue;
+-        auto *Incoming = PN.getIncomingValueForBlock(OnlyPred);
+-        if (DT.dominates(Incoming, BB->getTerminator())) {
+-          const SCEV *IncSCEV =
+-              getSCEVOnFirstIteration(Incoming, L, SE, FirstIterSCEV);
+-          FirstIterSCEV[&PN] = IncSCEV;
+-        }
+-      }
+-
+-    using namespace PatternMatch;
+-    ICmpInst::Predicate Pred;
+-    Value *LHS, *RHS;
+-    const BasicBlock *IfTrue, *IfFalse;
+-    // TODO: Handle switches.
+-    if (!match(BB->getTerminator(),
+-               m_Br(m_ICmp(Pred, m_Value(LHS), m_Value(RHS)),
+-                    m_BasicBlock(IfTrue), m_BasicBlock(IfFalse)))) {
+-      MarkAllSuccessorsLive(BB);
+-      continue;
+-    }
+-
+-    if (!SE.isSCEVable(LHS->getType())) {
+-      MarkAllSuccessorsLive(BB);
+-      continue;
+-    }
+-
+-    // Can we prove constant true or false for this condition?
+-    const SCEV *LHSS = getSCEVOnFirstIteration(LHS, L, SE, FirstIterSCEV);
+-    const SCEV *RHSS = getSCEVOnFirstIteration(RHS, L, SE, FirstIterSCEV);
+-    // TODO: isKnownPredicateAt is more powerful, but it's too compile time
+-    // consuming. So we avoid using it here.
+-    if (SE.isKnownPredicate(Pred, LHSS, RHSS))
+-      MarkLiveEdge(BB, BB->getTerminator()->getSuccessor(0));
+-    else if (SE.isKnownPredicate(ICmpInst::getInversePredicate(Pred), LHSS,
+-                                 RHSS))
+-      MarkLiveEdge(BB, BB->getTerminator()->getSuccessor(1));
+-    else
+-      MarkAllSuccessorsLive(BB);
+-  }
+-
+-  // We can break the latch if it wasn't live.
+-  return !LiveEdges.count({ Latch, Header });
+-}
+-
+ /// If we can prove the backedge is untaken, remove it.  This destroys the
+ /// loop, but leaves the (now trivially loop invariant) control flow and
+ /// side effects (if any) in place.
+@@ -311,7 +148,7 @@ breakBackedgeIfNotTaken(Loop *L, DominatorTree &DT, ScalarEvolution &SE,
+     return LoopDeletionResult::Unmodified;
+ 
+   auto *BTC = SE.getBackedgeTakenCount(L);
+-  if (!BTC->isZero() && !canProveExitOnFirstIteration(L, DT, SE, LI))
++  if (!BTC->isZero())
+     return LoopDeletionResult::Unmodified;
+ 
+   breakLoopBackedge(L, DT, SE, LI, MSSA);
+diff --git a/llvm/test/Transforms/LoopDeletion/eval_first_iteration.ll b/llvm/test/Transforms/LoopDeletion/eval_first_iteration.ll
+index bed479e408eb..98dafebe0df0 100644
+--- a/llvm/test/Transforms/LoopDeletion/eval_first_iteration.ll
++++ b/llvm/test/Transforms/LoopDeletion/eval_first_iteration.ll
+@@ -344,19 +344,17 @@ define i32 @test_ne_const() {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       loop:
+-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUM_NEXT:%.*]], [[BACKEDGE:%.*]] ]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub i32 4, [[SUM]]
+ ; CHECK-NEXT:    [[IS_POSITIVE:%.*]] = icmp sgt i32 [[SUB]], 0
+-; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE:%.*]], label [[IF_FALSE:%.*]]
++; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE]], label [[IF_FALSE:%.*]]
+ ; CHECK:       if.false:
+ ; CHECK-NEXT:    br label [[BACKEDGE]]
+ ; CHECK:       backedge:
+ ; CHECK-NEXT:    [[MERGE_PHI:%.*]] = phi i32 [ 0, [[IF_FALSE]] ], [ [[SUB]], [[LOOP]] ]
+-; CHECK-NEXT:    [[SUM_NEXT:%.*]] = add i32 [[SUM]], [[MERGE_PHI]]
++; CHECK-NEXT:    [[SUM_NEXT]] = add i32 [[SUM]], [[MERGE_PHI]]
+ ; CHECK-NEXT:    [[LOOP_COND:%.*]] = icmp ne i32 [[SUM_NEXT]], 4
+-; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[BACKEDGE_LOOP_CRIT_EDGE:%.*]], label [[DONE:%.*]]
+-; CHECK:       backedge.loop_crit_edge:
+-; CHECK-NEXT:    unreachable
++; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[LOOP]], label [[DONE:%.*]]
+ ; CHECK:       done:
+ ; CHECK-NEXT:    [[SUM_NEXT_LCSSA:%.*]] = phi i32 [ [[SUM_NEXT]], [[BACKEDGE]] ]
+ ; CHECK-NEXT:    ret i32 [[SUM_NEXT_LCSSA]]
+@@ -396,19 +394,17 @@ define i32 @test_slt_const() {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       loop:
+-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUM_NEXT:%.*]], [[BACKEDGE:%.*]] ]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub i32 4, [[SUM]]
+ ; CHECK-NEXT:    [[IS_POSITIVE:%.*]] = icmp sgt i32 [[SUB]], 0
+-; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE:%.*]], label [[IF_FALSE:%.*]]
++; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE]], label [[IF_FALSE:%.*]]
+ ; CHECK:       if.false:
+ ; CHECK-NEXT:    br label [[BACKEDGE]]
+ ; CHECK:       backedge:
+ ; CHECK-NEXT:    [[MERGE_PHI:%.*]] = phi i32 [ 0, [[IF_FALSE]] ], [ [[SUB]], [[LOOP]] ]
+-; CHECK-NEXT:    [[SUM_NEXT:%.*]] = add i32 [[SUM]], [[MERGE_PHI]]
++; CHECK-NEXT:    [[SUM_NEXT]] = add i32 [[SUM]], [[MERGE_PHI]]
+ ; CHECK-NEXT:    [[LOOP_COND:%.*]] = icmp slt i32 [[SUM_NEXT]], 4
+-; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[BACKEDGE_LOOP_CRIT_EDGE:%.*]], label [[DONE:%.*]]
+-; CHECK:       backedge.loop_crit_edge:
+-; CHECK-NEXT:    unreachable
++; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[LOOP]], label [[DONE:%.*]]
+ ; CHECK:       done:
+ ; CHECK-NEXT:    [[SUM_NEXT_LCSSA:%.*]] = phi i32 [ [[SUM_NEXT]], [[BACKEDGE]] ]
+ ; CHECK-NEXT:    ret i32 [[SUM_NEXT_LCSSA]]
+@@ -448,19 +444,17 @@ define i32 @test_ult_const() {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       loop:
+-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUM_NEXT:%.*]], [[BACKEDGE:%.*]] ]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub i32 4, [[SUM]]
+ ; CHECK-NEXT:    [[IS_POSITIVE:%.*]] = icmp sgt i32 [[SUB]], 0
+-; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE:%.*]], label [[IF_FALSE:%.*]]
++; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE]], label [[IF_FALSE:%.*]]
+ ; CHECK:       if.false:
+ ; CHECK-NEXT:    br label [[BACKEDGE]]
+ ; CHECK:       backedge:
+ ; CHECK-NEXT:    [[MERGE_PHI:%.*]] = phi i32 [ 0, [[IF_FALSE]] ], [ [[SUB]], [[LOOP]] ]
+-; CHECK-NEXT:    [[SUM_NEXT:%.*]] = add i32 [[SUM]], [[MERGE_PHI]]
++; CHECK-NEXT:    [[SUM_NEXT]] = add i32 [[SUM]], [[MERGE_PHI]]
+ ; CHECK-NEXT:    [[LOOP_COND:%.*]] = icmp ult i32 [[SUM_NEXT]], 4
+-; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[BACKEDGE_LOOP_CRIT_EDGE:%.*]], label [[DONE:%.*]]
+-; CHECK:       backedge.loop_crit_edge:
+-; CHECK-NEXT:    unreachable
++; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[LOOP]], label [[DONE:%.*]]
+ ; CHECK:       done:
+ ; CHECK-NEXT:    [[SUM_NEXT_LCSSA:%.*]] = phi i32 [ [[SUM_NEXT]], [[BACKEDGE]] ]
+ ; CHECK-NEXT:    ret i32 [[SUM_NEXT_LCSSA]]
+@@ -500,19 +494,17 @@ define i32 @test_sgt_const() {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       loop:
+-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUM_NEXT:%.*]], [[BACKEDGE:%.*]] ]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub i32 4, [[SUM]]
+ ; CHECK-NEXT:    [[IS_POSITIVE:%.*]] = icmp sgt i32 [[SUB]], 0
+-; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE:%.*]], label [[IF_FALSE:%.*]]
++; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE]], label [[IF_FALSE:%.*]]
+ ; CHECK:       if.false:
+ ; CHECK-NEXT:    br label [[BACKEDGE]]
+ ; CHECK:       backedge:
+ ; CHECK-NEXT:    [[MERGE_PHI:%.*]] = phi i32 [ 0, [[IF_FALSE]] ], [ [[SUB]], [[LOOP]] ]
+-; CHECK-NEXT:    [[SUM_NEXT:%.*]] = add i32 [[SUM]], [[MERGE_PHI]]
++; CHECK-NEXT:    [[SUM_NEXT]] = add i32 [[SUM]], [[MERGE_PHI]]
+ ; CHECK-NEXT:    [[LOOP_COND:%.*]] = icmp sgt i32 [[SUM_NEXT]], 4
+-; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[BACKEDGE_LOOP_CRIT_EDGE:%.*]], label [[DONE:%.*]]
+-; CHECK:       backedge.loop_crit_edge:
+-; CHECK-NEXT:    unreachable
++; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[LOOP]], label [[DONE:%.*]]
+ ; CHECK:       done:
+ ; CHECK-NEXT:    [[SUM_NEXT_LCSSA:%.*]] = phi i32 [ [[SUM_NEXT]], [[BACKEDGE]] ]
+ ; CHECK-NEXT:    ret i32 [[SUM_NEXT_LCSSA]]
+@@ -552,19 +544,17 @@ define i32 @test_ugt_const() {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       loop:
+-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUM_NEXT:%.*]], [[BACKEDGE:%.*]] ]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub i32 4, [[SUM]]
+ ; CHECK-NEXT:    [[IS_POSITIVE:%.*]] = icmp sgt i32 [[SUB]], 0
+-; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE:%.*]], label [[IF_FALSE:%.*]]
++; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[BACKEDGE]], label [[IF_FALSE:%.*]]
+ ; CHECK:       if.false:
+ ; CHECK-NEXT:    br label [[BACKEDGE]]
+ ; CHECK:       backedge:
+ ; CHECK-NEXT:    [[MERGE_PHI:%.*]] = phi i32 [ 0, [[IF_FALSE]] ], [ [[SUB]], [[LOOP]] ]
+-; CHECK-NEXT:    [[SUM_NEXT:%.*]] = add i32 [[SUM]], [[MERGE_PHI]]
++; CHECK-NEXT:    [[SUM_NEXT]] = add i32 [[SUM]], [[MERGE_PHI]]
+ ; CHECK-NEXT:    [[LOOP_COND:%.*]] = icmp ugt i32 [[SUM_NEXT]], 4
+-; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[BACKEDGE_LOOP_CRIT_EDGE:%.*]], label [[DONE:%.*]]
+-; CHECK:       backedge.loop_crit_edge:
+-; CHECK-NEXT:    unreachable
++; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[LOOP]], label [[DONE:%.*]]
+ ; CHECK:       done:
+ ; CHECK-NEXT:    [[SUM_NEXT_LCSSA:%.*]] = phi i32 [ [[SUM_NEXT]], [[BACKEDGE]] ]
+ ; CHECK-NEXT:    ret i32 [[SUM_NEXT_LCSSA]]
+@@ -604,24 +594,22 @@ define i32 @test_multiple_pred_const() {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       loop:
+-; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    [[SUM:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[SUM_NEXT:%.*]], [[BACKEDGE:%.*]] ]
+ ; CHECK-NEXT:    [[SUB:%.*]] = sub i32 4, [[SUM]]
+ ; CHECK-NEXT:    [[IS_POSITIVE:%.*]] = icmp sgt i32 [[SUB]], 0
+ ; CHECK-NEXT:    br i1 [[IS_POSITIVE]], label [[IF_TRUE:%.*]], label [[IF_FALSE:%.*]]
+ ; CHECK:       if.true:
+ ; CHECK-NEXT:    switch i32 4, label [[FAILURE:%.*]] [
+-; CHECK-NEXT:    i32 100, label [[BACKEDGE:%.*]]
++; CHECK-NEXT:    i32 100, label [[BACKEDGE]]
+ ; CHECK-NEXT:    i32 200, label [[BACKEDGE]]
+ ; CHECK-NEXT:    ]
+ ; CHECK:       if.false:
+ ; CHECK-NEXT:    br label [[BACKEDGE]]
+ ; CHECK:       backedge:
+ ; CHECK-NEXT:    [[MERGE_PHI:%.*]] = phi i32 [ 0, [[IF_FALSE]] ], [ [[SUB]], [[IF_TRUE]] ], [ [[SUB]], [[IF_TRUE]] ]
+-; CHECK-NEXT:    [[SUM_NEXT:%.*]] = add i32 [[SUM]], [[MERGE_PHI]]
++; CHECK-NEXT:    [[SUM_NEXT]] = add i32 [[SUM]], [[MERGE_PHI]]
+ ; CHECK-NEXT:    [[LOOP_COND:%.*]] = icmp ne i32 [[SUM_NEXT]], 4
+-; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[BACKEDGE_LOOP_CRIT_EDGE:%.*]], label [[DONE:%.*]]
+-; CHECK:       backedge.loop_crit_edge:
+-; CHECK-NEXT:    unreachable
++; CHECK-NEXT:    br i1 [[LOOP_COND]], label [[LOOP]], label [[DONE:%.*]]
+ ; CHECK:       done:
+ ; CHECK-NEXT:    [[SUM_NEXT_LCSSA:%.*]] = phi i32 [ [[SUM_NEXT]], [[BACKEDGE]] ]
+ ; CHECK-NEXT:    ret i32 [[SUM_NEXT_LCSSA]]
+diff --git a/llvm/test/Transforms/LoopDeletion/zero-btc.ll b/llvm/test/Transforms/LoopDeletion/zero-btc.ll
+index 958de0505af7..413b0a877dd4 100644
+--- a/llvm/test/Transforms/LoopDeletion/zero-btc.ll
++++ b/llvm/test/Transforms/LoopDeletion/zero-btc.ll
+@@ -161,16 +161,14 @@ define void @test_multi_exit3(i1 %cond1) {
+ ; CHECK-NEXT:  entry:
+ ; CHECK-NEXT:    br label [[LOOP:%.*]]
+ ; CHECK:       loop:
+-; CHECK-NEXT:    [[IV:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    [[IV:%.*]] = phi i32 [ 0, [[ENTRY:%.*]] ], [ [[IV_INC:%.*]], [[LATCH:%.*]] ]
+ ; CHECK-NEXT:    store i32 0, i32* @G, align 4
+-; CHECK-NEXT:    br i1 [[COND1:%.*]], label [[LATCH:%.*]], label [[EXIT:%.*]]
++; CHECK-NEXT:    br i1 [[COND1:%.*]], label [[LATCH]], label [[EXIT:%.*]]
+ ; CHECK:       latch:
+ ; CHECK-NEXT:    store i32 1, i32* @G, align 4
+-; CHECK-NEXT:    [[IV_INC:%.*]] = add i32 [[IV]], 1
++; CHECK-NEXT:    [[IV_INC]] = add i32 [[IV]], 1
+ ; CHECK-NEXT:    [[BE_TAKEN:%.*]] = icmp ne i32 [[IV_INC]], 1
+-; CHECK-NEXT:    br i1 [[BE_TAKEN]], label [[LATCH_LOOP_CRIT_EDGE:%.*]], label [[EXIT]]
+-; CHECK:       latch.loop_crit_edge:
+-; CHECK-NEXT:    unreachable
++; CHECK-NEXT:    br i1 [[BE_TAKEN]], label [[LOOP]], label [[EXIT]]
+ ; CHECK:       exit:
+ ; CHECK-NEXT:    ret void
+ ;

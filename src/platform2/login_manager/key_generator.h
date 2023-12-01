@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+// Copyright 2011 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,10 @@
 #include <sys/types.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <base/files/file_path.h>
-#include <base/macros.h>
-#include <base/optional.h>
 #include <base/time/time.h>
 
 #include "login_manager/child_exit_handler.h"
@@ -48,7 +47,7 @@ class KeyGenerator : public ChildExitHandler {
   // The username of the key owner and temporary storage location of the
   // generated public key are stored internally until Reset() is called.
   virtual bool Start(const std::string& username,
-                     const base::Optional<base::FilePath>& ns_path);
+                     const std::optional<base::FilePath>& ns_path);
 
   // Ask the managed job to exit. |reason| is a human-readable string that may
   // be logged to describe the reason for the request.

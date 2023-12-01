@@ -1,0 +1,33 @@
+#!/bin/bash
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+set -e
+
+has_camera_filter() {
+  local test_config=/var/cache/camera/test_config.json
+  if [[ ! -f "${test_config}" ]]; then
+    return 1
+  fi
+  jq -e 'has("enable_front_camera") or has("enable_back_camera") or
+    has("enable_external_camera")' "${test_config}" > /dev/null
+}
+
+main() {
+  if has_camera_filter; then
+    # If camera filter flag is presented, autotest toggling camera filter
+    # should be responsible for preparing media profile for ARC++.
+    return 0
+  fi
+  local target_dir=/mnt/stateful_partition/encrypted/var/cache/camera
+  if [[ ! -d "${target_dir}" ]]; then
+    rm -rf "${target_dir}"
+    mkdir -p "${target_dir}"
+  fi
+
+  cp /etc/camera/media_profiles.xml "${target_dir}"
+  return 0
+}
+
+main "$@"

@@ -1,0 +1,28 @@
+From: Caroline Tice <cmtice@google.com>
+
+This is a temporary workaround. Currently LLVM generates Dwarf version
+4 for all of its debug information, including its Debug Frames (CIE)
+information.  Breakpad cannot handle Dwarf Version 4 (see
+https://bugs.chromium.org/p/chromium/issues/detail?id=614788).  We
+tried reducing all of the Dwarf information to version 3, but that
+causes problems with Fission (the splitting of debug information into
+separate files), which requires the Dwarf DIEs to be emitted at
+version 4.  This patch works around that issue by forcing the Debug
+Frames version of Dwarf to be version 1, while leaving the rest of the
+Dwarf data at version 4.  When the replacement for Breakpad comes out
+we will no longer need this patch, as that is supposed to be able to
+handle version 4 frames information.
+
+index 759f90e..d536397 100644
+--- a/llvm/lib/MC/MCDwarf.cpp
++++ b/llvm/lib/MC/MCDwarf.cpp
+@@ -1252,7 +1252,8 @@ static unsigned getCIEVersion(bool IsEH, unsigned DwarfVersion) {
+     return 3;
+   case 4:
+   case 5:
+-    return 4;
++    return 1;
++    //    return 4;  Temporarily disable as workaround for Breakpad issue
+   }
+   llvm_unreachable("Unknown version");
+ }

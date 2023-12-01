@@ -1,0 +1,110 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [ ":usb_bouncer" ]
+  if (use.test) {
+    deps += [ ":run_tests" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":usb_bouncer_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libcap",
+    "libchrome",
+    "libcrypto",
+    "libmetrics",
+    "libminijail",
+    "libsession_manager-client",
+    "libusbguard",
+    "protobuf",
+    "re2",
+  ]
+
+  # Needed to catch rule parsing errors reported by libusbguard.
+  cflags_cc = [ "-fexceptions" ]
+}
+
+proto_library("usb_bouncer_protos") {
+  proto_in_dir = "."
+  proto_out_dir = "include/usb_bouncer"
+  sources = [ "${proto_in_dir}/usb_bouncer.proto" ]
+}
+
+static_library("usb_bouncer_common") {
+  sources = [
+    "entry_manager.cc",
+    "metrics_allowlist.cc",
+    "rule_db_storage.cc",
+    "util.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":usb_bouncer_protos" ]
+  pkg_deps = [ "libstructuredmetrics" ]
+}
+
+pkg_config("usb_bouncer_pkg_deps") {
+  pkg_deps = [ "libbrillo" ]
+}
+
+executable("usb_bouncer") {
+  sources = [ "usb_bouncer.cc" ]
+  configs += [
+    ":target_defaults",
+    ":usb_bouncer_pkg_deps",
+  ]
+  deps = [ ":usb_bouncer_common" ]
+}
+
+if (use.test) {
+  pkg_config("run_tests_pkg_deps") {
+    pkg_deps = [
+      "libbrillo",
+      "libcrypto",
+    ]
+  }
+  executable("run_tests") {
+    sources = [
+      "entry_manager_test.cc",
+      "entry_manager_test_util.cc",
+      "metrics_allowlist_test.cc",
+      "util_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":run_tests_pkg_deps",
+      ":target_defaults",
+    ]
+    deps = [
+      ":usb_bouncer_common",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  pkg_config("usb_bouncer_fuzzer_pkg_deps") {
+    pkg_deps = [ "libprotobuf-mutator" ]
+  }
+
+  executable("usb_bouncer_fuzzer") {
+    sources = [
+      "entry_manager_test_util.cc",
+      "usb_bouncer_fuzzer.cc",
+    ]
+    configs += [
+      "//common-mk/common_fuzzer:common_fuzzer",
+      ":usb_bouncer_fuzzer_pkg_deps",
+      ":target_defaults",
+    ]
+    deps = [ ":usb_bouncer_common" ]
+  }
+}

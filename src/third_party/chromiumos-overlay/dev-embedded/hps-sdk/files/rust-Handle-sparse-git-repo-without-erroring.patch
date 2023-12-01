@@ -1,0 +1,71 @@
+From 3a961f7b7f25dfcd54f427fa57ca064433e93829 Mon Sep 17 00:00:00 2001
+From: George Burgess IV <gbiv@google.com>
+Date: Fri, 30 Jul 2021 01:11:15 +0000
+Subject: [PATCH 8/8] sparse-git-repo
+
+---
+ src/tools/cargo/src/cargo/sources/path.rs | 39 +++++++++++++++++++----
+ 1 file changed, 32 insertions(+), 7 deletions(-)
+
+diff --git a/src/tools/cargo/src/cargo/sources/path.rs b/src/tools/cargo/src/cargo/sources/path.rs
+index f8041be55..a3eadb626 100644
+--- a/src/tools/cargo/src/cargo/sources/path.rs
++++ b/src/tools/cargo/src/cargo/sources/path.rs
+@@ -194,12 +194,25 @@ impl<'cfg> PathSource<'cfg> {
+         let index = repo
+             .index()
+             .with_context(|| format!("failed to open git index at {}", repo.path().display()))?;
+-        let repo_root = repo.workdir().ok_or_else(|| {
+-            anyhow::format_err!(
++        let repo_root = if let Some(root) = repo.workdir() {
++            root
++        } else if !repo.is_bare() {
++            // Sparse-checkouts (and possibly other git
++            // configurations) make libgit2 confused but there's still
++            // an actual non-bare repo here.
++            if let Some(r) = repo.path().parent() {
++                r
++            } else {
++                return Err(anyhow::format_err!(
++                    "repo path missing .git subfolder even when non-bare",
++                ));
++            }
++        } else {
++            return Err(anyhow::format_err!(
+                 "did not expect repo at {} to be bare",
+                 repo.path().display()
+-            )
+-        })?;
++            ));
++        };
+         let repo_relative_path = match paths::strip_prefix_canonical(root, repo_root) {
+             Ok(p) => p,
+             Err(e) => {
+@@ -228,9 +241,21 @@ impl<'cfg> PathSource<'cfg> {
+     ) -> CargoResult<Vec<PathBuf>> {
+         warn!("list_files_git {}", pkg.package_id());
+         let index = repo.index()?;
+-        let root = repo
+-            .workdir()
+-            .ok_or_else(|| anyhow::format_err!("can't list files on a bare repository"))?;
++        let root = if let Some(root) = repo.workdir() {
++            root
++        } else if !repo.is_bare() {
++            // Sparse-checkouts (and possibly other git
++            // configurations) make libgit2 confused but there's still
++            // an actual non-bare repo here.
++            if let Some(r) = repo.path().parent() {
++                r
++            } else {
++                return Err(anyhow::format_err!("malformed non-bare repository root",));
++            }
++        } else {
++            return Err(anyhow::format_err!("can't list files on a bare repository",));
++        };
++
+         let pkg_path = pkg.root();
+ 
+         let mut ret = Vec::<PathBuf>::new();
+-- 
+2.32.0.554.ge1b32706d8-goog
+

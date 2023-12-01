@@ -1,0 +1,107 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-proxies.gni")
+
+group("all") {
+  deps = [
+    ":dbus-proxies",
+    ":install_dbus_config",
+    ":install_init_config",
+    ":install_service_manager_policy_config",
+    ":install_tmpfiles_config",
+    "//diagnostics/cros_health_tool:cros-health-tool",
+    "//diagnostics/cros_healthd:cros_healthd",
+    "//diagnostics/cros_healthd/delegate:executor-delegate",
+    "//diagnostics/cros_healthd/routines:floating-point-accuracy",
+    "//diagnostics/cros_healthd/routines:prime-search",
+    "//diagnostics/cros_healthd/routines:urandom",
+    "//diagnostics/cros_healthd/seccomp",
+    "//diagnostics/wilco_dtc_supportd:wilco_dtc_supportd",
+    "//diagnostics/wilco_dtc_supportd/seccomp",
+  ]
+  if (use.test) {
+    deps += [
+      "//diagnostics/cros_healthd:cros_healthd_test",
+      "//diagnostics/wilco_dtc_supportd:wilco_dtc_supportd_test",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      "//diagnostics/cros_healthd/events:crash_events_uploads_log_parser_fuzzer",
+      "//diagnostics/cros_healthd/fetchers:fetch_system_info_fuzzer",
+    ]
+  }
+}
+
+group("dbus-proxies") {
+  deps = [
+    ":bluetooth-proxies",
+    ":cras-proxies",
+    ":fwupd-proxies",
+  ]
+}
+
+generate_dbus_proxies("bluetooth-proxies") {
+  dbus_service_config = "dbus_bindings/bluetooth/dbus-service-config.json"
+  proxy_output_file =
+      "include/diagnostics/dbus_bindings/bluetooth/dbus-proxies.h"
+  mock_output_file =
+      "include/diagnostics/dbus_bindings/bluetooth/dbus-proxy-mocks.h"
+  proxy_path_in_mocks = "diagnostics/dbus_bindings/bluetooth/dbus-proxies.h"
+  sources = [
+    "dbus_bindings/bluetooth/org.bluez.Adapter1.xml",
+    "dbus_bindings/bluetooth/org.bluez.AdminPolicyStatus1.xml",
+    "dbus_bindings/bluetooth/org.bluez.Battery1.xml",
+    "dbus_bindings/bluetooth/org.bluez.Device1.xml",
+    "dbus_bindings/bluetooth/org.bluez.LEAdvertisingManager1.xml",
+  ]
+}
+
+generate_dbus_proxies("cras-proxies") {
+  sources =
+      [ "${sysroot}/usr/share/dbus-1/interfaces/org.chromium.cras.Control.xml" ]
+  proxy_output_file = "include/cras/dbus-proxies.h"
+  mock_output_file = "include/cras/dbus-proxy-mocks.h"
+}
+
+generate_dbus_proxies("fwupd-proxies") {
+  sources =
+      [ "${sysroot}/usr/share/dbus-1/interfaces/org.freedesktop.fwupd.xml" ]
+  proxy_output_file = "include/fwupd/dbus-proxies.h"
+  mock_output_file = "include/fwupd/dbus-proxy-mocks.h"
+}
+
+install_config("install_dbus_config") {
+  sources = [ "dbus/org.chromium.CrosHealthd.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+  if (use.wilco) {
+    sources += [
+      "dbus/WilcoDtcUpstart.conf",
+      "dbus/org.chromium.WilcoDtcSupportd.conf",
+    ]
+  }
+}
+
+install_config("install_init_config") {
+  sources = [ "init/cros_healthd.conf" ]
+  install_path = "/etc/init"
+  if (use.wilco) {
+    sources += [
+      "init/wilco_dtc.conf",
+      "init/wilco_dtc_dispatcher.conf",
+      "init/wilco_dtc_supportd.conf",
+    ]
+  }
+}
+
+install_config("install_tmpfiles_config") {
+  sources = [ "init/tmpfiles.d/cros_healthd.conf" ]
+  install_path = "/usr/lib/tmpfiles.d/on-demand"
+}
+
+install_config("install_service_manager_policy_config") {
+  sources = [ "init/mojo/cros_healthd.jsonc" ]
+  install_path = "/etc/mojo/service_manager/policy"
+}

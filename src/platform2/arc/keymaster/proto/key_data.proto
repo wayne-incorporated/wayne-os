@@ -1,0 +1,51 @@
+// Copyright 2020 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+
+package arc.keymaster.context;
+
+// Standard ARC++ key material.
+message ArcKeyData {
+  // Blob containing the actual key material.
+  bytes key_material = 1;
+}
+
+// Metadata holder for keys owned by chaps.
+message ChapsKeyData {
+  // PKCS#11 ID (CKA_ID).
+  bytes id = 1;
+  // PKCS#11 label (CKA_LABEL).
+  string label = 2;
+
+  // The possible chaps slots a key can be stored in. Note this does NOT map to
+  // the PKCS#11 CK_SLOT_ID, but rather to an abstract representation of the
+  // value. The corresponding CK_SLOT_ID must be queried from cryptohome.
+  //
+  // Note this must be kept in sync with mojo/cert_store.mojom and with the
+  // ContextAdaptor::Slot enum.
+  enum Slot {
+    // The key is stored in the user slot.
+    USER = 0;
+    // The key is stored in the system slot.
+    SYSTEM = 1;
+  }
+  // The chaps slot where this key is stored.
+  Slot slot = 3;
+}
+
+// Extensible structure for key data from diverse sources.
+message KeyData {
+  // Sets of Keymaster tags.
+  bytes hw_enforced_tags = 1;
+  bytes sw_enforced_tags = 2;
+
+  // Source-specific key data.
+  oneof data {
+    // Data for ARC++ KeyStore keys.
+    ArcKeyData arc_key = 3;
+    // Data for chaps owned keys.
+    ChapsKeyData chaps_key = 4;
+  }
+}

@@ -1,0 +1,89 @@
+From 9d7001eba9c4cb311e03cd8cdc231f9e579f2d0f Mon Sep 17 00:00:00 2001
+From: Joao Moreira <joao.moreira@intel.com>
+Date: Sat, 26 Feb 2022 03:55:39 +0000
+Subject: [PATCH] [ELF][X86] Don't create IBT .plt if there is no PLT entry
+
+https://github.com/ClangBuiltLinux/linux/issues/1606
+When GNU_PROPERTY_X86_FEATURE_1_IBT is enabled, ld.lld will create .plt output
+section even if there is no PLT entry. Fix this by implementing
+IBTPltSection::isNeeded instead of using the default code path (which always
+returns true).
+
+Reviewed By: MaskRay
+
+Differential Revision: https://reviews.llvm.org/D120600
+---
+ lld/ELF/SyntheticSections.cpp     |  2 ++
+ lld/ELF/SyntheticSections.h       |  1 +
+ lld/test/ELF/format-binary.test   |  6 +++---
+ lld/test/ELF/x86-64-feature-cet.s | 11 +++++++++++
+ 4 files changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/lld/ELF/SyntheticSections.cpp b/lld/ELF/SyntheticSections.cpp
+index 2a93e66e7c02..c681f2ea0ff5 100644
+--- a/lld/ELF/SyntheticSections.cpp
++++ b/lld/ELF/SyntheticSections.cpp
+@@ -2696,6 +2696,8 @@ size_t IBTPltSection::getSize() const {
+   return 16 + in.plt->getNumEntries() * target->pltEntrySize;
+ }
+ 
++bool IBTPltSection::isNeeded() const { return in.plt->getNumEntries() > 0; }
++
+ // The string hash function for .gdb_index.
+ static uint32_t computeGdbHash(StringRef s) {
+   uint32_t h = 0;
+diff --git a/lld/ELF/SyntheticSections.h b/lld/ELF/SyntheticSections.h
+index 0538ada22970..0248cd0d1b23 100644
+--- a/lld/ELF/SyntheticSections.h
++++ b/lld/ELF/SyntheticSections.h
+@@ -761,6 +761,7 @@ class IBTPltSection : public SyntheticSection {
+ public:
+   IBTPltSection();
+   void writeTo(uint8_t *Buf) override;
++  bool isNeeded() const override;
+   size_t getSize() const override;
+ };
+ 
+diff --git a/lld/test/ELF/format-binary.test b/lld/test/ELF/format-binary.test
+index bb06d7e5ab9f..3c580ebb99ed 100644
+--- a/lld/test/ELF/format-binary.test
++++ b/lld/test/ELF/format-binary.test
+@@ -31,10 +31,10 @@
+ 
+ # EXE:      Machine: Advanced Micro Devices X86-64
+ # EXE:      [Nr] Name         Type     Address          Off    Size   ES Flg Lk Inf Al
+-# EXE:      [ 3] .data        PROGBITS {{.*}}                  00000c 00  WA  0   0  8
++# EXE:      [ 2] .data        PROGBITS {{.*}}                  00000c 00  WA  0   0  8
+ # EXE:      Size Type    Bind   Vis      Ndx Name
+-# EXE:         0 OBJECT  GLOBAL DEFAULT    3 _binary_d_t_txt_start
+-# EXE-NEXT:    0 OBJECT  GLOBAL DEFAULT    3 _binary_d_t_txt_end
++# EXE:         0 OBJECT  GLOBAL DEFAULT    2 _binary_d_t_txt_start
++# EXE-NEXT:    0 OBJECT  GLOBAL DEFAULT    2 _binary_d_t_txt_end
+ # EXE-NEXT:    0 OBJECT  GLOBAL DEFAULT  ABS _binary_d_t_txt_size
+ 
+ # RUN: not ld.lld -b foo 2>&1 | FileCheck --check-prefix=ERR %s
+diff --git a/lld/test/ELF/x86-64-feature-cet.s b/lld/test/ELF/x86-64-feature-cet.s
+index 5322bbdf3f38..cf90d9708e11 100644
+--- a/lld/test/ELF/x86-64-feature-cet.s
++++ b/lld/test/ELF/x86-64-feature-cet.s
+@@ -91,6 +91,17 @@
+ # DISASM-NEXT:               jmpq    *0x2126(%rip)
+ # DISASM-NEXT:               nopw    (%rax,%rax)
+ 
++## If there is no PLT entry, don't create .plt section.
++# RUN: ld.lld -e 0 %t1.o -o %t.noplt
++# RUN: llvm-readelf -S %t.noplt | FileCheck %s --check-prefix=NOPLT
++# RUN: ld.lld -r %t1.o -o %t.noplt
++# RUN: llvm-readelf -S %t.noplt | FileCheck %s --check-prefix=NOPLT
++
++# NOPLT:     [Nr] Name
++# NOPLT-NOT: .plt
++# NOPLT:     .note.gnu.property
++# NOPLT-NOT: .plt
++
+ .section ".note.gnu.property", "a"
+ .long 4
+ .long 0x10
+-- 
+2.35.1
+

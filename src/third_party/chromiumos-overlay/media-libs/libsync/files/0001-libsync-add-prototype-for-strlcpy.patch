@@ -1,0 +1,33 @@
+From 31d744973a6f0c706fd5b7f740d4be218c289ac4 Mon Sep 17 00:00:00 2001
+From: Dominik Behr <dbehr@chromium.org>
+Date: Thu, 13 Jul 2017 15:35:15 -0700
+Subject: [PATCH] libsync: add prototype for strlcpy
+
+Add prototype for BSD strlcpy which does not exists in Linux string.h
+and we have to add our own implementation in strlcpy.c.
+
+BUG=none
+TEST=emerge-kevin libsync
+
+Change-Id: If92515a2fdac1b9173ea10a6a54b262e38d51954
+Signed-off-by: Dominik Behr <dbehr@chromium.org>
+---
+ sync.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/sync.c b/sync.c
+index 9ed03db..bacb8de 100644
+--- a/sync.c
++++ b/sync.c
+@@ -40,6 +40,8 @@ struct sw_sync_create_fence_data {
+ #define SW_SYNC_IOC_CREATE_FENCE _IOWR(SW_SYNC_IOC_MAGIC, 0, struct sw_sync_create_fence_data)
+ #define SW_SYNC_IOC_INC _IOW(SW_SYNC_IOC_MAGIC, 1, __u32)
+ 
++size_t strlcpy(char *dst, const char *src, size_t dsize);
++
+ int sync_wait(int fd, int timeout)
+ {
+     struct pollfd fds;
+-- 
+2.13.2.932.g7449e964c-goog
+

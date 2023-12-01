@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,63 +20,6 @@ struct UserTypeTestParams {
   bool guest;
   bool owner;
 };
-
-class LoginMetricsTest : public testing::Test {
- public:
-  LoginMetricsTest() {}
-  LoginMetricsTest(const LoginMetricsTest&) = delete;
-  LoginMetricsTest& operator=(const LoginMetricsTest&) = delete;
-
-  ~LoginMetricsTest() override {}
-
-  void SetUp() override {
-    ASSERT_TRUE(tmpdir_.CreateUniqueTempDir());
-    metrics_.reset(new LoginMetrics(tmpdir_.GetPath()));
-  }
-
-  int PolicyFilesStatusCode(LoginMetrics::PolicyFilesStatus status) {
-    return LoginMetrics::PolicyFilesStatusCode(status);
-  }
-
- protected:
-  base::ScopedTempDir tmpdir_;
-  std::unique_ptr<LoginMetrics> metrics_;
-};
-
-TEST_F(LoginMetricsTest, AllGood) {
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = LoginMetrics::GOOD;
-  status.policy_file_state = LoginMetrics::GOOD;
-  status.defunct_prefs_file_state = LoginMetrics::GOOD;
-  EXPECT_EQ(PolicyFilesStatusCode(status), 0 /* 000 in base-4 */);
-}
-
-TEST_F(LoginMetricsTest, AllNotThere) {
-  LoginMetrics::PolicyFilesStatus status;
-  EXPECT_EQ(PolicyFilesStatusCode(status), 42 /* 222 in base-4 */);
-}
-
-TEST_F(LoginMetricsTest, Bug24361) {
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = LoginMetrics::GOOD;
-  status.policy_file_state = LoginMetrics::NOT_PRESENT;
-  status.defunct_prefs_file_state = LoginMetrics::GOOD;
-  EXPECT_EQ(PolicyFilesStatusCode(status), 8 /* 020 in base-4 */);
-}
-
-TEST_F(LoginMetricsTest, NoPrefs) {
-  LoginMetrics::PolicyFilesStatus status;
-  status.owner_key_file_state = LoginMetrics::GOOD;
-  status.policy_file_state = LoginMetrics::GOOD;
-  status.defunct_prefs_file_state = LoginMetrics::NOT_PRESENT;
-  EXPECT_EQ(PolicyFilesStatusCode(status), 2 /* 002 in base-4 */);
-}
-
-TEST_F(LoginMetricsTest, SendStatus) {
-  LoginMetrics::PolicyFilesStatus status;
-  EXPECT_TRUE(metrics_->SendPolicyFilesStatus(status));
-  EXPECT_FALSE(metrics_->SendPolicyFilesStatus(status));
-}
 
 class UserTypeTest : public ::testing::TestWithParam<UserTypeTestParams> {
  public:
@@ -123,5 +66,73 @@ INSTANTIATE_TEST_SUITE_P(Other,
                          UserTypeTest,
                          ::testing::Values(UserTypeTestParams(
                              LoginMetrics::OTHER, false, false, false)));
+
+class LoginMetricsTest : public testing::Test {
+ public:
+  LoginMetricsTest() {}
+  LoginMetricsTest(const LoginMetricsTest&) = delete;
+  LoginMetricsTest& operator=(const LoginMetricsTest&) = delete;
+
+  ~LoginMetricsTest() override {}
+
+  void SetUp() override {
+    ASSERT_TRUE(tmpdir_.CreateUniqueTempDir());
+    metrics_.reset(new LoginMetrics(tmpdir_.GetPath()));
+  }
+
+  int DevicePolicyStatusCode(LoginMetrics::DevicePolicyFilesStatus status) {
+    return LoginMetrics::DevicePolicyStatusCode(status);
+  }
+
+ protected:
+  base::ScopedTempDir tmpdir_;
+  std::unique_ptr<LoginMetrics> metrics_;
+};
+
+TEST_F(LoginMetricsTest, AllGoodConsumer) {
+  LoginMetrics::DevicePolicyFilesStatus status;
+  status.owner_key_file_state = LoginMetrics::PolicyFileState::kGood;
+  status.policy_file_state = LoginMetrics::PolicyFileState::kGood;
+  status.ownership_state = LoginMetrics::OwnershipState::kConsumer;
+  // DevicePoliciesState enum:  0 = "Consumer owned good key and policy"
+  EXPECT_EQ(DevicePolicyStatusCode(status), 0);
+}
+
+TEST_F(LoginMetricsTest, AllGoodEnterprise) {
+  LoginMetrics::DevicePolicyFilesStatus status;
+  status.owner_key_file_state = LoginMetrics::PolicyFileState::kGood;
+  status.policy_file_state = LoginMetrics::PolicyFileState::kGood;
+  status.ownership_state = LoginMetrics::OwnershipState::kEnterprise;
+  // DevicePoliciesState enum:  9 = "Enrolled device good key and policy"
+  EXPECT_EQ(DevicePolicyStatusCode(status), /*0*1 + 0*3 + 1*9=*/9);
+}
+
+TEST_F(LoginMetricsTest, KeyMissingEnterprise) {
+  LoginMetrics::DevicePolicyFilesStatus status;
+  status.owner_key_file_state = LoginMetrics::PolicyFileState::kNotPresent;
+  status.policy_file_state =
+      LoginMetrics::PolicyFileState::kMalformed;  // No key to validate with
+  status.ownership_state = LoginMetrics::OwnershipState::kEnterprise;
+  // DevicePoliciesState enum:  14 = "Enrolled device no key, malformed policy"
+  EXPECT_EQ(DevicePolicyStatusCode(status), /*2*1 + 1*3 + 1*9=*/14);
+}
+
+TEST_F(LoginMetricsTest, PolicyMissingEnterprise) {
+  LoginMetrics::DevicePolicyFilesStatus status;
+  status.owner_key_file_state = LoginMetrics::PolicyFileState::kGood;
+  status.policy_file_state = LoginMetrics::PolicyFileState::kNotPresent;
+  status.ownership_state = LoginMetrics::OwnershipState::kEnterprise;
+  // DevicePoliciesState enum:  15 = "Enrolled device good key, no policy"
+  EXPECT_EQ(DevicePolicyStatusCode(status), /*0*1 + 2*3 + 1*9=*/15);
+}
+
+TEST_F(LoginMetricsTest, MaxStatusValue) {
+  LoginMetrics::DevicePolicyFilesStatus status;
+  status.owner_key_file_state = LoginMetrics::PolicyFileState::kNotPresent;
+  status.policy_file_state = LoginMetrics::PolicyFileState::kNotPresent;
+  status.ownership_state = LoginMetrics::OwnershipState::kOther;
+  // DevicePoliciesState enum:  44 = "Unknown owner no key, no policy"
+  EXPECT_EQ(DevicePolicyStatusCode(status), /*2*1 + 2*3 + 4*9=*/44);
+}
 
 }  // namespace login_manager

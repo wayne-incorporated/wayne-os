@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include <base/callback_forward.h>
 #include <base/files/file_path.h>
+#include <base/functional/callback_forward.h>
 #include <base/time/time.h>
 #include <chromeos/dbus/service_constants.h>
 
@@ -30,7 +30,7 @@ enum class StatefulMode {
 class ContainerManagerInterface : public ChildExitHandler {
  public:
   using ExitCallback =
-      base::Callback<void(pid_t, ArcContainerStopReason reason)>;
+      base::OnceCallback<void(pid_t, ArcContainerStopReason reason)>;
 
   // The path to the location of containers.
   constexpr static const char kContainerRunPath[] = "/run/containers";
@@ -41,7 +41,7 @@ class ContainerManagerInterface : public ChildExitHandler {
   // If successful, |exit_callback| will be notified when the process exits.
   // |env| contains environment variables to be sent to the container.
   virtual bool StartContainer(const std::vector<std::string>& env,
-                              const ExitCallback& exit_callback) = 0;
+                              ExitCallback exit_callback) = 0;
 
   // Requests to stop the container. |reason| will be propagated into
   // the arg of |exit_callback| passed to StartContainer.

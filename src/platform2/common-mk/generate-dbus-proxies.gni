@@ -1,0 +1,53 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# TODO(crbug.com/983008): Unify build rule of generate_dbus_proxies and
+# generate_dbus_adaptors for easy to maintain.
+template("generate_dbus_proxies") {
+  forward_variables_from(invoker,
+                         [
+                           "dbus_service_config",
+                           "proxy_output_file",
+                           "mock_output_file",
+                           "proxy_path_in_mocks",
+                         ])
+  h_dir = "${root_gen_dir}"
+
+  if (!defined(proxy_output_file)) {
+    proxy_output_file = ""
+  }
+  if (!defined(proxy_path_in_mocks)) {
+    proxy_path_in_mocks = ""
+  }
+  if (!defined(mock_output_file)) {
+    mock_output_file = ""
+  }
+  if (!defined(dbus_service_config) || dbus_service_config == "") {
+    service_config = ""
+  } else {
+    service_config = rebase_path(dbus_service_config)
+  }
+
+  action(target_name) {
+    sources = invoker.sources
+    script = "//common-mk/file_generator_wrapper.py"
+    outputs = []
+    args = [
+      "go-generate-chromeos-dbus-bindings",
+      "-service-config=${service_config}",
+    ]
+    if (proxy_output_file != "") {
+      outputs += [ "${h_dir}/${proxy_output_file}" ]
+      args += [ "-proxy=${h_dir}/${proxy_output_file}" ]
+    }
+    if (mock_output_file != "") {
+      outputs += [ "${h_dir}/${mock_output_file}" ]
+      args += [ "-mock=${h_dir}/${mock_output_file}" ]
+    }
+    if (proxy_path_in_mocks != "") {
+      args += [ "-proxy-path-for-mocks=${proxy_path_in_mocks}" ]
+    }
+    args += rebase_path(sources, root_build_dir)
+  }
+}

@@ -1,0 +1,46 @@
+From ec89219791b806a26b68044cbc0a5f48037f6bce Mon Sep 17 00:00:00 2001
+From: Sean Kau <skau@chromium.org>
+Date: Thu, 8 Jul 2021 16:00:28 -0700
+Subject: [PATCH] Set the counted pages for PDFs as job-impressions
+
+---
+ filter/gstoraster.c | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/filter/gstoraster.c b/filter/gstoraster.c
+index c26e04e6a..2a3a5a286 100644
+--- a/filter/gstoraster.c
++++ b/filter/gstoraster.c
+@@ -713,21 +713,25 @@ main (int argc, char **argv, char *envp[])
+     goto out;
+   }
+ 
+-  if (doc_type == GS_DOC_TYPE_PDF) {  
+-    int pages = pdf_pages(filename);
+-
+-    if (pages == 0) {
++  if (doc_type == GS_DOC_TYPE_PDF) {
++    // Determine how many pages we have and if we have something valid to print.
++    int pagecount = pdf_pages(filename);
++    if (pagecount == 0) {
+       fprintf(stderr, "DEBUG: No pages left, outputting empty file.\n");
+       status = 0;
+       if (outformat == OUTPUT_FORMAT_RASTER)
+         fprintf(stdout, "RaS2");
+       goto out;
+     }
+-    if (pages < 0) {
++    if (pagecount < 0) {
+       fprintf(stderr, "DEBUG: Unexpected page count\n");
+       goto out;
+     }
++
++    // Set job-impressions for later embedding as TotalPageCount.
++    num_options = cupsAddIntegerOption("job-impressions", pagecount, num_options, &options);
+   }
++
+   if (argc == 6) {
+     /* input from stdin */
+     /* remove name of temp file*/
+2.32.0.93.g670b81a890-goog
+

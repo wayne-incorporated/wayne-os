@@ -1,0 +1,74 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":tpm_softclear" ]
+  if (use.test) {
+    deps += [ ":tpm_softclear_utils_testrunner" ]
+  }
+}
+
+executable("tpm_softclear") {
+  # installed to /usr/local/bin since it's on test/dev images only.
+  install_path = "/usr/local/bin"
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":utility_library" ]
+  pkg_deps = [ "libbrillo" ]
+}
+
+pkg_config("target_defaults") {
+  defines = [
+    "USE_TPM_DYNAMIC=${use.tpm_dynamic}",
+    "USE_TPM1=${use.tpm}",
+    "USE_TPM2=${use.tpm2}",
+  ]
+  pkg_deps = [ "libchrome" ]
+}
+
+static_library("utility_library") {
+  sources = [ "tpm.cc" ]
+  libs = [ "hwsec-foundation" ]
+  if (use.tpm2) {
+    sources += [ "tpm2_impl.cc" ]
+    libs += [ "trunks" ]
+
+    # NOSORT
+    pkg_deps = [
+      # system_api depends on protobuf. It must appear before protobuf here or the
+      # linker flags won't be in the right order.
+      "system_api",
+      "protobuf-lite",
+    ]
+  }
+  if (use.tpm) {
+    sources += [ "tpm_impl.cc" ]
+  }
+  configs += [ ":target_defaults" ]
+}
+
+if (use.test) {
+  pkg_config("tpm_softclear_utils_testrunner_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("tpm_softclear_utils_testrunner") {
+    run_test = true
+    configs += [
+      ":target_defaults",
+      ":tpm_softclear_utils_testrunner_config",
+      "//common-mk:test",
+    ]
+    if (use.tpm2) {
+      sources = [ "tpm2_test.cc" ]
+      libs = [ "trunks_test" ]
+    }
+    deps = [
+      ":utility_library",
+      "//common-mk/testrunner",
+    ]
+  }
+}

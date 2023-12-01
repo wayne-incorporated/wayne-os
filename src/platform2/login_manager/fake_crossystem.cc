@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,14 +16,18 @@ int FakeCrossystem::VbSetSystemPropertyInt(const char* name, int value) {
   return 0;
 }
 
-const char* FakeCrossystem::VbGetSystemPropertyString(const char* name,
-                                                      char* dest,
-                                                      std::size_t size) {
+int FakeCrossystem::VbGetSystemPropertyString(const char* name,
+                                              char* dest,
+                                              std::size_t size) {
   if (string_map_.find(name) == string_map_.end())
-    return nullptr;
+    return -1;
 
-  string_map_[name].copy(dest, size);
-  return dest;
+  // Max length of data to copy is size - 1 so we reserve a char for null
+  // termination. This matches the behavior we are faking from
+  // `platform/vboot_reference/host/include/crossystem.h`.
+  auto len = string_map_[name].copy(dest, size - 1);
+  dest[len] = '\0';
+  return 0;
 }
 
 int FakeCrossystem::VbSetSystemPropertyString(const char* name,

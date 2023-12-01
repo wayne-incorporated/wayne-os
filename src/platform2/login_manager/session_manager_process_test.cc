@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,16 @@
 #include <unistd.h>
 
 #include <memory>
+#include <optional>
 
-#include <base/bind.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
+#include <base/functional/bind.h>
 #include <base/location.h>
 #include <base/logging.h>
 #include <base/memory/ptr_util.h>
 #include <base/memory/ref_counted.h>
-#include <base/optional.h>
 #include <base/strings/string_util.h>
 #include <brillo/message_loops/base_message_loop.h>
 #include <chromeos/dbus/service_constants.h>
@@ -114,10 +114,9 @@ class SessionManagerProcessTest : public ::testing::Test {
   }
 
   void InitManager(std::unique_ptr<BrowserJobInterface> job) {
-    manager_ =
-        new SessionManagerService(std::move(job), getuid(), base::nullopt,
-                                  base::TimeDelta::FromSeconds(3), false,
-                                  base::TimeDelta(), &metrics_, &utils_);
+    manager_ = new SessionManagerService(std::move(job), getuid(), std::nullopt,
+                                         base::Seconds(3), false,
+                                         base::TimeDelta(), &metrics_, &utils_);
     manager_->test_api().set_liveness_checker(liveness_checker_);
     manager_->test_api().set_session_manager(session_manager_impl_);
     manager_->test_api().set_aborted_browser_pid_path(
@@ -284,11 +283,11 @@ TEST_F(SessionManagerProcessTest, BrowserRunningShutdown) {
 
   brillo::MessageLoop::current()->PostTask(
       FROM_HERE,
-      base::Bind(&SessionManagerService::RunBrowser, manager_.get()));
+      base::BindOnce(&SessionManagerService::RunBrowser, manager_.get()));
 
   brillo::MessageLoop::current()->PostTask(
       FROM_HERE,
-      base::Bind(&SessionManagerService::ScheduleShutdown, manager_.get()));
+      base::BindOnce(&SessionManagerService::ScheduleShutdown, manager_.get()));
 
   ForceRunLoop();
 }
@@ -438,8 +437,19 @@ TEST_F(SessionManagerProcessTest, SetBrowserDataMigrationArgsForUser) {
   FakeBrowserJob* job = CreateMockJobAndInitManager(false);
 
   const std::string userhash = "1234abcd";
-  EXPECT_CALL(*job, SetBrowserDataMigrationArgsForUser(userhash)).Times(1);
-  manager_->SetBrowserDataMigrationArgsForUser(userhash);
+  const std::string mode = "move";
+  EXPECT_CALL(*job, SetBrowserDataMigrationArgsForUser(userhash, mode))
+      .Times(1);
+  manager_->SetBrowserDataMigrationArgsForUser(userhash, mode);
+}
+
+TEST_F(SessionManagerProcessTest, SetBrowserDataBackwardMigrationArgsForUser) {
+  FakeBrowserJob* job = CreateMockJobAndInitManager(false);
+
+  const std::string userhash = "1234abcd";
+  EXPECT_CALL(*job, SetBrowserDataBackwardMigrationArgsForUser(userhash))
+      .Times(1);
+  manager_->SetBrowserDataBackwardMigrationArgsForUser(userhash);
 }
 
 TEST_F(SessionManagerProcessTest, ClearBrowserDataMigrationArgs) {
@@ -448,9 +458,11 @@ TEST_F(SessionManagerProcessTest, ClearBrowserDataMigrationArgs) {
   // args were set, ensuring that migration is attempted only once.
   FakeBrowserJob* job = CreateMockJobAndInitManager(false);
   const std::string userhash = "1234abcd";
-  manager_->SetBrowserDataMigrationArgsForUser(userhash);
+  const std::string mode = "move";
+  manager_->SetBrowserDataMigrationArgsForUser(userhash, mode);
 
   EXPECT_CALL(*job, ClearBrowserDataMigrationArgs());
+  EXPECT_CALL(*job, ClearBrowserDataBackwardMigrationArgs());
 
   manager_->RunBrowser();
 }

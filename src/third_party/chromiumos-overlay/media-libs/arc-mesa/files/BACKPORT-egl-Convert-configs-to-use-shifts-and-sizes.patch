@@ -1,0 +1,643 @@
+From 78f2ccc42301edea5a0c366ddc818e2f2a6bb466 Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Thu, 24 Jan 2019 16:32:48 -0800
+Subject: [PATCH] BACKPORT: egl: Convert configs to use shifts and sizes
+ instead of masks
+
+Change dri2_add_config to take arrays of shifts and sizes, and compare with
+those set in the dri config. Convert all platform driver masks
+to shifts and sizes.
+
+In order to handle older drivers, where shift attributes aren't available,
+we fall back to the mask attributes and compute the shifts with ffs.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Emil Velikov <emil.l.velikov@gmail.com>
+(cherry picked from commit 7b4ed2b513efad86616e932eb4bca20557addc78)
+
+ Conflicts:Dropped platform_device.c changes as it does not exist on
+ current arc-mesa version.
+	src/egl/drivers/dri2/platform_android.c
+	src/egl/drivers/dri2/platform_device.c
+	src/egl/drivers/dri2/platform_x11.c
+
+Change-Id: I7ecc50d384e514ed6da234f945b7e769c653b6f9
+---
+ src/egl/drivers/dri2/egl_dri2.c             | 87 ++++++++++++++++++---
+ src/egl/drivers/dri2/egl_dri2.h             |  7 +-
+ src/egl/drivers/dri2/platform_android.c     | 13 +--
+ src/egl/drivers/dri2/platform_drm.c         | 47 +++++------
+ src/egl/drivers/dri2/platform_surfaceless.c | 11 +--
+ src/egl/drivers/dri2/platform_wayland.c     | 49 +++++++-----
+ src/egl/drivers/dri2/platform_x11.c         | 27 +++++--
+ src/gbm/backends/dri/gbm_dri.c              | 36 ++++++---
+ src/gbm/backends/dri/gbm_driint.h           | 16 ++--
+ 9 files changed, 203 insertions(+), 90 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
+index c98b9a5d18a..d84b5668975 100644
+--- a/src/egl/drivers/dri2/egl_dri2.c
++++ b/src/egl/drivers/dri2/egl_dri2.c
+@@ -138,11 +138,7 @@ const __DRIuseInvalidateExtension use_invalidate = {
+ static const EGLint dri2_to_egl_attribute_map[__DRI_ATTRIB_MAX] = {
+    [__DRI_ATTRIB_BUFFER_SIZE ]          = EGL_BUFFER_SIZE,
+    [__DRI_ATTRIB_LEVEL]                 = EGL_LEVEL,
+-   [__DRI_ATTRIB_RED_SIZE]              = EGL_RED_SIZE,
+-   [__DRI_ATTRIB_GREEN_SIZE]            = EGL_GREEN_SIZE,
+-   [__DRI_ATTRIB_BLUE_SIZE]             = EGL_BLUE_SIZE,
+    [__DRI_ATTRIB_LUMINANCE_SIZE]        = EGL_LUMINANCE_SIZE,
+-   [__DRI_ATTRIB_ALPHA_SIZE]            = EGL_ALPHA_SIZE,
+    [__DRI_ATTRIB_DEPTH_SIZE]            = EGL_DEPTH_SIZE,
+    [__DRI_ATTRIB_STENCIL_SIZE]          = EGL_STENCIL_SIZE,
+    [__DRI_ATTRIB_SAMPLE_BUFFERS]        = EGL_SAMPLE_BUFFERS,
+@@ -177,10 +173,39 @@ dri2_match_config(const _EGLConfig *conf, const _EGLConfig *criteria)
+    return EGL_TRUE;
+ }
+ 
++void
++dri2_get_shifts_and_sizes(const __DRIcoreExtension *core,
++                          const __DRIconfig *config, int *shifts,
++		          unsigned int *sizes)
++{
++   unsigned int mask;
++
++   if (core->getConfigAttrib(config, __DRI_ATTRIB_RED_SHIFT, (unsigned int *)&shifts[0])) {
++      core->getConfigAttrib(config, __DRI_ATTRIB_GREEN_SHIFT, (unsigned int *)&shifts[1]);
++      core->getConfigAttrib(config, __DRI_ATTRIB_BLUE_SHIFT, (unsigned int *)&shifts[2]);
++      core->getConfigAttrib(config, __DRI_ATTRIB_ALPHA_SHIFT, (unsigned int *)&shifts[3]);
++   } else {
++      /* Driver isn't exposing shifts, so convert masks to shifts */
++      core->getConfigAttrib(config, __DRI_ATTRIB_RED_MASK, &mask);
++      shifts[0] = ffs(mask) - 1;
++      core->getConfigAttrib(config, __DRI_ATTRIB_GREEN_MASK, &mask);
++      shifts[1] = ffs(mask) - 1;
++      core->getConfigAttrib(config, __DRI_ATTRIB_BLUE_MASK, &mask);
++      shifts[2] = ffs(mask) - 1;
++      core->getConfigAttrib(config, __DRI_ATTRIB_ALPHA_MASK, &mask);
++      shifts[3] = ffs(mask) - 1;
++   }
++
++   core->getConfigAttrib(config, __DRI_ATTRIB_RED_SIZE, &sizes[0]);
++   core->getConfigAttrib(config, __DRI_ATTRIB_GREEN_SIZE, &sizes[1]);
++   core->getConfigAttrib(config, __DRI_ATTRIB_BLUE_SIZE, &sizes[2]);
++   core->getConfigAttrib(config, __DRI_ATTRIB_ALPHA_SIZE, &sizes[3]);
++}
++
+ struct dri2_egl_config *
+ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+                 EGLint surface_type, const EGLint *attr_list,
+-                const unsigned int *rgba_masks)
++                const int *rgba_shifts, const unsigned int *rgba_sizes)
+ {
+    struct dri2_egl_config *conf;
+    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+@@ -188,7 +213,8 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+    unsigned int attrib, value, double_buffer;
+    bool srgb = false;
+    EGLint key, bind_to_texture_rgb, bind_to_texture_rgba;
+-   unsigned int dri_masks[4] = { 0, 0, 0, 0 };
++   int dri_shifts[4] = { -1, -1, -1, -1 };
++   unsigned int dri_sizes[4] = { 0, 0, 0, 0 };
+    _EGLConfig *matching_config;
+    EGLint num_configs = 0;
+    EGLint config_id;
+@@ -234,20 +260,56 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+          double_buffer = value;
+          break;
+ 
++      case __DRI_ATTRIB_RED_SIZE:
++         dri_sizes[0] = value;
++         _eglSetConfigKey(&base, EGL_RED_SIZE, value);
++         break;
++
+       case __DRI_ATTRIB_RED_MASK:
+-         dri_masks[0] = value;
++         dri_shifts[0] = ffs(value) - 1;
++         break;
++
++      case __DRI_ATTRIB_RED_SHIFT:
++         dri_shifts[0] = value;
++         break;
++
++      case __DRI_ATTRIB_GREEN_SIZE:
++         dri_sizes[1] = value;
++         _eglSetConfigKey(&base, EGL_GREEN_SIZE, value);
+          break;
+ 
+       case __DRI_ATTRIB_GREEN_MASK:
+-         dri_masks[1] = value;
++         dri_shifts[1] = ffs(value) - 1;
++         break;
++
++      case __DRI_ATTRIB_GREEN_SHIFT:
++         dri_shifts[1] = value;
++         break;
++
++      case __DRI_ATTRIB_BLUE_SIZE:
++         dri_sizes[2] = value;
++         _eglSetConfigKey(&base, EGL_BLUE_SIZE, value);
+          break;
+ 
+       case __DRI_ATTRIB_BLUE_MASK:
+-         dri_masks[2] = value;
++         dri_shifts[2] = ffs(value) - 1;
++         break;
++
++      case __DRI_ATTRIB_BLUE_SHIFT:
++         dri_shifts[2] = value;
++         break;
++
++     case __DRI_ATTRIB_ALPHA_SIZE:
++         dri_sizes[3] = value;
++         _eglSetConfigKey(&base, EGL_ALPHA_SIZE, value);
+          break;
+ 
+       case __DRI_ATTRIB_ALPHA_MASK:
+-         dri_masks[3] = value;
++         dri_shifts[3] = ffs(value) - 1;
++         break;
++
++      case __DRI_ATTRIB_ALPHA_SHIFT:
++         dri_shifts[3] = value;
+          break;
+ 
+       case __DRI_ATTRIB_ACCUM_RED_SIZE:
+@@ -289,7 +351,10 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+       for (int i = 0; attr_list[i] != EGL_NONE; i += 2)
+          _eglSetConfigKey(&base, attr_list[i], attr_list[i+1]);
+ 
+-   if (rgba_masks && memcmp(rgba_masks, dri_masks, sizeof(dri_masks)))
++   if (rgba_shifts && memcmp(rgba_shifts, dri_shifts, sizeof(dri_shifts)))
++      return NULL;
++
++   if (rgba_sizes && memcmp(rgba_sizes, dri_sizes, sizeof(dri_sizes)))
+       return NULL;
+ 
+    base.NativeRenderable = EGL_TRUE;
+diff --git a/src/egl/drivers/dri2/egl_dri2.h b/src/egl/drivers/dri2/egl_dri2.h
+index a9ddadf11b1..4a601dabe2b 100644
+--- a/src/egl/drivers/dri2/egl_dri2.h
++++ b/src/egl/drivers/dri2/egl_dri2.h
+@@ -402,10 +402,15 @@ dri2_surface_get_dri_drawable(_EGLSurface *surf);
+ __DRIimage *
+ dri2_lookup_egl_image(__DRIscreen *screen, void *image, void *data);
+ 
++void
++dri2_get_shifts_and_sizes(const __DRIcoreExtension *core,
++		          const __DRIconfig *config, int *shifts,
++			  unsigned int *sizes);
++
+ struct dri2_egl_config *
+ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
+                 EGLint surface_type, const EGLint *attr_list,
+-                const unsigned int *rgba_masks);
++                const int *rgba_shifts, const unsigned int *rgba_sizes);
+ 
+ _EGLImage *
+ dri2_create_image_khr(_EGLDriver *drv, _EGLDisplay *disp,
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index c0bb37c7c9e..fef1cc4ad4b 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -1136,15 +1136,16 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
+    struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+    static const struct {
+       int format;
+-      unsigned int rgba_masks[4];
++      int rgba_shifts[4];
++      unsigned int rgba_sizes[4];
+    } visuals[] = {
+-      { HAL_PIXEL_FORMAT_RGBA_8888, { 0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000 } },
+-      { HAL_PIXEL_FORMAT_RGBX_8888, { 0x000000ff, 0x0000ff00, 0x00ff0000, 0x00000000 } },
+-      { HAL_PIXEL_FORMAT_RGB_565,   { 0x0000f800, 0x000007e0, 0x0000001f, 0x00000000 } },
++      { HAL_PIXEL_FORMAT_RGBA_8888, { 0, 8, 16, 24 }, { 8, 8, 8, 8 } },
++      { HAL_PIXEL_FORMAT_RGBX_8888, { 0, 8, 16, -1 }, { 8, 8, 8, 0 } },
++      { HAL_PIXEL_FORMAT_RGB_565,   { 11, 5, 0, -1 }, { 5, 6, 5, 0 } },
+       /* This must be after HAL_PIXEL_FORMAT_RGBA_8888, we only keep BGRA
+        * visual if it turns out RGBA visual is not available.
+        */
+-      { HAL_PIXEL_FORMAT_BGRA_8888, { 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000 } },
++      { HAL_PIXEL_FORMAT_BGRA_8888, { 16, 8, 0, 24 }, { 8, 8, 8, 8 } },
+    };
+ 
+    unsigned int format_count[ARRAY_SIZE(visuals)] = { 0 };
+@@ -1189,7 +1190,7 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
+          struct dri2_egl_config *dri2_conf =
+             dri2_add_config(dpy, dri2_dpy->driver_configs[j],
+                             config_count + 1, surface_type, config_attrs,
+-                            visuals[i].rgba_masks);
++                            visuals[i].rgba_shifts, visuals[i].rgba_sizes);
+          if (dri2_conf) {
+             if (dri2_conf->base.ConfigID == config_count + 1)
+                config_count++;
+diff --git a/src/egl/drivers/dri2/platform_drm.c b/src/egl/drivers/dri2/platform_drm.c
+index c1ab1c9b0f6..c0952ac8f1f 100644
+--- a/src/egl/drivers/dri2/platform_drm.c
++++ b/src/egl/drivers/dri2/platform_drm.c
+@@ -96,7 +96,8 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
+                               struct gbm_surface *surface)
+ {
+    const struct gbm_dri_visual *visual = NULL;
+-   unsigned int red, green, blue, alpha;
++   int shifts[4];
++   unsigned int sizes[4];
+    int i;
+ 
+    /* Check that the EGLConfig being used to render to the surface is
+@@ -104,10 +105,7 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
+     * otherwise-compatible formats is relatively common, explicitly allow
+     * this.
+     */
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_RED_MASK, &red);
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_GREEN_MASK, &green);
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_BLUE_MASK, &blue);
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_ALPHA_MASK, &alpha);
++   dri2_get_shifts_and_sizes(dri2_dpy->core, config, shifts, sizes);
+ 
+    for (i = 0; i < dri2_dpy->gbm_dri->num_visuals; i++) {
+       visual = &dri2_dpy->gbm_dri->visual_table[i];
+@@ -118,10 +116,14 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
+    if (i == dri2_dpy->gbm_dri->num_visuals)
+       return false;
+ 
+-   if (red != visual->rgba_masks.red ||
+-       green != visual->rgba_masks.green ||
+-       blue != visual->rgba_masks.blue ||
+-       (alpha && visual->rgba_masks.alpha && alpha != visual->rgba_masks.alpha)) {
++   if (shifts[0] != visual->rgba_shifts.red ||
++       shifts[1] != visual->rgba_shifts.green ||
++       shifts[2] != visual->rgba_shifts.blue ||
++       (shifts[3] > -1 && shifts[3] != visual->rgba_shifts.alpha) ||
++       sizes[0] != visual->rgba_sizes.red ||
++       sizes[1] != visual->rgba_sizes.green ||
++       sizes[2] != visual->rgba_sizes.blue ||
++       (sizes[3] > 0 && sizes[3] != visual->rgba_sizes.alpha)) {
+       return false;
+    }
+ 
+@@ -627,24 +629,23 @@ drm_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
+    memset(format_count, 0, num_visuals * sizeof(unsigned int));
+ 
+    for (unsigned i = 0; dri2_dpy->driver_configs[i]; i++) {
+-      unsigned int red, green, blue, alpha;
++      const __DRIconfig *config = dri2_dpy->driver_configs[i];
++      int shifts[4];
++      unsigned int sizes[4];
+ 
+-      dri2_dpy->core->getConfigAttrib(dri2_dpy->driver_configs[i],
+-                                      __DRI_ATTRIB_RED_MASK, &red);
+-      dri2_dpy->core->getConfigAttrib(dri2_dpy->driver_configs[i],
+-                                      __DRI_ATTRIB_GREEN_MASK, &green);
+-      dri2_dpy->core->getConfigAttrib(dri2_dpy->driver_configs[i],
+-                                      __DRI_ATTRIB_BLUE_MASK, &blue);
+-      dri2_dpy->core->getConfigAttrib(dri2_dpy->driver_configs[i],
+-                                      __DRI_ATTRIB_ALPHA_MASK, &alpha);
++      dri2_get_shifts_and_sizes(dri2_dpy->core, config, shifts, sizes);
+ 
+       for (unsigned j = 0; j < num_visuals; j++) {
+          struct dri2_egl_config *dri2_conf;
+ 
+-         if (visuals[j].rgba_masks.red != red ||
+-             visuals[j].rgba_masks.green != green ||
+-             visuals[j].rgba_masks.blue != blue ||
+-             visuals[j].rgba_masks.alpha != alpha)
++         if (visuals[j].rgba_shifts.red != shifts[0] ||
++             visuals[j].rgba_shifts.green != shifts[1] ||
++             visuals[j].rgba_shifts.blue != shifts[2] ||
++             visuals[j].rgba_shifts.alpha != shifts[3] ||
++             visuals[j].rgba_sizes.red != sizes[0] ||
++             visuals[j].rgba_sizes.green != sizes[1] ||
++             visuals[j].rgba_sizes.blue != sizes[2] ||
++             visuals[j].rgba_sizes.alpha != sizes[3])
+             continue;
+ 
+          const EGLint attr_list[] = {
+@@ -653,7 +654,7 @@ drm_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
+          };
+ 
+          dri2_conf = dri2_add_config(disp, dri2_dpy->driver_configs[i],
+-               config_count + 1, EGL_WINDOW_BIT, attr_list, NULL);
++               config_count + 1, EGL_WINDOW_BIT, attr_list, NULL, NULL);
+          if (dri2_conf) {
+             if (dri2_conf->base.ConfigID == config_count + 1)
+                config_count++;
+diff --git a/src/egl/drivers/dri2/platform_surfaceless.c b/src/egl/drivers/dri2/platform_surfaceless.c
+index f9809561611..46606df9a88 100644
+--- a/src/egl/drivers/dri2/platform_surfaceless.c
++++ b/src/egl/drivers/dri2/platform_surfaceless.c
+@@ -186,11 +186,12 @@ surfaceless_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
+    struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+    static const struct {
+       const char *format_name;
+-      unsigned int rgba_masks[4];
++      int rgba_shifts[4];
++      unsigned int rgba_sizes[4];
+    } visuals[] = {
+-      { "ARGB8888", { 0xff0000, 0xff00, 0xff, 0xff000000 } },
+-      { "RGB888",   { 0xff0000, 0xff00, 0xff, 0x0 } },
+-      { "RGB565",   { 0x00f800, 0x07e0, 0x1f, 0x0 } },
++      { "ARGB8888", { 16, 8, 0, 24 }, { 8, 8, 8, 8 } },
++      { "RGB888",   { 16, 8, 0, -1 }, { 8, 8, 8, 0 } },
++      { "RGB565",   { 11, 5, 0, -1 }, { 5, 6, 5, 0 } },
+    };
+    unsigned int format_count[ARRAY_SIZE(visuals)] = { 0 };
+    unsigned int config_count = 0;
+@@ -201,7 +202,7 @@ surfaceless_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
+ 
+          dri2_conf = dri2_add_config(dpy, dri2_dpy->driver_configs[i],
+                config_count + 1, EGL_PBUFFER_BIT, NULL,
+-               visuals[j].rgba_masks);
++               visuals[j].rgba_shifts, visuals[j].rgba_sizes);
+ 
+          if (dri2_conf) {
+             if (dri2_conf->base.ConfigID == config_count + 1)
+diff --git a/src/egl/drivers/dri2/platform_wayland.c b/src/egl/drivers/dri2/platform_wayland.c
+index c3ca1b6f7bc..be6cc961601 100644
+--- a/src/egl/drivers/dri2/platform_wayland.c
++++ b/src/egl/drivers/dri2/platform_wayland.c
+@@ -68,49 +68,57 @@ static const struct dri2_wl_visual {
+     */
+    int alt_dri_image_format;
+    int bpp;
+-   unsigned int rgba_masks[4];
++   int rgba_shifts[4];
++   unsigned int rgba_sizes[4];
+ } dri2_wl_visuals[] = {
+    {
+      "XRGB2101010",
+      WL_DRM_FORMAT_XRGB2101010, WL_SHM_FORMAT_XRGB2101010,
+      __DRI_IMAGE_FORMAT_XRGB2101010, __DRI_IMAGE_FORMAT_XBGR2101010, 32,
+-     { 0x3ff00000, 0x000ffc00, 0x000003ff, 0x00000000 }
++     { 20, 10, 0, -1 },
++     { 10, 10, 10, 0 },
+    },
+    {
+      "ARGB2101010",
+      WL_DRM_FORMAT_ARGB2101010, WL_SHM_FORMAT_ARGB2101010,
+      __DRI_IMAGE_FORMAT_ARGB2101010, __DRI_IMAGE_FORMAT_ABGR2101010, 32,
+-     { 0x3ff00000, 0x000ffc00, 0x000003ff, 0xc0000000 }
++     { 20, 10, 0, 30 },
++     { 10, 10, 10, 2 },
+    },
+    {
+      "XBGR2101010",
+      WL_DRM_FORMAT_XBGR2101010, WL_SHM_FORMAT_XBGR2101010,
+      __DRI_IMAGE_FORMAT_XBGR2101010, __DRI_IMAGE_FORMAT_XRGB2101010, 32,
+-     { 0x000003ff, 0x000ffc00, 0x3ff00000, 0x00000000 }
++     { 0, 10, 20, -1 },
++     { 10, 10, 10, 0 },
+    },
+    {
+      "ABGR2101010",
+      WL_DRM_FORMAT_ABGR2101010, WL_SHM_FORMAT_ABGR2101010,
+      __DRI_IMAGE_FORMAT_ABGR2101010, __DRI_IMAGE_FORMAT_ARGB2101010, 32,
+-     { 0x000003ff, 0x000ffc00, 0x3ff00000, 0xc0000000 }
++     { 0, 10, 20, 30 },
++     { 10, 10, 10, 2 },
+    },
+    {
+      "XRGB8888",
+      WL_DRM_FORMAT_XRGB8888, WL_SHM_FORMAT_XRGB8888,
+      __DRI_IMAGE_FORMAT_XRGB8888, __DRI_IMAGE_FORMAT_NONE, 32,
+-     { 0x00ff0000, 0x0000ff00, 0x000000ff, 0x00000000 }
++     { 16, 8, 0, -1 },
++     { 8, 8, 8, 0 },
+    },
+    {
+      "ARGB8888",
+      WL_DRM_FORMAT_ARGB8888, WL_SHM_FORMAT_ARGB8888,
+      __DRI_IMAGE_FORMAT_ARGB8888, __DRI_IMAGE_FORMAT_NONE, 32,
+-     { 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000 }
++     { 16, 8, 0, 24 },
++     { 8, 8, 8, 8 },
+    },
+    {
+      "RGB565",
+      WL_DRM_FORMAT_RGB565, WL_SHM_FORMAT_RGB565,
+      __DRI_IMAGE_FORMAT_RGB565, __DRI_IMAGE_FORMAT_NONE, 16,
+-     { 0xf800, 0x07e0, 0x001f, 0x0000 }
++     { 11, 5, 0, -1 },
++     { 5, 6, 5, 0 },
+    },
+ };
+ 
+@@ -118,20 +126,22 @@ static int
+ dri2_wl_visual_idx_from_config(struct dri2_egl_display *dri2_dpy,
+                                const __DRIconfig *config)
+ {
+-   unsigned int red, green, blue, alpha;
++   int shifts[4];
++   unsigned int sizes[4];
+ 
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_RED_MASK, &red);
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_GREEN_MASK, &green);
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_BLUE_MASK, &blue);
+-   dri2_dpy->core->getConfigAttrib(config, __DRI_ATTRIB_ALPHA_MASK, &alpha);
++   dri2_get_shifts_and_sizes(dri2_dpy->core, config, shifts, sizes);
+ 
+    for (unsigned int i = 0; i < ARRAY_SIZE(dri2_wl_visuals); i++) {
+       const struct dri2_wl_visual *wl_visual = &dri2_wl_visuals[i];
+ 
+-      if (red == wl_visual->rgba_masks[0] &&
+-          green == wl_visual->rgba_masks[1] &&
+-          blue == wl_visual->rgba_masks[2] &&
+-          alpha == wl_visual->rgba_masks[3]) {
++      if (shifts[0] == wl_visual->rgba_shifts[0] &&
++          shifts[1] == wl_visual->rgba_shifts[1] &&
++          shifts[2] == wl_visual->rgba_shifts[2] &&
++          shifts[3] == wl_visual->rgba_shifts[3] &&
++          sizes[0] == wl_visual->rgba_sizes[0] &&
++          sizes[1] == wl_visual->rgba_sizes[1] &&
++          sizes[2] == wl_visual->rgba_sizes[2] &&
++          sizes[3] == wl_visual->rgba_sizes[3]) {
+          return i;
+       }
+    }
+@@ -1350,7 +1360,7 @@ dri2_wl_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
+             continue;
+ 
+          dri2_conf = dri2_add_config(disp, dri2_dpy->driver_configs[i],
+-               count + 1, EGL_WINDOW_BIT, NULL, dri2_wl_visuals[j].rgba_masks);
++               count + 1, EGL_WINDOW_BIT, NULL, dri2_wl_visuals[j].rgba_shifts, dri2_wl_visuals[j].rgba_sizes);
+          if (dri2_conf) {
+             if (dri2_conf->base.ConfigID == count + 1)
+                count++;
+@@ -1383,7 +1393,8 @@ dri2_wl_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
+           */
+          dri2_conf = dri2_add_config(disp, dri2_dpy->driver_configs[i],
+                                      count + 1, EGL_WINDOW_BIT, NULL,
+-                                     dri2_wl_visuals[c].rgba_masks);
++                                     dri2_wl_visuals[c].rgba_shifts,
++                                     dri2_wl_visuals[c].rgba_sizes);
+          if (dri2_conf) {
+             if (dri2_conf->base.ConfigID == count + 1)
+                count++;
+diff --git a/src/egl/drivers/dri2/platform_x11.c b/src/egl/drivers/dri2/platform_x11.c
+index 4684c9f0825..47c2a925122 100644
+--- a/src/egl/drivers/dri2/platform_x11.c
++++ b/src/egl/drivers/dri2/platform_x11.c
+@@ -42,6 +42,7 @@
+ #include <sys/stat.h>
+ #include "util/debug.h"
+ #include "util/macros.h"
++#include "util/bitscan.h"
+ 
+ #include "egl_dri2.h"
+ #include "egl_dri2_fallbacks.h"
+@@ -806,16 +807,23 @@ dri2_x11_add_configs_for_visuals(struct dri2_egl_display *dri2_dpy,
+                     EGL_NONE
+             };
+ 
+-            unsigned int rgba_masks[4] = {
+-               visuals[i].red_mask,
+-               visuals[i].green_mask,
+-               visuals[i].blue_mask,
++            int rgba_shifts[4] = {
++               ffs(visuals[i].red_mask) - 1,
++               ffs(visuals[i].green_mask) - 1,
++               ffs(visuals[i].blue_mask) - 1,
++               -1,
++            };
++
++            unsigned int rgba_sizes[4] = {
++               util_bitcount(visuals[i].red_mask),
++               util_bitcount(visuals[i].green_mask),
++               util_bitcount(visuals[i].blue_mask),
+                0,
+             };
+ 
+             dri2_conf = dri2_add_config(disp, config, config_count + 1,
+                                         surface_type, config_attrs,
+-                                        rgba_masks);
++                                        rgba_shifts, rgba_sizes);
+             if (dri2_conf)
+                if (dri2_conf->base.ConfigID == config_count + 1)
+                   config_count++;
+@@ -829,11 +837,14 @@ dri2_x11_add_configs_for_visuals(struct dri2_egl_display *dri2_dpy,
+              * wants... especially on drivers that only have 32-bit RGBA
+              * EGLConfigs! */
+             if (d.data->depth == 24 || d.data->depth == 30) {
+-               rgba_masks[3] =
+-                  ~(rgba_masks[0] | rgba_masks[1] | rgba_masks[2]);
++               unsigned int rgba_mask = ~(visuals[i].red_mask |
++                                          visuals[i].green_mask |
++                                          visuals[i].blue_mask);
++               rgba_shifts[3] = ffs(rgba_mask) - 1;
++               rgba_sizes[3] = util_bitcount(rgba_mask);
+                dri2_conf = dri2_add_config(disp, config, config_count + 1,
+                                            surface_type, config_attrs,
+-                                           rgba_masks);
++                                           rgba_shifts, rgba_sizes);
+                if (dri2_conf)
+                   if (dri2_conf->base.ConfigID == config_count + 1)
+                      config_count++;
+diff --git a/src/gbm/backends/dri/gbm_dri.c b/src/gbm/backends/dri/gbm_dri.c
+index abbb0b90174..b2143eb3fe6 100644
+--- a/src/gbm/backends/dri/gbm_dri.c
++++ b/src/gbm/backends/dri/gbm_dri.c
+@@ -486,51 +486,63 @@ dri_screen_create_sw(struct gbm_dri_device *dri)
+ static const struct gbm_dri_visual gbm_dri_visuals_table[] = {
+    {
+      GBM_FORMAT_R8, __DRI_IMAGE_FORMAT_R8,
+-     { 0x000000ff, 0x00000000, 0x00000000, 0x00000000 },
++     { 0, -1, -1, -1 },
++     { 8, 0, 0, 0 },
+    },
+    {
+      GBM_FORMAT_GR88, __DRI_IMAGE_FORMAT_GR88,
+-     { 0x000000ff, 0x0000ff00, 0x00000000, 0x00000000 },
++     { 0, 8, -1, -1 },
++     { 8, 8, 0, 0 },
+    },
+    {
+      GBM_FORMAT_ARGB1555, __DRI_IMAGE_FORMAT_ARGB1555,
+-     { 0x00007c00, 0x000003e0, 0x0000001f, 0x00008000 },
++     { 10, 5, 0, 11 },
++     { 5, 5, 5, 1 },
+    },
+    {
+      GBM_FORMAT_RGB565, __DRI_IMAGE_FORMAT_RGB565,
+-     { 0x0000f800, 0x000007e0, 0x0000001f, 0x00000000 },
++     { 11, 5, 0, -1 },
++     { 5, 6, 5, 0 },
+    },
+    {
+      GBM_FORMAT_XRGB8888, __DRI_IMAGE_FORMAT_XRGB8888,
+-     { 0x00ff0000, 0x0000ff00, 0x000000ff, 0x00000000 },
++     { 16, 8, 0, -1 },
++     { 8, 8, 8, 0 },
+    },
+    {
+      GBM_FORMAT_ARGB8888, __DRI_IMAGE_FORMAT_ARGB8888,
+-     { 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000 },
++     { 16, 8, 0, 24 },
++     { 8, 8, 8, 8 },
+    },
+    {
+      GBM_FORMAT_XBGR8888, __DRI_IMAGE_FORMAT_XBGR8888,
+-     { 0x000000ff, 0x0000ff00, 0x00ff0000, 0x00000000 },
++     { 0, 8, 16, -1 },
++     { 8, 8, 8, 0 },
+    },
+    {
+      GBM_FORMAT_ABGR8888, __DRI_IMAGE_FORMAT_ABGR8888,
+-     { 0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000 },
++     { 0, 8, 16, 24 },
++     { 8, 8, 8, 8 },
+    },
+    {
+      GBM_FORMAT_XRGB2101010, __DRI_IMAGE_FORMAT_XRGB2101010,
+-     { 0x3ff00000, 0x000ffc00, 0x000003ff, 0x00000000 },
++     { 20, 10, 0, -1 },
++     { 10, 10, 10, 0 },
+    },
+    {
+      GBM_FORMAT_ARGB2101010, __DRI_IMAGE_FORMAT_ARGB2101010,
+-     { 0x3ff00000, 0x000ffc00, 0x000003ff, 0xc0000000 },
++     { 20, 10, 0, 30 },
++     { 10, 10, 10, 2 },
+    },
+    {
+      GBM_FORMAT_XBGR2101010, __DRI_IMAGE_FORMAT_XBGR2101010,
+-     { 0x000003ff, 0x000ffc00, 0x3ff00000, 0x00000000 },
++     { 0, 10, 20, -1 },
++     { 10, 10, 10, 0 },
+    },
+    {
+      GBM_FORMAT_ABGR2101010, __DRI_IMAGE_FORMAT_ABGR2101010,
+-     { 0x000003ff, 0x000ffc00, 0x3ff00000, 0xc0000000 },
++     { 0, 10, 20, 30 },
++     { 10, 10, 10, 2 },
+    },
+ };
+ 
+diff --git a/src/gbm/backends/dri/gbm_driint.h b/src/gbm/backends/dri/gbm_driint.h
+index 8497be3e8f6..75299bdb846 100644
+--- a/src/gbm/backends/dri/gbm_driint.h
++++ b/src/gbm/backends/dri/gbm_driint.h
+@@ -44,11 +44,17 @@ struct gbm_dri_visual {
+    uint32_t gbm_format;
+    int dri_image_format;
+    struct {
+-      uint32_t red;
+-      uint32_t green;
+-      uint32_t blue;
+-      uint32_t alpha;
+-   } rgba_masks;
++      int red;
++      int green;
++      int blue;
++      int alpha;
++   } rgba_shifts;
++   struct {
++      unsigned int red;
++      unsigned int green;
++      unsigned int blue;
++      unsigned int alpha;
++   } rgba_sizes;
+ };
+ 
+ struct gbm_dri_device {
+-- 
+2.21.0
+

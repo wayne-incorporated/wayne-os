@@ -1,0 +1,31 @@
+From 6738434de3e4dacedeb330a5cf878e0a196be864 Mon Sep 17 00:00:00 2001
+From: Bob Haarman <rust@inglorion.net>
+Date: Fri, 10 Jun 2022 11:53:25 -0700
+Subject: [PATCH] Make -Cpasses= only apply to pre-link optimization
+
+This change causes passes specified in -Cpasses= to be applied
+only during pre-link optimization, not during LTO. This avoids
+such passes running multiple times, which they may not be
+designed for.
+
+Fixes https://github.com/rust-lang/rust/issues/97713
+---
+ compiler/rustc_codegen_llvm/src/back/write.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/compiler/rustc_codegen_llvm/src/back/write.rs b/compiler/rustc_codegen_llvm/src/back/write.rs
+index 99e30531c22..f456408ca3a 100644
+--- a/compiler/rustc_codegen_llvm/src/back/write.rs
++++ b/compiler/rustc_codegen_llvm/src/back/write.rs
+@@ -467,7 +467,7 @@ pub(crate) unsafe fn optimize_with_new_llvm_pass_manager(
+     let llvm_selfprofiler =
+         llvm_profiler.as_mut().map(|s| s as *mut _ as *mut c_void).unwrap_or(std::ptr::null_mut());
+ 
+-    let extra_passes = config.passes.join(",");
++    let extra_passes = if !is_lto { config.passes.join(",") } else { "".to_string() };
+ 
+     let llvm_plugins = config.llvm_plugins.join(",");
+ 
+-- 
+2.36.1.476.g0c4daa206d-goog
+

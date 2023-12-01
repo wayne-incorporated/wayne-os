@@ -1,0 +1,47 @@
+From ccd659ec984c66f6f5e141b557ca612db424f388 Mon Sep 17 00:00:00 2001
+From: Michael Benfield <mbenfield@google.com>
+Date: Thu, 7 Jul 2022 19:49:25 +0000
+Subject: [PATCH] add-cros-targets
+
+Because of b/187783596, armv7 target triple's arch and ABI parts
+differ between chromeos and rust. Until that bug is fixed, we have to
+add our own triple for armv7.
+
+Additionally, the Rust compiler does not implement a fallback for unknown
+target triple vendors (e.g. "cros" or "pc") to the "unknown" variant, so we
+add copies of the relevant cros targets here as well.
+
+---
+ compiler/rustc_target/src/spec/mod.rs | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/compiler/rustc_target/src/spec/mod.rs b/compiler/rustc_target/src/spec/mod.rs
+index bd5b712c143..b5e2c403cc0 100644
+--- a/compiler/rustc_target/src/spec/mod.rs
++++ b/compiler/rustc_target/src/spec/mod.rs
+@@ -810,6 +810,8 @@ fn $module() {
+ supported_targets! {
+     ("x86_64-unknown-linux-gnu", x86_64_unknown_linux_gnu),
+     ("x86_64-unknown-linux-gnux32", x86_64_unknown_linux_gnux32),
++    ("x86_64-pc-linux-gnu", x86_64_pc_linux_gnu),
++    ("x86_64-cros-linux-gnu", x86_64_cros_linux_gnu),
+     ("i686-unknown-linux-gnu", i686_unknown_linux_gnu),
+     ("i586-unknown-linux-gnu", i586_unknown_linux_gnu),
+     ("m68k-unknown-linux-gnu", m68k_unknown_linux_gnu),
+@@ -842,11 +844,13 @@ fn $module() {
+     ("armv5te-unknown-linux-uclibceabi", armv5te_unknown_linux_uclibceabi),
+     ("armv7-unknown-linux-gnueabi", armv7_unknown_linux_gnueabi),
+     ("armv7-unknown-linux-gnueabihf", armv7_unknown_linux_gnueabihf),
++    ("armv7a-cros-linux-gnueabihf", armv7a_cros_linux_gnueabihf),
+     ("thumbv7neon-unknown-linux-gnueabihf", thumbv7neon_unknown_linux_gnueabihf),
+     ("thumbv7neon-unknown-linux-musleabihf", thumbv7neon_unknown_linux_musleabihf),
+     ("armv7-unknown-linux-musleabi", armv7_unknown_linux_musleabi),
+     ("armv7-unknown-linux-musleabihf", armv7_unknown_linux_musleabihf),
+     ("aarch64-unknown-linux-gnu", aarch64_unknown_linux_gnu),
++    ("aarch64-cros-linux-gnu", aarch64_cros_linux_gnu),
+     ("aarch64-unknown-linux-musl", aarch64_unknown_linux_musl),
+     ("x86_64-unknown-linux-musl", x86_64_unknown_linux_musl),
+     ("i686-unknown-linux-musl", i686_unknown_linux_musl),
+-- 
+2.37.0.rc0.161.g10f37bed90-goog
+

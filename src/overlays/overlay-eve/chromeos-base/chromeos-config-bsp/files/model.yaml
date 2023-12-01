@@ -1,0 +1,60 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This board only supports a single config, defined below, as it is a
+# migrated pre-unibuild device.
+device-config: &device_config
+  brand-code: ZZAF
+  firmware:
+    build-targets:
+      coreboot: eve
+      depthcharge: eve
+      libpayload: eve
+      ec: eve
+    image-name: eve
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    psu-type: battery
+  identity: &identity_common
+    platform-name: Poppy
+    frid: "Google_Eve"
+  name: eve
+  power:
+    als-smoothing-constant: '0.2'
+    battery-stabilized-after-startup-ms: '25000'
+    charging-ports: |-
+      CROS_USB_PD_CHARGER0 LEFT
+      CROS_USB_PD_CHARGER1 RIGHT
+    detect-hover: '1'
+    internal-backlight-als-steps: |-
+      36.14 36.14 -1 90
+      47.62 47.62 40 250
+      60.57 60.57 180 360
+      71.65 71.65 250 500
+      85.83 85.83 350 1700
+      93.27 93.27 1100 6750
+      100.0 100.0 5250 -1
+    keyboard-backlight-als-steps: |-
+      60.0 -1 30
+      0.0 5 -1
+    low-battery-shutdown-percent: '3.0'
+    set-wifi-transmit-power-for-tablet-mode: '1'
+    suspend-to-idle: '0'
+    wake-on-dp: '1'
+  ui:
+    side-volume-button:
+      region: keyboard
+      side: left
+
+chromeos:
+  devices:
+    - skus:
+        - config:
+            <<: *device_config
+            identity:
+              <<: *identity_common
+              customization-id: GOOGLE-EVE
+        # Config provided without a customization id as well to match
+        # unprovisioned development devices.
+        - config: *device_config

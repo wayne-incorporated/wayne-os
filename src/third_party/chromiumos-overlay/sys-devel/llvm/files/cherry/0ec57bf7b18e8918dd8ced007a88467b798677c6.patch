@@ -1,0 +1,121 @@
+From 0ec57bf7b18e8918dd8ced007a88467b798677c6 Mon Sep 17 00:00:00 2001
+From: Jordan Rupprecht <rupprecht@google.com>
+Date: Wed, 10 May 2023 15:43:37 -0700
+Subject: [PATCH] [libc++] Consistently enable __CORRECT_ISO_CPP_WCHAR_H_PROTO
+ in mbstate.
+
+In libc++'s `wchar.h`, before we forward to the system `wchar.h`, we set `__CORRECT_ISO_CPP_WCHAR_H_PROTO` to ensure it defines the correct signature (e.g. `extern "C++" const wchar_t *wmemchr` and not `extern wchar_t *wmemchr`). After D148542, there are cases where we include the system `wchar.h` from within `__mbstate_t.h` without setting that, and so we get a function type mismatch if we transitively include `wchar.h` through multiple headers in a modules-enabled build. Consistently setting it here resolves those build errors.
+
+Alternative 1: we could put this in `__config` instead. I chose to put it here for a more limited scope.
+
+Alternative 2: we could patch `wchar.h` itself to work correctly and remove references `__CORRECT_ISO_CPP_WCHAR_H_PROTO` from libc++ entirely. It does already set it, but with an additional condition that it is being built by GCC >= 4.4. Clang does pretend to be GCC via `__GNUC__` etc. which can be controlled via `-fgnuc-version` command line flags, but that might have other consequences.
+
+Reviewed By: ldionne, #libc, MaskRay
+
+Differential Revision: https://reviews.llvm.org/D150015
+---
+ libcxx/include/__mbstate_t.h                  |  8 ++++++
+ libcxx/include/wchar.h                        |  2 ++
+ .../cwchar_include_order1.compile.verify.cpp  | 25 +++++++++++++++++++
+ .../cwchar_include_order2.compile.verify.cpp  | 25 +++++++++++++++++++
+ 4 files changed, 60 insertions(+)
+ create mode 100644 libcxx/test/std/strings/c.strings/cwchar_include_order1.compile.verify.cpp
+ create mode 100644 libcxx/test/std/strings/c.strings/cwchar_include_order2.compile.verify.cpp
+
+diff --git a/libcxx/include/__mbstate_t.h b/libcxx/include/__mbstate_t.h
+index d793787fa0cd..000af71119f4 100644
+--- a/libcxx/include/__mbstate_t.h
++++ b/libcxx/include/__mbstate_t.h
+@@ -27,6 +27,14 @@
+ // This does not define std::mbstate_t -- this only brings in the declaration
+ // in the global namespace.
+ 
++// We define this here to support older versions of glibc <wchar.h> that do
++// not define this for clang. This is also set in libc++'s <wchar.h> header,
++// and we need to do so here too to avoid a different function signature given
++// a different include order.
++#ifdef __cplusplus
++#  define __CORRECT_ISO_CPP_WCHAR_H_PROTO
++#endif
++
+ #if __has_include(<bits/types/mbstate_t.h>)
+ #   include <bits/types/mbstate_t.h> // works on most Unixes
+ #elif __has_include(<sys/_types/_mbstate_t.h>)
+diff --git a/libcxx/include/wchar.h b/libcxx/include/wchar.h
+index db624cea2bee..eeccf3e937ff 100644
+--- a/libcxx/include/wchar.h
++++ b/libcxx/include/wchar.h
+@@ -116,6 +116,8 @@ size_t wcsrtombs(char* restrict dst, const wchar_t** restrict src, size_t len,
+ #  pragma GCC system_header
+ #endif
+ 
++// We define this here to support older versions of glibc <wchar.h> that do
++// not define this for clang.
+ #ifdef __cplusplus
+ #define __CORRECT_ISO_CPP_WCHAR_H_PROTO
+ #endif
+diff --git a/libcxx/test/std/strings/c.strings/cwchar_include_order1.compile.verify.cpp b/libcxx/test/std/strings/c.strings/cwchar_include_order1.compile.verify.cpp
+new file mode 100644
+index 000000000000..4b5460a54859
+--- /dev/null
++++ b/libcxx/test/std/strings/c.strings/cwchar_include_order1.compile.verify.cpp
+@@ -0,0 +1,25 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// <cwchar>
++
++// XFAIL: no-wide-characters
++
++// Tests that include ordering does not affect the definition of wcsstr.
++// See: https://llvm.org/PR62638
++
++// clang-format off
++#include <cwchar>
++#include <iosfwd>
++// clang-format on
++
++void func() {
++  wchar_t* v1;
++  const wchar_t* cv2 = L"/";
++  v1 = wcsstr(cv2, L"/"); // expected-error {{assigning to 'wchar_t *' from 'const wchar_t *' discards qualifiers}}
++}
+diff --git a/libcxx/test/std/strings/c.strings/cwchar_include_order2.compile.verify.cpp b/libcxx/test/std/strings/c.strings/cwchar_include_order2.compile.verify.cpp
+new file mode 100644
+index 000000000000..0222ac018d68
+--- /dev/null
++++ b/libcxx/test/std/strings/c.strings/cwchar_include_order2.compile.verify.cpp
+@@ -0,0 +1,25 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// <cwchar>
++
++// XFAIL: no-wide-characters
++
++// Tests that include ordering does not affect the definition of wcsstr.
++// See: https://llvm.org/PR62638
++
++// clang-format off
++#include <iosfwd>
++#include <cwchar>
++// clang-format on
++
++void func() {
++  wchar_t* v1;
++  const wchar_t* cv2 = L"/";
++  v1 = wcsstr(cv2, L"/"); // expected-error {{assigning to 'wchar_t *' from 'const wchar_t *' discards qualifiers}}
++}
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

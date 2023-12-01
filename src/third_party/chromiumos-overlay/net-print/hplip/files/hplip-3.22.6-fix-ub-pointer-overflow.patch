@@ -1,0 +1,18 @@
+From: Nathan Muggli <nmuggli@google.com>
+
+outputPtr2 is only used/initialized if hifipe is true.
+
+--- a/prnt/hpcups/Halftoner.cpp
++++ b/prnt/hpcups/Halftoner.cpp
+@@ -696,7 +696,10 @@
+         rasterByte2 = 0;
+         inputPtr  += ( numLoop-1 );
+         outputPtr1 += ( numLoop/8 - 1 );
+-        outputPtr2 += ( numLoop/8 - 1 );
++        if (hifipe)
++        {
++            outputPtr2 += ( numLoop/8 - 1 );
++        }
+         diffusionErrorPtr += ( numLoop-1 );
+ 
+         tmpShortStore = *diffusionErrorPtr;

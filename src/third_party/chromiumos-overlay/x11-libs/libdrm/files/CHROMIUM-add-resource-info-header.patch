@@ -1,0 +1,32 @@
+From 4572aeaecc9d859e051e6690ed3cda1b401678ac Mon Sep 17 00:00:00 2001
+From: Gurchetan Singh <gurchetansingh@google.com>
+Date: Thu, 20 Jun 2019 10:48:37 -0700
+Subject: [PATCH] CHROMIUM: add resource info header
+
+Change-Id: Ib39372a1784042d4efda522c63cb7e1c8e679ed8
+---
+ include/drm/virtgpu_drm.h | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/include/drm/virtgpu_drm.h b/include/drm/virtgpu_drm.h
+index f06a789f..a92d764d 100644
+--- a/include/drm/virtgpu_drm.h
++++ b/include/drm/virtgpu_drm.h
+@@ -100,7 +100,13 @@ struct drm_virtgpu_resource_info {
+ 	__u32 bo_handle;
+ 	__u32 res_handle;
+ 	__u32 size;
+-	__u32 stride;
++	union {
++		__u32 stride;
++		__u32 strides[4]; /* strides[0] is accessible with stride. */
++	};
++	__u32 num_planes;
++	__u32 offsets[4];
++	__u64 format_modifier;
+ };
+ 
+ struct drm_virtgpu_3d_box {
+-- 
+2.31.0
+

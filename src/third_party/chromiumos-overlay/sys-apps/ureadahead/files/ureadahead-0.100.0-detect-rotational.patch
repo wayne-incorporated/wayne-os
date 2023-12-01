@@ -1,0 +1,23 @@
+diff --git a/src/trace.c b/src/trace.c
+index bb4d696..16e7b53 100644
+--- a/src/trace.c
++++ b/src/trace.c
+@@ -665,8 +665,16 @@ trace_file (const void *parent,
+ 	 * obviously won't work for virtual devices and the like, so
+ 	 * default to TRUE for now.
+ 	 */
+-	filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:0/queue/rotational",
+-					  major (dev)));
++	filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
++					  major (dev), minor (dev)));
++	if (access (filename, R_OK) < 0) {
++		/* For devices managed by the scsi stack, the minor device number has to be
++		 * masked to find the queue/rotational file.
++		 */
++		nih_free (filename);
++		filename = NIH_MUST (nih_sprintf (NULL, "/sys/dev/block/%d:%d/queue/rotational",
++						  major (dev), minor (dev) & 0xffff0));
++	}
+ 
+ 	if (get_value (AT_FDCWD, filename, &rotational) < 0) {
+ 		NihError *err;

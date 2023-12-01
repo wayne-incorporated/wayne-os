@@ -79,7 +79,7 @@
         "num": 5,
         "label": "ROOT-B",
         "type": "rootfs",
-        "size": "4096 MiB"
+        "size": "4 GiB"
       },
       {
         # Slot A rootfs. Rootfs + extras must fit.
@@ -102,9 +102,10 @@
         "fs_format": "ext2",
         "fs_options": {
           "squashfs": "-noI -no-exports -comp lzo -Xalgorithm lzo1x_999 -Xcompression-level 9",
+          "ext2": "-i 65536",
           "btrfs": "skinny-metadata"
         },
-        "size": "4096 MiB",
+        "size": "4 GiB",
         "fs_size": "2300 MiB",
         "uuid": "clear"
       },
@@ -134,16 +135,40 @@
         "size": "2400 MiB"
       }
     ],
+    # CAN apply updates when running from USB.
+    "usb-updatable": [
+      {
+        # The partition size matches base, so it's installable.
+        "num": 5,
+        "size": "2400 MiB"
+      },
+      {
+        # The partition size matches base, so it's installable.
+        "num": 3,
+        "size": "2400 MiB"
+      },
+      {
+        "num": 1,
+        "size": "4 GiB"
+      }
+    ],
     # Used for factory install images.
     "factory_install": [
       {
+        "num": 4,
+        "size": "1"
+      },
+      {
         "num": 5,
-        "size": "2 MiB"
+        "size": "1"
       },
       {
         "num": 3,
         "size": "420 MiB",
-        "fs_size": "400 MiB"
+        "fs_size": "400 MiB",
+        "fs_options": {
+          "ext2": "-i 32768"
+        }
       },
       {
         "num": 1,
@@ -180,40 +205,6 @@
         "size": "2 MiB"
       }
     ],
-    # Larger rootfs, suitable for development with symbols, etc.
-    # Cannot apply updates when running from USB (no slot B).
-    "2gb-rootfs": [
-      {
-        # Will be grown to size from base on install.
-        "num": 5,
-        "size": "2 MiB"
-      },
-      {
-        # Will be shrunk to size from base on install.
-        "num": 3,
-        "size": "2048 MiB",
-        "fs_size": "2000 MiB"
-      }
-    ],
-    # Larger rootfs, suitable for development with symbols, etc.
-    # CAN apply updates when running from USB.
-    "2gb-rootfs-updatable": [
-      {
-        # The partition size matches base, so it's installable.
-        "num": 5,
-        "size": "2048 MiB"
-      },
-      {
-        # The partition size matches base, so it's installable.
-        "num": 3,
-        "size": "2048 MiB",
-        "fs_size": "2000 MiB"
-      },
-      {
-        "num": 1,
-        "size": "4 GiB"
-      }
-    ],
     # Very large rootfs, suitable for development with symbols,
     # etc. Cannot apply updates when running from USB (no slot B)
     "4gb-rootfs": [
@@ -225,7 +216,7 @@
         # This partition is larger than the base partition, so the
         # installer will corrupt the disk during installation.
         "num": 3,
-        "size": "4096 MiB",
+        "size": "4 GiB",
         "fs_size": "4000 MiB"
       }
     ],
@@ -238,7 +229,7 @@
       },
       {
         "num": 3,
-        "size": "16384 MiB",
+        "size": "16 GiB",
         "fs_size": "16000 MiB"
       }
     ]

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "login_manager/login_metrics.h"
 
-#include <base/macros.h>
 #include <gmock/gmock.h>
 
 namespace login_manager {
@@ -21,12 +20,6 @@ class MockMetrics : public LoginMetrics {
 
   ~MockMetrics() override;
 
-  MOCK_METHOD(void, SendConsumerAllowsNewUsers, (bool), (override));
-  MOCK_METHOD(void, SendLoginUserType, (bool, bool, bool), (override));
-  MOCK_METHOD(bool,
-              SendPolicyFilesStatus,
-              (const PolicyFilesStatus&),
-              (override));
   MOCK_METHOD(void,
               SendStateKeyGenerationStatus,
               (StateKeyGenerationStatus),
@@ -35,7 +28,7 @@ class MockMetrics : public LoginMetrics {
   MOCK_METHOD(bool, HasRecordedChromeExec, (), (override));
   MOCK_METHOD(void, SendSessionExitType, (SessionExitType), (override));
   MOCK_METHOD(void, SendBrowserShutdownTime, (base::TimeDelta), (override));
-  MOCK_METHOD(void, SendArcBugReportBackupTime, (base::TimeDelta), (override));
+  MOCK_METHOD(void, SendLivenessPingResult, (bool success), (override));
 };
 
 }  // namespace login_manager

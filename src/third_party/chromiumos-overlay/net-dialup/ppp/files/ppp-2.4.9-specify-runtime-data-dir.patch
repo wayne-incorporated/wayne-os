@@ -1,0 +1,130 @@
+From d180765a74822f687b18546b1d8d9c30fe944cc7 Mon Sep 17 00:00:00 2001
+From: Micah Morton <mortonm@chromium.org>
+Date: Mon, 23 Apr 2018 06:37:24 -0700
+Subject: [PATCH] Allow setting runtime data dir through preprocessor macro.
+
+ppp is hardcoded to use /var/run for runtime data directory. Enable
+specification of this directory through a preprocessor macro that can be
+set by compiler args.
+---
+ pppd/main.c                   |  7 +++++--
+ pppd/pathnames.h              |  8 ++++++--
+ pppd/plugins/radius/radattr.c | 14 +++++++++-----
+ 3 files changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/pppd/main.c b/pppd/main.c
+index fc9b322..6352666 100644
+--- a/pppd/main.c
++++ b/pppd/main.c
+@@ -118,6 +118,9 @@
+ #include "atcp.h"
+ #endif
+ 
++#ifndef RUNTIME_DATA_DIR
++#define RUNTIME_DATA_DIR "/var/run/"
++#endif
+ 
+ /* interface vars */
+ char ifname[MAXIFNAMELEN];	/* Interface name */
+@@ -807,7 +810,7 @@ create_pidfile(int pid)
+     FILE *pidfile;
+ 
+     slprintf(pidfilename, sizeof(pidfilename), "%s%s.pid",
+-	     _PATH_VARRUN, ifname);
++	     RUNTIME_DATA_DIR, ifname);
+     if ((pidfile = fopen(pidfilename, "w")) != NULL) {
+ 	fprintf(pidfile, "%d\n", pid);
+ 	(void) fclose(pidfile);
+@@ -826,7 +829,7 @@ create_linkpidfile(int pid)
+ 	return;
+     script_setenv("LINKNAME", linkname, 1);
+     slprintf(linkpidfile, sizeof(linkpidfile), "%sppp-%s.pid",
+-	     _PATH_VARRUN, linkname);
++	     RUNTIME_DATA_DIR, linkname);
+     if ((pidfile = fopen(linkpidfile, "w")) != NULL) {
+ 	fprintf(pidfile, "%d\n", pid);
+ 	if (ifname[0])
+diff --git a/pppd/pathnames.h b/pppd/pathnames.h
+index 524d608..57de2ea 100644
+--- a/pppd/pathnames.h
++++ b/pppd/pathnames.h
+@@ -50,11 +50,15 @@
+ #define _PATH_IPXDOWN	 _ROOT_PATH "/etc/ppp/ipx-down"
+ #endif /* IPX_CHANGE */
+ 
++#ifndef RUNTIME_DATA_DIR
++#define RUNTIME_DATA_DIR "/var/run/"
++#endif
++
+ #ifdef __STDC__
+-#define _PATH_PPPDB	_ROOT_PATH _PATH_VARRUN "pppd2.tdb"
++#define _PATH_PPPDB	_ROOT_PATH RUNTIME_DATA_DIR "pppd2.tdb"
+ #else /* __STDC__ */
+ #ifdef HAVE_PATHS_H
+-#define _PATH_PPPDB	"/var/run/pppd2.tdb"
++#define _PATH_PPPDB	RUNTIME_DATA_DIR "pppd2.tdb"
+ #else
+ #define _PATH_PPPDB	"/etc/ppp/pppd2.tdb"
+ #endif
+diff --git a/pppd/plugins/radius/radattr.c b/pppd/plugins/radius/radattr.c
+index 1fe7daa..ee2c738 100644
+--- a/pppd/plugins/radius/radattr.c
++++ b/pppd/plugins/radius/radattr.c
+@@ -4,7 +4,7 @@
+ *
+ * A plugin which is stacked on top of radius.so.  This plugin writes
+ * all RADIUS attributes from the server's authentication confirmation
+-* into /var/run/radattr.pppN.  These attributes are available for
++* into /var/run/ipsec/radattr.pppN.  These attributes are available for
+ * consumption by /etc/ppp/ip-{up,down} scripts.
+ *
+ * Copyright (C) 2002 Roaring Penguin Software Inc.
+@@ -21,6 +21,10 @@ static char const RCSID[] =
+ #include "radiusclient.h"
+ #include <stdio.h>
+ 
++#ifndef RUNTIME_DATA_DIR
++#define RUNTIME_DATA_DIR "/var/run/"
++#endif
++
+ extern void (*radius_attributes_hook)(VALUE_PAIR *);
+ static void print_attributes(VALUE_PAIR *);
+ static void cleanup(void *opaque, int arg);
+@@ -60,7 +64,7 @@ plugin_init(void)
+ * %RETURNS:
+ *  Nothing
+ * %DESCRIPTION:
+-*  Prints the attribute pairs to /var/run/radattr.pppN.  Each line of the
++*  Prints the attribute pairs to /var/run/ipsec/radattr.pppN.  Each line of the
+ *  file contains "name value" pairs.
+ ***********************************************************************/
+ static void
+@@ -72,7 +76,7 @@ print_attributes(VALUE_PAIR *vp)
+     char value[2048];
+     int cnt = 0;
+ 
+-    slprintf(fname, sizeof(fname), "/var/run/radattr.%s", ifname);
++    slprintf(fname, sizeof(fname), RUNTIME_DATA_DIR "radattr.%s", ifname);
+     fp = fopen(fname, "w");
+     if (!fp) {
+ 	warn("radattr plugin: Could not open %s for writing: %m", fname);
+@@ -98,14 +102,14 @@ print_attributes(VALUE_PAIR *vp)
+ * %RETURNS:
+ *  Nothing
+ * %DESCRIPTION:
+-*  Deletes /var/run/radattr.pppN
++*  Deletes /var/run/ipsec/radattr.pppN
+ ***********************************************************************/
+ static void
+ cleanup(void *opaque, int arg)
+ {
+     char fname[512];
+ 
+-    slprintf(fname, sizeof(fname), "/var/run/radattr.%s", ifname);
++    slprintf(fname, sizeof(fname), RUNTIME_DATA_DIR "radattr.%s", ifname);
+     (void) remove(fname);
+     dbglog("RADATTR plugin removed file %s.", fname);
+ }
+-- 
+2.30.1
+

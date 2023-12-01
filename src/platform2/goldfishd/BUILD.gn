@@ -1,0 +1,61 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":goldfishd",
+    ":install_init",
+    ":libgoldfishd",
+  ]
+  if (use.test) {
+    deps += [ ":goldfishd_test_runner" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+static_library("libgoldfishd") {
+  sources = [ "goldfish_library.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("goldfishd") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":libgoldfishd" ]
+}
+
+install_config("install_init") {
+  sources = [ "init/goldfishd.conf" ]
+  install_path = "/etc/init"
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+  executable("goldfishd_test_runner") {
+    sources = [ "goldfish_library_test.cc" ]
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    run_test = true
+    deps = [
+      ":libgoldfishd",
+      "//common-mk/testrunner",
+    ]
+  }
+}

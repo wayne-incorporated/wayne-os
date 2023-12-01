@@ -1,0 +1,101 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_dbus_config",
+    ":install_init",
+    ":install_minijail_conf",
+    ":install_policy",
+    ":pciguard",
+  ]
+  if (use.test) {
+    deps += [ ":pciguard_testrunner" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libsession_manager-client",
+    "libudev",
+  ]
+}
+
+executable("pciguard") {
+  install_path = "sbin"
+  sources = [
+    "daemon.cc",
+    "main.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":pciguard_common" ]
+}
+
+static_library("pciguard_common") {
+  sources = [
+    "authorizer.cc",
+    "event_handler.cc",
+    "session_monitor.cc",
+    "sysfs_utils.cc",
+    "udev_monitor.cc",
+  ]
+  all_dependent_configs = [ ":target_defaults" ]
+  libs = [ "pthread" ]
+}
+
+if (use.test) {
+  pkg_config("test_defaults") {
+    pkg_deps = [
+      "libbrillo-test",
+      "libchrome-test",
+      "libudev",
+    ]
+  }
+
+  executable("pciguard_testrunner") {
+    run_test = true
+    sources = [
+      "event_handler_test.cc",
+      "sysfs_utils_test.cc",
+    ]
+    configs += [
+      ":test_defaults",
+      "//common-mk:test",
+    ]
+    deps = [
+      ":pciguard_common",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}
+
+install_config("install_init") {
+  sources = [
+    "init/pciguard-watchdog.conf",
+    "init/pciguard.conf",
+  ]
+  install_path = "/etc/init"
+}
+
+install_config("install_policy") {
+  _arch = getenv("ARCH")
+  sources = [ "seccomp/pciguard-seccomp-${_arch}.policy" ]
+  install_path = "/usr/share/policy"
+
+  outputs = [ "pciguard-seccomp.policy" ]
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "minijail/pciguard.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+install_config("install_dbus_config") {
+  sources = [ "dbus/pciguard-dbus.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}

@@ -1,0 +1,226 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":container-protos",
+    ":dbus_code_generator",
+    ":install_config_cros_startup",
+    ":install_config_dbus_system-services",
+    ":install_config_dbus_systemd",
+    ":install_config_init",
+    ":install_seccomp_policy",
+    ":kerberosd",
+    ":libkerberos",
+  ]
+  if (use.test) {
+    deps += [ ":kerberos_test" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":config_parser_fuzzer" ]
+  }
+}
+
+config("target_defaults") {
+  cflags = [
+    "-Wshadow",
+    "-Wextra",
+
+    # -Wextra enables unused parameter warnings, but there are unused parameters.
+    "-Wno-unused-parameter",
+  ]
+}
+
+# D-Bus code generator.
+generate_dbus_adaptors("dbus_code_generator") {
+  sources = [ "dbus_bindings/org.chromium.Kerberos.xml" ]
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/kerberos"
+}
+
+# Container protos.
+proto_library("container-protos") {
+  proto_in_dir = "proto"
+  proto_out_dir = "include/bindings"
+  sources = [ "${proto_in_dir}/kerberos_containers.proto" ]
+  configs = [ ":target_defaults" ]
+}
+
+pkg_config("libkerberos_config") {
+  pkg_deps = [
+    "dbus-1",
+    "libbrillo",
+    "libchrome",
+    "libminijail",
+    "libpasswordprovider",
+    "libsession_manager-client",
+    "mit-krb5",
+  ]
+}
+
+# Kerberos library (shared between executables and tests).
+static_library("libkerberos") {
+  sources = [
+    "account_manager.cc",
+    "config_parser.cc",
+    "error_strings.cc",
+    "fake_krb5_interface.cc",
+    "kerberos_adaptor.cc",
+    "kerberos_daemon.cc",
+    "kerberos_metrics.cc",
+    "krb5_interface_impl.cc",
+    "krb5_jail_wrapper.cc",
+    "platform_helper.cc",
+    "tgt_renewal_scheduler.cc",
+  ]
+  configs += [
+    ":libkerberos_config",
+    ":target_defaults",
+  ]
+  deps = [
+    ":container-protos",
+    ":dbus_code_generator",
+  ]
+}
+
+pkg_config("kerberosd_config") {
+  # NOSORT
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "libminijail",
+
+    # system_api depends on protobuf (or protobuf-lite). It must
+    # appear before protobuf or the linker flags won't be in the right
+    # order.
+    "system_api",
+  ]
+  if (use.fuzzer) {
+    pkg_deps += [ "protobuf" ]
+  } else {
+    pkg_deps += [ "protobuf-lite" ]
+  }
+}
+
+# Kerberos daemon executable.
+executable("kerberosd") {
+  sources = [ "kerberosd_main.cc" ]
+  install_path = "sbin"
+  configs += [
+    ":kerberosd_config",
+    ":target_defaults",
+  ]
+  deps = [ ":libkerberos" ]
+}
+
+install_config("install_config_dbus_systemd") {
+  sources = [ "dbus/org.chromium.Kerberos.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_config_dbus_system-services") {
+  sources = [ "dbus/org.chromium.Kerberos.service" ]
+  install_path = "/usr/share/dbus-1/system-services"
+}
+
+install_config("install_config_init") {
+  sources = [ "init/kerberosd.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_seccomp_policy") {
+  arch = getenv("ARCH")
+  sources = [ "seccomp/kerberosd-seccomp-$arch.policy" ]
+  outputs = [ "kerberosd-seccomp.policy" ]
+  install_path = "/usr/share/policy"
+}
+
+install_config("install_config_cros_startup") {
+  sources = [ "setuid_restrictions/kerberosd_uid_allowlist.txt" ]
+  install_path = "/usr/share/cros/startup/process_management_policies"
+}
+
+# Unit tests.
+if (use.test) {
+  pkg_config("kerberos_test_config") {
+    # NOSORT
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+      "libchrome-test",
+      "libmetrics",
+      "libminijail",
+
+      # system_api depends on protobuf (or protobuf-lite). It must
+      # appear before protobuf or the linker flags won't be in the right
+      # order.
+      "system_api",
+    ]
+    if (use.fuzzer) {
+      pkg_deps += [ "protobuf" ]
+    } else {
+      pkg_deps += [ "protobuf-lite" ]
+    }
+  }
+
+  executable("kerberos_test") {
+    sources = [
+      "account_manager_test.cc",
+      "config_parser_test.cc",
+      "kerberos_adaptor_test.cc",
+      "kerberos_metrics_test.cc",
+      "krb5_interface_impl_test.cc",
+      "krb5_jail_wrapper_test.cc",
+      "tgt_renewal_scheduler_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":kerberos_test_config",
+      ":target_defaults",
+    ]
+    defines = [ "UNIT_TEST" ]
+    deps = [
+      ":libkerberos",
+      "//common-mk/testrunner",
+    ]
+    run_test = true
+  }
+}
+
+# Fuzzers.
+if (use.fuzzer) {
+  pkg_config("fuzzer_config") {
+    # NOSORT
+    pkg_deps = [
+      "libbrillo",
+      "libchrome",
+      "libmetrics",
+      "libminijail",
+
+      # system_api depends on protobuf (or protobuf-lite). It must
+      # appear before protobuf or the linker flags won't be in the right
+      # order.
+      "system_api",
+      "protobuf",
+    ]
+  }
+
+  #pkg_config("libchrome_test_config") {
+  #  pkg_deps = [ "libchrome-test" ]
+  #}
+  executable("config_parser_fuzzer") {
+    sources = [ "config_parser_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":fuzzer_config",
+      ":target_defaults",
+    ]
+    deps = [ ":libkerberos" ]
+  }
+}

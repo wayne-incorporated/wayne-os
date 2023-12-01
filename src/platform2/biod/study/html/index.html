@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Fingerprint User study</title>
+  <link rel="stylesheet" href="static/bootstrap-3.3.7.min.css">
+  <style>
+    h1 {
+      font-size: 25px;
+      margin-top:20px;
+    }
+
+    button {
+      background-color:#939393;
+      text-align: center;
+      font-size: 20px;
+      border: none;
+      height: 40px;
+      width: 80px;
+      margin-top:20px
+    }
+
+    input {
+      width:100px;
+      margin-left:70px;
+    }
+
+    #container {
+      width:800px;
+      height:400px;
+      margin:0 auto;
+      background-color: #e6e6e6;
+      text-align: center;
+      padding: 10px;
+    }
+
+    #set_participant {
+      margin-top:100px;
+      margin-left:500px;
+    }
+
+    #server-state .progress {
+      margin-top:20px;
+    }
+
+    .text-danger {
+      font-size: large;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="container">
+    <!-- Screen 1-Person administering the test enters parameters -->
+    <div id="userid">
+      <h1>Please enter the participant ID</h1>
+      <h1>
+        Participant ID:
+        <input type="number" name="pid" id="pid" min="0" max="9999" required>
+      </h1>
+      <h1>
+        Participant group:
+        <input type="text" name="grp" id="grp" pattern="[A-Za-z0-9]{1,2}">
+      </h1>
+      <div id="server-state" class="text-danger">
+        Waiting for the fingerprint scanner to be ready...
+      </div>
+      <button id="set_participant" disabled>OK</button>
+    </div>
+
+    <!-- Screen 2 - Operator enter the finger id to be captured -->
+    <div id="fingerid" hidden>
+      <h1>Please enter the finger ID</h1>
+      <h1>
+        Finger ID:
+        <input type="number" id="fid" min="0" max="10" required>
+      </h1>
+      <button id="set_fingerid">OK</button>
+    </div>
+
+    <!-- Screen 3 - User kicks off enrollment image capture for finger X -->
+    <div id="kickoff" hidden>
+      <h1>Capture enrollment image for finger
+        <span id="fingerid0">0</span> for participant <span id="pid0">000</span>
+      </h1>
+      <h1> Click OK to start the capture </h1>
+      <button id="kickoff_finger">OK</button>
+    </div>
+
+    <!-- Screen 4 - User is asked to place finger on sensor to capture image.
+         This screen is shared by both enrollment and verification phases.
+    -->
+    <div id="finger" hidden>
+      <h1>Lift, then touch finger <span id="fingerid1">0</span></h1>
+      <h1>Keep lifting your finger to add the different parts of your fingerprint</h1>
+      <div class="progress">
+        <div id = "bar" class="progress-bar" role="progressbar">
+         <span id="completion">0% completed</span>
+        </div>
+      </div>
+      <div id="fingerprint-icon">
+        <img src="static/fingerprint.svg" height="100" width="100">
+      </div>
+      <div id="error" class="text-danger" hidden>
+        <b>Please try again by <span id="error_message">DEADBEEF</span></b>
+      </div>
+    </div>
+
+    <!-- Screen 5 - User kicks off verification image capture for finger X -->
+    <div id="enroll-complete" hidden>
+        <h1>Capture verification image for finger
+          <span id="fingerid2">0</span> for participant <span id="pid1">000</span>
+        </h1>
+        <h1> Click OK to start the capture </h1>
+      <button id="start_verification">OK</button>
+    </div>
+
+    <!-- Screen 6 - Image capture for finger X complete. -->
+    <div id="complete" hidden>
+      <div id="sameUser">
+        <h1>Image capture for finger <span id="fingerid3">0</span> complete</h1>
+        <h1>To start next capture, click OK </h1>
+      </div>
+      <div id="nextUser" hidden>
+        <h1>
+          Image capture for participant <span id="pid2">0</span> complete
+        </h1>
+        <h1>To start capture for next participant, click OK </h1>
+      </div>
+      <button id="next_finger">OK</button>
+    </div>
+
+    <div id="server-error" class="text-danger" hidden>
+      Lost connection to fingerprint scanner. Please reload the page.
+    </div>
+  </container>
+
+  <script>
+  // --- Study parameters (filed by the server config later)
+  var finger_count = 0;
+  var enrollment_count = 0;
+  var verification_count = 0;
+  var touches_count = 0;
+
+  // --- Capture operations global state
+  var pid = -1;     // Participant ID
+  var group = 'Z'; // Participant Group
+
+  var finger_num = 0; // Current finger index
+  var picture_num = 0;
+
+  // The finger ID to capture, this is specified by the operator.
+  var finger_id = 0;
+
+  // Indicate which phase the UI is currently in. Backend is not aware of this
+  // and will get the same request.
+  var in_enroll_phase = true;
+
+  // --- Websocket handling / communication with server
+
+  var socket = null;
+
+  function connectSocket() {
+    var url = window.location.href.split("/");
+    socket = new WebSocket("ws://"+url[2]+"/finger");
+    socket.onmessage = event => onFingerMessage(socket, event.data);
+    socket.onopen = function(evt) {
+      requestConfig();
+    };
+
+    socket.onclose = function(evt) {
+      document.getElementById("server-error").hidden = false;
+    };
+
+    socket.onerror = function(evt) {
+      console.error("socket on error");
+      document.getElementById("server-error").hidden = false;
+    };
+  }
+
+  function onFingerMessage(socket, dataString) {
+    console.log("socket RX:" + dataString);
+    j = JSON.parse(dataString)
+    if ('result' in j) {
+      do_FingerResult(j['result']);
+    } else if ('config' in j) {
+      var config = j['config'];
+      finger_count = config.fingerCount;
+      enrollment_count = config.enrollmentCount;
+      verification_count = config.verificationCount;
+      touches_count = enrollment_count + verification_count;
+
+      document.getElementById("set_participant").disabled = false;
+      document.getElementById("server-state").textContent =
+          'Fingerprint scanner is ready.';
+    }
+  }
+
+  function logServer(message) {
+    var payload = {'log' : message};
+    socket.send(JSON.stringify(payload));
+  }
+
+  function sendNextFingerInfo() {
+    var msg = {'participant': pid, 'group': group, 'finger': finger_id, 'picture': picture_num};
+    socket.send(JSON.stringify(msg));
+  }
+
+  function requestConfig() {
+    var msg = {'config' : ''};
+    socket.send(JSON.stringify(msg));
+  }
+
+  // --- UI handling functions
+  function switchDiv(before, after) {
+    document.getElementById(before).style.display = 'none';
+    document.getElementById(after).style.display = 'block';
+  }
+
+  function setFingerId(spanid) {
+    document.getElementById(spanid).textContent = finger_id;
+  }
+
+  function setParticipantId(spanid) {
+    document.getElementById(spanid).textContent = pid;
+  }
+
+  function do_SetParticipant() {
+    var input1 = document.getElementById("pid").value;
+    var input2 = document.getElementById("grp").value;
+    if (input1.length == 0 || input2.length == 0) {
+      alert("Please enter both the participant ID and group.");
+      return;
+    }
+
+    pid = parseInt(input1);
+    group = input2;
+
+    // Clean up the input field.
+    document.getElementById("pid").value = "";
+    document.getElementById("grp").value = "";
+
+    document.getElementById("fid").value = "0";
+    switchDiv('userid', 'fingerid');
+    document.getElementById('fid').focus();
+  }
+
+  function do_SetFingerId() {
+    var input = document.getElementById("fid").value;
+    if (input.length == 0) {
+      alert("Please enter the finger ID.");
+      return;
+    }
+
+    finger_id = parseInt(input);
+    setFingerId("fingerid0");
+    setParticipantId("pid0");
+
+    // Clean up the input field.
+    document.getElementById("fid").value = "";
+
+    switchDiv('fingerid', 'kickoff');
+    document.getElementById('kickoff_finger').focus();
+  }
+
+  function show_Progress(result) {
+    if (result === 'ok') {
+      var progress = Math.round((in_enroll_phase === true ?
+          picture_num / enrollment_count
+          : (picture_num - enrollment_count) / verification_count) * 100);
+      document.getElementById("completion").textContent = progress + "% completed";
+      document.getElementById("bar").style.width = progress+"%";
+    }
+    document.getElementById("error_message").textContent = result;
+    document.getElementById("error").style.display = result === 'ok' ? 'none' : 'block';
+  }
+
+  function do_KickOffFinger() {
+    // Start new acquisition series from the beginning
+    picture_num = 0;
+    in_enroll_phase = true;
+    // Reset progress bar
+    show_Progress('ok');
+
+    setFingerId("fingerid1");
+    switchDiv('kickoff', 'finger');
+    logServer('Participant ' + pid + ' group ' + group + ' Finger ' + finger_id + ' START');
+    sendNextFingerInfo();
+  }
+
+  function do_FingerResult(result) {
+    if (result === 'ok') {
+      picture_num++;
+    }
+    show_Progress(result);
+    if (picture_num === enrollment_count && in_enroll_phase === true) {
+      in_enroll_phase = false;
+      do_CompleteEnroll();
+    } else if (picture_num >= touches_count) {
+      do_CompleteFinger();
+    } else {
+      sendNextFingerInfo();
+    }
+  }
+
+  function do_CompleteEnroll() {
+    setFingerId("fingerid2");
+    setParticipantId("pid1");
+    switchDiv('finger', 'enroll-complete');
+    document.getElementById('start_verification').focus();
+  }
+
+  function do_CompleteFinger() {
+    setFingerId("fingerid3");
+    setParticipantId("pid2");
+    if (finger_num + 1 == finger_count) {
+      switchDiv('sameUser', 'nextUser');
+    } else {
+      switchDiv('nextUser', 'sameUser');
+    }
+    switchDiv('finger', 'complete');
+    document.getElementById('next_finger').focus();
+    logServer('Participant ' + pid + ' group ' + group + ' Finger ' + finger_id + ' DONE');
+  }
+
+  function do_NextFinger() {
+    finger_num += 1;
+    if (finger_num >= finger_count) {
+      finger_num = 0;
+      switchDiv('complete', 'userid');
+      document.getElementById('pid').focus();
+    } else {
+      document.getElementById("fid").value = finger_id + 1;
+      switchDiv('complete', 'fingerid');
+      document.getElementById('fid').focus();
+    }
+  }
+
+  function do_StartVerification() {
+    // Reset progress bar
+    show_Progress('ok');
+
+    setFingerId("fingerid1");
+    switchDiv('enroll-complete', 'finger');
+    sendNextFingerInfo();
+  }
+
+  // --- Plug UI events
+  document.addEventListener('DOMContentLoaded', event => {
+    connectSocket();
+
+    document.getElementById('set_participant').addEventListener('click', do_SetParticipant);
+    document.getElementById('set_fingerid').addEventListener('click', do_SetFingerId);
+    document.getElementById('kickoff_finger').addEventListener('click', do_KickOffFinger);
+    document.getElementById('next_finger').addEventListener('click', do_NextFinger);
+    document.getElementById('start_verification').addEventListener('click', do_StartVerification);
+    document.getElementById('pid').focus();
+  });
+
+  </script>
+</body>
+</html>

@@ -1,0 +1,421 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/mojom_bindings_generator.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":ml_cmdline",
+    ":ml_service",
+  ]
+  if (use.test) {
+    deps += [
+      ":ml_cmdline_test",
+      ":ml_service_test",
+    ]
+  }
+  if (use.fuzzer) {
+    deps += [
+      ":ml_service_impl_fuzzer",
+      ":ml_service_load_flatbuffer_fuzzer",
+      ":web_platform_handwriting_fuzzer",
+    ]
+  }
+  if (use.ml_benchmark_drivers) {
+    deps += [ ":libml_for_benchmark" ]
+  }
+}
+
+generate_mojom_bindings("ml_mojo_bindings") {
+  mojo_root = "${platform2_root}"
+  if (use.ml_benchmark_drivers) {
+    use_pic = true
+  }
+  sources = [
+    "mojom/big_buffer.mojom",
+    "mojom/document_scanner.mojom",
+    "mojom/document_scanner_param_types.mojom",
+    "mojom/file_path.mojom",
+    "mojom/geometry.mojom",
+    "mojom/grammar_checker.mojom",
+    "mojom/graph_executor.mojom",
+    "mojom/handwriting_recognizer.mojom",
+    "mojom/image_content_annotation.mojom",
+    "mojom/machine_learning_service.mojom",
+    "mojom/model.mojom",
+    "mojom/shared_memory.mojom",
+    "mojom/soda.mojom",
+    "mojom/tensor.mojom",
+    "mojom/text_classifier.mojom",
+    "mojom/text_suggester.mojom",
+    "mojom/time.mojom",
+    "mojom/web_platform_handwriting.mojom",
+    "mojom/web_platform_model.mojom",
+  ]
+  mojo_extra_args = [
+    "--typemap",
+    rebase_path("mojom/type_mappings.json"),
+  ]
+  enabled_features = [ "file_path_is_string" ]
+}
+
+source_set("ml_mojo_bindings_lib") {
+  sources = [ "mojom/time_mojom_traits.h" ]
+  public_deps = [ ":ml_mojo_bindings" ]
+}
+
+pkg_config("ml_common_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "libminijail",
+    "libmojo",
+    "system_api",
+    "zlib",
+  ]
+}
+
+proto_library("ml_grammar_proto") {
+  proto_in_dir = "${sysroot}/usr/include/chromeos/libgrammar/proto"
+  proto_out_dir = "chrome/knowledge/grammar/"
+  sources = [ "${proto_in_dir}/grammar_interface.proto" ]
+}
+
+proto_library("ml_handwriting_proto") {
+  proto_in_dir = "${sysroot}/usr/include/chromeos/libhandwriting/proto"
+  proto_out_dir = "chrome/knowledge/handwriting/"
+  sources = [
+    "${proto_in_dir}/handwriting_interface.proto",
+    "${proto_in_dir}/handwriting_validate.proto",
+  ]
+}
+
+proto_library("ml_soda_proto") {
+  proto_in_dir = "${sysroot}/usr/include/chromeos/libsoda/proto"
+  proto_out_dir = "chrome/knowledge/soda/"
+  sources = [ "${proto_in_dir}/extended_soda_api.proto" ]
+}
+
+proto_library("ml_text_suggester_proto") {
+  proto_in_dir = "${sysroot}/usr/include/chromeos/libsuggest/proto"
+  proto_out_dir = "chrome/knowledge/suggest/"
+  sources = [ "${proto_in_dir}/text_suggester_interface.proto" ]
+}
+
+proto_library("ml_assist_ranker_proto") {
+  proto_in_dir = "./proto/"
+  proto_out_dir = "chrome/knowledge/assist_ranker/"
+  sources = [
+    "${proto_in_dir}/example_preprocessor.proto",
+    "${proto_in_dir}/ranker_example.proto",
+  ]
+}
+
+proto_library("ml_ica_proto") {
+  proto_in_dir = "${sysroot}/usr/include/ml_core"
+  proto_out_dir = "chrome/knowledge/ica/"
+  sources = [ "${proto_in_dir}/ica.proto" ]
+}
+
+source_set("example_preprocessor") {
+  sources = [
+    "example_preprocessor/example_preprocessing.cc",
+    "example_preprocessor/ranker_example_util.cc",
+  ]
+  configs += [ ":ml_common_pkg_deps" ]
+  deps = [ ":ml_assist_ranker_proto" ]
+}
+
+ondevice_image_content_annotation_enabled =
+    use.ondevice_image_content_annotation && use.internal
+static_library("ml_common") {
+  sources = [
+    "custom_ops/transpose_conv_bias.cc",
+    "daemon.cc",
+    "dlcservice_client.cc",
+    "document_scanner_impl.cc",
+    "document_scanner_library.cc",
+    "grammar_checker_impl.cc",
+    "grammar_library.cc",
+    "grammar_proto_mojom_conversion.cc",
+    "graph_executor_delegate.cc",
+    "graph_executor_impl.cc",
+    "handwriting.cc",
+    "handwriting_proto_mojom_conversion.cc",
+    "handwriting_recognizer_impl.cc",
+    "machine_learning_service_impl.cc",
+    "metrics.cc",
+    "model_conversions.cc",
+    "model_delegate.cc",
+    "model_impl.cc",
+    "model_metadata.cc",
+    "process.cc",
+    "request_metrics.cc",
+    "tensor_view.cc",
+    "text_classifier_impl.cc",
+    "text_suggester_impl.cc",
+    "text_suggester_proto_mojom_conversion.cc",
+    "text_suggestions.cc",
+    "time_metrics.cc",
+    "util.cc",
+    "web_platform_handwriting_proto_mojom_conversion.cc",
+    "web_platform_handwriting_recognizer_impl.cc",
+    "web_platform_model_impl.cc",
+    "web_platform_model_loader_impl.cc",
+  ]
+  include_dirs = [
+    "${sysroot}/usr/include/icu-chrome/common",
+    "${sysroot}/usr/include/icu-chrome/i18n",
+    "${sysroot}/usr/include/libtextclassifier",
+    "${sysroot}/usr/include/marisa-aosp",
+    "${sysroot}/usr/include/tensorflow",
+  ]
+  libs = [
+    "icui18n-chrome",
+    "icuuc-chrome",
+    "marisa-aosp",
+    "tensorflowlite",
+    "textclassifier",
+    "utf",
+  ]
+  pkg_deps = [ "protobuf" ]
+  all_dependent_configs = [ ":ml_common_pkg_deps" ]
+  defines = [
+    "USE_ONDEVICE_DOCUMENT_SCANNER=${use.ondevice_document_scanner}",
+    "USE_ONDEVICE_DOCUMENT_SCANNER_DLC=${use.ondevice_document_scanner_dlc}",
+    "USE_ONDEVICE_GRAMMAR=${use.ondevice_grammar}",
+    "USE_ONDEVICE_TEXT_SUGGESTIONS=${use.ondevice_text_suggestions}",
+    "USE_ONDEVICE_IMAGE_CONTENT_ANNOTATION=" +
+        "${ondevice_image_content_annotation_enabled}",
+    "TC3_VOCAB_ANNOTATOR_IMPL",
+  ]
+  public_deps = [ ":ml_mojo_bindings_lib" ]
+  deps = [
+    ":benchmark_proto",
+    ":example_preprocessor",
+    ":ml_assist_ranker_proto",
+    ":ml_grammar_proto",
+    ":ml_handwriting_proto",
+    ":ml_text_suggester_proto",
+    "//ml_core/dlc:dlc_client",
+  ]
+  if (use.ondevice_speech) {
+    sources += [
+      "soda.cc",
+      "soda_proto_mojom_conversion.cc",
+      "soda_recognizer_impl.cc",
+    ]
+    deps += [ ":ml_soda_proto" ]
+  } else {
+    sources += [ "soda_recognizer_impl_fake.cc" ]
+  }
+  if (ondevice_image_content_annotation_enabled) {
+    sources += [
+      "image_content_annotation.cc",
+      "image_content_annotation_impl.cc",
+    ]
+    deps += [ ":ml_ica_proto" ]
+  } else {
+    sources += [ "image_content_annotation_impl_fake.cc" ]
+  }
+
+  # Enables handwriting for all boards in fuzzer, including those don't support
+  # ondevice handwriting, because we want to do fuzzer test on all the boards.
+  # This is safe because fuzzer uses a fake handwriting backend which doesn't
+  # really dlopen the library.
+  if (use.fuzzer) {
+    defines += [
+      "USE_ONDEVICE_HANDWRITING=true",
+      "USE_ONDEVICE_HANDWRITING_DLC=true",
+    ]
+  } else {
+    defines += [
+      "USE_ONDEVICE_HANDWRITING=${use.ondevice_handwriting}",
+      "USE_ONDEVICE_HANDWRITING_DLC=${use.ondevice_handwriting_dlc}",
+    ]
+  }
+}
+
+proto_library("benchmark_proto") {
+  proto_in_dir = "./proto/"
+  proto_out_dir = "include/ml"
+  sources = [ "${proto_in_dir}/benchmark.proto" ]
+  standalone = true
+  use_pic = true
+}
+
+shared_library("libml_for_benchmark") {
+  sources = [
+    "benchmark.cc",
+    "custom_ops/transpose_conv_bias.cc",
+    "graph_executor_delegate.cc",
+    "graph_executor_impl.cc",
+    "metrics.cc",
+    "model_conversions.cc",
+    "model_delegate.cc",
+    "model_impl.cc",
+    "model_metadata.cc",
+    "process.cc",
+    "request_metrics.cc",
+    "tensor_view.cc",
+    "time_metrics.cc",
+    "util.cc",
+  ]
+  include_dirs = [ "${sysroot}/usr/include/tensorflow" ]
+  libs = [ "tensorflowlite" ]
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+    "libmojo",
+    "protobuf",
+  ]
+  public_deps = [
+    ":benchmark_proto",
+    "//ml_benchmark:libmlbenchmark_proto",
+    "//ml_benchmark/driver_common:libmlbenchmark_driver_common",
+  ]
+  deps = [ ":ml_mojo_bindings_lib" ]
+}
+
+static_library("ml_cmdline_common") {
+  sources = [ "simple.cc" ]
+  deps = [ ":ml_common" ]
+}
+
+executable("ml_service") {
+  sources = [ "main.cc" ]
+  include_dirs = [ "${sysroot}/usr/include/tensorflow" ]
+  deps = [
+    ":ml_common",
+    "//ml/dbus_service:core",
+  ]
+}
+
+executable("ml_cmdline") {
+  sources = [ "command_line.cc" ]
+  include_dirs = [ "${sysroot}/usr/include/tensorflow" ]
+  install_path = "bin"
+  deps = [ ":ml_cmdline_common" ]
+}
+
+if (use.test) {
+  executable("ml_service_test") {
+    sources = [
+      "dbus_service/tf_model_graph_executor_test.cc",
+      "dbus_service/tf_model_graph_executor_util_test.cc",
+      "dlcservice_client_test.cc",
+      "document_scanner_library_test.cc",
+      "example_preprocessor/example_preprocessing_test.cc",
+      "example_preprocessor/ranker_example_util_test.cc",
+      "grammar_library_test.cc",
+      "grammar_proto_mojom_conversion_test.cc",
+      "graph_executor_impl_test.cc",
+      "handwriting_proto_mojom_conversion_test.cc",
+      "handwriting_test.cc",
+      "machine_learning_service_impl_multiprocess_test.cc",
+      "machine_learning_service_impl_test.cc",
+      "model_impl_test.cc",
+      "test_utils.cc",
+      "testrunner.cc",
+      "text_suggester_proto_mojom_conversion_test.cc",
+      "text_suggestions_test.cc",
+      "util_test.cc",
+      "web_platform_handwriting_proto_mojom_conversion_test.cc",
+      "web_platform_model_impl_test.cc",
+    ]
+    configs += [ "//common-mk:test" ]
+    include_dirs = [ "${sysroot}/usr/include/tensorflow" ]
+    defines = [
+      "USE_ONDEVICE_DOCUMENT_SCANNER=${use.ondevice_document_scanner}",
+      "USE_ONDEVICE_DOCUMENT_SCANNER_DLC=${use.ondevice_document_scanner_dlc}",
+      "USE_ONDEVICE_GRAMMAR=${use.ondevice_grammar}",
+      "USE_ONDEVICE_HANDWRITING=${use.ondevice_handwriting}",
+      "USE_ONDEVICE_HANDWRITING_DLC=${use.ondevice_handwriting_dlc}",
+      "USE_ONDEVICE_TEXT_SUGGESTIONS=${use.ondevice_text_suggestions}",
+      "USE_ONDEVICE_IMAGE_CONTENT_ANNOTATION=" +
+          "${ondevice_image_content_annotation_enabled}",
+    ]
+    deps = [
+      ":ml_assist_ranker_proto",
+      ":ml_common",
+      ":ml_grammar_proto",
+      ":ml_handwriting_proto",
+      ":ml_service",
+      ":ml_text_suggester_proto",
+      "//common-mk/testrunner:testrunner",
+      "//ml/dbus_service:core",
+    ]
+    pkg_deps = []
+    if (use.ondevice_speech && !use.asan) {
+      sources += [
+        "soda_proto_mojom_conversion_test.cc",
+        "soda_test.cc",
+      ]
+      defines += [ "USE_ONDEVICE_SPEECH" ]
+    }
+    if (ondevice_image_content_annotation_enabled) {
+      sources += [ "image_content_annotation_test.cc" ]
+      pkg_deps += [ "opencv4" ]
+    }
+    if (use.ml_benchmark_drivers) {
+      sources += [ "benchmark_test.cc" ]
+      deps += [ ":libml_for_benchmark" ]
+    }
+  }
+  executable("ml_cmdline_test") {
+    sources = [
+      "simple_test.cc",
+      "testrunner.cc",
+    ]
+    configs += [ "//common-mk:test" ]
+    include_dirs = [ "${sysroot}/usr/include/tensorflow" ]
+    run_test = true
+    deps = [ ":ml_cmdline_common" ]
+  }
+}
+
+# Fuzzer target.
+if (use.fuzzer) {
+  executable("ml_service_impl_fuzzer") {
+    sources = [ "fuzzers/ml_service_impl_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer:common_fuzzer" ]
+    deps = [ ":ml_common" ]
+  }
+  executable("ml_service_load_flatbuffer_fuzzer") {
+    sources = [ "fuzzers/ml_service_load_flatbuffer_fuzzer.cc" ]
+    configs += [ "//common-mk/common_fuzzer" ]
+    deps = [ ":ml_common" ]
+  }
+
+  proto_library("web_platform_handwriting_fuzz_container_proto") {
+    proto_in_dir = "./proto/"
+    proto_lib_dirs = [ "${sysroot}/usr/include/chromeos/libhandwriting/proto" ]
+    proto_out_dir = "chrome/knowledge/handwriting/"
+    sources =
+        [ "${proto_in_dir}/web_platform_handwriting_fuzz_container.proto" ]
+  }
+
+  executable("web_platform_handwriting_fuzzer") {
+    sources = [
+      "fuzzers/handwriting_fake.cc",
+      "fuzzers/web_platform_handwriting_fuzzer.cc",
+    ]
+    configs += [ "//common-mk/common_fuzzer" ]
+
+    # Enables handwriting for all boards in fuzzer.
+    defines = [
+      "USE_ONDEVICE_HANDWRITING=true",
+      "USE_ONDEVICE_HANDWRITING_DLC=true",
+    ]
+    pkg_deps = [ "libprotobuf-mutator" ]
+    deps = [
+      ":ml_common",
+      ":web_platform_handwriting_fuzz_container_proto",
+    ]
+  }
+}

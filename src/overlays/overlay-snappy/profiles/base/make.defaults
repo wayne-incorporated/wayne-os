@@ -1,0 +1,47 @@
+# Copyright 2017 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+INPUT_DEVICES=""
+LINUX_FIRMWARE=""
+USE=""
+
+USE="${USE} snappy touchview stylus pointer_events"
+
+# Avoid inhibiting the keyboard (which reports events from side buttons).
+USE="${USE} keyboard_includes_side_buttons"
+
+# Disable the touchpad wakeup since it cannot be turned off
+# dynamically when the system is converted into tablet mode.  Note
+# that this is for old devices only, and should not be copied into new
+# overlays.
+USE="${USE} -touchpad_wakeup"
+
+# Include the wacom firmware updating tool
+INPUT_DEVICES="${INPUT_DEVICES} wacom"
+INPUT_DEVICES="${INPUT_DEVICES} weida"
+
+# Uncomment this line to activate the serial port.
+#TTY_CONSOLE="ttyS2"
+
+# Enable background blur.
+USE="${USE} background_blur"
+
+# Add g2touch firmware update tool
+INPUT_DEVICES="${INPUT_DEVICES} g2touch"
+
+# this indicates that this board has a -kernelnext overlay
+USE="${USE} has-kernelnext"
+
+# To prevent cryptohome incompatibility problem while transitioning to 5.4
+USE="${USE} uprev-4-to-5"
+
+# Kernel uprev 4.4 to 5.10, remove after chipset-apl uprev
+USE="${USE} -kernel-4_4 kernel-5_10"
+
+# Enable chromeos-config.
+USE="${USE} unibuild has_chromeos_config_bsp"
+
+# Use zstd to minify ARC images. (go/arc-zstd)
+USE="${USE} arc_squashfs_zstd"

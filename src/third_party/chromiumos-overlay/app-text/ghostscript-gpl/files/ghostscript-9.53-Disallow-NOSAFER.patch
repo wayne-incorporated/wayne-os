@@ -1,0 +1,31 @@
+From 7a3bd1f2f4e50d2e8b408e34e5cba91c4487cd68 Mon Sep 17 00:00:00 2001
+From: Sean Kau <skau@chromium.org>
+Date: Fri, 22 Jan 2021 15:02:27 -0800
+Subject: [PATCH 05/10] Disallow -dNOSAFER
+
+ChromiumOS only uses PPDs that run with -dSAFER.  Disallow the
+less safe option.
+---
+ psi/imainarg.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/psi/imainarg.c b/psi/imainarg.c
+index aaf41b6bf..69e274402 100644
+--- a/psi/imainarg.c
++++ b/psi/imainarg.c
+@@ -806,6 +806,12 @@ run_stdin:
+                     return gs_error_Fatal;
+                 eqp = strchr(adef, '=');
+ 
++                if (strncmp(adef, "NOSAFER", 7) == 0) {
++                    puts(minst->heap, "-dNOSAFER is not allowed");
++                    arg_free((char *)adef, minst->heap);
++                    return gs_error_Fatal;
++                }
++
+                 if (eqp == NULL)
+                     eqp = strchr(adef, '#');
+                 /* Initialize the object memory, scanner, and */
+-- 
+2.39.1
+

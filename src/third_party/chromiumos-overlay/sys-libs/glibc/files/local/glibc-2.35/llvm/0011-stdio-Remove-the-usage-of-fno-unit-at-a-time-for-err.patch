@@ -1,0 +1,367 @@
+From e43fecefd01e301d9abd20f587e65a6d8916264d Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 6 Apr 2022 12:09:42 -0300
+Subject: [PATCH 011/163] stdio: Remove the usage of $(fno-unit-at-a-time) for
+ errlist.c
+
+The errlist.c is built with -fno-toplevel-reorder to avoid compiler to
+reorder the compat assembly directives due an assembler issue [1]
+(fixed on 2.39).
+
+This patch removes the compiler flags by split the compat symbol
+generation in two phases.  First the _sys_errlist_internal internal
+without any compat symbol directive is preprocessed to generate an
+assembly source code.  This generate assembly is then used as input
+on a platform agnostic errlist-data.S which then creates the compat
+definitions.  This prevents compiler to move any compat directive
+prior the _sys_errlist_internal definition itself.
+
+Checked on a make check run-built-tests=no on all affected ABIs.
+
+[1] https://sourceware.org/bugzilla/show_bug.cgi?id=29012
+
+(cherry picked from commit 900fa2573671d692ed245f76aa3f05cec462be0c)
+---
+ Makeconfig                                    |  3 +-
+ include/stdio.h                               |  1 +
+ stdio-common/Makefile                         | 21 ++++++++++--
+ stdio-common/err_map.h                        | 24 +++++++++++++
+ stdio-common/errlist-compat-data.h            |  1 +
+ stdio-common/errlist-compat.c                 |  1 -
+ stdio-common/errlist-data-gen.c               | 34 +++++++++++++++++++
+ stdio-common/errlist-data.S                   |  7 ++++
+ stdio-common/errlist.c                        | 20 +++--------
+ sysdeps/mach/hurd/{errlist.c => err_map.h}    |  9 +++--
+ ...errlist-compat.c => errlist-compat-data.h} |  0
+ ...errlist-compat.c => errlist-compat-data.h} |  0
+ sysdeps/unix/sysv/linux/errlist-compat.h      | 33 +++++++++++-------
+ ...errlist-compat.c => errlist-compat-data.h} |  0
+ ...errlist-compat.c => errlist-compat-data.h} |  0
+ ...errlist-compat.c => errlist-compat-data.h} |  0
+ 16 files changed, 120 insertions(+), 34 deletions(-)
+ create mode 100644 stdio-common/err_map.h
+ create mode 100644 stdio-common/errlist-compat-data.h
+ delete mode 100644 stdio-common/errlist-compat.c
+ create mode 100644 stdio-common/errlist-data-gen.c
+ create mode 100644 stdio-common/errlist-data.S
+ rename sysdeps/mach/hurd/{errlist.c => err_map.h} (83%)
+ rename sysdeps/unix/sysv/linux/alpha/{errlist-compat.c => errlist-compat-data.h} (100%)
+ rename sysdeps/unix/sysv/linux/{errlist-compat.c => errlist-compat-data.h} (100%)
+ rename sysdeps/unix/sysv/linux/hppa/{errlist-compat.c => errlist-compat-data.h} (100%)
+ rename sysdeps/unix/sysv/linux/mips/{errlist-compat.c => errlist-compat-data.h} (100%)
+ rename sysdeps/unix/sysv/linux/sparc/{errlist-compat.c => errlist-compat-data.h} (100%)
+
+diff --git a/Makeconfig b/Makeconfig
+index 47db08d6ae..2bd78e9edc 100644
+--- a/Makeconfig
++++ b/Makeconfig
+@@ -1045,7 +1045,8 @@ ifeq (yes,$(build-shared))
+ # Under --enable-shared, we will build a shared library of PIC objects.
+ # The PIC object files are named foo.os.
+ object-suffixes += .os
+-CPPFLAGS-.os = -DPIC -DSHARED
++pic-cppflags = -DPIC -DSHARED
++CPPFLAGS-.os = $(pic-cppflags)
+ CFLAGS-.os = $(filter %frame-pointer,$(+cflags)) $(pic-ccflag)
+ libtype.os := lib%_pic.a
+ # This can be changed by a sysdep makefile
+diff --git a/include/stdio.h b/include/stdio.h
+index 23b7fd288c..a6f7fd43cb 100644
+--- a/include/stdio.h
++++ b/include/stdio.h
+@@ -180,6 +180,7 @@ int __vfxprintf (FILE *__fp, const char *__fmt, __gnuc_va_list,
+   attribute_hidden;
+ 
+ extern const char *const _sys_errlist_internal[] attribute_hidden;
++extern const size_t _sys_errlist_internal_len attribute_hidden;
+ extern const char *__get_errlist (int) attribute_hidden;
+ extern const char *__get_errname (int) attribute_hidden;
+ 
+diff --git a/stdio-common/Makefile b/stdio-common/Makefile
+index 7f67665ef1..b20a0f00a4 100644
+--- a/stdio-common/Makefile
++++ b/stdio-common/Makefile
+@@ -43,7 +43,7 @@ routines	:=							      \
+ 	vfscanf-internal vfwscanf-internal iovfscanf			      \
+ 	vfprintf-internal vfwprintf-internal
+ 
+-aux	:= errlist errname siglist printf-parsemb printf-parsewc fxprintf
++aux	:= errlist errlist-data errname siglist printf-parsemb printf-parsewc fxprintf
+ 
+ tests := tstscanf test_rdwr test-popen tstgetln test-fseek \
+ 	 temptest tst-fileno test-fwrite tst-ungetc tst-ferror \
+@@ -75,6 +75,10 @@ tests := tstscanf test_rdwr test-popen tstgetln test-fseek \
+ 	 tst-sprintf-errno \
+ 	 # tests
+ 
++generated += \
++  errlist-data-aux-shared.S \
++  errlist-data-aux.S \
++  # generated
+ 
+ test-srcs = tst-unbputc tst-printf tst-printfsz-islongdouble
+ 
+@@ -99,6 +103,20 @@ tests-special += $(objpfx)tst-errno-manual.out
+ 
+ include ../Rules
+ 
++# The errlist.c is built in two phases because compiler might reorder the
++# compat_symbol directive prior the object itself and on binutils older
++# than 2.29 it might generate object sizes different than the expected ones.
++$(objpfx)errlist-data-aux-shared.S: errlist-data-gen.c
++	$(make-target-directory)
++	$(compile-command.c) $(pic-cppflags) $(pic-ccflag) $(no-stack-protector) -S
++
++$(objpfx)errlist-data-aux.S: errlist-data-gen.c
++	$(make-target-directory)
++	$(compile-command.c) $(pie-default) $(no-stack-protector) -S
++
++$(objpfx)errlist-data.os: $(objpfx)errlist-data-aux-shared.S
++$(objpfx)errlist-data.o: $(objpfx)errlist-data-aux.S
++
+ ifeq ($(run-built-tests),yes)
+ LOCALES := de_DE.ISO-8859-1 de_DE.UTF-8 en_US.ISO-8859-1 ja_JP.EUC-JP
+ include ../gen-locales.mk
+@@ -181,7 +199,6 @@ CFLAGS-isoc99_vfscanf.c += -fexceptions
+ CFLAGS-isoc99_vscanf.c += -fexceptions
+ CFLAGS-isoc99_fscanf.c += -fexceptions
+ CFLAGS-isoc99_scanf.c += -fexceptions
+-CFLAGS-errlist.c += $(fno-unit-at-a-time)
+ CFLAGS-siglist.c += $(fno-unit-at-a-time)
+ 
+ # scanf14a.c and scanf16a.c test a deprecated extension which is no
+diff --git a/stdio-common/err_map.h b/stdio-common/err_map.h
+new file mode 100644
+index 0000000000..6cc3aa3375
+--- /dev/null
++++ b/stdio-common/err_map.h
+@@ -0,0 +1,24 @@
++/* Internal errno names mapping definition.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#ifndef _ERR_MAP_H
++#define _ERR_MAP_H
++
++#define ERR_MAP(n) (n)
++
++#endif
+diff --git a/stdio-common/errlist-compat-data.h b/stdio-common/errlist-compat-data.h
+new file mode 100644
+index 0000000000..7c89c9a5a4
+--- /dev/null
++++ b/stdio-common/errlist-compat-data.h
+@@ -0,0 +1 @@
++/* Empty  */
+diff --git a/stdio-common/errlist-compat.c b/stdio-common/errlist-compat.c
+deleted file mode 100644
+index 6e25b021ab..0000000000
+--- a/stdio-common/errlist-compat.c
++++ /dev/null
+@@ -1 +0,0 @@
+-/* Empty.  */
+diff --git a/stdio-common/errlist-data-gen.c b/stdio-common/errlist-data-gen.c
+new file mode 100644
+index 0000000000..db4f50e6db
+--- /dev/null
++++ b/stdio-common/errlist-data-gen.c
+@@ -0,0 +1,34 @@
++/* Internal errno names mapping definition.
++   Copyright (C) 2022 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <https://www.gnu.org/licenses/>.  */
++
++#include <array_length.h>
++#include <err_map.h>
++#include <errno.h>
++#include <libintl.h>
++#include <stdio.h>
++
++const char *const _sys_errlist_internal[] =
++  {
++#define _S(n, str)         [ERR_MAP(n)] = str,
++#include <errlist.h>
++#undef _S
++  };
++const size_t _sys_errlist_internal_len = array_length (_sys_errlist_internal);
++
++/* Include to get the definitions for sys_nerr/_sys_nerr.  */
++#include <errlist-compat-data.h>
+diff --git a/stdio-common/errlist-data.S b/stdio-common/errlist-data.S
+new file mode 100644
+index 0000000000..870b3f40c9
+--- /dev/null
++++ b/stdio-common/errlist-data.S
+@@ -0,0 +1,7 @@
++#ifdef SHARED
++# include "errlist-data-aux-shared.S"
++#else
++# include "errlist-data-aux.S"
++#endif
++
++#include <errlist-compat-data.h>
+diff --git a/stdio-common/errlist.c b/stdio-common/errlist.c
+index 1c09a31a7a..4c0a0a218d 100644
+--- a/stdio-common/errlist.c
++++ b/stdio-common/errlist.c
+@@ -16,29 +16,17 @@
+    License along with the GNU C Library; if not, see
+    <https://www.gnu.org/licenses/>.  */
+ 
+-#include <stdio.h>
++#include <array_length.h>
++#include <err_map.h>
+ #include <errno.h>
+ #include <libintl.h>
+-#include <array_length.h>
+-
+-#ifndef ERR_MAP
+-# define ERR_MAP(n) n
+-#endif
+-
+-const char *const _sys_errlist_internal[] =
+-  {
+-#define _S(n, str)         [ERR_MAP(n)] = str,
+-#include <errlist.h>
+-#undef _S
+-  };
++#include <stdio.h>
+ 
+ const char *
+ __get_errlist (int errnum)
+ {
+   int mapped = ERR_MAP (errnum);
+-  if (mapped >= 0 && mapped < array_length (_sys_errlist_internal))
++  if (mapped >= 0 && mapped < _sys_errlist_internal_len)
+     return _sys_errlist_internal[mapped];
+   return NULL;
+ }
+-
+-#include <errlist-compat.c>
+diff --git a/sysdeps/mach/hurd/errlist.c b/sysdeps/mach/hurd/err_map.h
+similarity index 83%
+rename from sysdeps/mach/hurd/errlist.c
+rename to sysdeps/mach/hurd/err_map.h
+index 2d782ffc67..22d21ca9f1 100644
+--- a/sysdeps/mach/hurd/errlist.c
++++ b/sysdeps/mach/hurd/err_map.h
+@@ -1,4 +1,5 @@
+-/* Copyright (C) 1998-2022 Free Software Foundation, Inc.
++/* Internal errno names mapping definition.  Hurd version.
++   Copyright (C) 2022 Free Software Foundation, Inc.
+    This file is part of the GNU C Library.
+ 
+    The GNU C Library is free software; you can redistribute it and/or
+@@ -15,7 +16,11 @@
+    License along with the GNU C Library; if not, see
+    <https://www.gnu.org/licenses/>.  */
+ 
++#ifndef _ERR_MAP_H
++#define _ERR_MAP_H
++
+ #include <mach/error.h>
+ 
+ #define ERR_MAP(value) err_get_code (value)
+-#include <stdio-common/errlist.c>
++
++#endif
+diff --git a/sysdeps/unix/sysv/linux/alpha/errlist-compat.c b/sysdeps/unix/sysv/linux/alpha/errlist-compat-data.h
+similarity index 100%
+rename from sysdeps/unix/sysv/linux/alpha/errlist-compat.c
+rename to sysdeps/unix/sysv/linux/alpha/errlist-compat-data.h
+diff --git a/sysdeps/unix/sysv/linux/errlist-compat.c b/sysdeps/unix/sysv/linux/errlist-compat-data.h
+similarity index 100%
+rename from sysdeps/unix/sysv/linux/errlist-compat.c
+rename to sysdeps/unix/sysv/linux/errlist-compat-data.h
+diff --git a/sysdeps/unix/sysv/linux/errlist-compat.h b/sysdeps/unix/sysv/linux/errlist-compat.h
+index a09b38f243..33008863f8 100644
+--- a/sysdeps/unix/sysv/linux/errlist-compat.h
++++ b/sysdeps/unix/sysv/linux/errlist-compat.h
+@@ -20,6 +20,7 @@
+ #define _ERRLIST_COMPAT_H
+ 
+ #include <shlib-compat.h>
++#include <limits.h>
+ 
+ /* Define new compat symbols for symbols  _sys_errlist, sys_errlist,
+    _sys_nerr, and sys_nerr for version VERSION with NUMBERERR times number of
+@@ -27,17 +28,25 @@
+    Both _sys_errlist and sys_errlist alias to _sys_errlist_internal symbol
+    (defined on errlist.c) while _sys_nerr and sys_nerr created new variable
+    with the expected size.  */
+-#define DEFINE_COMPAT_ERRLIST(NUMBERERR, VERSION) 			     \
+-  const int __##VERSION##_sys_nerr = NUMBERERR;				     \
+-  strong_alias (__##VERSION##_sys_nerr, __##VERSION##__sys_nerr); 	     \
+-  declare_symbol_alias (__ ## VERSION ## _sys_errlist, _sys_errlist_internal,\
+-			object, NUMBERERR * (ULONG_WIDTH / UCHAR_WIDTH));    \
+-  declare_symbol_alias (__ ## VERSION ## __sys_errlist,			     \
+-			_sys_errlist_internal, object,			     \
+-			NUMBERERR * (ULONG_WIDTH / UCHAR_WIDTH));	     \
+-  compat_symbol (libc, __## VERSION ## _sys_nerr, sys_nerr, VERSION);	     \
+-  compat_symbol (libc, __## VERSION ## __sys_nerr, _sys_nerr, VERSION);      \
+-  compat_symbol (libc, __## VERSION ## _sys_errlist, sys_errlist, VERSION);  \
+-  compat_symbol (libc, __## VERSION ## __sys_errlist, _sys_errlist, VERSION);\
++#ifdef __ASSEMBLER__
++# define DEFINE_COMPAT_ERRLIST(NUMBERERR, VERSION) 			    \
++  declare_object_symbol_alias (__ ## VERSION ## _sys_errlist,		    \
++			       _sys_errlist_internal,			    \
++			       NUMBERERR * (ULONG_WIDTH / UCHAR_WIDTH))	    \
++			       ASM_LINE_SEP				    \
++  declare_object_symbol_alias (__ ## VERSION ## __sys_errlist,		    \
++			       _sys_errlist_internal, 			    \
++			       NUMBERERR * (ULONG_WIDTH / UCHAR_WIDTH))	    \
++			       ASM_LINE_SEP				    \
++  compat_symbol (libc, __## VERSION ## _sys_errlist, sys_errlist, VERSION)  \
++		 ASM_LINE_SEP						    \
++  compat_symbol (libc, __## VERSION ## __sys_errlist, _sys_errlist, VERSION)
++#else
++# define DEFINE_COMPAT_ERRLIST(NUMBERERR, VERSION) 			    \
++  const int __##VERSION##_sys_nerr = NUMBERERR;				    \
++  strong_alias (__##VERSION##_sys_nerr, __##VERSION##__sys_nerr);	    \
++  compat_symbol (libc, __## VERSION ## _sys_nerr, sys_nerr, VERSION);	    \
++  compat_symbol (libc, __## VERSION ## __sys_nerr, _sys_nerr, VERSION);
++#endif
+ 
+ #endif
+diff --git a/sysdeps/unix/sysv/linux/hppa/errlist-compat.c b/sysdeps/unix/sysv/linux/hppa/errlist-compat-data.h
+similarity index 100%
+rename from sysdeps/unix/sysv/linux/hppa/errlist-compat.c
+rename to sysdeps/unix/sysv/linux/hppa/errlist-compat-data.h
+diff --git a/sysdeps/unix/sysv/linux/mips/errlist-compat.c b/sysdeps/unix/sysv/linux/mips/errlist-compat-data.h
+similarity index 100%
+rename from sysdeps/unix/sysv/linux/mips/errlist-compat.c
+rename to sysdeps/unix/sysv/linux/mips/errlist-compat-data.h
+diff --git a/sysdeps/unix/sysv/linux/sparc/errlist-compat.c b/sysdeps/unix/sysv/linux/sparc/errlist-compat-data.h
+similarity index 100%
+rename from sysdeps/unix/sysv/linux/sparc/errlist-compat.c
+rename to sysdeps/unix/sysv/linux/sparc/errlist-compat-data.h
+-- 
+2.37.2
+

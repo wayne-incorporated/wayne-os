@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright 2016 The Chromium OS Authors. All rights reserved.
+# Copyright 2016 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,7 +8,8 @@ JOB=$(basename "$0")
 
 bootstat ui-post-stop
 set +e
-. /sbin/killers
+# shellcheck source=./ui-killers-helper
+. /usr/share/cros/init/ui-killers-helper
 
 # Terminate PKCS #11 services.
 cryptohome --action=pkcs11_terminate
@@ -16,13 +17,11 @@ cryptohome --action=pkcs11_terminate
 # Thaw any renderers that may have been left behind. If we
 # have crashed while renderers are frozen, they'll be unkillable
 # until we do this.
-echo "THAWED" > "${CHROME_FREEZER_CGROUP_DIR}/to_be_frozen/freezer.state"
+echo "THAWED" > "${CHROME_FREEZER_CGROUP_DIR:-}/to_be_frozen/freezer.state"
 
 # Terminate any processes with files open on the mount point
 # TODO(wad) parallelize with VFS/PID namespaces.
-kill_with_open_files_on_path_and_mountpoints \
-  '/home/[^.]|/data|/home/.shadow/[a-fA-F0-9]{40}/mount' "cryptohome" \
-  /home/chronos/u-*
+process_killer --session --file_holders
 
 # Make sure everything is going down. No exceptions.
 # The loop is so that clever daemons can't evade the kill by
@@ -50,12 +49,12 @@ for container in /run/containers/*-run_oci ; do
   if [ -d "${container}" ]; then
     run_oci --signal=KILL kill "${container##*/}"
     NUM_RETRIES=3
-    for i in $(seq ${NUM_RETRIES}) ; do
+    for i in $(seq "${NUM_RETRIES}") ; do
       # Both sleep and polling are needed here because 'run_oci destroy' fails
       # if the container process is still alive.
       sleep 1
       run_oci destroy "${container##*/}" && break
-      if [ ${i} = ${NUM_RETRIES} ]; then
+      if [ "${i}" = "${NUM_RETRIES}" ]; then
         logger -i -p crit "Failed to destroy ${container##*/}"
       fi
     done
@@ -77,3 +76,20 @@ cryptohome --action=unmount
 # Unmount the user session namespace mount point.
 umount /run/namespaces/mnt_chrome
 bootstat cryptohome-unmounted
+
+# In case cryptohome crashes, application containers may remain active post
+# cryptohome unmount. Check for the existence of these devices and lazy remove
+# the encrypted containers of these containers.
+for device in /dev/mapper/dmcrypt-* ; do
+  dmsetup remove --deferred "${device}"
+done
+
+# Clears chrome oobe storage files. Chrome could leave files behind for
+# the sign-in storage partition. See http://b/277632606.
+rm -rf  /home/chronos/Default/Storage/ext/oobe
+
+# Post unmount, attempt to kill any left over processes from the session
+# that could have leaked user mounts. This is intentionally done post
+# unmount: lazy unmount cleans up mounts from the root namespace and
+# newly launched processes will no be able to clone the mount.
+process_killer --session --mount_holders

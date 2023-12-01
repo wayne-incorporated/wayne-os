@@ -1,0 +1,43 @@
+From 45b209e69240d1c71db87ebf86e4d15003b80929 Mon Sep 17 00:00:00 2001
+From: James Ye <jamesye@google.com>
+Date: Tue, 11 Oct 2022 17:03:46 +1100
+Subject: [PATCH] Use toolchain pkg-config
+
+---
+ configure.ac | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index 0909cc5b4..4e9908e95 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -1353,7 +1353,7 @@ AM_CONDITIONAL(INT10MODULE, test "x$INT10MODULE" = xyes)
+ AC_DEFINE(SHAPE, 1, [Support SHAPE extension])
+ 
+ if test "x$XKBPATH" = "xauto"; then
+-    XKBPATH=$(pkg-config --variable datadir xkbcomp || echo ${datadir})/X11/xkb
++    XKBPATH=$($PKG_CONFIG --variable datadir xkbcomp || echo ${datadir})/X11/xkb
+ fi
+ 
+ AC_DEFINE_DIR(XKB_BASE_DIRECTORY, XKBPATH, [Path to XKB data])
+@@ -1363,7 +1363,7 @@ AC_ARG_WITH(xkb-bin-directory,
+ 				[XKB_BIN_DIRECTORY="auto"])
+ 
+ if test "x$XKB_BIN_DIRECTORY" = "xauto"; then
+-    XKB_BIN_DIRECTORY=$(pkg-config --variable bindir xkbcomp || echo ${bindir})
++    XKB_BIN_DIRECTORY=$($PKG_CONFIG --variable bindir xkbcomp || echo ${bindir})
+ fi
+ 
+ AC_DEFINE_DIR(XKB_BIN_DIRECTORY, XKB_BIN_DIRECTORY, [Path to XKB bin dir])
+@@ -2156,7 +2156,7 @@ dnl XWin requires OpenGL spec files in order to generate wrapper code for native
+            AC_MSG_RESULT(yes)
+            if test "x$KHRONOS_SPEC_DIR" = "xauto" ; then
+ 		PKG_CHECK_MODULES([KHRONOS_OPENGL_REGISTRY], [khronos-opengl-registry])
+-		KHRONOS_SPEC_DIR=`pkg-config khronos-opengl-registry --variable=specdir`
++		KHRONOS_SPEC_DIR=`$PKG_CONFIG khronos-opengl-registry --variable=specdir`
+            fi
+            AC_SUBST(KHRONOS_SPEC_DIR)
+ 	fi
+-- 
+2.38.0.rc2.412.g84df46c1b4-goog
+

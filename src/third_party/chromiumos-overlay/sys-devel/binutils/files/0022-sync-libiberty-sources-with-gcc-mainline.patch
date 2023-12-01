@@ -1,0 +1,1683 @@
+From 072a4ce5b7d94dfd677054d9e15e1ab1b5d53a41 Mon Sep 17 00:00:00 2001
+From: Nick Clifton <nickc@redhat.com>
+Date: Sat, 31 Dec 2022 12:03:16 +0000
+Subject: [PATCH 22/22] sync libiberty sources with gcc mainline
+
+---
+ include/demangle.h                    |  29 +-
+ libiberty/ChangeLog                   | 669 +++++++++++++++++++++++++-
+ libiberty/README                      |   2 +-
+ libiberty/_doprnt.c                   |   1 -
+ libiberty/configure                   |   3 +
+ libiberty/cp-demangle.c               | 411 +++++++++++++---
+ libiberty/cp-demangle.h               |   2 +-
+ libiberty/functions.texi              |   2 +-
+ libiberty/testsuite/demangle-expected | 170 ++++++-
+ 9 files changed, 1180 insertions(+), 109 deletions(-)
+
+diff --git a/include/demangle.h b/include/demangle.h
+index 23b47265d94..a1eaaf5b048 100644
+--- a/include/demangle.h
++++ b/include/demangle.h
+@@ -446,7 +446,25 @@ enum demangle_component_type
+   /* A cloned function.  */
+   DEMANGLE_COMPONENT_CLONE,
+   DEMANGLE_COMPONENT_NOEXCEPT,
+-  DEMANGLE_COMPONENT_THROW_SPEC
++  DEMANGLE_COMPONENT_THROW_SPEC,
++
++  DEMANGLE_COMPONENT_STRUCTURED_BINDING,
++
++  DEMANGLE_COMPONENT_MODULE_NAME,
++  DEMANGLE_COMPONENT_MODULE_PARTITION,
++  DEMANGLE_COMPONENT_MODULE_ENTITY,
++  DEMANGLE_COMPONENT_MODULE_INIT,
++
++  DEMANGLE_COMPONENT_TEMPLATE_HEAD,
++  DEMANGLE_COMPONENT_TEMPLATE_TYPE_PARM,
++  DEMANGLE_COMPONENT_TEMPLATE_NON_TYPE_PARM,
++  DEMANGLE_COMPONENT_TEMPLATE_TEMPLATE_PARM,
++  DEMANGLE_COMPONENT_TEMPLATE_PACK_PARM,
++
++  /* A builtin type with argument.  This holds the builtin type
++     information.  */
++  DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE
++
+ };
+ 
+ /* Types which are only used internally.  */
+@@ -533,6 +551,15 @@ struct demangle_component
+       const struct demangle_builtin_type_info *type;
+     } s_builtin;
+ 
++    /* For DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.  */
++    struct
++    {
++      /* Builtin type.  */
++      const struct demangle_builtin_type_info *type;
++      short arg;
++      char suffix;
++    } s_extended_builtin;
++
+     /* For DEMANGLE_COMPONENT_SUB_STD.  */
+     struct
+     {
+diff --git a/libiberty/ChangeLog b/libiberty/ChangeLog
+index a6f82ef6ec9..0e2289d81b7 100644
+--- a/libiberty/ChangeLog
++++ b/libiberty/ChangeLog
+@@ -1,3 +1,626 @@
++2022-11-23  Marek Polacek  <polacek@redhat.com>
++
++	Revert:
++	2022-11-23  Marek Polacek  <polacek@redhat.com>
++
++	* configure.ac: Also set shared when enable_host_pie.
++	* configure: Regenerate.
++
++2022-11-23  Marek Polacek  <polacek@redhat.com>
++
++	* configure.ac: Also set shared when enable_host_pie.
++	* configure: Regenerate.
++
++2022-11-15  Nathan Sidwell  <nathan@acm.org>
++
++	* cp-demangle.c (struct d_print_info): Rename is_lambda_arg to
++	lambda_tpl_parms.  Augment semantics.
++	(d_make_comp): Add checks for new components.
++	(d_template_parm, d_template_head): New.
++	(d_lambda): Add templated lambda support.
++	(d_print_init): Adjust.
++	(d_print_lambda_parm_name): New.
++	(d_print_comp_inner): Support templated lambdas,
++	* testsuite/demangle-expected: Add testcases.
++
++2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	Revert:
++	2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	* doc/bsd.rst: New file.
++	* doc/conf.py: New file.
++	* doc/copyright.rst: New file.
++	* doc/extensions.rst: New file.
++	* doc/function-variable-and-macro-listing.rst: New file.
++	* doc/index.rst: New file.
++	* doc/indices-and-tables.rst: New file.
++	* doc/introduction.rst: New file.
++	* doc/lesser-general-public-license-2.1.rst: New file.
++	* doc/overview.rst: New file.
++	* doc/replacement-functions.rst: New file.
++	* doc/supplemental-functions.rst: New file.
++	* doc/using.rst: New file.
++
++2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	Revert:
++	2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	* Makefile.in: Support Sphinx based documentation.
++
++2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	Revert:
++	2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	* at-file.texi: Removed.
++	* copying-lib.texi: Removed.
++	* functions.texi: Removed.
++	* libiberty.texi: Removed.
++	* obstacks.texi: Removed.
++
++2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	Revert:
++	2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	* Makefile.in: Support --with-sphinx-build.
++	* configure.ac: Likewise.
++	* configure: Regenerate.
++
++2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	Revert:
++	2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	* doc/bsd.rst:
++	Add trailing newline.
++	* doc/copyright.rst:
++	Add trailing newline.
++	* doc/extensions.rst:
++	Add trailing newline.
++	* doc/function-variable-and-macro-listing.rst:
++	Add trailing newline.
++	* doc/index.rst:
++	Add trailing newline.
++	* doc/indices-and-tables.rst:
++	Add trailing newline.
++	* doc/introduction.rst:
++	Add trailing newline.
++	* doc/lesser-general-public-license-2.1.rst:
++	Add trailing newline.
++	* doc/overview.rst:
++	Add trailing newline.
++	* doc/replacement-functions.rst:
++	Add trailing newline.
++	* doc/supplemental-functions.rst:
++	Add trailing newline.
++	* doc/using.rst:
++	Add trailing newline.
++
++2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	Revert:
++	2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	* doc/conf.py: Add newline at last line.
++
++2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	Revert:
++	2022-11-14  Martin Liska  <mliska@suse.cz>
++
++	PR other/107620
++	* configure: Regenerate.
++	* configure.ac: Always set sphinx-build.
++
++2022-11-13  Martin Liska  <mliska@suse.cz>
++
++	PR other/107620
++	* configure: Regenerate.
++	* configure.ac: Always set sphinx-build.
++
++2022-11-10  Martin Liska  <mliska@suse.cz>
++
++	* doc/conf.py: Add newline at last line.
++
++2022-11-09  Martin Liska  <mliska@suse.cz>
++
++	* doc/bsd.rst:
++	Add trailing newline.
++	* doc/copyright.rst:
++	Add trailing newline.
++	* doc/extensions.rst:
++	Add trailing newline.
++	* doc/function-variable-and-macro-listing.rst:
++	Add trailing newline.
++	* doc/index.rst:
++	Add trailing newline.
++	* doc/indices-and-tables.rst:
++	Add trailing newline.
++	* doc/introduction.rst:
++	Add trailing newline.
++	* doc/lesser-general-public-license-2.1.rst:
++	Add trailing newline.
++	* doc/overview.rst:
++	Add trailing newline.
++	* doc/replacement-functions.rst:
++	Add trailing newline.
++	* doc/supplemental-functions.rst:
++	Add trailing newline.
++	* doc/using.rst:
++	Add trailing newline.
++
++2022-11-09  Martin Liska  <mliska@suse.cz>
++
++	* Makefile.in: Support --with-sphinx-build.
++	* configure.ac: Likewise.
++	* configure: Regenerate.
++
++2022-11-09  Martin Liska  <mliska@suse.cz>
++
++	* at-file.texi: Removed.
++	* copying-lib.texi: Removed.
++	* functions.texi: Removed.
++	* libiberty.texi: Removed.
++	* obstacks.texi: Removed.
++
++2022-11-09  Martin Liska  <mliska@suse.cz>
++
++	* Makefile.in: Support Sphinx based documentation.
++
++2022-11-09  Martin Liska  <mliska@suse.cz>
++
++	* doc/bsd.rst: New file.
++	* doc/conf.py: New file.
++	* doc/copyright.rst: New file.
++	* doc/extensions.rst: New file.
++	* doc/function-variable-and-macro-listing.rst: New file.
++	* doc/index.rst: New file.
++	* doc/indices-and-tables.rst: New file.
++	* doc/introduction.rst: New file.
++	* doc/lesser-general-public-license-2.1.rst: New file.
++	* doc/overview.rst: New file.
++	* doc/replacement-functions.rst: New file.
++	* doc/supplemental-functions.rst: New file.
++	* doc/using.rst: New file.
++
++2022-10-18  Florian Weimer  <fweimer@redhat.com>
++
++	* acinclude.m4 (ac_cv_func_strncmp_works): Add missing
++	int return type and parameter list to the definition of main.
++	Include <stdlib.h> and <string.h> for prototypes.
++	(ac_cv_c_stack_direction): Add missing
++	int return type and parameter list to the definitions of
++	main, find_stack_direction.  Include <stdlib.h> for exit
++	prototype.
++	* configure: Regenerate.
++
++2022-10-14  Jakub Jelinek  <jakub@redhat.com>
++
++	* cp-demangle.h (D_BUILTIN_TYPE_COUNT): Increment.
++	* cp-demangle.c (cplus_demangle_builtin_types): Add std::bfloat16_t
++	entry.
++	(cplus_demangle_type): Demangle DF16b.
++	* testsuite/demangle-expected (_Z3xxxDF16b): New test.
++
++2022-10-11  Nathan Sidwell  <nathan@acm.org>
++
++	* cp-demangle.c (d_prefix): 'M' components are not
++	(re-)added to the substitution table.
++	* testsuite/demangle-expected: Add tests.
++
++2022-10-07  Nathan Sidwell  <nathan@acm.org>
++
++	* cp-demangle.c (d_print_comp_inner): Allow parameter packs
++	in a lambda signature.
++	* testsuite/demangle-expected: Add tests.
++
++2022-09-27  Jakub Jelinek  <jakub@redhat.com>
++
++	PR c++/106652
++	PR c++/85518
++	* cp-demangle.c (d_dump): Handle
++	DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.  Don't handle
++	DEMANGLE_COMPONENT_FIXED_TYPE.
++	(d_make_extended_builtin_type): New function.
++	(cplus_demangle_builtin_types): Add _Float entry.
++	(cplus_demangle_type): For DF demangle it as _Float<N> or
++	_Float<N>x rather than fixed point which conflicts with it.
++	(d_count_templates_scopes): Handle
++	DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.  Just break; for
++	DEMANGLE_COMPONENT_FIXED_TYPE.
++	(d_find_pack): Handle DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.
++	Don't handle DEMANGLE_COMPONENT_FIXED_TYPE.
++	(d_print_comp_inner): Likewise.
++	* cp-demangle.h (D_BUILTIN_TYPE_COUNT): Bump.
++	* testsuite/demangle-expected: Replace _Z3xxxDFyuVb test
++	with _Z3xxxDF16_DF32_DF64_DF128_CDF16_Vb.  Add
++	_Z3xxxDF32xDF64xDF128xCDF32xVb test.
++
++2022-09-22  Jonathan Wakely  <jwakely@redhat.com>
++
++	* README: Replace gcc-bugs email address with Bugzilla URL.
++
++2022-08-25  Martin Liska  <mliska@suse.cz>
++
++	* configure: Regenerate.
++
++2022-07-22  Martin Liska  <mliska@suse.cz>
++
++	PR other/106370
++	* _doprnt.c: Remove continue as last stmt
++	in a loop.
++
++2022-07-14  Martin Liska  <mliska@suse.cz>
++
++	* functions.texi: Replace strtoul with strtoull.
++
++2022-07-04  Nick Clifton  <nickc@redhat.com>
++
++	* rust-demangle.c (demangle_const): Add a missing goto pass_return
++	at the end of the function.
++
++2022-07-04  Nick Clifton  <nickc@redhat.com>
++
++	* rust-demangle.c (demangle_path_maybe_open_generics): Add
++	recursion limit.
++
++2022-07-01  Nick Clifton  <nickc@redhat.com>
++
++	PR demangler/105039
++	* rust-demangle.c (demangle_const): Add recursion limit.
++
++2022-06-26  Simon Marchi  <simon.marchi@efficios.com>
++
++	* configure.ac: Add AC_CONFIG_MACRO_DIRS call.
++	* configure: Re-generate.
++
++2022-05-23  Nathan Sidwell  <nathan@acm.org>
++
++	* cp-demangle.c (d_make_comp): Adjust.
++	(d_name, d_prefix): Adjust subst handling. Add module handling.
++	(d_maybe_module_name): New.
++	(d_unqualified_name): Add incoming module parm. Handle it.  Adjust all callers.
++	(d_special_name): Add 'GI' support.
++	(d_count_template_scopes): Adjust.
++	(d_print_comp_inner): Print module.
++	* testsuite/demangle-expected: New test cases
++
++2022-05-18  Nathan Sidwell  <nathan@acm.org>
++
++	* cp-demangle.c (d_name): Add SUBSTABLE parameter,
++	push substitution if requested. Adjust unscoped name handling.
++	(d_prefix): Reorder main loop. Adjust all calls.
++	(d_unqualified_name): Add SCOPE parameter, create qualified
++	name here. Adjust all calls.
++	(cplus_demangle_type): Do not handle 'S' here, leave all
++	to d_class_enum_type.
++	(d_class_enum_type): Add SUBSTABLE parameter.
++
++2022-05-17  Nathan Sidwell  <nathan@acm.org>
++
++	* cp-demangle.c (d_make_comp): Adjust.
++	(d_unqualified_name): Add 'DC' support.
++	(d_count_template_scopes): Adjust.
++	(d_print_comp_inner): Add structured binding.
++	* testsuite/demangle-expected: Add testcases.
++
++2022-05-10  Martin Liska  <mliska@suse.cz>
++
++	* regex.c: Restore comments.
++
++2022-05-10  Martin Liska  <mliska@suse.cz>
++	    Alan Modra  <amodra@gmail.com>
++
++	* hashtab.c (htab_empty): Use void * type instead of void **.
++	(htab_expand): Likewise.
++
++2022-05-10  Martin Liska  <mliska@suse.cz>
++
++	* random.c: Remove 'define PTR'.
++
++2022-05-10  Martin Liska  <mliska@suse.cz>
++
++	* alloca.c (C_alloca): Use void * instead PTR.
++	* calloc.c (malloc): Likewise.
++	(bzero): Likewise.
++	(calloc): Likewise.
++	* hashtab.c (find_empty_slot_for_expand): Likewise.
++	(eq_pointer): Likewise.
++	(htab_create_alloc_ex): Likewise.
++	(htab_create_typed_alloc): Likewise.
++	(htab_set_functions_ex): Likewise.
++	(htab_delete): Likewise.
++	(htab_empty): Likewise.
++	(htab_expand): Likewise.
++	(htab_find_with_hash): Likewise.
++	(htab_find): Likewise.
++	(htab_find_slot_with_hash): Likewise.
++	(htab_find_slot): Likewise.
++	(htab_remove_elt): Likewise.
++	(htab_remove_elt_with_hash): Likewise.
++	(htab_clear_slot): Likewise.
++	(htab_traverse_noresize): Likewise.
++	(htab_traverse): Likewise.
++	(htab_hash_string): Likewise.
++	(iterative_hash): Likewise.
++	(hash_pointer): Likewise.
++	* memchr.c (memchr): Likewise.
++	* memcmp.c (memcmp): Likewise.
++	* memcpy.c (memcpy): Likewise.
++	* memmove.c (memmove): Likewise.
++	* mempcpy.c (memcpy): Likewise.
++	(mempcpy): Likewise.
++	* memset.c (memset): Likewise.
++	* objalloc.c (malloc): Likewise.
++	(free): Likewise.
++	(objalloc_create): Likewise.
++	(_objalloc_alloc): Likewise.
++	(objalloc_free_block): Likewise.
++	* random.c (PTR): Likewise.
++	(void): Likewise.
++	(initstate): Likewise.
++	(setstate): Likewise.
++	* regex.c: Likewise.
++	* spaces.c (malloc): Likewise.
++	(free): Likewise.
++	* stpcpy.c (memcpy): Likewise.
++	* strdup.c (malloc): Likewise.
++	(memcpy): Likewise.
++	* strerror.c (malloc): Likewise.
++	(memset): Likewise.
++	* strndup.c (malloc): Likewise.
++	(memcpy): Likewise.
++	* strsignal.c (malloc): Likewise.
++	(memset): Likewise.
++	* vasprintf.c (malloc): Likewise.
++	* vprintf-support.c: Likewise.
++	* xatexit.c (malloc): Likewise.
++	* xmalloc.c (xmalloc): Likewise.
++	(xcalloc): Likewise.
++	(xrealloc): Likewise.
++	* xmemdup.c (xmemdup): Likewise.
++
++2022-03-19  Tiezhu Yang  <yangtiezhu@loongson.cn>
++
++	* floatformat.c (floatformat_ieee_quad_big): Renamed from
++	floatformat_ia64_quad_big.
++	(floatformat_ieee_quad_little): Similarly.
++
++2022-02-22  Jakub Jelinek  <jakub@redhat.com>
++
++	PR lto/104617
++	* simple-object-elf.c (simple_object_elf_match): Fix up URL
++	in comment.
++	(simple_object_elf_copy_lto_debug_sections): Remap sh_info and
++	sh_link even if they are in the SHN_LORESERVE .. SHN_HIRESERVE
++	range (inclusive).
++
++2022-02-17  Mark Wielaard  <mark@klomp.org>
++
++	* rust-demangle.c (rust_demangle_callback): Ignore everything
++	after '.' char in sym for v0. For legacy symbols search
++	backwards to find the last 'E' before any '.'.
++	* testsuite/rust-demangle-expected: Add new .suffix testcases.
++
++2022-01-31  Nick Clifton  <nickc@redhat.com>
++
++	PR demangler/98886
++	PR demangler/99935
++	* rust-demangle.c (struct rust_demangler): Add a recursion
++	counter.
++	(demangle_path): Increment/decrement the recursion counter upon
++	entry and exit.  Fail if the counter exceeds a fixed limit.
++	(demangle_type): Likewise.
++	(rust_demangle_callback): Initialise the recursion counter,
++	disabling if requested by the option flags.
++
++2022-01-15  Martin Sebor  <msebor@redhat.com>
++
++	* regex.c: Suppress -Wuse-after-free.
++
++2021-12-30  Lancelot SIX  <lsix@lancelotsix.com>
++
++	* cp-demangle.c (d_clone_suffix): Support digits in clone tag
++	names.
++	* testsuite/demangle-expected: Check demangling of clone symbols
++	with digits in name.
++
++2021-12-16  H.J. Lu  <hjl.tools@gmail.com>
++
++	Revert:
++	2021-12-16  H.J. Lu  <hjl.tools@gmail.com>
++
++	* Makefile.in (AR): Add @AR_PLUGIN_OPTION@
++	(RANLIB): Add @RANLIB_PLUGIN_OPTION@.
++	(configure_deps): Depend on ../config/gcc-plugin.m4.
++	* configure.ac: AC_SUBST AR_PLUGIN_OPTION and
++	RANLIB_PLUGIN_OPTION.
++	* aclocal.m4: Regenerated.
++	* configure: Likewise.
++
++2021-12-15  H.J. Lu  <hjl.tools@gmail.com>
++
++	* Makefile.in (AR): Add @AR_PLUGIN_OPTION@
++	(RANLIB): Add @RANLIB_PLUGIN_OPTION@.
++	(configure_deps): Depend on ../config/gcc-plugin.m4.
++	* configure.ac: AC_SUBST AR_PLUGIN_OPTION and
++	RANLIB_PLUGIN_OPTION.
++	* aclocal.m4: Regenerated.
++	* configure: Likewise.
++
++2021-11-29  Eric Gallager  <egallager@gcc.gnu.org>
++
++	PR other/103021
++	* Makefile.in: Use ETAGS variable in TAGS target.
++	* configure: Regenerate.
++	* configure.ac: Allow ETAGS variable to be overridden.
++
++2021-11-29  Andrew Pinski  <apinski@marvell.com>
++
++	* make-temp-file.c (try_dir): Check to see if the dir
++	is actually a directory.
++
++2021-10-22  Eric Gallager  <egallager@gcc.gnu.org>
++
++	PR other/102663
++	* Makefile.in: Allow dvi-formatted documentation
++	to be installed.
++
++2021-10-17  Luís Ferreira  <contact@lsferreira.net>
++
++	PR d/102618
++	* d-demangle.c (dlang_parse_qualified): Handle anonymous
++	symbols correctly.
++	* testsuite/d-demangle-expected: New tests to cover anonymous
++	symbols.
++
++2021-10-14  Luís Ferreira  <contact@lsferreira.net>
++
++	* testsuite/d-demangle-expected: Add test case for function literals.
++
++2021-10-14  Luís Ferreira  <contact@lsferreira.net>
++
++	* testsuite/d-demangle-expected: Add test cases for simple special
++	mangles.
++
++2021-10-12  Luís Ferreira  <contact@lsferreira.net>
++
++	* d-demangle.c (dlang_parse_qualified): Remove redudant parenthesis
++	around lhs and rhs of assignments.
++
++2021-10-01  Luís Ferreira  <contact@lsferreira.net>
++
++	* testsuite/d-demangle-expected: Add missing format for new test
++
++2021-09-23  Luís Ferreira  <contact@lsferreira.net>
++
++	* d-demangle.c (dlang_Type): Validate MANGLED is nonnull.
++	* testsuite/d-demangle-expected: New test.
++
++2021-09-23  Luís Ferreira  <contact@lsferreira.net>
++
++	* d-demangle.c (dlang_symbol_backref): Ensure strlen of
++	string is less than length computed by dlang_number.
++
++2021-09-01  Iain Sandoe  <iain@sandoe.co.uk>
++
++	* configure: Regenerate.
++	* configure.ac: Do not search for sbrk on Darwin.
++	* xmalloc.c: Do not declare sbrk unless it has been found
++	by configure.
++
++2021-08-29  Iain Buclaw  <ibuclaw@gdcproject.org>
++
++	* d-demangle.c (dlang_identifier): Skip over fake parent manglings.
++	* testsuite/d-demangle-expected: Add tests.
++
++2021-08-29  Iain Buclaw  <ibuclaw@gdcproject.org>
++
++	* d-demangle.c (dlang_parse_arrayliteral): Add 'info' parameter.
++	(dlang_parse_assocarray): Likewise.
++	(dlang_parse_structlit): Likewise.
++	(dlang_value): Likewise.  Handle function literal symbols.
++	(dlang_template_args): Pass 'info' to dlang_value.
++	* testsuite/d-demangle-expected: Add new test.
++
++2021-08-29  Iain Buclaw  <ibuclaw@gdcproject.org>
++
++	* d-demangle.c (dlang_attributes): Handle typeof(*null).
++	(dlang_type): Likewise.  Demangle 'n' as typeof(null).
++	* testsuite/d-demangle-expected: Update tests.
++
++2021-08-23  Iain Sandoe  <iain@sandoe.co.uk>
++
++	* simple-object-mach-o.c (simple_object_mach_o_write_segment):
++	Cast the first argument to set_32 as needed.
++
++2021-08-18  Iain Sandoe  <iain@sandoe.co.uk>
++
++	* simple-object-mach-o.c (simple_object_mach_o_write_segment):
++	Arrange to swap the LTO index tables where needed.
++
++2021-06-30  Gerald Pfeifer  <gerald@pfeifer.com>
++
++	* make-temp-file.c (usrtmp): Remove.
++	(choose_tmpdir): Remove use of usrtmp.
++
++2021-06-28  Indu Bhagat  <indu.bhagat@oracle.com>
++
++	* simple-object.c (handle_lto_debug_sections): Copy over .BTF section.
++
++2021-06-28  Indu Bhagat  <indu.bhagat@oracle.com>
++	    David Faust  <david.faust@oracle.com>
++	    Jose E. Marchesi  <jose.marchesi@oracle.com>
++	    Weimin Pan  <weimin.pan@oracle.com>
++
++	* simple-object.c (handle_lto_debug_sections): Copy over .ctf
++	sections.
++
++2021-06-05  John David Anglin  <danglin@gcc.gnu.org>
++
++	PR target/100734
++	* configure.ac: Use libiberty snprintf and vsnprintf on
++	hppa*-*-hpux*.
++	* configure: Regenerate.
++
++2021-05-06  Tom Tromey  <tom@tromey.com>
++
++	* hashtab.c (htab_eq_string): New function.
++
++2021-05-04  Eric Botcazou  <ebotcazou@adacore.com>
++
++	* configure.ac: Make test for variables more robust.
++	* configure: Regenerate.
++
++2021-05-03  H.J. Lu  <hjl.tools@gmail.com>
++
++	PR bootstrap/99703
++	* configure: Regenerated.
++
++2021-04-21  Andreas Schwab  <schwab@linux-m68k.org>
++
++	PR demangler/100177
++	* rust-demangle.c (demangle_const_char): Properly print the
++	character value.
++
++2021-03-31  Patrick Palka  <ppalka@redhat.com>
++
++	PR c++/88115
++	* cp-demangle.c (d_dump, d_make_comp, d_expression_1)
++	(d_count_templates_scopes): Handle DEMANGLE_COMPONENT_VENDOR_EXPR.
++	(d_print_comp_inner): Likewise.
++	<case DEMANGLE_COMPONENT_EXTENDED_OPERATOR>: Revert r11-4926
++	change.
++	<case DEMANGLE_COMPONENT_UNARY>: Likewise.
++	* testsuite/demangle-expected: Adjust __alignof__ tests.
++
++2021-03-16  Nick Clifton  <nickc@redhat.com>
++
++	* sha1.c (sha1_process_bytes): Use memmove in place of memcpy.
++
++2021-02-20  Mike Frysinger  <vapier@gentoo.org>
++
++	* Makefile.in (ACLOCAL, ACLOCAL_AMFLAGS, $(srcdir)/aclocal.m4): Define.
++	(configure_deps): Rename to ...
++	(aclocal_deps): ... this.  Replace aclocal.m4 with acinclude.m4.
++	($(srcdir)/configure): Replace $(configure_deps) with
++	$(srcdir)/aclocal.m4.
++	* aclocal.m4: Move libiberty macros to acinclude.m4, then regenerate.
++	* acinclude.m4: New file.
++	* configure: Regenerate.
++
++2021-02-19  Ayush Mittal  <ayush.m@samsung.com>
++
++	* argv.c (expandargv): free allocated buffer if read fails.
++
++2021-02-01  Martin Sebor  <msebor@redhat.com>
++
++	* dyn-string.c (dyn_string_insert_cstr): Use memcpy instead of strncpy
++	to avoid -Wstringop-truncation.
++
+ 2021-01-04  Martin Liska  <mliska@suse.cz>
+ 
+ 	* strverscmp.c: Convert to utf8 from iso8859.
+@@ -1130,7 +1753,7 @@
+ 2016-06-12  Brooks Moses  <bmoses@google.com>
+ 
+ 	* cp-demangle.c (cplus_demangle_print_callback): Avoid zero-length
+-	  VLAs.
++	VLAs.
+ 
+ 2016-05-31  Alan Modra  <amodra@gmail.com>
+ 
+@@ -2707,8 +3330,8 @@
+ 
+ 2009-08-23  H.J. Lu  <hongjiu.lu@intel.com>
+ 
+-	 PR ld/10536
+-	 * Makefile.in (install-html-recursive): Removed.
++	PR ld/10536
++	* Makefile.in (install-html-recursive): Removed.
+ 
+ 2009-08-22  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+ 
+@@ -7142,7 +7765,7 @@ Sun Nov 28 00:59:39 1999  Philippe De Muyter  <phdm@macqel.be>
+ 	* strtoul.c, strtol.c, random.c: Remove advertising clause from
+ 	BSD license, pursuant with
+ 
+-	  ftp://ftp.cs.berkeley.edu/pub/4bsd/README.Impt.License.Change
++	ftp://ftp.cs.berkeley.edu/pub/4bsd/README.Impt.License.Change
+ 
+ Wed Nov 10 09:42:39 1999  Jeffrey A Law  (law@cygnus.com)
+ 
+@@ -9526,12 +10149,12 @@ Sun Feb 27 21:50:11 1994  Jim Kingdon  (kingdon@deneb.cygnus.com)
+ Thu Feb 24 11:51:12 1994  David J. Mackenzie  (djm@rtl.cygnus.com)
+ 
+ 	* getopt.c: Remove #ifdef GETOPT_COMPAT and #if 0 code.
+-	 (_getopt_initialize): New function, broken out of _getopt_internal.
+-	 (_getopt_internal):
+-	 If long_only and the ARGV-element has the form "-f", where f is
+-	 a valid short option, don't consider it an abbreviated form of
+-	 a long option that starts with f.  Otherwise there would be no
+-	 way to give the -f short option.
++	(_getopt_initialize): New function, broken out of _getopt_internal.
++	(_getopt_internal):
++	If long_only and the ARGV-element has the form "-f", where f is
++	a valid short option, don't consider it an abbreviated form of
++	a long option that starts with f.  Otherwise there would be no
++	way to give the -f short option.
+ 
+ Thu Feb 10 14:44:16 1994  Richard Stallman  (rms@mole.gnu.ai.mit.edu)
+ 
+@@ -9751,8 +10374,8 @@ Fri Oct 22 07:53:15 1993  Jim Kingdon  (kingdon@lioth.cygnus.com)
+ Tue Oct 19 17:12:01 1993  david d `zoo' zuhn  (zoo@rtl.cygnus.com)
+ 
+ 	* Makefile.in (lneeded-list): ensure that object file names are
+-	  not duplicated, as multiple instances of the same object file in
+-	  a library causes problems on some machines
++	not duplicated, as multiple instances of the same object file in
++	a library causes problems on some machines
+ 
+ Mon Oct 18 21:59:28 1993  Jim Kingdon  (kingdon@lioth.cygnus.com)
+ 
+@@ -10165,10 +10788,10 @@ Wed Sep  9 12:41:48 1992  Ian Lance Taylor  (ian@cygnus.com)
+ Thu Sep  3 13:29:39 1992  K. Richard Pixley  (rich@sendai.cygnus.com)
+ 
+ 	* cplus-dem.c: (demangle_prefix): reduction in strength of strstr
+-	  as a time optimization.
++	as a time optimization.
+ 
+ 	* cplus-dem.c (cplus_demangle): remove strpbrk test.  Appears to
+-	  be more expensive than simply demangling.
++	be more expensive than simply demangling.
+ 
+ 	* cplus-dem.c (cplus_match): new function.
+ 
+@@ -10264,7 +10887,7 @@ Wed Jun 17 18:13:58 1992  Per Bothner  (bothner@rtl.cygnus.com)
+ Tue Jun 16 16:11:59 1992  K. Richard Pixley  (rich@rtl.cygnus.com)
+ 
+ 	* getopt.c, getopt1.c: merged largely gratuitous, mostly
+-	  whitespace diffs from other prep distributions.
++	whitespace diffs from other prep distributions.
+ 
+ Mon Jun 15 12:25:46 1992  Fred Fish  (fnf@cygnus.com)
+ 
+@@ -10354,7 +10977,7 @@ Mon Apr 20 20:49:32 1992  K. Richard Pixley  (rich@cygnus.com)
+ 	* Makefile.in: do not print recursion line.
+ 
+ 	* Makefile.in: allow CFLAGS to be passed in from command line.
+-	  Removed MINUS_G.  Default CFLAGS to -g.
++	Removed MINUS_G.  Default CFLAGS to -g.
+ 
+ Mon Apr 20 12:57:46 1992  Per Bothner  (bothner@rtl.cygnus.com)
+ 
+@@ -10425,8 +11048,8 @@ Thu Feb 27 22:19:39 1992  Per Bothner  (bothner@cygnus.com)
+ Wed Feb 26 18:04:40 1992  K. Richard Pixley  (rich@cygnus.com)
+ 
+ 	* Makefile.in, configure.in: removed traces of namesubdir,
+-	  -subdirs, $(subdir), $(unsubdir), some rcs triggers.  Forced
+-	  copyrights to '92, changed some from Cygnus to FSF.
++	-subdirs, $(subdir), $(unsubdir), some rcs triggers.  Forced
++	copyrights to '92, changed some from Cygnus to FSF.
+ 
+ Sat Feb 22 01:09:21 1992  Stu Grossman  (grossman at cygnus.com)
+ 
+@@ -10511,17 +11134,17 @@ Tue Dec 10 04:14:49 1991  K. Richard Pixley  (rich at rtl.cygnus.com)
+ Fri Dec  6 23:26:45 1991  K. Richard Pixley  (rich at rtl.cygnus.com)
+ 
+ 	* Makefile.in: remove spaces following hyphens because bsd make
+-	  can't cope.  added standards.text support.  install using
+-	  INSTALL_DATA.
++	can't cope.  added standards.text support.  install using
++	INSTALL_DATA.
+ 
+ 	* configure.in: remove commontargets as it is no longer a
+-	  recognized hook.
++	recognized hook.
+ 
+ Thu Dec  5 22:46:46 1991  K. Richard Pixley  (rich at rtl.cygnus.com)
+ 
+ 	* Makefile.in: idestdir and ddestdir go away.  Added copyrights
+-	  and shift gpl to v2.  Added ChangeLog if it didn't exist. docdir
+-	  and mandir now keyed off datadir by default.
++	and shift gpl to v2.  Added ChangeLog if it didn't exist. docdir
++	and mandir now keyed off datadir by default.
+ 
+ Fri Nov 22 19:15:29 1991  John Gilmore  (gnu at cygnus.com)
+ 
+diff --git a/libiberty/README b/libiberty/README
+index 9f1cc979e49..e7ffb17c192 100644
+--- a/libiberty/README
++++ b/libiberty/README
+@@ -15,7 +15,7 @@ The library must be configured from the top source directory.  Don't
+ try to run configure in this directory.  Follow the configuration
+ instructions in ../README.
+ 
+-Please report bugs to "gcc-bugs@gcc.gnu.org" and send fixes to
++Please report bugs to https://gcc.gnu.org/bugzilla/ and send fixes to
+ "gcc-patches@gcc.gnu.org".  Thank you.
+ 
+ ADDING A NEW FILE
+diff --git a/libiberty/_doprnt.c b/libiberty/_doprnt.c
+index f91d80d1ded..4fabcfdb7a6 100644
+--- a/libiberty/_doprnt.c
++++ b/libiberty/_doprnt.c
+@@ -55,7 +55,6 @@ Foundation, 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
+ 	 putc(CHAR, stream); \
+ 	 ptr++; \
+ 	 total_printed++; \
+-	 continue; \
+      } while (0)
+ 
+ #define PRINT_TYPE(TYPE) \
+diff --git a/libiberty/configure b/libiberty/configure
+index b6af9baf212..0299162e3c1 100755
+--- a/libiberty/configure
++++ b/libiberty/configure
+@@ -5205,6 +5205,9 @@ case "${host}" in
+ 	# sets the default TLS model and affects inlining.
+ 	PICFLAG=-fPIC
+ 	;;
++    loongarch*-*-*)
++	PICFLAG=-fpic
++	;;
+     mips-sgi-irix6*)
+ 	# PIC is the default.
+ 	;;
+diff --git a/libiberty/cp-demangle.c b/libiberty/cp-demangle.c
+index d3e798455cc..7a70c67026f 100644
+--- a/libiberty/cp-demangle.c
++++ b/libiberty/cp-demangle.c
+@@ -347,9 +347,9 @@ struct d_print_info
+   /* Number of times d_print_comp was recursively called.  Should not
+      be bigger than MAX_RECURSION_COUNT.  */
+   int recursion;
+-  /* Non-zero if we're printing a lambda argument.  A template
+-     parameter reference actually means 'auto'.  */
+-  int is_lambda_arg;
++  /* 1 more than the number of explicit template parms of a lambda.  Template
++     parm references >= are actually 'auto'.  */
++  int lambda_tpl_parms;
+   /* The current index into any template argument packs we are using
+      for printing, or -1 to print the whole pack.  */
+   int pack_index;
+@@ -488,6 +488,10 @@ static struct demangle_component *d_local_name (struct d_info *);
+ 
+ static int d_discriminator (struct d_info *);
+ 
++static struct demangle_component *d_template_parm (struct d_info *, int *bad);
++
++static struct demangle_component *d_template_head (struct d_info *, int *bad);
++
+ static struct demangle_component *d_lambda (struct d_info *);
+ 
+ static struct demangle_component *d_unnamed_type (struct d_info *);
+@@ -645,6 +649,13 @@ d_dump (struct demangle_component *dc, int indent)
+     case DEMANGLE_COMPONENT_BUILTIN_TYPE:
+       printf ("builtin type %s\n", dc->u.s_builtin.type->name);
+       return;
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
++      {
++	char suffix[2] = { dc->u.s_extended_builtin.type->suffix, 0 };
++	printf ("builtin type %s%d%s\n", dc->u.s_extended_builtin.type->name,
++		dc->u.s_extended_builtin.type->arg, suffix);
++      }
++      return;
+     case DEMANGLE_COMPONENT_OPERATOR:
+       printf ("operator %s\n", dc->u.s_operator.op->name);
+       return;
+@@ -768,11 +779,6 @@ d_dump (struct demangle_component *dc, int indent)
+     case DEMANGLE_COMPONENT_PTRMEM_TYPE:
+       printf ("pointer to member type\n");
+       break;
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+-      printf ("fixed-point type, accum? %d, sat? %d\n",
+-              dc->u.s_fixed.accum, dc->u.s_fixed.sat);
+-      d_dump (dc->u.s_fixed.length, indent + 2);
+-      break;
+     case DEMANGLE_COMPONENT_ARGLIST:
+       printf ("argument list\n");
+       break;
+@@ -1016,6 +1022,12 @@ d_make_comp (struct d_info *di, enum demangle_component_type type,
+     case DEMANGLE_COMPONENT_NULLARY:
+     case DEMANGLE_COMPONENT_TRINARY_ARG2:
+     case DEMANGLE_COMPONENT_TPARM_OBJ:
++    case DEMANGLE_COMPONENT_STRUCTURED_BINDING:
++    case DEMANGLE_COMPONENT_MODULE_INIT:
++    case DEMANGLE_COMPONENT_TEMPLATE_HEAD:
++    case DEMANGLE_COMPONENT_TEMPLATE_NON_TYPE_PARM:
++    case DEMANGLE_COMPONENT_TEMPLATE_TEMPLATE_PARM:
++    case DEMANGLE_COMPONENT_TEMPLATE_PACK_PARM:
+       if (left == NULL)
+ 	return NULL;
+       break;
+@@ -1036,6 +1048,7 @@ d_make_comp (struct d_info *di, enum demangle_component_type type,
+     case DEMANGLE_COMPONENT_CONST:
+     case DEMANGLE_COMPONENT_ARGLIST:
+     case DEMANGLE_COMPONENT_TEMPLATE_ARGLIST:
++    case DEMANGLE_COMPONENT_TEMPLATE_TYPE_PARM:
+     FNQUAL_COMPONENT_CASE:
+       break;
+ 
+@@ -1097,6 +1110,28 @@ d_make_builtin_type (struct d_info *di,
+   return p;
+ }
+ 
++/* Add a new extended builtin type component.  */
++
++static struct demangle_component *
++d_make_extended_builtin_type (struct d_info *di,
++			      const struct demangle_builtin_type_info *type,
++			      short arg, char suffix)
++{
++  struct demangle_component *p;
++
++  if (type == NULL)
++    return NULL;
++  p = d_make_empty (di);
++  if (p != NULL)
++    {
++      p->type = DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE;
++      p->u.s_extended_builtin.type = type;
++      p->u.s_extended_builtin.arg = arg;
++      p->u.s_extended_builtin.suffix = suffix;
++    }
++  return p;
++}
++
+ /* Add a new operator component.  */
+ 
+ static struct demangle_component *
+@@ -1591,11 +1626,8 @@ d_prefix (struct d_info *di, int subst)
+ 	return ret;
+       else if (peek == 'M')
+ 	{
+-	  /* Initializer scope for a lambda.  We don't need to represent
+-	     this; the normal code will just treat the variable as a type
+-	     scope, which gives appropriate output.  */
+-	  if (ret == NULL)
+-	    return NULL;
++	  /* Initializer scope for a lambda.  We already added it as a
++  	     substitution candidate, don't do that again.  */
+ 	  d_advance (di, 1);
+ 	  continue;
+ 	}
+@@ -2393,6 +2425,8 @@ cplus_demangle_builtin_types[D_BUILTIN_TYPE_COUNT] =
+   /* 32 */ { NL ("char32_t"),	NL ("char32_t"),	D_PRINT_DEFAULT },
+   /* 33 */ { NL ("decltype(nullptr)"),	NL ("decltype(nullptr)"),
+ 	     D_PRINT_DEFAULT },
++  /* 34 */ { NL ("_Float"),	NL ("_Float"),		D_PRINT_FLOAT },
++  /* 35 */ { NL ("std::bfloat16_t"), NL ("std::bfloat16_t"), D_PRINT_FLOAT },
+ };
+ 
+ CP_STATIC_IF_GLIBCPP_V3
+@@ -2696,19 +2730,37 @@ cplus_demangle_type (struct d_info *di)
+ 	  break;
+ 
+ 	case 'F':
+-	  /* Fixed point types. DF<int bits><length><fract bits><sat>  */
+-	  ret = d_make_empty (di);
+-	  ret->type = DEMANGLE_COMPONENT_FIXED_TYPE;
+-	  if ((ret->u.s_fixed.accum = IS_DIGIT (d_peek_char (di))))
+-	    /* For demangling we don't care about the bits.  */
+-	    d_number (di);
+-	  ret->u.s_fixed.length = cplus_demangle_type (di);
+-	  if (ret->u.s_fixed.length == NULL)
+-	    return NULL;
+-	  d_number (di);
+-	  peek = d_next_char (di);
+-	  ret->u.s_fixed.sat = (peek == 's');
+-	  break;
++	  /* DF<number>_ - _Float<number>.
++	     DF<number>x - _Float<number>x
++	     DF16b - std::bfloat16_t.  */
++	  {
++	    int arg = d_number (di);
++	    char buf[12];
++	    char suffix = 0;
++	    if (d_peek_char (di) == 'b')
++	      {
++		if (arg != 16)
++		  return NULL;
++		d_advance (di, 1);
++		ret = d_make_builtin_type (di,
++					   &cplus_demangle_builtin_types[35]);
++		di->expansion += ret->u.s_builtin.type->len;
++		break;
++	      }
++	    if (d_peek_char (di) == 'x')
++	      suffix = 'x';
++	    if (!suffix && d_peek_char (di) != '_')
++	      return NULL;
++	    ret
++	      = d_make_extended_builtin_type (di,
++					      &cplus_demangle_builtin_types[34],
++					      arg, suffix);
++	    d_advance (di, 1);
++	    sprintf (buf, "%d", arg);
++	    di->expansion += ret->u.s_extended_builtin.type->len
++			     + strlen (buf) + (suffix != 0);
++	    break;
++	  }
+ 
+ 	case 'v':
+ 	  ret = d_vector_type (di);
+@@ -3794,32 +3846,120 @@ d_discriminator (struct d_info *di)
+   return 1;
+ }
+ 
+-/* <closure-type-name> ::= Ul <lambda-sig> E [ <nonnegative number> ] _ */
++/* <template-parm> ::= Ty
++                   ::= Tn <type>
++		   ::= Tt <template-head> E
++		   ::= Tp <template-parm>  */
+ 
+ static struct demangle_component *
+-d_lambda (struct d_info *di)
++d_template_parm (struct d_info *di, int *bad)
+ {
+-  struct demangle_component *tl;
+-  struct demangle_component *ret;
+-  int num;
++  if (d_peek_char (di) != 'T')
++    return NULL;
+ 
++  struct demangle_component *op;
++  enum demangle_component_type kind;
++  switch (d_peek_next_char (di))
++    {
++    default:
++      return NULL;
++
++    case 'p': /* Pack  */
++      d_advance (di, 2);
++      op = d_template_parm (di, bad);
++      kind = DEMANGLE_COMPONENT_TEMPLATE_PACK_PARM;
++      if (!op)
++	{
++	  *bad = 1;
++	  return NULL;
++	}
++      break;
++
++    case 'y': /* Typename  */
++      d_advance (di, 2);
++      op = NULL;
++      kind = DEMANGLE_COMPONENT_TEMPLATE_TYPE_PARM;
++      break;
++
++    case 'n': /* Non-Type  */
++      d_advance (di, 2);
++      op = cplus_demangle_type (di);
++      kind = DEMANGLE_COMPONENT_TEMPLATE_NON_TYPE_PARM;
++      if (!op)
++	{
++	  *bad = 1;
++	  return NULL;
++	}
++      break;
++
++    case 't': /* Template */
++      d_advance (di, 2);
++      op = d_template_head (di, bad);
++      kind = DEMANGLE_COMPONENT_TEMPLATE_TEMPLATE_PARM;
++      if (!op || !d_check_char (di, 'E'))
++	{
++	  *bad = 1;
++	  return NULL;
++	}
++    }
++
++  return d_make_comp (di, kind, op, NULL);
++}
++
++/* <template-head> ::= <template-head>? <template-parm>  */
++
++static struct demangle_component *
++d_template_head (struct d_info *di, int *bad)
++{
++  struct demangle_component *res = NULL, **slot = &res;
++  struct demangle_component *op;
++
++  while ((op = d_template_parm (di, bad)))
++    {
++      *slot = op;
++      slot = &d_right (op);
++    }
++
++  /* Wrap it in a template head, to make concatenating with any parm list, and
++     printing simpler.  */
++  if (res)
++    res = d_make_comp (di, DEMANGLE_COMPONENT_TEMPLATE_HEAD, res, NULL);
++
++  return res;
++}
++
++/* <closure-type-name> ::= Ul <template-head>? <lambda-sig> E [ <nonnegative number> ] _ */
++
++static struct demangle_component *
++d_lambda (struct d_info *di)
++{
+   if (! d_check_char (di, 'U'))
+     return NULL;
+   if (! d_check_char (di, 'l'))
+     return NULL;
+ 
+-  tl = d_parmlist (di);
++  int bad = 0;
++  struct demangle_component *head = d_template_head (di, &bad);
++  if (bad)
++    return NULL;
++
++  struct demangle_component *tl = d_parmlist (di);
+   if (tl == NULL)
+     return NULL;
++  if (head)
++    {
++      d_right (head) = tl;
++      tl = head;
++    }
+ 
+   if (! d_check_char (di, 'E'))
+     return NULL;
+ 
+-  num = d_compact_number (di);
++  int num = d_compact_number (di);
+   if (num < 0)
+     return NULL;
+ 
+-  ret = d_make_empty (di);
++  struct demangle_component *ret = d_make_empty (di);
+   if (ret)
+     {
+       ret->type = DEMANGLE_COMPONENT_LAMBDA;
+@@ -4160,10 +4300,21 @@ d_count_templates_scopes (struct d_print_info *dpi,
+     case DEMANGLE_COMPONENT_FUNCTION_PARAM:
+     case DEMANGLE_COMPONENT_SUB_STD:
+     case DEMANGLE_COMPONENT_BUILTIN_TYPE:
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
+     case DEMANGLE_COMPONENT_OPERATOR:
+     case DEMANGLE_COMPONENT_CHARACTER:
+     case DEMANGLE_COMPONENT_NUMBER:
+     case DEMANGLE_COMPONENT_UNNAMED_TYPE:
++    case DEMANGLE_COMPONENT_STRUCTURED_BINDING:
++    case DEMANGLE_COMPONENT_MODULE_NAME:
++    case DEMANGLE_COMPONENT_MODULE_PARTITION:
++    case DEMANGLE_COMPONENT_MODULE_INIT:
++    case DEMANGLE_COMPONENT_FIXED_TYPE:
++    case DEMANGLE_COMPONENT_TEMPLATE_HEAD:
++    case DEMANGLE_COMPONENT_TEMPLATE_TYPE_PARM:
++    case DEMANGLE_COMPONENT_TEMPLATE_NON_TYPE_PARM:
++    case DEMANGLE_COMPONENT_TEMPLATE_TEMPLATE_PARM:
++    case DEMANGLE_COMPONENT_TEMPLATE_PACK_PARM:
+       break;
+ 
+     case DEMANGLE_COMPONENT_TEMPLATE:
+@@ -4262,10 +4413,6 @@ d_count_templates_scopes (struct d_print_info *dpi,
+       d_count_templates_scopes (dpi, dc->u.s_extended_operator.name);
+       break;
+ 
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+-      d_count_templates_scopes (dpi, dc->u.s_fixed.length);
+-      break;
+-
+     case DEMANGLE_COMPONENT_GLOBAL_CONSTRUCTORS:
+     case DEMANGLE_COMPONENT_GLOBAL_DESTRUCTORS:
+       d_count_templates_scopes (dpi, d_left (dc));
+@@ -4296,7 +4443,7 @@ d_print_init (struct d_print_info *dpi, demangle_callbackref callback,
+ 
+   dpi->demangle_failure = 0;
+   dpi->recursion = 0;
+-  dpi->is_lambda_arg = 0;
++  dpi->lambda_tpl_parms = 0;
+ 
+   dpi->component_stack = NULL;
+ 
+@@ -4532,11 +4679,11 @@ d_find_pack (struct d_print_info *dpi,
+     case DEMANGLE_COMPONENT_TAGGED_NAME:
+     case DEMANGLE_COMPONENT_OPERATOR:
+     case DEMANGLE_COMPONENT_BUILTIN_TYPE:
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
+     case DEMANGLE_COMPONENT_SUB_STD:
+     case DEMANGLE_COMPONENT_CHARACTER:
+     case DEMANGLE_COMPONENT_FUNCTION_PARAM:
+     case DEMANGLE_COMPONENT_UNNAMED_TYPE:
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+     case DEMANGLE_COMPONENT_DEFAULT_ARG:
+     case DEMANGLE_COMPONENT_NUMBER:
+       return NULL;
+@@ -4793,6 +4940,33 @@ d_maybe_print_designated_init (struct d_print_info *dpi, int options,
+   return 1;
+ }
+ 
++static void
++d_print_lambda_parm_name (struct d_print_info *dpi, int type, unsigned index)
++{
++  const char *str;
++  switch (type)
++    {
++    default:
++      dpi->demangle_failure = 1;
++      str = "";
++      break;
++
++    case DEMANGLE_COMPONENT_TEMPLATE_TYPE_PARM:
++      str = "$T";
++      break;
++
++    case DEMANGLE_COMPONENT_TEMPLATE_NON_TYPE_PARM:
++      str = "$N";
++      break;
++
++    case DEMANGLE_COMPONENT_TEMPLATE_TEMPLATE_PARM:
++      str = "$TT";
++      break;
++    }
++  d_append_string (dpi, str);
++  d_append_num (dpi, index);
++}
++
+ /* Subroutine to handle components.  */
+ 
+ static void
+@@ -5015,7 +5189,21 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+       }
+ 
+     case DEMANGLE_COMPONENT_TEMPLATE_PARAM:
+-      if (dpi->is_lambda_arg)
++      if (dpi->lambda_tpl_parms > dc->u.s_number.number + 1)
++	{
++	  const struct demangle_component *a
++	    = d_left (dpi->templates->template_decl);
++	  unsigned c;
++	  for (c = dc->u.s_number.number; a && c; c--)
++	    a = d_right (a);
++	  if (a && a->type == DEMANGLE_COMPONENT_TEMPLATE_PACK_PARM)
++	    a = d_left (a);
++	  if (!a)
++	    dpi->demangle_failure = 1;
++	  else
++	    d_print_lambda_parm_name (dpi, a->type, dc->u.s_number.number);
++	}
++      else if (dpi->lambda_tpl_parms)
+ 	{
+ 	  /* Show the template parm index, as that's how g++ displays
+ 	     these, and future proofs us against potential
+@@ -5191,7 +5379,7 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+       {
+ 	/* Handle reference smashing: & + && = &.  */
+ 	struct demangle_component *sub = d_left (dc);
+-	if (!dpi->is_lambda_arg
++	if (!dpi->lambda_tpl_parms
+ 	    && sub->type == DEMANGLE_COMPONENT_TEMPLATE_PARAM)
+ 	  {
+ 	    struct d_saved_scope *scope = d_get_saved_scope (dpi, sub);
+@@ -5302,6 +5490,14 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+ 			 dc->u.s_builtin.type->java_len);
+       return;
+ 
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
++      d_append_buffer (dpi, dc->u.s_extended_builtin.type->name,
++		       dc->u.s_extended_builtin.type->len);
++      d_append_num (dpi, dc->u.s_extended_builtin.arg);
++      if (dc->u.s_extended_builtin.suffix)
++	d_append_buffer (dpi, &dc->u.s_extended_builtin.suffix, 1);
++      return;
++
+     case DEMANGLE_COMPONENT_VENDOR_TYPE:
+       d_print_comp (dpi, options, d_left (dc));
+       return;
+@@ -5440,22 +5636,6 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+ 	return;
+       }
+ 
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+-      if (dc->u.s_fixed.sat)
+-	d_append_string (dpi, "_Sat ");
+-      /* Don't print "int _Accum".  */
+-      if (dc->u.s_fixed.length->u.s_builtin.type
+-	  != &cplus_demangle_builtin_types['i'-'a'])
+-	{
+-	  d_print_comp (dpi, options, dc->u.s_fixed.length);
+-	  d_append_char (dpi, ' ');
+-	}
+-      if (dc->u.s_fixed.accum)
+-	d_append_string (dpi, "_Accum");
+-      else
+-	d_append_string (dpi, "_Fract");
+-      return;
+-
+     case DEMANGLE_COMPONENT_ARGLIST:
+     case DEMANGLE_COMPONENT_TEMPLATE_ARGLIST:
+       if (d_left (dc) != NULL)
+@@ -5831,9 +6011,10 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+ 
+     case DEMANGLE_COMPONENT_PACK_EXPANSION:
+       {
+-	int len;
+-	int i;
+-	struct demangle_component *a = d_find_pack (dpi, d_left (dc));
++	struct demangle_component *a = NULL;
++
++	if (!dpi->lambda_tpl_parms)
++	  a = d_find_pack (dpi, d_left (dc));
+ 	if (a == NULL)
+ 	  {
+ 	    /* d_find_pack won't find anything if the only packs involved
+@@ -5841,17 +6022,20 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+ 	       case, just print the pattern and "...".  */
+ 	    d_print_subexpr (dpi, options, d_left (dc));
+ 	    d_append_string (dpi, "...");
+-	    return;
+ 	  }
+-
+-	len = d_pack_length (a);
+-	dc = d_left (dc);
+-	for (i = 0; i < len; ++i)
++	else
+ 	  {
+-	    dpi->pack_index = i;
+-	    d_print_comp (dpi, options, dc);
+-	    if (i < len-1)
+-	      d_append_string (dpi, ", ");
++	    int len = d_pack_length (a);
++	    int i;
++
++	    dc = d_left (dc);
++	    for (i = 0; i < len; ++i)
++	      {
++		if (i)
++		  d_append_string (dpi, ", ");
++		dpi->pack_index = i;
++		d_print_comp (dpi, options, dc);
++	      }
+ 	  }
+       }
+       return;
+@@ -5881,15 +6065,50 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+       return;
+ 
+     case DEMANGLE_COMPONENT_LAMBDA:
+-      d_append_string (dpi, "{lambda(");
+-      /* Generic lambda auto parms are mangled as the template type
+-	 parm they are.  */
+-      dpi->is_lambda_arg++;
+-      d_print_comp (dpi, options, dc->u.s_unary_num.sub);
+-      dpi->is_lambda_arg--;
+-      d_append_string (dpi, ")#");
+-      d_append_num (dpi, dc->u.s_unary_num.num + 1);
+-      d_append_char (dpi, '}');
++      {
++	d_append_string (dpi, "{lambda");
++	struct demangle_component *parms = dc->u.s_unary_num.sub;
++	struct d_print_template dpt;
++	/* Generic lambda auto parms are mangled as the (synthedic) template
++	   type parm they are.  We need to tell the printer that (a) we're in
++	   a lambda, and (b) the number of synthetic parms.  */
++	int saved_tpl_parms = dpi->lambda_tpl_parms;
++	dpi->lambda_tpl_parms = 0;
++	/* Hang any lambda head as-if template args.  */
++	dpt.template_decl = NULL;
++	dpt.next = dpi->templates;
++	dpi->templates = &dpt;
++	if (parms && parms->type == DEMANGLE_COMPONENT_TEMPLATE_HEAD)
++	  {
++	    dpt.template_decl = parms;
++
++	    d_append_char (dpi, '<');
++	    struct demangle_component *parm;
++	    for (parm = d_left (parms); parm; parm = d_right (parm))
++	      {
++		if (dpi->lambda_tpl_parms++)
++		  d_append_string (dpi, ", ");
++		d_print_comp (dpi, options, parm);
++		d_append_char (dpi, ' ');
++		if (parm->type == DEMANGLE_COMPONENT_TEMPLATE_PACK_PARM)
++		  parm = d_left (parm);
++		d_print_lambda_parm_name (dpi, parm->type,
++					  dpi->lambda_tpl_parms - 1);
++	      }
++	    d_append_char (dpi, '>');
++
++	    parms = d_right (parms);
++	  }
++	dpi->lambda_tpl_parms++;
++
++	d_append_char (dpi, '(');
++	d_print_comp (dpi, options, parms);
++	dpi->lambda_tpl_parms = saved_tpl_parms;
++	dpi->templates = dpt.next;
++	d_append_string (dpi, ")#");
++	d_append_num (dpi, dc->u.s_unary_num.num + 1);
++	d_append_char (dpi, '}');
++      }
+       return;
+ 
+     case DEMANGLE_COMPONENT_UNNAMED_TYPE:
+@@ -5905,6 +6124,40 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+       d_append_char (dpi, ']');
+       return;
+ 
++    case DEMANGLE_COMPONENT_TEMPLATE_HEAD:
++      {
++	d_append_char (dpi, '<');
++	int count = 0;
++	struct demangle_component *parm;
++	for (parm = d_left (dc); parm; parm = d_right (parm))
++	  {
++	    if (count++)
++	      d_append_string (dpi, ", ");
++	    d_print_comp (dpi, options, parm);
++	  }
++	d_append_char (dpi, '>');
++      }
++      return;
++
++    case DEMANGLE_COMPONENT_TEMPLATE_TYPE_PARM:
++      d_append_string (dpi, "typename");
++      return;
++
++    case DEMANGLE_COMPONENT_TEMPLATE_NON_TYPE_PARM:
++      d_print_comp (dpi, options, d_left (dc));
++      return;
++
++    case DEMANGLE_COMPONENT_TEMPLATE_TEMPLATE_PARM:
++      d_append_string (dpi, "template");
++      d_print_comp (dpi, options, d_left (dc));
++      d_append_string (dpi, " class");
++      return;
++
++    case DEMANGLE_COMPONENT_TEMPLATE_PACK_PARM:
++      d_print_comp (dpi, options, d_left (dc));
++      d_append_string (dpi, "...");
++      return;
++
+     default:
+       d_print_error (dpi);
+       return;
+diff --git a/libiberty/cp-demangle.h b/libiberty/cp-demangle.h
+index cb47bdf0d2e..dfc80243760 100644
+--- a/libiberty/cp-demangle.h
++++ b/libiberty/cp-demangle.h
+@@ -180,7 +180,7 @@ d_advance (struct d_info *di, int i)
+ extern const struct demangle_operator_info cplus_demangle_operators[];
+ #endif
+ 
+-#define D_BUILTIN_TYPE_COUNT (34)
++#define D_BUILTIN_TYPE_COUNT (36)
+ 
+ CP_STATIC_IF_GLIBCPP_V3
+ const struct demangle_builtin_type_info
+diff --git a/libiberty/functions.texi b/libiberty/functions.texi
+index e4d74b58220..b56b02e0686 100644
+--- a/libiberty/functions.texi
++++ b/libiberty/functions.texi
+@@ -1747,7 +1747,7 @@ that the converted value is unsigned.
+ @c strtoll.c:33
+ @deftypefn Supplemental {long long int} strtoll (const char *@var{string}, @
+   char **@var{endptr}, int @var{base})
+-@deftypefnx Supplemental {unsigned long long int} strtoul (@
++@deftypefnx Supplemental {unsigned long long int} strtoull (@
+   const char *@var{string}, char **@var{endptr}, int @var{base})
+ 
+ The @code{strtoll} function converts the string in @var{string} to a
+diff --git a/libiberty/testsuite/demangle-expected b/libiberty/testsuite/demangle-expected
+index e6b5b64b9a9..548c0672fe9 100644
+--- a/libiberty/testsuite/demangle-expected
++++ b/libiberty/testsuite/demangle-expected
+@@ -1237,8 +1237,16 @@ _ZNSt9_Any_data9_M_accessIPZ4postISt8functionIFvvEEEvOT_EUlvE_EERS5_v
+ post<std::function<void ()> >(std::function<void ()>&&)::{lambda()#1}*& std::_Any_data::_M_access<post<std::function<void ()> >(post<std::function<void ()> >(std::function<void ()>&&)::{lambda()#1}*&&)::{lambda()#1}*>()
+ #
+ --format=auto --no-params
+-_Z3xxxDFyuVb
+-xxx(unsigned long long _Fract, bool volatile)
++_Z3xxxDF16_DF32_DF64_DF128_CDF16_Vb
++xxx(_Float16, _Float32, _Float64, _Float128, _Float16 _Complex, bool volatile)
++xxx
++--format=auto --no-params
++_Z3xxxDF32xDF64xDF128xCDF32xVb
++xxx(_Float32x, _Float64x, _Float128x, _Float32x _Complex, bool volatile)
++xxx
++--format=auto --no-params
++_Z3xxxDF16b
++xxx(std::bfloat16_t)
+ xxx
+ # https://sourceware.org/bugzilla/show_bug.cgi?id=16817
+ --format=auto --no-params
+@@ -1488,3 +1496,161 @@ decltype ({parm#1}.A::x) f<A>(A)
+ 
+ _Z2f6IP1AEDtptfp_gssr1A1BE1xET_
+ decltype ({parm#1}->(::A::B::x)) f6<A*>(A*)
++
++# Structured Bindings
++_ZDC1a1bE
++[a, b]
++
++_ZNStDC1aEE
++std::[a]
++
++_ZN3NMSDC1aEE
++NMS::[a]
++
++# Modules
++_ZN5Outer5InnerW3FOO2FnERNS0_1XE
++Outer::Inner::Fn@FOO(Outer::Inner::X&)
++
++_ZN5OuterW3FOO5Inner2FnERNS1_1XE
++Outer::Inner@FOO::Fn(Outer::Inner@FOO::X&)
++
++_ZN4Quux4TotoW3FooW3Bar3BazEPNS0_S2_5PlughE
++Quux::Toto::Baz@Foo.Bar(Quux::Toto::Plugh@Foo.Bar*)
++
++_ZW6Module1fNS_1a1bENS0_1cE
++f@Module(a@Module::b, a@Module::c)
++
++_ZN3BobW3FOOW3BAR3BarEPS1_1APNS_S1_1BE
++Bob::Bar@FOO.BAR(A@FOO.BAR*, Bob::B@FOO.BAR*)
++
++_ZW3FOOW3BAR3FooPS0_1APN3BobS0_1BE
++Foo@FOO.BAR(A@FOO.BAR*, Bob::B@FOO.BAR*)
++
++_ZN3BobW3FOOW3BAZ3FooEPS0_W3BAR1APNS_S2_1BE
++Bob::Foo@FOO.BAZ(A@FOO.BAR*, Bob::B@FOO.BAR*)
++
++_ZW3FOOW3BAZ3BarPS_W3BAR1APN3BobS1_1BE
++Bar@FOO.BAZ(A@FOO.BAR*, Bob::B@FOO.BAR*)
++
++_ZNW3FOO3TPLIS_3OneE1MEPS1_
++TPL@FOO<One@FOO>::M(One@FOO*)
++
++_ZNW3FOO3TPLIS_3OneE1NIS_3TwoEEvPS1_PT_
++void TPL@FOO<One@FOO>::N<Two@FOO>(One@FOO*, Two@FOO*)
++
++_ZN3NMSW3FOO3TPLINS_S0_3OneEE1MEPS2_
++NMS::TPL@FOO<NMS::One@FOO>::M(NMS::One@FOO*)
++
++_ZN3NMSW3FOO3TPLINS_S0_3OneEE1NINS_S0_3TwoEEEvPS2_PT_
++void NMS::TPL@FOO<NMS::One@FOO>::N<NMS::Two@FOO>(NMS::One@FOO*, NMS::Two@FOO*)
++
++_ZNStW3STD9allocatorIiE1MEPi
++std::allocator@STD<int>::M(int*)
++
++_ZNStW3STD9allocatorIiE1NIfEEPT_Pi
++float* std::allocator@STD<int>::N<float>(int*)
++
++_ZNStW3STD9allocatorI4PoohE1MEPS1_
++std::allocator@STD<Pooh>::M(Pooh*)
++
++_ZNStW3STD9allocatorI4PoohE1NI6PigletEEPT_PS1_
++Piglet* std::allocator@STD<Pooh>::N<Piglet>(Pooh*)
++
++_ZW3FooDC1a1bE
++[a, b]@Foo
++
++_ZN1NW3FooDC1a1bEE
++N::[a, b]@Foo
++
++_ZN3NMSW3MOD3FooB3ABIEv
++NMS::Foo@MOD[abi:ABI]()
++
++_ZGIW3Foo
++initializer for module Foo
++
++_ZGIW3FooW3Bar
++initializer for module Foo.Bar
++
++_ZGIW3FooWP3BarW3Baz
++initializer for module Foo:Bar.Baz
++
++_ZZ2L1vENKUlDpT_E_clIJiPiEEEvS0_
++void L1()::{lambda((auto:1)...)#1}::operator()<int, int*>(int, int*) const
++
++_ZZ2L1vENKUlDpT_E_clIJiPiEEEDaS0_
++auto L1()::{lambda((auto:1)...)#1}::operator()<int, int*>(int, int*) const
++
++_Z7captureIN4gvarMUlvE_EE7WrapperIT_EOS3_
++Wrapper<gvar::{lambda()#1}> capture<gvar::{lambda()#1}>(gvar::{lambda()#1}&&)
++
++_ZNK2L2MUlT_T0_E_clIifEEvS_S0_
++void L2::{lambda(auto:1, auto:2)#1}::operator()<int, float>(L2, int) const
++
++_ZNK1C1fMUlT_E_clIMS_iEEDaS1_
++auto C::f::{lambda(auto:1)#1}::operator()<int C::*>(int C::*) const
++
++_ZNK2L2MUlT_T0_E_clIifEEvS0_S1_
++void L2::{lambda(auto:1, auto:2)#1}::operator()<int, float>(int, float) const
++
++_ZNK1B2L3MUlT_T0_E_clIjdEEvS1_S2_
++void B::L3::{lambda(auto:1, auto:2)#1}::operator()<unsigned int, double>(unsigned int, double) const
++
++_Z3fooIN1qMUlvE_ENS0_UlvE0_EEiOT_OT0_
++int foo<q::{lambda()#1}, q::{lambda()#2}>(q::{lambda()#1}&&, q::{lambda()#2}&&)
++
++_ZNK2L1MUlDpT_E_clIJiPiEEEvS1_
++void L1::{lambda((auto:1)...)#1}::operator()<int, int*>(int, int*) const
++
++_ZZN1XIfLj0EE2FnEvENKUlTyfT_E_clIiEEDafS1_
++auto X<float, 0u>::Fn()::{lambda<typename $T0>(float, $T0)#1}::operator()<int>(float, int) const
++
++_ZZN1XIfLj0EE2FnEvENKUlTyT_E_clIiEEDaS1_
++auto X<float, 0u>::Fn()::{lambda<typename $T0>($T0)#1}::operator()<int>(int) const
++
++_ZZN1XIfLj1EE2FnEvENKUlTyfT_E_clIiEEDafS1_
++auto X<float, 1u>::Fn()::{lambda<typename $T0>(float, $T0)#1}::operator()<int>(float, int) const
++
++_ZZN1XIfLj1EE2FnEvENKUlTyT_E_clIiEEDaS1_
++auto X<float, 1u>::Fn()::{lambda<typename $T0>($T0)#1}::operator()<int>(int) const
++
++_ZZN1XIiLj0EE2FnEvENKUlTyiT_E_clIiEEDaiS1_
++auto X<int, 0u>::Fn()::{lambda<typename $T0>(int, $T0)#1}::operator()<int>(int, int) const
++
++_ZZN1XIiLj0EE2FnEvENKUlTyT_E_clIiEEDaS1_
++auto X<int, 0u>::Fn()::{lambda<typename $T0>($T0)#1}::operator()<int>(int) const
++
++_ZNK10l_tpl_autoMUlTyT_T0_E_clIiiEEDaS0_S1_
++auto l_tpl_auto::{lambda<typename $T0>($T0, auto:2)#1}::operator()<int, int>(int, int) const
++
++_ZNK12l_tpl_nt_aryMUlTniRAT__iE_clILi2EEEDaS1_
++auto l_tpl_nt_ary::{lambda<int $N0>(int (&) [$N0])#1}::operator()<2>(int (&) [2]) const
++
++_ZNK13l_tpl_nt_autoMUlTnDavE_clILi0EEEDav
++auto l_tpl_nt_auto::{lambda<auto $N0>()#1}::operator()<0>() const
++
++_ZNK9l_tpl_tplMUlTtTyTnjER3TPLIT_EE_clI1UEEDaS3_
++auto l_tpl_tpl::{lambda<template<typename, unsigned int> class $TT0>(TPL<$TT0>&)#1}::operator()<U>(TPL<U>&) const
++
++_ZNK13l_tpl_tpl_tplMUlTtTtTyTnjEER6TPLTPLIT_EE_clI3TPLEEDaS3_
++auto l_tpl_tpl_tpl::{lambda<template<template<typename, unsigned int> class> class $TT0>(TPLTPL<$TT0>&)#1}::operator()<TPL>(TPLTPL<TPL>&) const
++
++_ZNK5l_varMUlTpTyDpT_E_clIJiiiEEEDaS1_
++auto l_var::{lambda<typename... $T0>(($T0)...)#1}::operator()<int, int, int>(int, int, int) const
++
++_ZNK6l_var2MUlTpTniDpRAT__iE_clIJLi2ELi2EEEEDaS2_
++auto l_var2::{lambda<int... $N0>((int (&) [$N0])...)#1}::operator()<2, 2>(int (&) [2], int (&) [2]) const
++
++_ZNK6l_var3MUlTtTpTniETpTniRT_IJXspT0_EEEE_clI1XJLi1ELi2ELi3EEEEDaS2_
++auto l_var3::{lambda<template<int...> class $TT0, int... $N1>($TT0<($N1)...>&)#1}::operator()<X, 1, 2, 3>(X<1, 2, 3>&) const
++
++_ZNK6l_var4MUlTpTtTyTnjER1YIJDpT_EEE_clIJ1US7_EEEDaS4_
++auto l_var4::{lambda<template<typename, unsigned int> class... $TT0>(Y<($TT0)...>&)#1}::operator()<U, U>(Y<U, U>&) const
++
++_ZZ2FnILi1EEvvENKUlTyT_E_clIiEEDaS0_
++auto Fn<1>()::{lambda<typename $T0>($T0)#1}::operator()<int>(int) const
++
++_ZZ1fvENKUlTyP1XIT_EPS_IiEE_clIcEEDaS2_S4_
++auto f()::{lambda<typename $T0>(X<$T0>*, X<int>*)#1}::operator()<char>(X<char>*, X<int>*) const
++
++_ZZN1XIiE1FEvENKUliE_clEi
++X<int>::F()::{lambda(int)#1}::operator()(int) const
+-- 
+2.40.0.rc1.284.g88254d51c5-goog
+

@@ -1,0 +1,68 @@
+From 9af8ed34c4a2ab2c72cd5092e1b67ebfe5defe9a Mon Sep 17 00:00:00 2001
+From: Victor Dodon <printesoi@chromium.org>
+Date: Mon, 14 Jun 2021 15:52:00 +0000
+Subject: [PATCH 17/19] Handle DHCP iSNS option
+
+iSNS clients need to handle DHCP iSNS option (RFC 4174) to discover the
+location of the iSNS server automatically.
+
+TEST=run `dbus-monitor --system \
+    "type=signal,path=/org/chromium/dhcpcd,interface=org.chromium.dhcpcd,arg1='BOUND'"`
+    and check that iSNSOptionData is sent as array of bytes
+---
+ src/dbus/rpc-dbus.c         |  1 +
+ src/dhcpcd-definitions.conf | 26 +++++++++++++++-----------
+ 2 files changed, 16 insertions(+), 11 deletions(-)
+
+diff --git a/src/dbus/rpc-dbus.c b/src/dbus/rpc-dbus.c
+index df9b54d2..22608d15 100644
+--- a/src/dbus/rpc-dbus.c
++++ b/src/dbus/rpc-dbus.c
+@@ -217,6 +217,7 @@ static const struct o_dbus dhos[] = {
+ 	{ "domain_search=", DBUS_TYPE_ARRAY, DBUS_TYPE_STRING,
+ 	  "DomainSearch" },
+ 	{ "wpad_url=", DBUS_TYPE_STRING, 0, "WebProxyAutoDiscoveryUrl" },
++	{ "isns_option_data=", DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE, "iSNSOptionData" },
+ 	{ NULL, 0, 0, NULL }
+ };
+ 
+diff --git a/src/dhcpcd-definitions.conf b/src/dhcpcd-definitions.conf
+index df4075e8..3500f13a 100644
+--- a/src/dhcpcd-definitions.conf
++++ b/src/dhcpcd-definitions.conf
+@@ -119,17 +119,21 @@ embed		optional domain		fqdn
+ # Option 82 is for Relay Agents and DHCP servers
+ 
+ # iSNS, RFC4174
+-define 83	embed			isns
+-embed		byte			reserved1
+-embed		bitflags=00000SAE	functions
+-embed		byte			reserved2
+-embed		bitflags=00fFsSCE	dd
+-embed		byte			reserved3
+-embed		bitflags=0000DMHE	admin
+-embed		uint16			reserved4
+-embed		byte			reserved5
+-embed		bitflags=0TXPAMSE	server_security
+-embed		array ipaddress		servers
++# NOTE: Proper definition is commented below.  This is used for
++# exporting values to hooks which shill is not using so let's simplify
++# iSNS and format according to shill expectations
++define 83	binhex			isns_option_data
++#define 83	embed			isns
++#embed		byte			reserved1
++#embed		bitflags=00000SAE	functions
++#embed		byte			reserved2
++#embed		bitflags=00fFsSCE	dd
++#embed		byte			reserved3
++#embed		bitflags=0000DMHE	admin
++#embed		uint16			reserved4
++#embed		byte			reserved5
++#embed		bitflags=0TXPAMSE	server_security
++#embed		array ipaddress		servers
+ 
+ # Option 84 are unused, RFC3679
+ 
+-- 
+2.33.0.800.g4c38ced690-goog
+

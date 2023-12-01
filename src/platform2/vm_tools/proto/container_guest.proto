@@ -1,0 +1,421 @@
+// Copyright 2018 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+syntax = "proto3";
+
+option cc_enable_arenas = true;
+
+// This file defines services that will be running in the guest container that
+// will be used by the host.
+package vm_tools.container;
+
+option go_package = "chromiumos/vm_tools/container_proto";
+
+enum ContainerFeature {
+  UNKNOWN = 0;
+  ENABLE_GTK3_IME_SUPPORT = 1;
+  ENABLE_VIRTUAL_KEYBOARD_SUPPORT = 2;
+  ENABLE_QT_IME_SUPPORT = 3;
+}
+
+// Request protobuf for launching an application in the container.
+message LaunchApplicationRequest {
+  // Display scaling of the app windows.
+  enum DisplayScaling {
+    // Default scaling.
+    UNSCALED = 0;
+    // Windows scaled. Used to scale up older app windows that don't show well
+    // with HiDPI display otherwise.
+    SCALED = 1;
+  }
+
+  // The ID of the application to launch. This should correspond to an
+  // identifier for a .desktop file available in the container.
+  string desktop_file_id = 1;
+
+  // Files to pass as arguments when launching the application, if any, given
+  // as absolute paths within the container's filesystem.
+  repeated string files = 2;
+
+  // Display scaling requested.
+  DisplayScaling display_scaling = 3;
+
+  // Features to enable in the container.
+  repeated ContainerFeature container_features = 4;
+}
+
+// Response protobuf for launching an application.
+message LaunchApplicationResponse {
+  // If true, the requested application launched successfully.
+  bool success = 1;
+
+  // The failure_reason if the requested application could not be started.
+  string failure_reason = 2;
+}
+
+// Request proto for getting an application icon from the container.
+message IconRequest {
+  // The IDs of the applications to get icons for. These should correspond to
+  // identifiers for .desktop files available in the container.
+  repeated string desktop_file_ids = 1;
+
+  //  The size of the icon is icon_size by icon_size.
+  int32 icon_size = 2;
+
+  // The target scale of this icon. This is the scale at which this icon is
+  // designed to be used.
+  int32 scale = 3;
+}
+
+// One desktop file ID and the icon found for it.
+message DesktopIcon {
+  enum Format {
+    PNG = 0;
+    SVG = 1;
+  }
+
+  string desktop_file_id = 1;
+
+  // Icon data as uninterpreted bytes.
+  bytes icon = 2;
+
+  // Interpretation hint for icon bytes
+  Format format = 3;
+}
+
+// Response proto for getting an application icon.
+message IconResponse {
+  repeated DesktopIcon desktop_icons = 1;
+}
+
+// Request protobuf for launching a vshd instance.
+message LaunchVshdRequest {
+  // The host port for vshd to connect to.
+  uint32 port = 1;
+
+  // Features to enable in the container.
+  repeated ContainerFeature container_features = 2;
+}
+
+// Response protobuf for launching a vshd instance.
+message LaunchVshdResponse {
+  // If true, the vshd launched successfully.
+  bool success = 1;
+
+  // The failure_reason if vshd could not be started.
+  string failure_reason = 2;
+}
+
+// Request to get information about a Linux package in the container.
+// Only one of |file_path| or |package_name| needs to be set. If |file_path|
+// is set, this will get information about a Linux package file, if
+// |package_name| is set, it will try to resolve |package_name| into a package
+// id and get information about a Linux package with that id. If both
+// |file_path| and |package_id| are set, |file_path| will take precedence and
+// |package_id| will be unused.
+message LinuxPackageInfoRequest {
+  // Path to the package file (e.g. .deb) in the container's filesystem.
+  string file_path = 1;
+
+  // Name (not package_id) of package to look up. Used when |file_path| is
+  // empty.
+  string package_name = 2;
+}
+
+// Response sent back from a GetLinuxPackageInfo call.
+message LinuxPackageInfoResponse {
+  // True if the file was successfully parsed and the other fields are valid.
+  bool success = 1;
+
+  // Contains a textual reason for the failure in case success is false.
+  string failure_reason = 2;
+
+  // The package identifier is in the form of a semicolon delimited string of
+  // the format: name;version;arch;data
+  // name, version and arch are as expected. data is somewhat variant and refers
+  // to the state of the package as well as potentially remote repository
+  // information.
+  string package_id = 3;
+
+  // The license associated with the package. So far only the value of
+  // 'unknown' has been observed for this field.
+  string license = 4;
+
+  // The description of the package, can be a multi-line text string.
+  string description = 5;
+
+  // The URL for the homepage of the project.
+  string project_url = 6;
+
+  // Size of the package file in bytes.
+  uint64 size = 7;
+
+  // Usually more of a title for a package, but sometimes less descriptive
+  // than that.
+  string summary = 8;
+}
+
+// Request protobuf for installing a Linux package.
+// Only one of |file_path| or |package_id| needs to be set. If |file_path|
+// is set, this will try installing a Linux package file at that path, if
+// |package_id| is set, this will try and install a Linux package with that
+// |package_id|. If both |file_path| and |package_id| are set, |file_path|
+// will take precedence and |package_id| will be unused.
+message InstallLinuxPackageRequest {
+  // Path to the package file (e.g. .deb) in the container's filesystem.
+  string file_path = 1;
+
+  // Package ID to install in the form "package_name;version;arch;data". Used
+  // when |file_path| is empty.
+  string package_id = 5;
+
+  // Command identifier to track installation progress.
+  string command_uuid = 6;
+}
+
+// Response sent back from a request to install a Linux package.
+message InstallLinuxPackageResponse {
+  enum Status {
+    // Install process was successfully started, all further updates will be
+    // sent via the LinuxPackageProgress signal.
+    STARTED = 0;
+
+    // Failed to startup for a general reason, specific details are given in
+    // failure_reason.
+    FAILED = 1;
+
+    // Indicates another install (or other blocking operation) is already in
+    // process, this one will not be started.
+    INSTALL_ALREADY_ACTIVE = 2;
+  }
+  Status status = 1;
+
+  // Contains a textual reason for the failure in case of a FAILED status.
+  string failure_reason = 2;
+}
+
+// Request to uninstall the package that owns the given .desktop file. This is
+// safer than uninstalling by package_id, since packages can get upgraded and
+// we'd have a stale package_id.
+message UninstallPackageOwningFileRequest {
+  // Uninstall the package owning this .desktop file:
+  string desktop_file_id = 1;
+}
+
+// Response sent back from a request to uninstall a Linux package.
+message UninstallPackageOwningFileResponse {
+  enum Status {
+    // Uninstall process was successfully started, all further updates will be
+    // sent via the UninstallPackageOwningFileProgress callbacks.
+    STARTED = 0;
+
+    // Failed to startup for a general reason, specific details are given in
+    // failure_reason.
+    FAILED = 1;
+
+    // Indicates another blocking operation (uninstall, install, etc) is already
+    // in progress, this one will not be started.
+    BLOCKING_OPERATION_IN_PROGRESS = 2;
+  }
+  Status status = 1;
+
+  // Contains a textual reason for the failure in case of a FAILED status.
+  string failure_reason = 2;
+}
+
+// Request for debug information about container state.
+message GetDebugInformationRequest {}
+
+// Response for debug information about container state.
+message GetDebugInformationResponse {
+  string debug_information = 1;
+}
+
+message ConnectChunnelRequest {
+  uint32 chunneld_port = 1;
+
+  uint32 target_tcp4_port = 2;
+}
+
+message ConnectChunnelResponse {
+  // If true, chunnel launched successfully.
+  bool success = 1;
+
+  // The failure_reason if chunnel could not be started.
+  string failure_reason = 2;
+}
+
+// Request protobuf for applying Ansible playbook.
+message ApplyAnsiblePlaybookRequest {
+  // Ansible playbook to be applied.
+  string playbook = 1;
+}
+
+// Response sent back from a request to apply Ansible playbook.
+message ApplyAnsiblePlaybookResponse {
+  enum Status {
+    UNKNOWN = 0;
+
+    // Application process was successfully started, all further updates will be
+    // sent via the ApplyAnsiblePlaybookProgress signal.
+    STARTED = 1;
+
+    // Failed to start up for a general reason, specific details are given in
+    // failure_reason.
+    FAILED = 2;
+  }
+  Status status = 1;
+
+  // Contains a textual reason for the failure in case of a FAILED status.
+  string failure_reason = 2;
+}
+
+// Request for the container to configure itself to allow sideloading android
+// apps.
+message ConfigureForArcSideloadRequest {}
+
+// Response from the sideloading configuration.
+message ConfigureForArcSideloadResponse {
+  enum Status {
+    UNKNOWN = 0;
+
+    SUCCEEDED = 2;
+
+    FAILED = 3;
+  }
+
+  // Status of the request.
+  Status status = 1;
+
+  // If status is FAILED, contains the reason the request failed.
+  string failure_reason = 2;
+}
+
+// Request to watch files and notify if there are changes.
+message AddFileWatchRequest {
+  // Directory in container relative to $HOME to watch.
+  string path = 1;
+}
+
+message AddFileWatchResponse {
+  enum Status {
+    // The current status is unknown.
+    UNKNOWN = 0;
+
+    // Watch added successfully.
+    SUCCEEDED = 2;
+
+    // Add watch failed.
+    FAILED = 1;
+  }
+
+  // Add watch status.
+  Status status = 1;
+
+  // The failure_reason if the watcher could not be added.
+  string failure_reason = 2;
+}
+
+// Request to stop watching files.
+message RemoveFileWatchRequest {
+  // Directory in container relative to $HOME to stop watching.
+  string path = 1;
+}
+
+message RemoveFileWatchResponse {
+  enum Status {
+    // The current status is unknown.
+    UNKNOWN = 0;
+
+    // Watch removed successfully.
+    SUCCEEDED = 2;
+
+    // Remove watch failed.
+    FAILED = 1;
+  }
+
+  // Remove watch status.
+  Status status = 1;
+
+  // The failure_reason if the watcher could not be removed.
+  string failure_reason = 2;
+}
+
+// Request to get session info from Garcon.
+message GetGarconSessionInfoRequest {}
+
+message GetGarconSessionInfoResponse {
+  enum Status {
+    UNKNOWN = 0;
+    FAILED = 1;
+    SUCCEEDED = 2;
+  }
+
+  // Status.
+  Status status = 1;
+
+  // Failure reason if gathering info failed.
+  string failure_reason = 2;
+
+  // The username of garcon is running as.
+  string container_username = 3;
+
+  // The home directory of the user garcon is running as.
+  string container_homedir = 4;
+
+  // The vsock port that sftp-server runs on.
+  uint32 sftp_vsock_port = 5;
+}
+
+// Implemented by garcon inside of the container.
+service Garcon {
+  // Called to launch an application in a container.
+  rpc LaunchApplication(LaunchApplicationRequest)
+      returns (LaunchApplicationResponse);
+
+  // Get an application icon from the container.
+  rpc GetIcon(IconRequest) returns (IconResponse);
+
+  // Launch a vshd instance that will connect back to the host.
+  rpc LaunchVshd(LaunchVshdRequest) returns (LaunchVshdResponse);
+
+  // Gets information about a Linux package file in the container.
+  rpc GetLinuxPackageInfo(LinuxPackageInfoRequest)
+      returns (LinuxPackageInfoResponse);
+
+  // Install a Linux package file in the container.
+  rpc InstallLinuxPackage(InstallLinuxPackageRequest)
+      returns (InstallLinuxPackageResponse);
+
+  // Uninstalls the package that owns the specified file. Results are in
+  // signals.
+  rpc UninstallPackageOwningFile(UninstallPackageOwningFileRequest)
+      returns (UninstallPackageOwningFileResponse);
+
+  // Get debug information about container state.
+  rpc GetDebugInformation(GetDebugInformationRequest)
+      returns (GetDebugInformationResponse);
+
+  // Connects to chunnel to forward traffic to localhost.
+  rpc ConnectChunnel(ConnectChunnelRequest) returns (ConnectChunnelResponse);
+
+  // Apply Ansible playbook to the container.
+  rpc ApplyAnsiblePlaybook(ApplyAnsiblePlaybookRequest)
+      returns (ApplyAnsiblePlaybookResponse);
+
+  // Configure the container to allow sideloading android apps.
+  rpc ConfigureForArcSideload(ConfigureForArcSideloadRequest)
+      returns (ConfigureForArcSideloadResponse);
+
+  // Watch files in the specified directory and notify if there are changes.
+  // This is used by FilesApp.
+  rpc AddFileWatch(AddFileWatchRequest) returns (AddFileWatchResponse);
+
+  // Stop watching files in the specified directory.
+  rpc RemoveFileWatch(RemoveFileWatchRequest) returns (RemoveFileWatchResponse);
+
+  // Requests Garcon to send information about the current session
+  rpc GetGarconSessionInfo(GetGarconSessionInfoRequest)
+      returns (GetGarconSessionInfoResponse);
+}

@@ -1,0 +1,51 @@
+commit 85750de685f543443ec38c407392d9d7cdc19451
+Author: Aaron Ballman <aaron@aaronballman.com>
+Date:   Thu May 26 07:40:10 2022 -0400
+
+    Use the canonical type when matching a generic selection association
+    
+    This ensures that a deduced type like __auto_type matches the correct
+    association instead of matching all associations.
+    
+    This addresses a regression from e4a42c5b64d044ae28d9483b0ebd12038d5b5917
+    
+    Fixes #55702
+
+diff --git a/clang/lib/Sema/SemaExpr.cpp b/clang/lib/Sema/SemaExpr.cpp
+index 9d9cb99085f3..3e8bd63e89ae 100644
+--- a/clang/lib/Sema/SemaExpr.cpp
++++ b/clang/lib/Sema/SemaExpr.cpp
+@@ -1753,10 +1753,14 @@ Sema::CreateGenericSelectionExpr(SourceLocation KeyLoc,
+ 
+   SmallVector<unsigned, 1> CompatIndices;
+   unsigned DefaultIndex = -1U;
++  // Look at the canonical type of the controlling expression in case it was a
++  // deduced type like __auto_type. However, when issuing diagnostics, use the
++  // type the user wrote in source rather than the canonical one.
+   for (unsigned i = 0; i < NumAssocs; ++i) {
+     if (!Types[i])
+       DefaultIndex = i;
+-    else if (Context.typesAreCompatible(ControllingExpr->getType(),
++    else if (Context.typesAreCompatible(
++                 ControllingExpr->getType().getCanonicalType(),
+                                         Types[i]->getType()))
+       CompatIndices.push_back(i);
+   }
+diff --git a/clang/test/Sema/auto-type.c b/clang/test/Sema/auto-type.c
+index 4e85eecc6b05..1170c687c96a 100644
+--- a/clang/test/Sema/auto-type.c
++++ b/clang/test/Sema/auto-type.c
+@@ -78,3 +78,13 @@ void Issue53652(void) {
+                  __typeof__(i) : 0,   // expected-note {{compatible type 'typeof (i)' (aka 'int') specified here}}
+                  __typeof__(a) : 1);  // expected-error {{type 'typeof (a)' (aka 'int') in generic association compatible with previously specified type 'typeof (i)' (aka 'int')}}
+ }
++
++void Issue55702(void) {
++  // A controlling expression which uses __auto_type should not be
++  // automatically compatible with every association; we should be using the
++  // canonical type for that comparison.
++  void *ptr = 0;
++  __auto_type v = ptr;
++  (void)_Generic(v, long double : 0, double : 0, default : 1); // OK
++  _Static_assert(_Generic(v, long double : 0, default : 1) == 1, "fail");
++}

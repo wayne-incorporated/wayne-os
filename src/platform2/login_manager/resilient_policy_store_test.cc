@@ -1,14 +1,17 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "login_manager/resilient_policy_store.h"
 
+#include <memory>
 #include <string>
+#include <utility>
 
 #include <base/files/file_util.h>
 #include <base/files/scoped_temp_dir.h>
 #include <base/logging.h>
+#include <brillo/files/file_util.h>
 #include <gtest/gtest.h>
 
 #include "login_manager/mock_metrics.h"
@@ -32,7 +35,7 @@ class ResilientPolicyStoreTest : public ::testing::Test {
     // Create a temporary filename that's guaranteed to not exist, but is
     // inside our scoped directory so it'll get deleted later.
     ASSERT_TRUE(base::CreateTemporaryFileInDir(tmpdir_.GetPath(), &tmpfile_));
-    ASSERT_TRUE(base::DeleteFile(tmpfile_));
+    ASSERT_TRUE(brillo::DeleteFile(tmpfile_));
   }
 
   virtual void TearDown() {}
@@ -59,8 +62,22 @@ TEST_F(ResilientPolicyStoreTest, LoadResilientMissingPolicy) {
 TEST_F(ResilientPolicyStoreTest, CheckDeleteAtLoadResilient) {
   MockMetrics metrics;
   ResilientPolicyStore store(tmpfile_, &metrics);
+  std::unique_ptr<policy::DevicePolicyImpl> device_policy =
+      std::make_unique<policy::DevicePolicyImpl>();
+  device_policy->set_policy_path_for_testing(tmpfile_);
+  device_policy->set_verify_policy_for_testing(false);
+  store.set_device_policy_for_testing(std::move(device_policy));
+
   enterprise_management::PolicyFetchResponse policy;
-  policy.set_error_message("foo");
+  enterprise_management::PolicyData policy_data;
+  enterprise_management::ChromeDeviceSettingsProto settings;
+  policy_data.set_username("test_user");
+  policy_data.set_request_token("secret_token");
+  std::string settings_str;
+  settings.SerializeToString(&settings_str);
+  policy_data.set_policy_value(settings_str);
+  policy.set_policy_data(policy_data.SerializeAsString());
+
   store.Set(policy);
 
   ASSERT_TRUE(store.Persist());
@@ -112,18 +129,11 @@ TEST_F(ResilientPolicyStoreTest, CheckCleanupFromPersistResilient) {
   ASSERT_TRUE(store.Persist());
   ASSERT_TRUE(base::PathExists(policy_path4));
 
-  // The last Persist resilient should have done the cleanup, which means the
-  // file with index 2 is not present anymore, being invalid.
-  ASSERT_FALSE(base::PathExists(policy_path3));
-
-  // Check that file with base policy file name still exists, but will be
-  // cleaned up after next persist.
-  ASSERT_TRUE(base::PathExists(policy_path1));
-  policy.set_error_message("foo2");
-  store.Set(policy);
-  ASSERT_TRUE(store.Persist());
-  ASSERT_TRUE(base::PathExists(policy_path4));
+  // The last Persist resilient should have done the cleanup and removed the
+  // oldest file since the limit was reached.
   ASSERT_FALSE(base::PathExists(policy_path1));
+  ASSERT_TRUE(base::PathExists(policy_path2));
+  ASSERT_TRUE(base::PathExists(policy_path3));
 }
 
 }  // namespace login_manager

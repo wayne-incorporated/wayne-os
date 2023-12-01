@@ -1,0 +1,112 @@
+From a3422b1049428a4018f8ba5f16e52214c8467b42 Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Fri, 14 Jun 2019 14:27:53 -0700
+Subject: [PATCH 04/12] UPSTREAM: util: move bitcount to bitscan.h
+
+bitcount is free from the pipe header dependencies that make u_math.h hard
+to include by non-gallium specific code, so move it to bitscan.h. bitscan.h
+is included by u_math.h so existing references will continue working.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Emil Velikov <emil.l.velikov@gmail.com>
+(cherry picked from commit 3562f48c9d58793429fc5ea655b8b4629b495ce0)
+
+Change-Id: Ibde531ad0b5f4a192dc3eb6dc0d6c658fffa6548
+---
+ src/util/bitscan.h | 32 ++++++++++++++++++++++++++++++++
+ src/util/u_math.h  | 36 ------------------------------------
+ 2 files changed, 32 insertions(+), 36 deletions(-)
+
+diff --git a/src/util/bitscan.h b/src/util/bitscan.h
+index dc89ac93f28..02b3afda7f9 100644
+--- a/src/util/bitscan.h
++++ b/src/util/bitscan.h
+@@ -286,6 +286,38 @@ u_bit_consecutive64(unsigned start, unsigned count)
+    return (((uint64_t)1 << count) - 1) << start;
+ }
+ 
++/**
++ * Return number of bits set in n.
++ */
++static inline unsigned
++util_bitcount(unsigned n)
++{
++#if defined(HAVE___BUILTIN_POPCOUNT)
++   return __builtin_popcount(n);
++#else
++   /* K&R classic bitcount.
++    *
++    * For each iteration, clear the LSB from the bitfield.
++    * Requires only one iteration per set bit, instead of
++    * one iteration per bit less than highest set bit.
++    */
++   unsigned bits;
++   for (bits = 0; n; bits++) {
++      n &= n - 1;
++   }
++   return bits;
++#endif
++}
++
++static inline unsigned
++util_bitcount64(uint64_t n)
++{
++#ifdef HAVE___BUILTIN_POPCOUNTLL
++   return __builtin_popcountll(n);
++#else
++   return util_bitcount(n) + util_bitcount(n >> 32);
++#endif
++}
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/src/util/u_math.h b/src/util/u_math.h
+index e7dbbe5ca22..de1158a56f5 100644
+--- a/src/util/u_math.h
++++ b/src/util/u_math.h
+@@ -519,42 +519,6 @@ util_next_power_of_two64(uint64_t x)
+ #endif
+ }
+ 
+-
+-/**
+- * Return number of bits set in n.
+- */
+-static inline unsigned
+-util_bitcount(unsigned n)
+-{
+-#if defined(HAVE___BUILTIN_POPCOUNT)
+-   return __builtin_popcount(n);
+-#else
+-   /* K&R classic bitcount.
+-    *
+-    * For each iteration, clear the LSB from the bitfield.
+-    * Requires only one iteration per set bit, instead of
+-    * one iteration per bit less than highest set bit.
+-    */
+-   unsigned bits;
+-   for (bits = 0; n; bits++) {
+-      n &= n - 1;
+-   }
+-   return bits;
+-#endif
+-}
+-
+-
+-static inline unsigned
+-util_bitcount64(uint64_t n)
+-{
+-#ifdef HAVE___BUILTIN_POPCOUNTLL
+-   return __builtin_popcountll(n);
+-#else
+-   return util_bitcount(n) + util_bitcount(n >> 32);
+-#endif
+-}
+-
+-
+ /**
+  * Reverse bits in n
+  * Algorithm taken from:
+-- 
+2.21.0
+

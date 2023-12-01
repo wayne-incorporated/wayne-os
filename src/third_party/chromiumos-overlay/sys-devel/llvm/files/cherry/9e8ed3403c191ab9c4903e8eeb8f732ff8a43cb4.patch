@@ -1,0 +1,568 @@
+From 9e8ed3403c191ab9c4903e8eeb8f732ff8a43cb4 Mon Sep 17 00:00:00 2001
+From: luxufan <luxufan@iscas.ac.cn>
+Date: Fri, 26 May 2023 11:48:28 +0800
+Subject: [PATCH] [RISCV] Support '.option arch' directive
+
+The proposal of '.option arch' directive is https://github.com/riscv-non-isa/riscv-asm-manual/pull/67
+
+Note: For '.option arch, +/-' directive, version number is not yet supported.
+
+Reviewed By: luismarques, craig.topper
+
+Differential Revision: https://reviews.llvm.org/D123515
+---
+ .../Target/RISCV/AsmParser/RISCVAsmParser.cpp | 193 +++++++++++++++---
+ .../MCTargetDesc/RISCVTargetStreamer.cpp      |  44 ++++
+ .../RISCV/MCTargetDesc/RISCVTargetStreamer.h  |  13 ++
+ .../CodeGen/RISCV/inline-option-directive.ll  |  10 +
+ llvm/test/MC/RISCV/eflags-option-directive.s  |   5 +
+ llvm/test/MC/RISCV/option-arch.s              | 120 +++++++++++
+ llvm/test/MC/RISCV/option-invalid.s           |  45 +++-
+ 7 files changed, 395 insertions(+), 35 deletions(-)
+ create mode 100644 llvm/test/CodeGen/RISCV/inline-option-directive.ll
+ create mode 100644 llvm/test/MC/RISCV/eflags-option-directive.s
+ create mode 100644 llvm/test/MC/RISCV/option-arch.s
+
+diff --git a/llvm/lib/Target/RISCV/AsmParser/RISCVAsmParser.cpp b/llvm/lib/Target/RISCV/AsmParser/RISCVAsmParser.cpp
+index 31d5e134b10a..e012907a95f0 100644
+--- a/llvm/lib/Target/RISCV/AsmParser/RISCVAsmParser.cpp
++++ b/llvm/lib/Target/RISCV/AsmParser/RISCVAsmParser.cpp
+@@ -211,6 +211,12 @@ class RISCVAsmParser : public MCTargetAsmParser {
+   bool parseDirectiveInsn(SMLoc L);
+   bool parseDirectiveVariantCC();
+ 
++  /// Helper to reset target features for a new arch string. It
++  /// also records the new arch string that is expanded by RISCVISAInfo
++  /// and reports error for invalid arch string.
++  bool resetToArch(StringRef Arch, SMLoc Loc, std::string &Result,
++                   bool FromOptionDirective);
++
+   void setFeatureBits(uint64_t Feature, StringRef FeatureString) {
+     if (!(getSTI().hasFeature(Feature))) {
+       MCSubtargetInfo &STI = copySTI();
+@@ -2626,6 +2632,49 @@ bool RISCVAsmParser::ParseDirective(AsmToken DirectiveID) {
+   return true;
+ }
+ 
++bool RISCVAsmParser::resetToArch(StringRef Arch, SMLoc Loc, std::string &Result,
++                                 bool FromOptionDirective) {
++  for (auto Feature : RISCVFeatureKV)
++    if (llvm::RISCVISAInfo::isSupportedExtensionFeature(Feature.Key))
++      clearFeatureBits(Feature.Value, Feature.Key);
++
++  auto ParseResult = llvm::RISCVISAInfo::parseArchString(
++      Arch, /*EnableExperimentalExtension=*/true,
++      /*ExperimentalExtensionVersionCheck=*/true);
++  if (!ParseResult) {
++    std::string Buffer;
++    raw_string_ostream OutputErrMsg(Buffer);
++    handleAllErrors(ParseResult.takeError(), [&](llvm::StringError &ErrMsg) {
++      OutputErrMsg << "invalid arch name '" << Arch << "', "
++                   << ErrMsg.getMessage();
++    });
++
++    return Error(Loc, OutputErrMsg.str());
++  }
++  auto &ISAInfo = *ParseResult;
++
++  for (auto Feature : RISCVFeatureKV)
++    if (ISAInfo->hasExtension(Feature.Key))
++      setFeatureBits(Feature.Value, Feature.Key);
++
++  if (FromOptionDirective) {
++    if (ISAInfo->getXLen() == 32 && isRV64())
++      return Error(Loc, "bad arch string switching from rv64 to rv32");
++    else if (ISAInfo->getXLen() == 64 && !isRV64())
++      return Error(Loc, "bad arch string switching from rv32 to rv64");
++  }
++
++  if (ISAInfo->getXLen() == 32)
++    clearFeatureBits(RISCV::Feature64Bit, "64bit");
++  else if (ISAInfo->getXLen() == 64)
++    setFeatureBits(RISCV::Feature64Bit, "64bit");
++  else
++    return Error(Loc, "bad arch string " + Arch);
++
++  Result = ISAInfo->toString();
++  return false;
++}
++
+ bool RISCVAsmParser::parseDirectiveOption() {
+   MCAsmParser &Parser = getParser();
+   // Get the option token.
+@@ -2658,6 +2707,109 @@ bool RISCVAsmParser::parseDirectiveOption() {
+     return false;
+   }
+ 
++  if (Option == "arch") {
++
++    Parser.parseComma();
++
++    bool PrefixEmitted = false;
++    bool IsExtensionList = false;
++    while (true) {
++      bool IsAdd;
++      if (Parser.getTok().is(AsmToken::Plus)) {
++        IsAdd = true;
++        IsExtensionList = true;
++      } else if (Parser.getTok().is(AsmToken::Minus)) {
++        IsAdd = false;
++        IsExtensionList = true;
++      } else {
++        SMLoc ArchLoc = Parser.getTok().getLoc();
++
++        if (IsExtensionList)
++          return Error(ArchLoc, "unexpected token, expected + or -");
++
++        StringRef Arch;
++        if (Parser.getTok().is(AsmToken::Identifier))
++          Arch = Parser.getTok().getString();
++        else
++          return Error(ArchLoc,
++                       "unexpected token, expected identifier");
++
++        std::string Result;
++        if (resetToArch(Arch, ArchLoc, Result, true))
++          return true;
++
++        getTargetStreamer().emitDirectiveOptionArchFullArch(Result,
++                                                            PrefixEmitted);
++
++        Parser.Lex();
++
++        return Parser.parseToken(AsmToken::EndOfStatement,
++                                 "unexpected token, expected end of statement");
++      }
++
++      Parser.Lex();
++
++      if (Parser.getTok().isNot(AsmToken::Identifier))
++        return Error(Parser.getTok().getLoc(),
++                     "unexpected token, expected identifier");
++
++      StringRef ExtStr = Parser.getTok().getString();
++
++      ArrayRef<SubtargetFeatureKV> KVArray(RISCVFeatureKV);
++      auto Ext = llvm::lower_bound(KVArray, ExtStr);
++      if (Ext == KVArray.end() || StringRef(Ext->Key) != ExtStr ||
++          !RISCVISAInfo::isSupportedExtension(ExtStr)) {
++        if (isDigit(ExtStr.back()))
++          return Error(
++              Parser.getTok().getLoc(),
++              "Extension version number parsing not currently implemented");
++        return Error(Parser.getTok().getLoc(), "unknown extension feature");
++      }
++
++      SMLoc Loc = Parser.getTok().getLoc();
++
++      Parser.Lex(); // Eat arch string
++      bool HasComma = getTok().is(AsmToken::Comma);
++      if (IsAdd) {
++        setFeatureBits(Ext->Value, Ext->Key);
++        auto ParseResult = RISCVFeatures::parseFeatureBits(isRV64(), STI->getFeatureBits());
++        if (!ParseResult) {
++          std::string Buffer;
++          raw_string_ostream OutputErrMsg(Buffer);
++          handleAllErrors(ParseResult.takeError(), [&](llvm::StringError &ErrMsg) {
++            OutputErrMsg << ErrMsg.getMessage();
++          });
++
++          return Error(Loc, OutputErrMsg.str());
++        }
++        getTargetStreamer().emitDirectiveOptionArchPlus(Ext->Key, PrefixEmitted,
++                                                        HasComma);
++      } else {
++        // It is invalid to disable an extension that there are other enabled
++        // extensions depend on it.
++        // TODO: Make use of RISCVISAInfo to handle this
++        for (auto Feature : KVArray) {
++          if (getSTI().hasFeature(Feature.Value) &&
++              Feature.Implies.test(Ext->Value))
++            return Error(Loc,
++                         Twine("Can't disable ") + Ext->Key + " extension, " +
++                             Feature.Key + " extension requires " + Ext->Key +
++                             " extension be enabled");
++        }
++
++        clearFeatureBits(Ext->Value, Ext->Key);
++        getTargetStreamer().emitDirectiveOptionArchMinus(
++            Ext->Key, PrefixEmitted, HasComma);
++      }
++
++      if (!HasComma)
++        return Parser.parseToken(AsmToken::EndOfStatement,
++                                 "unexpected token, expected end of statement");
++      // Eat comma
++      Parser.Lex();
++    }
++  }
++
+   if (Option == "rvc") {
+     if (Parser.parseEOL())
+       return true;
+@@ -2714,9 +2866,9 @@ bool RISCVAsmParser::parseDirectiveOption() {
+   }
+ 
+   // Unknown option.
+-  Warning(Parser.getTok().getLoc(),
+-          "unknown option, expected 'push', 'pop', 'rvc', 'norvc', 'relax' or "
+-          "'norelax'");
++  Warning(Parser.getTok().getLoc(), "unknown option, expected 'push', 'pop', "
++                                    "'rvc', 'norvc', 'arch', 'relax' or "
++                                    "'norelax'");
+   Parser.eatToEndOfStatement();
+   return false;
+ }
+@@ -2791,39 +2943,12 @@ bool RISCVAsmParser::parseDirectiveAttribute() {
+   else if (Tag != RISCVAttrs::ARCH)
+     getTargetStreamer().emitTextAttribute(Tag, StringValue);
+   else {
+-    StringRef Arch = StringValue;
+-    for (auto Feature : RISCVFeatureKV)
+-      if (llvm::RISCVISAInfo::isSupportedExtensionFeature(Feature.Key))
+-        clearFeatureBits(Feature.Value, Feature.Key);
+-
+-    auto ParseResult = llvm::RISCVISAInfo::parseArchString(
+-        StringValue, /*EnableExperimentalExtension=*/true,
+-        /*ExperimentalExtensionVersionCheck=*/true);
+-    if (!ParseResult) {
+-      std::string Buffer;
+-      raw_string_ostream OutputErrMsg(Buffer);
+-      handleAllErrors(ParseResult.takeError(), [&](llvm::StringError &ErrMsg) {
+-        OutputErrMsg << "invalid arch name '" << Arch << "', "
+-                     << ErrMsg.getMessage();
+-      });
+-
+-      return Error(ValueExprLoc, OutputErrMsg.str());
+-    }
+-    auto &ISAInfo = *ParseResult;
+-
+-    for (auto Feature : RISCVFeatureKV)
+-      if (ISAInfo->hasExtension(Feature.Key))
+-        setFeatureBits(Feature.Value, Feature.Key);
+-
+-    if (ISAInfo->getXLen() == 32)
+-      clearFeatureBits(RISCV::Feature64Bit, "64bit");
+-    else if (ISAInfo->getXLen() == 64)
+-      setFeatureBits(RISCV::Feature64Bit, "64bit");
+-    else
+-      return Error(ValueExprLoc, "bad arch string " + Arch);
++    std::string Result;
++    if (resetToArch(StringValue, ValueExprLoc, Result, false))
++      return true;
+ 
+     // Then emit the arch string.
+-    getTargetStreamer().emitTextAttribute(Tag, ISAInfo->toString());
++    getTargetStreamer().emitTextAttribute(Tag, Result);
+   }
+ 
+   return false;
+diff --git a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp
+index 93c1a1fc2e81..3c8c704ef54e 100644
+--- a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp
++++ b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp
+@@ -34,6 +34,14 @@ void RISCVTargetStreamer::emitDirectiveOptionNoRVC() {}
+ void RISCVTargetStreamer::emitDirectiveOptionRelax() {}
+ void RISCVTargetStreamer::emitDirectiveOptionNoRelax() {}
+ void RISCVTargetStreamer::emitDirectiveVariantCC(MCSymbol &Symbol) {}
++void RISCVTargetStreamer::emitDirectiveOptionArchFullArch(StringRef Value,
++                                                          bool &hasDotOption) {}
++void RISCVTargetStreamer::emitDirectiveOptionArchPlus(StringRef Value,
++                                                      bool &hasDotOption,
++                                                      bool EmitComma) {}
++void RISCVTargetStreamer::emitDirectiveOptionArchMinus(StringRef Value,
++                                                       bool &hasDotOption,
++                                                       bool EmitComma) {}
+ void RISCVTargetStreamer::emitAttribute(unsigned Attribute, unsigned Value) {}
+ void RISCVTargetStreamer::finishAttributeSection() {}
+ void RISCVTargetStreamer::emitTextAttribute(unsigned Attribute,
+@@ -118,4 +126,40 @@ void RISCVTargetAsmStreamer::emitIntTextAttribute(unsigned Attribute,
+                                                   unsigned IntValue,
+                                                   StringRef StringValue) {}
+ 
++static void emitDirectiveOptionArchPrefix(formatted_raw_ostream &OS,
++                                          bool &PrefixEmitted) {
++  if (!PrefixEmitted) {
++    OS << "\t .option\tarch,\t";
++    PrefixEmitted = true;
++  }
++}
++
++static void emitCommaOrNextLine(formatted_raw_ostream &OS, bool EmitComma) {
++  if (EmitComma)
++    OS << ", ";
++  else
++    OS << "\n";
++}
++
++void RISCVTargetAsmStreamer::emitDirectiveOptionArchFullArch(
++    StringRef Value, bool &PrefixEmitted) {
++  emitDirectiveOptionArchPrefix(OS, PrefixEmitted);
++  OS << Value;
++  emitCommaOrNextLine(OS, false);
++}
++void RISCVTargetAsmStreamer::emitDirectiveOptionArchPlus(StringRef Value,
++                                                         bool &PrefixEmitted,
++                                                         bool EmitComma) {
++  emitDirectiveOptionArchPrefix(OS, PrefixEmitted);
++  OS << "+" << Value;
++  emitCommaOrNextLine(OS, EmitComma);
++}
++void RISCVTargetAsmStreamer::emitDirectiveOptionArchMinus(StringRef Value,
++                                                          bool &PrefixEmitted,
++                                                          bool EmitComma) {
++  emitDirectiveOptionArchPrefix(OS, PrefixEmitted);
++  OS << "-" << Value;
++  emitCommaOrNextLine(OS, EmitComma);
++}
++
+ void RISCVTargetAsmStreamer::finishAttributeSection() {}
+diff --git a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h
+index 8298f5e6c051..48da70503fcc 100644
+--- a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h
++++ b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h
+@@ -34,6 +34,13 @@ public:
+   virtual void emitDirectiveOptionRelax();
+   virtual void emitDirectiveOptionNoRelax();
+   virtual void emitDirectiveVariantCC(MCSymbol &Symbol);
++  virtual void emitDirectiveOptionArchFullArch(StringRef Value,
++                                               bool &PrefixEmitted);
++  virtual void emitDirectiveOptionArchPlus(StringRef Value, bool &PrefixEmitted,
++                                           bool EmitComma);
++  virtual void emitDirectiveOptionArchMinus(StringRef Value,
++                                            bool &PrefixEmitted,
++                                            bool EmitComma);
+   virtual void emitAttribute(unsigned Attribute, unsigned Value);
+   virtual void finishAttributeSection();
+   virtual void emitTextAttribute(unsigned Attribute, StringRef String);
+@@ -67,6 +74,12 @@ public:
+   void emitDirectiveOptionRelax() override;
+   void emitDirectiveOptionNoRelax() override;
+   void emitDirectiveVariantCC(MCSymbol &Symbol) override;
++  void emitDirectiveOptionArchFullArch(StringRef Value,
++                                       bool &PrefixEmitted) override;
++  void emitDirectiveOptionArchPlus(StringRef Value, bool &PrefixEmitted,
++                                   bool EmitComma) override;
++  void emitDirectiveOptionArchMinus(StringRef Value, bool &PrefixEmitted,
++                                    bool EmitComma) override;
+ };
+ 
+ }
+diff --git a/llvm/test/CodeGen/RISCV/inline-option-directive.ll b/llvm/test/CodeGen/RISCV/inline-option-directive.ll
+new file mode 100644
+index 000000000000..2c4a936b2dff
+--- /dev/null
++++ b/llvm/test/CodeGen/RISCV/inline-option-directive.ll
+@@ -0,0 +1,10 @@
++; RUN: llc -mtriple=riscv64 < %s -o - | FileCheck --check-prefixes=CHECK-ATTRIBUTES %s
++; RUN: llc -mtriple=riscv64 < %s -filetype=obj | llvm-readelf -h - \
++; RUN:     | FileCheck --check-prefixes=CHECK-EFLAGS %s
++
++; CHECK-ATTRIBUTES: .attribute      5, "rv64i2p1"
++; CHECK-EFLAGS: Flags: 0x0
++define void @test() {
++  tail call void asm ".option arch, +c", ""()
++  ret void
++}
+diff --git a/llvm/test/MC/RISCV/eflags-option-directive.s b/llvm/test/MC/RISCV/eflags-option-directive.s
+new file mode 100644
+index 000000000000..ceeb55408db7
+--- /dev/null
++++ b/llvm/test/MC/RISCV/eflags-option-directive.s
+@@ -0,0 +1,5 @@
++# RUN: llvm-mc -triple=riscv64 -filetype=obj %s -o - | llvm-readelf -h - \
++# RUN:         | FileCheck --check-prefixes=CHECK %s
++
++# CHECK: Flags: 0x0
++.option arch, +c
+diff --git a/llvm/test/MC/RISCV/option-arch.s b/llvm/test/MC/RISCV/option-arch.s
+new file mode 100644
+index 000000000000..16c20b1fafd7
+--- /dev/null
++++ b/llvm/test/MC/RISCV/option-arch.s
+@@ -0,0 +1,120 @@
++# RUN: llvm-mc -triple riscv32 -show-encoding < %s \
++# RUN:   | FileCheck -check-prefixes=CHECK %s
++# RUN: llvm-mc -triple riscv32 -filetype=obj < %s \
++# RUN:   | llvm-objdump  --triple=riscv32 --mattr=+c,+m,+a,+f,+zba -d -M no-aliases - \
++# RUN:   | FileCheck -check-prefixes=CHECK-INST %s
++
++# Test '.option arch, +' and '.option arch, -' directive
++# The following test cases were copied from MC/RISCV/option-rvc.s
++
++# CHECK-INST: addi a0, a1, 0
++# CHECK: # encoding:  [0x13,0x85,0x05,0x00]
++addi a0, a1, 0
++
++# CHECK-INST: addi s0, sp, 1020
++# CHECK: # encoding:  [0x13,0x04,0xc1,0x3f]
++addi s0, sp, 1020
++
++# CHECK: .option arch, +c
++.option arch, +c
++# CHECK-INST: c.mv a0, a1
++# CHECK: # encoding:  [0x2e,0x85]
++addi a0, a1, 0
++
++# CHECK-INST: c.addi4spn s0, sp, 1020
++# CHECK: # encoding:  [0xe0,0x1f]
++addi s0, sp, 1020
++
++# CHECK: .option arch, -c
++.option arch, -c
++# CHECK-INST: addi a0, a1, 0
++# CHECK: # encoding:  [0x13,0x85,0x05,0x00]
++addi a0, a1, 0
++
++# CHECK-INST: addi s0, sp, 1020
++# CHECK: # encoding:  [0x13,0x04,0xc1,0x3f]
++addi s0, sp, 1020
++
++# CHECK: .option arch, +c
++.option arch, +c
++# CHECK-INST: c.mv a0, a1
++# CHECK: # encoding:  [0x2e,0x85]
++addi a0, a1, 0
++
++# CHECK-INST: c.addi4spn s0, sp, 1020
++# CHECK: # encoding:  [0xe0,0x1f]
++addi s0, sp, 1020
++
++# CHECK: .option arch, -c
++.option arch, -c
++# CHECK-INST: addi a0, a1, 0
++# CHECK: # encoding:  [0x13,0x85,0x05,0x00]
++addi a0, a1, 0
++
++# CHECK-INST: addi s0, sp, 1020
++# CHECK: # encoding:  [0x13,0x04,0xc1,0x3f]
++addi s0, sp, 1020
++
++# CHECK: .option arch, +d, -d
++.option arch, +d, -d
++# CHECK-INST: flw ft0, 12(a0)
++# CHECK: # encoding:  [0x07,0x20,0xc5,0x00]
++flw f0, 12(a0)
++
++# Test comma-separated list
++# CHECK: arch, +m, +a
++.option arch, +m, +a
++# CHECK-INST: mul a4, ra, s0
++# CHECK: # encoding:  [0x33,0x87,0x80,0x02]
++mul a4, ra, s0
++# CHECK-INST: lr.w t0, (t1)
++# CHECK: # encoding:  [0xaf,0x22,0x03,0x10]
++lr.w t0, (t1)
++
++# Test multi-letter extension
++# CHECK: .option arch, +zba
++.option arch, +zba
++# CHECK-INST: sh1add t0, t1, t2
++# CHECK: encoding: [0xb3,0x22,0x73,0x20]
++sh1add t0, t1, t2
++
++# Test '.option arch, <arch-string>' directive
++# CHECK: .option arch, rv32i2p1_m2p0_a2p1_c2p0
++.option arch, rv32i2p1_m2p0_a2p1_c2p0
++
++# CHECK-INST: mul a4, ra, s0
++# CHECK: # encoding:  [0x33,0x87,0x80,0x02]
++mul a4, ra, s0
++# CHECK-INST: lr.w t0, (t1)
++# CHECK: # encoding:  [0xaf,0x22,0x03,0x10]
++lr.w t0, (t1)
++
++# Test arch string without version number
++#CHECK: .option arch, rv32i2p1_m2p0_a2p1_c2p0
++.option arch, rv32imac
++# CHECK-INST: mul a4, ra, s0
++# CHECK: # encoding:  [0x33,0x87,0x80,0x02]
++mul a4, ra, s0
++# CHECK-INST: lr.w t0, (t1)
++# CHECK: # encoding:  [0xaf,0x22,0x03,0x10]
++lr.w t0, (t1)
++
++# Test +c, -c and vice-versa
++.option arch, +c, -c
++# CHECK-INST: addi a0, a1, 0
++# CHECK: # encoding:  [0x13,0x85,0x05,0x00]
++addi a0, a1, 0
++
++.option arch, -c, +c
++# CHECK-INST: c.mv a0, a1
++# CHECK: # encoding:  [0x2e,0x85]
++addi a0, a1, 0
++
++.option arch, rv32ic
++# CHECK-INST: c.mv a0, a1
++# CHECK: # encoding:  [0x2e,0x85]
++addi a0, a1, 0
++
++# Test extension name that has digits.
++.option arch, +zve32x
++# CHECK: .option arch, +zve32x
+diff --git a/llvm/test/MC/RISCV/option-invalid.s b/llvm/test/MC/RISCV/option-invalid.s
+index b2a0344493c9..237fcd961ee8 100644
+--- a/llvm/test/MC/RISCV/option-invalid.s
++++ b/llvm/test/MC/RISCV/option-invalid.s
+@@ -13,9 +13,49 @@
+ # CHECK: :[[#@LINE+1]]:13: error: expected newline
+ .option rvc foo
+ 
+-# CHECK: :[[#@LINE+1]]:12: warning: unknown option, expected 'push', 'pop', 'rvc', 'norvc', 'relax' or 'norelax'
++# CHECK: :[[#@LINE+1]]:23: error: unexpected token, expected + or -
++.option arch, +f, +d, rv32ifd, -d
++
++# CHECK: :[[#@LINE+1]]:22: error: unexpected token, expected end of statement
++.option arch, rv32ifd, +f, +d
++
++# CHECK: :[[#@LINE+1]]:16: error: unexpected token, expected identifier
++.option arch, +"c"
++
++# CHECK: :[[#@LINE+1]]:16: error: unknown extension feature
++.option arch, +x
++
++# CHECK: :[[#@LINE+1]]:16: error: unknown extension feature
++.option arch, +relax
++
++# CHECK: :[[#@LINE+1]]:16: error: unexpected token, expected identifier
++.option arch, +
++
++# CHECK: :[[#@LINE+1]]:18: error: unexpected token, expected end of statement
++.option arch, +c foo
++
++# CHECK: :[[#@LINE+1]]:16: error: Extension version number parsing not currently implemented
++.option arch, +c2p0
++
++.option arch, +d
++# CHECK: :[[#@LINE+1]]:16: error: Can't disable f extension, d extension requires f extension be enabled
++.option arch, -f
++
++# CHECK: :[[#@LINE+1]]:16: error: Can't disable zicsr extension, f extension requires zicsr extension be enabled
++.option arch, -zicsr
++
++# CHECK: :[[#@LINE+1]]:20: error: 'f' and 'zfinx' extensions are incompatible
++.option arch, +f, +zfinx
++
++# CHECK: :[[#@LINE+1]]:13: error: expected newline
++.option rvc foo
++
++# CHECK: :[[#@LINE+1]]:12: warning: unknown option, expected 'push', 'pop', 'rvc', 'norvc', 'arch', 'relax' or 'norelax'
+ .option bar
+ 
++# CHECK: :[[#@LINE+1]]:16: error: unknown extension feature
++.option arch, -i
++
+ # CHECK: :[[#@LINE+1]]:12: error: .option pop with no .option push
+ .option pop
+ 
+@@ -24,3 +64,6 @@
+ 
+ # CHECK: :[[#@LINE+1]]:13: error: expected newline
+ .option pop 123
++
++# CHECK: :[[#@LINE+1]]:15: error: bad arch string switching from rv32 to rv64
++.option arch, rv64gc
+-- 
+2.41.0.rc0.172.g3f132b7071-goog
+

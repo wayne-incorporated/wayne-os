@@ -1,0 +1,1 @@
+autotest-capability-strongbad-1.0.0.ebuild

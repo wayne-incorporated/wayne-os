@@ -1,0 +1,1 @@
+chromeos-bsp-baseboard-coral-0.0.1.ebuild

@@ -1,0 +1,34 @@
+From 44f88055d48b245a936f090e0d6b2544ca6923e9 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Wed, 24 Aug 2022 12:41:39 -0300
+Subject: [PATCH 087/163] math: Suppress clang
+ -Wincompatible-library-redeclaration on s_llround
+
+Clang issues:
+
+  ../sysdeps/ieee754/dbl-64/s_llround.c:83:30: error: incompatible
+  redeclaration of library function 'lround'
+  [-Werror,-Wincompatible-library-redeclaration]
+  libm_alias_double (__lround, lround)
+                               ^
+  ../sysdeps/ieee754/dbl-64/s_llround.c:83:30: note: 'lround' is a builtin
+  with type 'long (double)'
+---
+ sysdeps/ieee754/dbl-64/Makefile | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/sysdeps/ieee754/dbl-64/Makefile b/sysdeps/ieee754/dbl-64/Makefile
+index 78530b5966..9f1226326c 100644
+--- a/sysdeps/ieee754/dbl-64/Makefile
++++ b/sysdeps/ieee754/dbl-64/Makefile
+@@ -2,4 +2,7 @@ ifeq ($(subdir),math)
+ # branred depends on precise IEEE double rounding
+ CFLAGS-branred.c += $(config-cflags-nofma)
+ CFLAGS-e_sqrt.c += $(config-cflags-nofma)
++
++# The symbols alias to lround
++CFLAGS-s_llround.c += -fno-builtin-lround
+ endif
+-- 
+2.37.2
+

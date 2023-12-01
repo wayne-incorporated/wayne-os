@@ -1,0 +1,42 @@
+From d171d9dfa2bd144b8f86b3ee83b50588918ed63a Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 25 Aug 2022 09:48:57 -0300
+Subject: [PATCH 142/163] x86: Use inhibit_stack_protector on tst-ifunc-isa.h
+
+---
+ sysdeps/x86/tst-ifunc-isa.h | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/sysdeps/x86/tst-ifunc-isa.h b/sysdeps/x86/tst-ifunc-isa.h
+index 7a6ff9a92a..e44277ec10 100644
+--- a/sysdeps/x86/tst-ifunc-isa.h
++++ b/sysdeps/x86/tst-ifunc-isa.h
+@@ -16,6 +16,7 @@
+    License along with the GNU C Library; if not, see
+    <https://www.gnu.org/licenses/>.  */
+ 
++#include <stackprotector.h>
+ #include <sys/platform/x86.h>
+ 
+ enum isa
+@@ -29,7 +30,7 @@ enum isa
+ };
+ 
+ enum isa
+-__attribute__ ((__optimize__ ("-fno-stack-protector")))
++inhibit_stack_protector
+ get_isa (void)
+ {
+   if (CPU_FEATURE_ACTIVE (AVX512F))
+@@ -84,7 +85,7 @@ isa_none (void)
+ int foo (void) __attribute__ ((ifunc ("foo_ifunc")));
+ 
+ void *
+-__attribute__ ((__optimize__ ("-fno-stack-protector")))
++inhibit_stack_protector
+ foo_ifunc (void)
+ {
+   switch (get_isa ())
+-- 
+2.37.2
+

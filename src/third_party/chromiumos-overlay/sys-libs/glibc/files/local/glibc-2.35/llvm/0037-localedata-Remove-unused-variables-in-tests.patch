@@ -1,0 +1,140 @@
+From 1ea5aed02e1fc0f1c53eadbb687a9d4ab42244f9 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Mon, 28 Mar 2022 14:40:55 -0300
+Subject: [PATCH 037/163] localedata: Remove unused variables in tests
+
+Checked on x86_64-linux-gnu and i686-linux-gnu.
+
+(cherry picked from commit d1eefcb2a0e49465f49ff26ecb9bb2435c0e63fb)
+---
+ localedata/tests-mbwc/tst_funcs.h   | 1 -
+ localedata/tests-mbwc/tst_strcoll.c | 1 -
+ localedata/tests-mbwc/tst_strxfrm.c | 3 ---
+ localedata/tests-mbwc/tst_wcschr.c  | 1 -
+ localedata/tests-mbwc/tst_wcspbrk.c | 2 --
+ localedata/tests-mbwc/tst_wcsxfrm.c | 4 ----
+ 6 files changed, 12 deletions(-)
+
+diff --git a/localedata/tests-mbwc/tst_funcs.h b/localedata/tests-mbwc/tst_funcs.h
+index 23dc6a0065..5e22a76bb0 100644
+--- a/localedata/tests-mbwc/tst_funcs.h
++++ b/localedata/tests-mbwc/tst_funcs.h
+@@ -83,7 +83,6 @@ extern int result (FILE * fp, char res, const char *func, const char *loc,
+ 
+ #define TST_DECL_VARS(_type_)				\
+ 	int   loc, rec, err_count = 0;			\
+-	int   warn_count __attribute__ ((unused));	\
+ 	int   seq_num = 0;				\
+ 	const char *locale;				\
+ 	int   err_exp, ret_flg;				\
+diff --git a/localedata/tests-mbwc/tst_strcoll.c b/localedata/tests-mbwc/tst_strcoll.c
+index 4c5a84f697..677edc6592 100644
+--- a/localedata/tests-mbwc/tst_strcoll.c
++++ b/localedata/tests-mbwc/tst_strcoll.c
+@@ -75,7 +75,6 @@ tst_strcoll (FILE * fp, int debug_flg)
+ 			 " to check a return value");
+ 	      }
+ 
+-	    warn_count++;
+ 	    Result (C_INVALID, S_WCSCHR, CASE_3, "(check the test data); "
+ 		    "should set ret_flg=1 to check a return value");
+ 	  }
+diff --git a/localedata/tests-mbwc/tst_strxfrm.c b/localedata/tests-mbwc/tst_strxfrm.c
+index fdfeffc892..837ee8c947 100644
+--- a/localedata/tests-mbwc/tst_strxfrm.c
++++ b/localedata/tests-mbwc/tst_strxfrm.c
+@@ -30,7 +30,6 @@ tst_strxfrm (FILE * fp, int debug_flg)
+ 
+       if (n1 < 0 || sizeof (frm1) < n1 || sizeof (frm2) < n2)
+ 	{
+-	  warn_count++;
+ 	  Result (C_IGNORED, S_STRXFRM, CASE_9,
+ 		  "input data n1 or n2 is invalid");
+ 	  continue;
+@@ -60,7 +59,6 @@ tst_strxfrm (FILE * fp, int debug_flg)
+ 
+       if (ret >= n1 || errno != 0)
+ 	{
+-	  warn_count++;
+ 	  Result (C_INVALID, S_STRXFRM, CASE_8,
+ 		  "got an error in fist strxfrm() call");
+ 	  continue;
+@@ -103,7 +101,6 @@ tst_strxfrm (FILE * fp, int debug_flg)
+       if (errno != 0)
+ 	{
+ 	  /* bug * bug may get correct results ...	  */
+-	  warn_count++;
+ 	  Result (C_INVALID, S_STRXFRM, CASE_6,
+ 		  "got an error in strcoll() call");
+ 	  continue;
+diff --git a/localedata/tests-mbwc/tst_wcschr.c b/localedata/tests-mbwc/tst_wcschr.c
+index b57a05a8f9..a78ba29285 100644
+--- a/localedata/tests-mbwc/tst_wcschr.c
++++ b/localedata/tests-mbwc/tst_wcschr.c
+@@ -46,7 +46,6 @@ tst_wcschr (FILE * fp, int debug_flg)
+ 			 "set ret_flg=1 to check NULL return value\n");
+ 	      }
+ 
+-	    warn_count++;
+ 	    Result (C_INVALID, S_WCSCHR, CASE_3, "(check the test data) "
+ 		    "set ret_flg=1 to check NULL return value");
+ 	    continue;
+diff --git a/localedata/tests-mbwc/tst_wcspbrk.c b/localedata/tests-mbwc/tst_wcspbrk.c
+index 95c1c0fa69..e40bc0c87c 100644
+--- a/localedata/tests-mbwc/tst_wcspbrk.c
++++ b/localedata/tests-mbwc/tst_wcspbrk.c
+@@ -12,7 +12,6 @@ tst_wcspbrk (FILE * fp, int debug_flg)
+ {
+   TST_DECL_VARS (wchar_t *);
+   wchar_t *ws1, *ws2;
+-  int err;
+   wchar_t wc_ex;
+ 
+   TST_DO_TEST (wcspbrk)
+@@ -63,7 +62,6 @@ tst_wcspbrk (FILE * fp, int debug_flg)
+ 
+ 	if (*ret != wc_ex)
+ 	  {
+-	    err++;
+ 	    err_count++;
+ 	    Result (C_FAILURE, S_WCSPBRK, CASE_4, "the pointed wc is "
+ 		    "different from an expected wc");
+diff --git a/localedata/tests-mbwc/tst_wcsxfrm.c b/localedata/tests-mbwc/tst_wcsxfrm.c
+index 6fb8a1c28d..ce22844a54 100644
+--- a/localedata/tests-mbwc/tst_wcsxfrm.c
++++ b/localedata/tests-mbwc/tst_wcsxfrm.c
+@@ -28,7 +28,6 @@ tst_wcsxfrm (FILE * fp, int debug_flg)
+       n2 = TST_INPUT (wcsxfrm).n2;
+       if (n1 < 0 || sizeof (frm1) < n1 || sizeof (frm2) < n2)
+ 	{
+-	  warn_count++;
+ 	  Result (C_IGNORED, S_WCSXFRM, CASE_9,
+ 		  "input data n1 or n2 is invalid");
+ 	  continue;
+@@ -52,7 +51,6 @@ tst_wcsxfrm (FILE * fp, int debug_flg)
+ 
+       if (ret == -1 || ret >= n1 || errno_save != 0)
+ 	{
+-	  warn_count++;
+ 	  Result (C_INVALID, S_WCSXFRM, CASE_8,
+ 		  "got an error in fist wcsxfrm() call");
+ 	  continue;
+@@ -70,7 +68,6 @@ tst_wcsxfrm (FILE * fp, int debug_flg)
+       if (n2 == 0 || ret >= n2 || errno != 0)
+ 	{
+ #if 0
+-	  warn_count++;
+ 	  Result (C_IGNORED, S_WCSXFRM, CASE_7, "did not get a result");
+ #endif
+ 	  continue;
+@@ -89,7 +86,6 @@ tst_wcsxfrm (FILE * fp, int debug_flg)
+ 
+       if (errno != 0)		/* bugs * bugs may got correct results ... */
+ 	{
+-	  warn_count++;
+ 	  Result (C_INVALID, S_WCSXFRM, CASE_6,
+ 		  "got an error in wcscoll() call");
+ 	  continue;
+-- 
+2.37.2
+

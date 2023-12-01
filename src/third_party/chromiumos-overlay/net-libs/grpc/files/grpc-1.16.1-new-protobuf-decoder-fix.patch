@@ -1,0 +1,24 @@
+Modify proto_utils.h to work with protobuf >3.11.x
+
+Newer version of protobuf updated the SetTotalBytesLimit interface dropping one
+function input. The patch updates proto_utils.h to use a new interface signature
+when a protobuf >3.11.x is detected.
+
+diff --git a/include/grpcpp/impl/codegen/proto_utils.h b/include/grpcpp/impl/codegen/proto_utils.h
+index d9db6de..ede7381 100644
+--- a/include/grpcpp/impl/codegen/proto_utils.h
++++ b/include/grpcpp/impl/codegen/proto_utils.h
+@@ -83,7 +83,12 @@ Status GenericDeserialize(ByteBuffer* buffer, grpc::protobuf::Message* msg) {
+       return reader.status();
+     }
+     ::grpc::protobuf::io::CodedInputStream decoder(&reader);
+-    decoder.SetTotalBytesLimit(INT_MAX, INT_MAX);
++    #if GOOGLE_PROTOBUF_VERSION >= 3002000
++      decoder.SetTotalBytesLimit(INT_MAX);
++    #else
++      decoder.SetTotalBytesLimit(INT_MAX, INT_MAX);
++    #endif
++
+     if (!msg->ParseFromCodedStream(&decoder)) {
+       result = Status(StatusCode::INTERNAL, msg->InitializationErrorString());
+     }

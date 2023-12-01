@@ -1,0 +1,44 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":cfm_dfu_notification" ]
+  if (use.test) {
+    deps += [ ":cfm_dfu_notification_test" ]
+  }
+}
+
+pkg_config("cfm_dfu_notification_pkg_deps") {
+  pkg_deps = [ "libchrome" ]
+}
+
+shared_library("cfm_dfu_notification") {
+  sources = [
+    "dfu_log_notification.cc",
+    "idfu_notification.cc",
+  ]
+  configs += [ ":cfm_dfu_notification_pkg_deps" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("cfm_dfu_notification_test") {
+    sources = [
+      "dfu_log_notification.cc",
+      "dfu_log_notification_test.cc",
+      "idfu_notification.cc",
+    ]
+    configs += [
+      ":test_config",
+      "//common-mk:test",
+    ]
+    defines = [ "UNIT_TEST" ]
+    deps = [ "//common-mk/testrunner" ]
+  }
+}

@@ -1,0 +1,31 @@
+This patch fixes a bug where board-emerged aarch64 versions of GDB fail to
+build with the error:
+
+ld.lld: error: undefined symbol: set_tdesc_osabi(target_desc*, char const*)
+referenced by aarch64.c:50
+
+This fix should go into upstream GDB, but until it does we are fixing it here.
+Author: cmtice@google.com
+Date: 18-Nov-2020
+
+diff --git a/gdb/arch/aarch64.c b/gdb/arch/aarch64.c
+index 4a23c13..4be3c43 100644
+--- a/gdb/arch/aarch64.c
++++ b/gdb/arch/aarch64.c
+@@ -33,6 +33,8 @@ aarch64_create_target_description (uint64_t vq, bool pauth_p)
+ 
+ #ifndef IN_PROCESS_AGENT
+   set_tdesc_architecture (tdesc, "aarch64");
++
++  set_tdesc_osabi (tdesc, "GNU/Linux");
+ #endif
+ 
+   long regnum = 0;
+@@ -47,7 +49,5 @@ aarch64_create_target_description (uint64_t vq, bool pauth_p)
+   if (pauth_p)
+     regnum = create_feature_aarch64_pauth (tdesc, regnum);
+ 
+-  set_tdesc_osabi (tdesc, "GNU/Linux");
+-
+   return tdesc;
+ }

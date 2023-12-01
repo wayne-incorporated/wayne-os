@@ -1,0 +1,84 @@
+From 017ca5eb4472c2f811eb357f5aff707fcb0c1b7c Mon Sep 17 00:00:00 2001
+From: Zubin Mithra <zsm@google.com>
+Date: Wed, 8 Feb 2023 10:14:49 -0800
+Subject: [PATCH 6/7] cros-syzkaller: do not unshare CLONE_NEWNET
+
+---
+ executor/common_linux.h | 31 ++-----------------------------
+ 1 file changed, 2 insertions(+), 29 deletions(-)
+
+diff --git a/executor/common_linux.h b/executor/common_linux.h
+index e53a908ab..501e4df7a 100644
+--- a/executor/common_linux.h
++++ b/executor/common_linux.h
+@@ -3128,6 +3128,7 @@ static volatile long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volat
+ 
+ #include <linux/net.h>
+ 
++#if 0
+ // checkpoint/reset_net_namespace partially resets net namespace to initial state
+ // after each test. Currently it resets only ipv4 netfilter state.
+ // Ideally, we just create a new net namespace for each test,
+@@ -3595,6 +3596,7 @@ static void reset_net_namespace(void)
+ 	reset_iptables(ipv6_tables, sizeof(ipv6_tables) / sizeof(ipv6_tables[0]), AF_INET6, SOL_IPV6);
+ }
+ #endif
++#endif
+ 
+ #if SYZ_EXECUTOR || (SYZ_CGROUPS && (SYZ_SANDBOX_NONE || SYZ_SANDBOX_SETUID || SYZ_SANDBOX_NAMESPACE || SYZ_SANDBOX_ANDROID))
+ #include <fcntl.h>
+@@ -3989,31 +3991,8 @@ static int do_sandbox_none(void)
+ 		return wait_for_loop(pid);
+ 
+ 	setup_common();
+-#if SYZ_EXECUTOR || SYZ_VHCI_INJECTION
+-	initialize_vhci();
+-#endif
+ 	sandbox_common();
+ 	drop_caps();
+-#if SYZ_EXECUTOR || SYZ_NET_DEVICES
+-	initialize_netdevices_init();
+-#endif
+-	if (unshare(CLONE_NEWNET)) {
+-		debug("unshare(CLONE_NEWNET): %d\n", errno);
+-	}
+-	// Enable access to IPPROTO_ICMP sockets, must be done after CLONE_NEWNET.
+-	write_file("/proc/sys/net/ipv4/ping_group_range", "0 65535");
+-#if SYZ_EXECUTOR || SYZ_DEVLINK_PCI
+-	initialize_devlink_pci();
+-#endif
+-#if SYZ_EXECUTOR || SYZ_NET_INJECTION
+-	initialize_tun();
+-#endif
+-#if SYZ_EXECUTOR || SYZ_NET_DEVICES
+-	initialize_netdevices();
+-#endif
+-#if SYZ_EXECUTOR || SYZ_WIFI
+-	initialize_wifi_devices();
+-#endif
+ 	setup_binderfs();
+ 	loop();
+ 	doexit(1);
+@@ -4671,9 +4650,6 @@ static void setup_loop()
+ #if SYZ_EXECUTOR || SYZ_CGROUPS
+ 	setup_cgroups_loop();
+ #endif
+-#if SYZ_EXECUTOR || SYZ_NET_RESET
+-	checkpoint_net_namespace();
+-#endif
+ }
+ #endif
+ 
+@@ -4690,9 +4666,6 @@ static void reset_loop()
+ 		close(loopfd);
+ 	}
+ #endif
+-#if SYZ_EXECUTOR || SYZ_NET_RESET
+-	reset_net_namespace();
+-#endif
+ }
+ #endif
+ 
+-- 
+2.39.2.637.g21b0678d19-goog
+

@@ -1,0 +1,38 @@
+From 5c4bf63a94ed0c20aca5bafb94ecd05893a45ec1 Mon Sep 17 00:00:00 2001
+From: Takashi Iwai <tiwai@suse.de>
+Date: Tue, 24 Aug 2021 09:36:33 +0200
+Subject: [PATCH 1/5] aplay: Handle 16bit sample negative overflow in peak
+ calculations
+
+The handling of 16bit samples in the peak calculations has a bug when
+a sample with 0x8000 is passed.  As abs() treats 32bit int, it returns
+0x8000.  And yet the code stores back into 16bit value again.
+
+To fix that overflow, use 32bit value (i.e. val instead of sval) for
+the further calculations.
+
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+---
+ aplay/aplay.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/aplay/aplay.c b/aplay/aplay.c
+index 91af244..c884346 100644
+--- a/aplay/aplay.c
++++ b/aplay/aplay.c
+@@ -1829,9 +1829,9 @@ static void compute_max_peak(u_char *data, size_t samples)
+ 			else
+ 				sval = be16toh(*valp);
+ 			sval ^= mask;
+-			sval = abs(sval);
+-			if (max_peak[c] < sval)
+-				max_peak[c] = sval;
++			val = abs(sval);
++			if (max_peak[c] < val)
++				max_peak[c] = val;
+ 			valp++;
+ 			if (vumeter == VUMETER_STEREO)
+ 				c = !c;
+-- 
+2.33.0.259.gc128427fd7-goog
+

@@ -1,0 +1,37 @@
+From dea51861a8626694c6e80121c17a0a38efc2e33c Mon Sep 17 00:00:00 2001
+From: Takashi Iwai <tiwai@suse.de>
+Date: Tue, 24 Aug 2021 10:06:05 +0200
+Subject: [PATCH 4/5] aplay: Fix out-of-bound access in stereo VU meter drawing
+
+The left channel drawing of a stereo VU meter has a bug where it may
+access a negative array index.
+
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+---
+ aplay/aplay.c | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/aplay/aplay.c b/aplay/aplay.c
+index a51a37b..63a4e34 100644
+--- a/aplay/aplay.c
++++ b/aplay/aplay.c
+@@ -1758,10 +1758,12 @@ static void print_vu_meter_stereo(int *perc, int *maxperc)
+ 		if (c)
+ 			memset(line + bar_length + 6 + 1, '#', p);
+ 		else
+-			memset(line + bar_length - p - 1, '#', p);
+-		p = maxperc[c] * bar_length / 100;
+-		if (p > bar_length)
+-			p = bar_length;
++			memset(line + bar_length - p, '#', p);
++		p = maxperc[c] * bar_length / 100 - 1;
++		if (p < 0)
++			p = 0;
++		else if (p >= bar_length)
++			p = bar_length - 1;
+ 		if (c)
+ 			line[bar_length + 6 + 1 + p] = '+';
+ 		else
+-- 
+2.33.0.259.gc128427fd7-goog
+

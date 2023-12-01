@@ -1,0 +1,609 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+include(sepolicy/file_contexts/chromeos_unconfined)
+include(sepolicy/file_contexts/coreutils)
+
+include(sepolicy/file_contexts/sysfs_contexts)
+
+
+# Please add ARC++ engineers as code reviewers when changing file contexts under
+# android-data.
+
+
+# Chrome OS file contexts.
+/([^/]+)?                       u:object_r:rootfs:s0
+/sys                            u:object_r:sysfs:s0
+/usr/[^/]+                      u:object_r:cros_usr_dirs:s0
+/usr/share(/.*)?                u:object_r:cros_usr_dirs:s0
+/usr/local/[^/]+                u:object_r:cros_dev_image_files:s0
+/sbin/init                      u:object_r:chromeos_init_exec:s0
+
+# SBIN_START_HERE
+/sbin/agetty                    u:object_r:cros_agetty_exec:s0
+/sbin/audispd                   u:object_r:cros_audispd_exec:s0
+/sbin/auditd                    u:object_r:cros_auditd_exec:s0
+/sbin/blockdev                  u:object_r:cros_blockdev_exec:s0
+/sbin/capsh                     u:object_r:cros_capsh_exec:s0
+/sbin/chromeos_startup          u:object_r:chromeos_startup_script_exec:s0
+/sbin/crash_reporter            u:object_r:cros_crash_reporter_exec:s0
+/sbin/crash_sender              u:object_r:cros_crash_sender_exec:s0
+/sbin/debugd                    u:object_r:cros_debugd_exec:s0
+/sbin/dhcpcd                    u:object_r:cros_dhcpcd_exec:s0
+/sbin/featured                  u:object_r:cros_featured_exec:s0
+/sbin/frecon                    u:object_r:frecon_exec:s0
+/sbin/hwclock                   u:object_r:cros_hwclock_exec:s0
+/sbin/initctl                   u:object_r:cros_initctl_exec:s0
+/sbin/insmod                    u:object_r:cros_modprobe_exec:s0
+/sbin/losetup                   u:object_r:cros_losetup_exec:s0
+/sbin/minijail0                 u:object_r:cros_minijail_exec:s0
+/sbin/mke2fs                    u:object_r:cros_mke2fs_exec:s0
+/sbin/modprobe                  u:object_r:cros_modprobe_exec:s0
+/sbin/restorecon                u:object_r:cros_restorecon_exec:s0
+/sbin/rmmod                     u:object_r:cros_modprobe_exec:s0
+/sbin/session_manager           u:object_r:cros_session_manager_exec:s0
+/sbin/setfiles                  u:object_r:cros_restorecon_exec:s0
+/sbin/sfdisk                    u:object_r:cros_sfdisk_exec:s0
+/sbin/udevd                     u:object_r:cros_udevd_exec:s0
+/sbin/upstart-socket-bridge     u:object_r:upstart_socket_bridge_exec:s0
+/sbin/ureadahead                u:object_r:cros_ureadahead_exec:s0
+# SBIN_END_HERE
+
+/bin/bash                       u:object_r:sh_exec:s0
+/bin/brltty                     u:object_r:cros_brltty_exec:s0
+/bin/dash                       u:object_r:sh_exec:s0
+/bin/grep                       u:object_r:cros_grep_exec:s0
+/bin/kmod                       u:object_r:cros_modprobe_exec:s0
+/bin/lsblk                      u:object_r:cros_lsblk_exec:s0
+/bin/mount                      u:object_r:cros_mount_exec:s0
+/bin/mountpoint                 u:object_r:cros_mountpoint_exec:s0
+/bin/sed                        u:object_r:cros_sed_exec:s0
+/bin/sh                         u:object_r:sh_exec:s0
+/bin/udevadm                    u:object_r:cros_udevadm_exec:s0
+/bin/umount                     u:object_r:cros_umount_exec:s0
+
+# USR_BIN_START_HERE
+/usr/bin/anomaly_detector       u:object_r:cros_anomaly_detector_exec:s0
+/usr/bin/arc-appfuse-provider   u:object_r:cros_arc_appfuse_provider_exec:s0
+/usr/bin/arc-host-clock-service u:object_r:cros_arc_host_clock_service_exec:s0
+/usr/bin/arc-obb-mounter        u:object_r:cros_arc_obb_mounter_exec:s0
+/usr/bin/arc-packages-xml-reader u:object_r:cros_arc_packages_xml_reader_exec:s0
+/usr/bin/arc_camera_service     u:object_r:cros_arc_camera_service_exec:s0
+/usr/bin/arcvm_data_migrator    u:object_r:cros_arcvm_data_migrator_exec:s0
+/usr/bin/arcvm_server_proxy     u:object_r:cros_arcvm_server_proxy_exec:s0
+/usr/bin/backlight_tool         u:object_r:cros_backlight_tool_exec:s0
+/usr/bin/biod                   u:object_r:cros_biod_exec:s0
+/usr/bin/btadapterd             u:object_r:cros_btadapterd_exec:s0
+/usr/bin/btdispatch             u:object_r:cros_btdispatch_exec:s0
+/usr/bin/btmanagerd             u:object_r:cros_btmanagerd_exec:s0
+/usr/bin/cgpt                   u:object_r:cros_cgpt_exec:s0
+/usr/bin/chrt                   u:object_r:cros_chrt_exec:s0
+/usr/bin/chunneld               u:object_r:cros_chunneld_exec:s0
+/usr/bin/core_collector[0-9]*   u:object_r:cros_core_collector_exec:s0
+/usr/bin/cras                   u:object_r:cros_cras_exec:s0
+/usr/bin/cronista               u:object_r:cros_cronista_exec:s0
+/usr/bin/cros-disks             u:object_r:cros_disks_exec:s0
+/usr/bin/cros-health-tool       u:object_r:cros_health_tool_exec:s0
+/usr/bin/cros_camera_algo       u:object_r:cros_camera_algo_exec:s0
+/usr/bin/cros_camera_service    u:object_r:cros_camera_service_exec:s0
+/usr/bin/cros_camera_diagnostics_service    u:object_r:cros_camera_diagnostics_service_exec:s0
+/usr/bin/cros_healthd           u:object_r:cros_healthd_exec:s0
+/usr/bin/cros_installer         u:object_r:cros_installer_exec:s0
+/usr/bin/crossystem             u:object_r:cros_crossystem_exec:s0
+/usr/bin/cups_proxy             u:object_r:cros_cups_proxy_exec:s0
+/usr/bin/dbus-daemon            u:object_r:cros_dbus_daemon_exec:s0
+/usr/bin/dbus-monitor           u:object_r:cros_dbus_monitor_exec:s0
+/usr/bin/dbus-send              u:object_r:cros_dbus_send_exec:s0
+/usr/bin/dbus-uuidgen           u:object_r:cros_dbus_uuidgen_exec:s0
+/usr/bin/dugong                 u:object_r:cros_dugong_exec:s0
+/usr/bin/ipf_ufd                u:object_r:cros_ipf_ufd_exec:s0
+/usr/bin/ipfhostd               u:object_r:cros_ipfhostd_exec:s0
+/usr/bin/find                   u:object_r:cros_system_file:s0
+/usr/bin/gdbus                  u:object_r:cros_gdbus_exec:s0
+/usr/bin/getopt                 u:object_r:cros_getopt_exec:s0
+/usr/bin/hermes                 u:object_r:cros_hermes_exec:s0
+/usr/bin/hotlined               u:object_r:cros_hotlined_exec:s0
+/usr/bin/hotlog                 u:object_r:cros_hotlog_exec:s0
+/usr/bin/hps-factory            u:object_r:cros_hps_factory_exec:s0
+/usr/bin/ionice                 u:object_r:cros_ionice_exec:s0
+/usr/bin/ippusb_bridge          u:object_r:cros_ippusb_bridge_exec:s0
+/usr/bin/logger                 u:object_r:cros_logger_exec:s0
+/usr/bin/lorgnette              u:object_r:cros_lorgnette_exec:s0
+/usr/bin/mawk                   u:object_r:cros_mawk_exec:s0
+/usr/bin/memd                   u:object_r:cros_memd_exec:s0
+/usr/bin/metrics_client         u:object_r:cros_metrics_client_exec:s0
+/usr/bin/metrics_daemon         u:object_r:cros_metrics_daemon_exec:s0
+/usr/bin/midis                  u:object_r:cros_midis_exec:s0
+/usr/bin/missived               u:object_r:cros_missived_exec:s0
+/usr/bin/ml_service             u:object_r:cros_ml_service_exec:s0
+/usr/bin/mmdata_mgr             u:object_r:cros_mmdata_mgr_exec:s0
+/usr/bin/modemfwd               u:object_r:cros_modemfwd_exec:s0
+/usr/bin/mojo_service_manager   u:object_r:cros_mojo_service_manager_exec:s0
+/usr/bin/mount-passthrough        u:object_r:cros_mount_passthrough_exec:s0
+/usr/bin/mount-passthrough-jailed u:object_r:cros_mount_passthrough_jailed_exec:s0
+/usr/bin/newblued               u:object_r:cros_newblued_exec:s0
+/usr/bin/opencl_cacher          u:object_r:cros_opencl_cacher_exec:s0
+/usr/bin/patchpaneld            u:object_r:cros_patchpaneld_exec:s0
+/usr/bin/periodic_scheduler     u:object_r:cros_periodic_scheduler_exec:s0
+/usr/bin/permission_broker      u:object_r:cros_permission_broker_exec:s0
+/usr/bin/powerd                 u:object_r:cros_powerd_exec:s0
+/usr/bin/qrtr-ns                u:object_r:cros_qrtr_ns_exec:s0
+/usr/bin/resourced              u:object_r:cros_resourced_exec:s0
+/usr/bin/rmtfs                  u:object_r:cros_rmtfs_exec:s0
+/usr/bin/rootdev                u:object_r:cros_rootdev_exec:s0
+/usr/bin/run_oci                u:object_r:cros_run_oci_exec:s0
+/usr/bin/seneschal              u:object_r:cros_seneschal_exec:s0
+/usr/bin/shill                  u:object_r:cros_shill_exec:s0
+/usr/bin/sound_card_init        u:object_r:cros_sound_card_init_exec:s0
+/usr/bin/swap_management        u:object_r:cros_swap_management_exec:s0
+/usr/bin/ti50-emulator-ec_comm    u:object_r:cros_ti50-emulator-ec_comm_exec:s0
+/usr/bin/ti50-emulator-fw_updater u:object_r:cros_ti50-emulator-fw_updater_exec:s0
+/usr/bin/ti50-emulator-kernel     u:object_r:cros_ti50-emulator-kernel_exec:s0
+/usr/bin/ti50-emulator-pinweaver  u:object_r:cros_ti50-emulator-pinweaver_exec:s0
+/usr/bin/ti50-emulator-sys_mgr    u:object_r:cros_ti50-emulator-sys_mgr_exec:s0
+/usr/bin/ti50-emulator-tpm2       u:object_r:cros_ti50-emulator-tpm2_exec:s0
+/usr/bin/ti50-emulator-u2f        u:object_r:cros_ti50-emulator-u2f_exec:s0
+/usr/bin/timberslide            u:object_r:cros_timberslide_exec:s0
+/usr/bin/tlsdated               u:object_r:cros_tlsdated_exec:s0
+/usr/bin/tpm2-simulator         u:object_r:cros_tpm2_simulator_exec:s0
+/usr/bin/traced                 u:object_r:cros_traced_exec:s0
+/usr/bin/traced_probes          u:object_r:cros_traced_probes_exec:s0
+/usr/bin/typecd                 u:object_r:cros_typecd_exec:s0
+/usr/bin/u2fd                   u:object_r:cros_u2fd_exec:s0
+/usr/bin/virtual-file-provider  u:object_r:cros_virtual_file_provider_exec:s0
+/usr/bin/virtual-file-provider-jailed u:object_r:cros_virtual_file_provider_jailed_exec:s0
+/usr/bin/vm_cicerone            u:object_r:cros_vm_cicerone_exec:s0
+/usr/bin/vm_concierge           u:object_r:cros_vm_concierge_exec:s0
+/usr/bin/vmlog_forwarder        u:object_r:cros_vmlog_forwarder_exec:s0
+/usr/bin/vshd                   u:object_r:cros_vshd_exec:s0
+/usr/bin/wilco_dtc_supportd     u:object_r:cros_wilco_dtc_supportd_exec:s0
+/usr/bin/ureadahead-diff        u:object_r:cros_ureadahead_diff_exec:s0
+# USR_BIN_END_HERE
+
+# USR_SBIN_START_HERE
+/usr/sbin/ModemManager          u:object_r:cros_modem_manager_exec:s0
+/usr/sbin/accelerator-logs      u:object_r:cros_accelerator_logs_exec:s0
+/usr/sbin/apk-cache-cleaner-jailed u:object_r:cros_apk_cache_cleaner_jailed_exec:s0
+/usr/sbin/arc-adbd              u:object_r:cros_arc_adbd_exec:s0
+/usr/sbin/arc-apply-per-board-config u:object_r:cros_arc_apply_per_board_config_exec:s0
+/usr/sbin/arc-keymasterd        u:object_r:cros_arc_keymasterd_exec:s0
+/usr/sbin/arc-setup             u:object_r:cros_arc_setup_exec:s0
+/usr/sbin/arcvm_boot_notification_server u:object_r:cros_arcvm_boot_notification_server_exec:s0
+/usr/sbin/atrusd                u:object_r:cros_atrusd_exec:s0
+/usr/sbin/attestationd          u:object_r:cros_attestationd_exec:s0
+/usr/sbin/avahi-daemon          u:object_r:cros_avahi_daemon_exec:s0
+/usr/sbin/bootlockboxd          u:object_r:cros_bootlockboxd_exec:s0
+/usr/sbin/bootstat              u:object_r:cros_bootstat_exec:s0
+/usr/sbin/brcm_patchram_plus    u:object_r:cros_brcm_patchram_plus_exec:s0
+/usr/sbin/cdm-oemcrypto         u:object_r:cros_cdm_oemcrypto_exec:s0
+/usr/sbin/cdm-oemcrypto-wv14    u:object_r:cros_cdm_oemcrypto_exec:s0
+/usr/sbin/cecservice            u:object_r:cros_cecservice_exec:s0
+/usr/sbin/chapsd                u:object_r:cros_chapsd_exec:s0
+/usr/sbin/chromeos-cleanup-logs u:object_r:cros_chromeos_cleanup_logs_exec:s0
+/usr/sbin/chromeos-install      u:object_r:cros_chromeos_install_exec:s0
+/usr/sbin/chromeos-postinst     u:object_r:cros_chromeos_postinst_exec:s0
+/usr/sbin/chromeos-trim         u:object_r:cros_chromeos_trim_exec:s0
+/usr/sbin/conntrackd            u:object_r:cros_conntrackd_exec:s0
+/usr/sbin/cros-machine-id-regen u:object_r:cros_machine_id_regen_exec:s0
+/usr/sbin/crosdns               u:object_r:cros_crosdns_exec:s0
+/usr/sbin/cryptohomed           u:object_r:cros_cryptohomed_exec:s0
+/usr/sbin/cryptohome-namespace-mounter u:object_r:cros_cryptohome_namespace_mounter_exec:s0
+/usr/sbin/cupsd                 u:object_r:cros_cupsd_exec:s0
+/usr/sbin/daisydog              u:object_r:cros_daisydog_exec:s0
+/usr/sbin/dcad                  u:object_r:cros_dcad_exec:s0
+/usr/sbin/discod                u:object_r:cros_discod_exec:s0
+/usr/sbin/dlcservice            u:object_r:cros_dlcservice_exec:s0
+/usr/sbin/dnsproxyd             u:object_r:cros_dnsproxyd_exec:s0
+/usr/sbin/enterprised           u:object_r:cros_enterprised_exec:s0
+/usr/sbin/gsctool               u:object_r:cros_gsctool_exec:s0
+/usr/sbin/hpsd                  u:object_r:cros_hpsd_exec:s0
+/usr/sbin/huddly-monitor        u:object_r:cros_huddly_monitor_exec:s0
+/usr/sbin/iioservice            u:object_r:cros_iioservice_exec:s0
+/usr/sbin/imageloader           u:object_r:cros_imageloader_exec:s0
+/usr/sbin/is_running_from_installer u:object_r:cros_is_running_from_installer_exec:s0
+/usr/sbin/jetstream-update-stats u:object_r:cros_jetstream_update_stats_exec:s0
+/usr/sbin/lvmd                  u:object_r:cros_lvmd_exec:s0
+/usr/sbin/mimo-monitor          u:object_r:cros_mimo_monitor_exec:s0
+/usr/sbin/mtpd                  u:object_r:cros_mtpd_exec:s0
+/usr/sbin/oobe_config_restore   u:object_r:cros_oobe_config_restore_exec:s0
+/usr/sbin/oobe_config_save      u:object_r:cros_oobe_config_save_exec:s0
+/usr/sbin/os_install_service    u:object_r:cros_os_install_service_exec:s0
+/usr/sbin/p2p-http-server       u:object_r:cros_p2p_http_server_exec:s0
+/usr/sbin/p2p-server            u:object_r:cros_p2p_server_exec:s0
+/usr/sbin/parted                u:object_r:cros_parted_exec:s0
+/usr/sbin/pca_agentd            u:object_r:cros_pca_agentd_exec:s0
+/usr/sbin/pciguard              u:object_r:cros_pciguard_exec:s0
+/usr/sbin/rgbkbd                u:object_r:cros_rgbkbd_exec:s0
+/usr/sbin/rmad                  u:object_r:cros_rmad_exec:s0
+/usr/sbin/rollback_prepare_save u:object_r:rollback_prepare_save_exec:s0
+/usr/sbin/rsyslogd              u:object_r:cros_rsyslogd_exec:s0
+/usr/sbin/secanomalyd           u:object_r:cros_secanomalyd_exec:s0
+/usr/sbin/smbproviderd          u:object_r:cros_smbproviderd_exec:s0
+/usr/sbin/spaced                u:object_r:cros_spaced_exec:s0
+/usr/sbin/spaced_cli            u:object_r:cros_spaced_cli_exec:s0
+/usr/sbin/sshd                  u:object_r:cros_sshd_exec:s0
+/usr/sbin/sslh(-fork|-select)?  u:object_r:cros_sslh_exec:s0
+/usr/sbin/syslog-cat            u:object_r:cros_syslog_cat_exec:s0
+/usr/sbin/tcsd                  u:object_r:cros_tcsd_exec:s0
+/usr/sbin/tpm_managerd          u:object_r:cros_tpm_managerd_exec:s0
+/usr/sbin/tpm_tunneld           u:object_r:cros_tpm_tunneld_exec:s0
+/usr/sbin/trunksd               u:object_r:cros_trunksd_exec:s0
+/usr/sbin/update_engine         u:object_r:cros_update_engine_exec:s0
+/usr/sbin/usbguard-daemon       u:object_r:cros_usbguard_exec:s0
+/usr/sbin/vtpmd                 u:object_r:cros_vtpmd_exec:s0
+/usr/sbin/wpa_supplicant        u:object_r:cros_wpa_supplicant_exec:s0
+# USR_SBIN_END_HERE
+
+# These executables are installed in dev/test builds. Give them an
+# explicit label (rather than cros_unconfined_exec) so that
+# chromeos-install is allowed to write them when creating the stateful
+# partition.
+/usr/local/bin/[^/]+            u:object_r:cros_dev_image_exec:s0
+
+/usr/local/bin/recover_duts     u:object_r:cros_recover_duts_script:s0
+
+# To allow test tools to access Mojo Service Manager.
+/usr/local/sbin/iioservice_event u:object_r:cros_iioservice_test_exec:s0
+/usr/local/sbin/iioservice_query u:object_r:cros_iioservice_test_exec:s0
+/usr/local/sbin/iioservice_simpleclient u:object_r:cros_iioservice_test_exec:s0
+
+/usr/local/share/tast(/.*)?     u:object_r:cros_dev_tast_test:s0
+
+/usr/libexec/bluetooth/bluetoothd u:object_r:cros_bluetoothd_exec:s0
+
+/usr/libexec/cryptohome/update_userdataauth_from_features.sh u:object_r:cros_update_userdataauth_shell_script:s0
+
+/usr/libexec/fwupd/fwupd        u:object_r:cros_fwupd_exec:s0
+
+/usr/libexec/ipsec/charon       u:object_r:cros_ipsec_charon_exec:s0
+/usr/libexec/ipsec/starter      u:object_r:cros_ipsec_starter_exec:s0
+
+/usr/share/policy(/.*)?         u:object_r:cros_seccomp_policy_file:s0
+/usr/share/userfeedback(/.*)?   u:object_r:cros_userfeedback_file:s0
+
+/usr/bin/start_bluetoothd.sh    u:object_r:cros_init_start_bluetoothd_shell_script:s0
+/usr/bin/start_bluetoothlog.sh  u:object_r:cros_init_start_bluetoothlog_shell_script:s0
+/usr/share/chromeos-ssh-config/sshd-pre u:object_r:cros_init_sshd_pre_shell_script:s0
+/usr/share/cros(/.*)?           u:object_r:cros_usr_dirs:s0
+/usr/share/cros/init(/.*)?      u:object_r:cros_init_shell_scripts:s0
+/usr/share/cros/cr50-disable-sleep.sh u:object_r:cros_cr50-disable-sleep_script:so
+/usr/share/cros/init/activate_date.sh u:object_r:cros_init_activate_date_script:s0
+/usr/share/cros/init/crx-import.sh u:object_r:cros_init_crx_import_script:s0
+/usr/share/cros/init/lockbox-cache.sh u:object_r:cros_init_lockbox_cache_script:s0
+/usr/share/cros/init/powerd-pre-start.sh u:object_r:cros_init_powerd_pre_start_script:s0
+/usr/share/cros/init/ui-pre-start u:object_r:cros_init_ui_pre_start_shell_script:s0
+/usr/share/cros/init/ui-respawn u:object_r:cros_init_ui_respawn_shell_script:s0
+/usr/share/cros/init/shill.sh   u:object_r:cros_init_shill_shell_script:s0
+/usr/share/cros/init/shill-pre-start.sh u:object_r:cros_init_shill_shell_script:s0
+/usr/share/cros/init/temp_logger.sh u:object_r:cros_init_temp_logger_shell_script:s0
+
+/usr/share/cros-camera/libfs         u:object_r:camera_libs_dir:s0
+/usr/share/cros-camera/libfs/.*\.so  u:object_r:camera_lib:s0
+
+/var                            u:object_r:cros_var:s0
+/var/cache                      u:object_r:cros_var_cache:s0
+/var/cache/dlc(/.*)?            u:object_r:cros_var_cache_dlcservice:s0
+/var/cache/dlc-images(/.*)?     u:object_r:cros_var_cache_dlcservice_images:s0
+/var/cache/shill(/.*)?          u:object_r:cros_var_cache_shill:s0
+# The following directory is deprecated but still must be kept for backward
+# compatibility purposes. See comments titled {{{ Notes on /var/cache/reporting
+# }}} in platform2/missived/tmpfiles.d/missived.conf for details.
+/var/cache/reporting(/.*)?      u:object_r:cros_var_cache_reporting:s0
+/var/cache/modemfwd(/.*)?       u:object_r:cros_var_cache_modemfwd:s0
+/var/cache/modem-utilities(/.*)? u:object_r:cros_var_cache_modem_utilities:s0
+/var/cache/camera(/.*)?         u:object_r:cros_var_cache_camera:s0
+/var/cache/cups(/.*)?           u:object_r:cros_var_cache_cups:s0
+/var/cache/diagnostics(/.*)?    u:object_r:cros_var_cache_diagnostics:s0
+/var/cache/fwupd(/.*)?          u:object_r:cros_var_cache_fwupd:s0
+/var/cache/tlsdated(/.*)?       u:object_r:cros_var_cache_tlsdated:s0
+/var/db                         u:object_r:cros_var_db:s0
+/var/db/pkg                     u:object_r:cros_var_db_pkg:s0
+/var/empty                      u:object_r:cros_var_empty:s0
+/var/lib                        u:object_r:cros_var_lib:s0
+/var/lib/bluetooth(/.*)?        u:object_r:cros_var_lib_bluetooth:s0
+/var/lib/boot-update-firmware(/.*)? u:object_r:cros_var_lib_boot-update-firmware:s0
+/var/lib/bootlockbox(/.*)?      u:object_r:cros_var_lib_bootlockbox:s0
+/var/lib/chaps(/.*)?            u:object_r:cros_var_lib_chaps:s0
+/var/lib/cras(/.*)?             u:object_r:cros_var_lib_cras:s0
+/var/lib/crash_reporter(/.*)?   u:object_r:cros_var_lib_crash_reporter:s0
+/var/lib/dlcservice(/.*)?       u:object_r:cros_var_lib_dlcservice:s0
+/var/lib/dbus(/.*)?             u:object_r:cros_var_lib_dbus:s0
+/var/lib/dhcpcd(/.*)?           u:object_r:cros_var_lib_shill:s0
+/var/lib/featured(/.*)?         u:object_r:cros_var_lib_featured:s0
+/var/lib/fwupd                  u:object_r:cros_var_lib_fwupd:s0
+/var/lib/fwupd/pending          u:object_r:cros_var_lib_fwupd_pending:s0
+/var/lib/imageloader(/.*)?      u:object_r:cros_var_lib_imageloader:s0
+/var/lib/metrics(/.*)?          u:object_r:cros_metrics_file:s0
+/var/lib/metrics/uma-events     u:object_r:cros_metrics_uma_events_file:s0
+/var/lib/misc                   u:object_r:cros_var_lib_misc:s0
+/var/lib/ml_core(/.*)?          u:object_r:cros_var_lib_ml_core:s0
+/var/lib/modemfwd(/.*)?         u:object_r:cros_modemfwd_file:s0
+/var/lib/node_exporter(/.*)?    u:object_r:cros_var_lib_node_exporter:s0
+/var/lib/oemcrypto(/.*)?        u:object_r:cros_var_lib_oemcrypto:s0
+/var/lib/oobe_config_restore(/.*)? u:object_r:cros_var_lib_oobe_config_restore:s0
+/var/lib/oobe_config_save(/.*)? u:object_r:cros_var_lib_oobe_config_save:s0
+/var/lib/portage                u:object_r:cros_var_lib_portage:s0
+/var/lib/power_manager(/.*)?    u:object_r:cros_var_lib_power_manager:s0
+/var/lib/preload-network-drivers.* u:object_r:cros_var_lib_preload_network_drivers:s0
+/var/lib/private_computing(/.*)? u:object_r:cros_var_lib_private_computing:s0
+/var/lib/rmad(/.*)?             u:object_r:cros_var_lib_rmad:s0
+/var/lib/shill(/.*)?            u:object_r:cros_var_lib_shill:s0
+/var/lib/tpm(/.*)?              u:object_r:cros_var_lib_tpm:s0
+/var/lib/tpm_manager(/.*)?      u:object_r:cros_var_lib_tpm_manager:s0
+/var/lib/trim(/.*)?             u:object_r:cros_var_lib_trim:s0
+/var/lib/u2f(/.*)?              u:object_r:cros_var_lib_u2f:s0
+/var/lib/ui(/.*)?               u:object_r:cros_var_lib_ui:s0
+/var/lib/update_engine(/.*)?    u:object_r:cros_var_lib_update_engine:s0
+/var/lib/ureadahead(/.*)?       u:object_r:cros_var_lib_ureadahead:s0
+/var/lib/vm_cicerone(/.*)?      u:object_r:cros_var_lib_vm_cicerone:s0
+/var/lib/vm_cicerone/metrics(/.*)? u:object_r:cros_var_lib_vm_cicerone_metrics:s0
+/var/lib/vm_concierge(/.*)?     u:object_r:cros_var_lib_vm_concierge:s0
+/var/lib/vm_concierge/vmm_swap_policy(/.*)? u:object_r:cros_var_lib_vm_concierge_vmm_swap_policy:s0
+/var/lib/vtpm(/.*)?             u:object_r:cros_var_lib_vtpm:s0
+/var/lib/whitelist(/.*)?        u:object_r:cros_var_lib_devicesettings:s0
+/var/lib/devicesettings(/.*)?   u:object_r:cros_var_lib_devicesettings:s0
+/var/lib/swap(/.*)?             u:object_r:cros_var_lib_swap:s0
+/var/lock                       u:object_r:cros_var_lock:s0
+/var/log                        u:object_r:cros_var_log:s0
+/var/log/arc.log                u:object_r:cros_arc_log:s0
+/var/log/asan(/.*)?             u:object_r:cros_var_log_asan:s0
+/var/log/atrus.log              u:object_r:cros_var_log_atrus:s0
+/var/log/audit(/.*)?            u:object_r:cros_var_log_audit:s0
+/var/log/authpolicy.log         u:object_r:cros_authpolicy_log:s0
+/var/log/bio_crypto_init(/.*)?  u:object_r:cros_var_log_biod:s0
+/var/log/biod(/.*)?             u:object_r:cros_var_log_biod:s0
+/var/log/bluetooth.log          u:object_r:cros_var_log_bluetooth:s0
+/var/log/boot.log               u:object_r:cros_boot_log:s0
+/var/log/chrome(/.*)?           u:object_r:cros_var_log_chrome:s0
+/var/log/eventlog.txt           u:object_r:cros_var_log_eventlog:s0
+/var/log/faillog                u:object_r:cros_var_log_faillog:s0
+/var/log/fwupd.log              u:object_r:cros_var_log_fwupd:s0
+/var/log/hammerd.log            u:object_r:cros_hammerd_log:s0
+/var/log/hypervisor.log         u:object_r:cros_var_log_hypervisor:s0
+/var/log/lorgnette(/.*)?        u:object_r:cros_var_log_lorgnette:s0
+/var/log/messages               u:object_r:cros_syslog:s0
+/var/log/metrics(/.*)?          u:object_r:cros_var_log_metrics:s0
+/var/log/modemfwd(/.*)?         u:object_r:cros_var_log_modemfwd:s0
+/var/log/mount_options.log      u:object_r:chromeos_startup_mount_options_log_file:s0
+/var/log/net.log                u:object_r:cros_net_log:s0
+/var/log/node_exporter.log      u:object_r:cros_var_log_node_exporter:s0
+/var/log/powerd.out             u:object_r:cros_powerd_log:s0
+/var/log/os_install_service(/.*)? u:object_r:cros_var_log_os_install_service:s0
+/var/log/recover_duts(/.*)?     u:object_r:cros_var_log_recover_duts:s0
+/var/log/secagentd.log          u:object_r:cros_secagentd_log:s0
+/var/log/secure                 u:object_r:cros_secure_log:s0
+/var/log/session_manager        u:object_r:cros_var_log_session_manager:s0
+/var/log/tcsd(/.*)?             u:object_r:cros_var_log_tcsd:s0
+/var/log/tlsdate.log            u:object_r:cros_tlsdate_log:s0
+/var/log/tpm-firmware-updater.log u:object_r:cros_var_log_tpm_firmware_updater:s0
+/var/log/typecd.log             u:object_r:cros_typecd_log:s0
+/var/log/ui(/.*)?               u:object_r:cros_var_log_ui:s0
+/var/log/upstart.log            u:object_r:cros_var_log_upstart:s0
+/var/log/vmlog(/.*)?            u:object_r:cros_var_log_vmlog:s0
+# This gets bind-mounted to /run so the label needs to match.
+/var/run                        u:object_r:cros_run:s0
+/var/spool                      u:object_r:cros_var_spool:s0
+/var/spool/cron-lite(/.*)?      u:object_r:cros_periodic_scheduler_cache_t:s0
+/var/spool/crash(/.*)?          u:object_r:cros_crash_spool:s0
+/var/spool/cups(/.*)?           u:object_r:cros_cups_spool:s0
+/var/spool/power_manager(/.*)?  u:object_r:cros_var_spool_power_manager:s0
+/var/spool/reporting(/.*)?      u:object_r:cros_var_spool_reporting:s0
+/var/spool/support(/.*)?        u:object_r:cros_var_spool_support:s0
+/var/tmp                        u:object_r:cros_var_tmp:s0
+
+# /opt
+# Please add ARC++ engineers as code reviewers when changing file contexts under
+# android-data.
+/opt(/.*)          u:object_r:cros_system_file:s0
+/opt/google/chrome/chrome       u:object_r:chrome_browser_exec:s0
+/opt/google/containers/android/rootfs/root u:object_r:cros_arc_rootfs_mountpoint:s0
+/opt/google/containers/arc-sdcard/mountpoints/container-root u:object_r:cros_arc_sdcard_mountpoint:s0
+# These files are mounted into the mini-container before real /data, /cache are
+# available.
+/opt/google/containers/android/rootfs/android-data/cache                   u:object_r:cache_file:s0
+/opt/google/containers/android/rootfs/android-data/data          is_arc_p(`u:object_r:system_data_file:s0',
+                                                                          `u:object_r:system_data_root_file:s0')
+/opt/google/containers/android/rootfs/android-data/data/.*                 u:object_r:system_data_file:s0
+/opt/google/containers/android/rootfs/android-data/data/dalvik-cache(/.*)? u:object_r:dalvikcache_data_file:s0
+/opt/google/easy_unlock/easy_unlock u:object_r:cros_easy_unlock_exec:s0
+
+# /etc
+/etc(/.*)?                      u:object_r:cros_conf_file:s0
+/etc/group                      u:object_r:cros_passwd_file:s0
+# '/etc/hosts.d' is a bind mount to '/run/crosdns'.
+/etc/hosts.d(/.*)?              u:object_r:cros_run_crosdns:s0
+/etc/passwd                     u:object_r:cros_passwd_file:s0
+/etc/shadow                     u:object_r:cros_shadow_file:s0
+/etc/selinux(/.*)?              u:object_r:cros_selinux_config_file:s0
+/etc/featured(/.*)?             u:object_r:cros_featured_file:s0
+
+# All the following files are created dynamically and need to be labeled at
+# runtime.
+# Please add ARC++ engineers as code reviewers when changing file contexts under
+# android-data.
+/run                                           u:object_r:cros_run:s0
+/run/arc/debugfs                               u:object_r:debugfs:s0
+/run/arc/oem(/.*)?                             u:object_r:oem_fs:s0
+/run/arc/sdcard(/.*)?                          u:object_r:storage_file:s0
+/run/arcvm(/.*)?                               u:object_r:cros_run_arcvm:s0
+/run/arcvm/android-data(/.*)?        is_arc_p(`u:object_r:system_data_file:s0',
+                                              `u:object_r:system_data_root_file:s0')
+/run/arcvm/android-data/mount/data/.*          u:object_r:system_data_file:s0
+has_arc(`
+/run/arcvm/android-data/mount/data/media(/.*)? u:object_r:media_rw_data_file:s0
+')
+/run/arcvm/apkcache(/.*)?                      u:object_r:apkcache_file:s0
+/run/arcvm/host_generated(/.*)?                u:object_r:oem_fs:s0
+/run/arcvm/jemalloc(/.*)?                      u:object_r:cros_arc_jemalloc_config_file:s0
+/run/avahi-daemon                              u:object_r:cros_run_avahi_daemon:s0
+/run/bluetooth                                 u:object_r:cros_run_bluetooth:s0
+/run/bluetooth/audio(/.*)?                     u:object_r:cros_bluetooth_audio_socket:s0
+# /run/camera requires labels from Android.
+/run/camera                     u:object_r:camera_dir:s0
+/run/camera/.*\.sock            u:object_r:camera_socket:s0
+/run/camera_tokens(/.*)?        u:object_r:cros_run_camera_tokens:s0
+/run/cras(/.*)?                 u:object_r:cras_socket:s0
+/run/crosdns(/.*)?              u:object_r:cros_run_crosdns:s0
+/run/cryptohome                 u:object_r:cros_run_cryptohome:s0
+/run/cryptohome/ephemeral_mount u:object_r:cros_ephemeral_mount:s0
+/run/cups(/.*)?                 u:object_r:cros_run_cups:s0
+/run/cups_proxy(/.*)?           u:object_r:cros_run_cups_proxy:s0
+/run/daemon-store               u:object_r:cros_run_daemon_store:s0
+/run/dbus                       u:object_r:cros_run_dbus:s0
+/run/dbus.pid                   u:object_r:cros_dbus_pid_file:s0
+/run/dbus/system_bus_socket     u:object_r:cros_system_bus_socket:s0
+/run/dhcpcd                     u:object_r:cros_run_dhcpcd:s0
+/run/dns-proxy                  u:object_r:cros_run_dns_proxy:s0
+/run/featured/active            u:object_r:cros_run_featured_active:s0
+/run/featured_seed              u:object_r:cros_run_featured_seed:s0
+/run/fuse                       u:object_r:cros_run_fuse:s0
+/run/hibernate                  u:object_r:cros_run_hibernate:s0
+/run/ippusb(/.*)?               u:object_r:cros_run_ippusb:s0
+/run/ipsec                      u:object_r:cros_run_ipsec:s0
+/run/l2tpipsec_vpn              u:object_r:cros_run_l2tpipsec_vpn:s0
+/run/lock                       u:object_r:cros_run_lock:s0
+/run/lock/power_override        u:object_r:cros_run_lock_power_override:s0
+/run/lockbox(/.*)?              u:object_r:cros_run_lockbox:s0
+/run/log                        u:object_r:cros_run_log:s0
+/run/lorgnette(/.*)?            u:object_r:cros_run_lorgnette:s0
+/run/metrics                    u:object_r:cros_run_metrics:s0
+/run/metrics/external           u:object_r:cros_run_metrics_external:s0
+/run/mojo                       u:object_r:cros_run_mojo:s0
+/run/mojo/service_manager.sock  u:object_r:cros_mojo_service_manager_socket:s0
+/run/mount_encrypted            u:object_r:cros_run_mount_encrypted:s0
+/run/perfetto                   u:object_r:cros_run_perfetto:s0
+/run/pvm                        u:object_r:cros_run_pvm:s0
+/run/pvm/opt                    u:object_r:cros_run_pvm_opt:s0
+/run/pvm/opt/pita               u:object_r:cros_run_pvm_opt_pita:s0
+/run/rgbkbd(/.*)?               u:object_r:cros_run_rgbkbd:s0
+/run/rsyslogd                   u:object_r:cros_run_rsyslogd:s0
+/run/seneschal                  u:object_r:cros_run_seneschal:s0
+/run/shill                      u:object_r:cros_run_shill:s0
+/run/tpm_manager(/.*)?          u:object_r:cros_run_tpm_manager:s0
+/run/tpm2-simulator(/.*)?       u:object_r:cros_run_tpm2-simulator:s0
+/run/usb_bouncer(/.*)?          u:object_r:cros_run_usb_bouncer:s0
+/run/usbguard(/.*)?             u:object_r:cros_run_usbguard:s0
+/run/vm                         u:object_r:cros_run_vm:s0
+/run/vm_cicerone(/.*)?          u:object_r:cros_run_vm_cicerone:s0
+/run/vm_cicerone/client(/.*)?   u:object_r:cros_run_vm_cicerone_client:s0
+/run/wireguard                  u:object_r:cros_run_wireguard:s0
+/run/wpa_supplicant(/.*)?       u:object_r:cros_run_wpa_supplicant:s0
+/run/namespaces                 u:object_r:cros_run_namespaces:s0
+/run/namespaces/mnt_chrome      u:object_r:cros_run_namespaces_mnt_chrome:s0
+/run/namespaces/mnt_concierge   u:object_r:cros_run_namespaces_mnt_concierge:s0
+
+has_arc(`
+/run/arc/cmdline.android        u:object_r:proc_cmdline:s0
+')
+
+
+/dev                            u:object_r:device:s0
+/dev/console                    u:object_r:console_device:s0
+/dev/iio:device[0-9]+           u:object_r:cros_iio_device:s0
+/dev/input(/.*)?                u:object_r:input_device:s0
+/dev/kmsg                       u:object_r:kmsg_device:s0
+/dev/log                        u:object_r:logger_device:s0
+# TODO(sarthakkukreti@): Move to a seperate context once enforcing domains that
+# use /dev/mapper/* have rules set up to access the files/directories.
+/dev/mapper(/.*)?               u:object_r:device:s0
+/dev/mei[0-9]*                  u:object_r:mei_device:s0
+/dev/null                       u:object_r:null_device:s0
+/dev/ptmx                       u:object_r:ptmx_device:s0
+# This needs to match arc++. See: device/google/bertha/sepolicy/file_contexts.
+/dev/pts(/.*)?                  u:object_r:devpts:s0
+/dev/random                     u:object_r:random_device:s0
+# TODO(b/239615455): Restore this back to '/dev/shm(/.*)?'.
+/dev/shm/.+                     u:object_r:cros_shm:s0
+/dev/snd(/.*)?                  u:object_r:audio_device:s0
+/dev/tpm[0-9]*                  u:object_r:tpm_device:s0
+/dev/urandom                    u:object_r:urandom_device:s0
+/dev/zero                       u:object_r:zero_device:s0
+
+# Label /dev/bus/usb/NNN/MMM
+# (USB device nodes passed by Chrome / permission broker)
+/dev/bus/usb(/.*)?              u:object_r:usb_device:s0
+
+# /proc
+# Needed for tmpfiles.d to chgrp ip_conntrack
+/proc/net(/.*)?                 u:object_r:proc_net:s0
+# Needed for featured to enable kernel features
+/proc/sys/kernel(/.*)?                 u:object_r:proc_sys_kernel:s0
+/proc/sys/kernel/timer_highres         u:object_r:proc_timer:s0
+
+(/usr)?/lib64(/.*)?                    u:object_r:cros_system_file:s0
+(/usr)?/lib(/.*)?                      u:object_r:cros_system_file:s0
+/lib/modules(/.*)?                     u:object_r:cros_kernel_modules_file:s0
+/lib/modules/.*\.ko(\.gz|\.xz)?        u:object_r:cros_kernel_modules_ko_file:s0
+/lib/udev/hps-dev.sh                   u:object_r:cros_lib_udev_hps-dev_script:s0
+
+# /sys
+# Needed for tmpfiles.d to chgrp /sys/fs/cgroup/*
+/sys/fs/cgroup/.*               u:object_r:cgroup:s0
+
+# /mnt
+/mnt/stateful_partition                                        u:object_r:cros_stateful_partition:s0
+/mnt/stateful_partition/unencrypted                            u:object_r:cros_stateful_partition_unencrypted:s0
+/mnt/stateful_partition/unencrypted/apkcache(/.*)?             u:object_r:apkcache_file:s0
+/mnt/stateful_partition/unencrypted/cache                      u:object_r:cros_stateful_partition_unencrypted_cache:s0
+/mnt/stateful_partition/unencrypted/preserve                   u:object_r:cros_stateful_partition_unencrypted_preserve:s0
+/mnt/stateful_partition/unencrypted/preserve/rollback_data     u:object_r:cros_var_lib_oobe_config_save:s0
+/mnt/stateful_partition/unencrypted/preserve/rollback_data_tpm u:object_r:cros_var_lib_oobe_config_save:s0
+/mnt/stateful_partition/unencrypted/profraws(/.*)?             u:object_r:cros_stateful_partition_unencrypted_profraws:s0
+/mnt/stateful_partition/unencrypted/rma-data(/.*)?             u:object_r:cros_stateful_partition_unencrypted_rma:s0
+/mnt/stateful_partition/unencrypted/tpm_manager(/.*)?          u:object_r:cros_stateful_partition_unencrypted_tpm_manager:s0
+/mnt/stateful_partition/unencrypted/userspace_swap.tmp(/.*)?   u:object_r:cros_stateful_partition_unencrypted_userspace_swap:s0
+
+# These are bind mounts so they need to match their other labels.
+/mnt/stateful_partition/home                      u:object_r:cros_home:s0
+/mnt/stateful_partition/home/root(/[0-9a-z]{40})? u:object_r:cros_home_root:s0
+/mnt/stateful_partition/home/user(/[0-9a-z]{40})? u:object_r:cros_home_user:s0
+/mnt/stateful_partition/home/chronos(/(?!(u-[0-9a-z]{40}|user)).*)?   u:object_r:cros_home_chronos:s0
+/mnt/stateful_partition/var_overlay/cache/dlc-images(/.*)? u:object_r:cros_var_cache_dlcservice_images:s0
+/mnt/stateful_partition/var_overlay/db/pkg(/.*)? u:object_r:cros_var_db_pkg:s0
+/mnt/stateful_partition/var_overlay/lib/portage(/.*)? u:object_r:cros_var_lib_portage:s0
+
+# /home
+# Please add ARC++ engineers as code reviewers when changing file contexts under
+# android-data.
+/home                            u:object_r:cros_home:s0
+/home/root(/[0-9a-z]{40})?       u:object_r:cros_home_root:s0
+/home/user(/[0-9a-z]{40})?       u:object_r:cros_home_user:s0
+/home/chronos(/(?!(u-[0-9a-z]{40}|user)).*)?   u:object_r:cros_home_chronos:s0
+/home/chronos/crash              u:object_r:cros_home_chronos_crash:s0
+/home/chronos/user               u:object_r:cros_home_chronos:s0
+/home/chronos/u-[0-9a-z]{40}     u:object_r:cros_home_chronos:s0
+/home/.shadow                    u:object_r:cros_home_shadow:s0
+/home/.shadow/(?![0-9a-z]{40}).* u:object_r:cros_home_shadow:s0
+/home/.shadow/low_entropy_creds(/.*)? u:object_r:cros_home_shadow_low_entropy_creds:s0
+# exclude <uid>/mount/root/android-data/data
+/home/.shadow/[0-9a-z]{40}(/(?!mount/root/android-data/data).*)? u:object_r:cros_home_shadow_uid:s0
+/home/.shadow/[0-9a-z]{40}/mount/root(/(?!android-data/data).*)? u:object_r:cros_home_shadow_uid_root:s0
+/home/.shadow/[0-9a-z]{40}/cache/user(/.*)? u:object_r:cros_home_shadow_uid_user:s0
+/home/.shadow/[0-9a-z]{40}/mount/user(/.*)? u:object_r:cros_home_shadow_uid_user:s0
+/home/.shadow/[0-9a-z]{40}/mount/user/Downloads(/.*)? u:object_r:has_arc(media_rw_data_file, cros_downloads_file):s0
+/home/.shadow/[0-9a-z]{40}/mount/user/MyFiles(/.*)?   u:object_r:has_arc(media_rw_data_file, cros_downloads_file):s0
+/home/.shadow/[0-9a-z]{40}/mount/root/android-data u:object_r:cros_home_shadow_uid_root_android:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/android-data/cache u:object_r:cache_file:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/android-data/data   is_arc_p(`u:object_r:system_data_file:s0',
+                                                                   `u:object_r:system_data_root_file:s0')
+/home/.shadow/[0-9a-z]{40}/mount/root/android-data/data/.*   u:object_r:system_data_file:s0
+has_arc(`
+/home/.shadow/[0-9a-z]{40}/mount/root/android-data/data/media(/.*)?   u:object_r:media_rw_data_file:s0
+')
+/home/.shadow/[0-9a-z]{40}/mount/root/authpolicyd(/.*)?   u:object_r:cros_home_shadow_uid_root_authpolicyd:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/cdm-oemcrypto(/.*)?   u:object_r:cros_home_shadow_uid_root_cdm-oemcrypto:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/chaps(/.*)?   u:object_r:cros_home_shadow_uid_root_chaps:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/crash(/.*)?   u:object_r:cros_home_shadow_uid_root_crash:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/crosvm(/.*)?   u:object_r:cros_home_shadow_uid_root_crosvm:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/debugd(/.*)?   u:object_r:cros_home_shadow_uid_root_debugd:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/kerberosd(/.*)?   u:object_r:cros_home_shadow_uid_root_kerberosd:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/pvm(/.*)?   u:object_r:cros_home_shadow_uid_root_pvm:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/pvm-dispatcher(/.*)?   u:object_r:cros_home_shadow_uid_root_pvm-dispatcher:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/secagentd(/.*)?   u:object_r:cros_home_shadow_uid_root_secagentd:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/session_manager(/.*)?   u:object_r:cros_home_shadow_uid_root_session_manager:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/shill(/.*)?   u:object_r:cros_home_shadow_uid_root_shill:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/shill_logs(/.*)?   u:object_r:cros_home_shadow_uid_root_shill_logs:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/smbfs(/.*)?   u:object_r:cros_home_shadow_uid_root_smbfs:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/smbproviderd(/.*)?   u:object_r:cros_home_shadow_uid_root_smbproviderd:s0
+/home/.shadow/[0-9a-z]{40}/mount/root/usb_bouncer(/.*)?   u:object_r:cros_home_shadow_uid_root_usb_bouncer:s0

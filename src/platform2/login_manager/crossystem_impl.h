@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,18 +10,18 @@
 class CrossystemImpl : public Crossystem {
  public:
   // Reads a system property integer.
-  int VbGetSystemPropertyInt(const char* name);
+  int VbGetSystemPropertyInt(const char* name) override;
 
   // Sets a system property integer.
-  int VbSetSystemPropertyInt(const char* name, int value);
+  int VbSetSystemPropertyInt(const char* name, int value) override;
 
   // Reads a system property string into a destination buffer.
-  const char* VbGetSystemPropertyString(const char* name,
-                                        char* dest,
-                                        std::size_t size);
+  int VbGetSystemPropertyString(const char* name,
+                                char* dest,
+                                std::size_t size) override;
 
   // Sets a system property string.
-  int VbSetSystemPropertyString(const char* name, const char* value);
+  int VbSetSystemPropertyString(const char* name, const char* value) override;
 };
 
 #endif  // LOGIN_MANAGER_CROSSYSTEM_IMPL_H_

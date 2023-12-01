@@ -1,0 +1,52 @@
+From 4979a66f54e9a944ae6eb3f2ccc769e5789c485a Mon Sep 17 00:00:00 2001
+From: James Ye <jamesye@google.com>
+Date: Thu, 3 Nov 2022 13:06:19 +1100
+Subject: [PATCH] uv_metadata: use unaligned access functions
+
+These buffers may be unaligned. On architectures with alignment
+requirements, unaligned access will cause a crash.
+---
+ src/uv_metadata.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/src/uv_metadata.c b/src/uv_metadata.c
+index f8363b3..5034e06 100644
+--- a/src/uv_metadata.c
++++ b/src/uv_metadata.c
+@@ -14,10 +14,10 @@
+ static void uvMetadataEncode(const struct uvMetadata *metadata, void *buf)
+ {
+     void *cursor = buf;
+-    bytePut64(&cursor, UV__DISK_FORMAT);
+-    bytePut64(&cursor, metadata->version);
+-    bytePut64(&cursor, metadata->term);
+-    bytePut64(&cursor, metadata->voted_for);
++    bytePut64Unaligned(&cursor, UV__DISK_FORMAT);
++    bytePut64Unaligned(&cursor, metadata->version);
++    bytePut64Unaligned(&cursor, metadata->term);
++    bytePut64Unaligned(&cursor, metadata->voted_for);
+ }
+ 
+ /* Decode the content of a metadata file. */
+@@ -27,14 +27,14 @@ static int uvMetadataDecode(const void *buf,
+ {
+     const void *cursor = buf;
+     uint64_t format;
+-    format = byteGet64(&cursor);
++    format = byteGet64Unaligned(&cursor);
+     if (format != UV__DISK_FORMAT) {
+         ErrMsgPrintf(errmsg, "bad format version %ju", format);
+         return RAFT_MALFORMED;
+     }
+-    metadata->version = byteGet64(&cursor);
+-    metadata->term = byteGet64(&cursor);
+-    metadata->voted_for = byteGet64(&cursor);
++    metadata->version = byteGet64Unaligned(&cursor);
++    metadata->term = byteGet64Unaligned(&cursor);
++    metadata->voted_for = byteGet64Unaligned(&cursor);
+ 
+     /* Coherence checks that values make sense */
+     if (metadata->version == 0) {
+-- 
+2.38.1.273.g43a17bfeac-goog
+

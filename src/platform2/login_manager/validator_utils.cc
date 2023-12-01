@@ -1,13 +1,11 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "login_manager/validator_utils.h"
 
-#include <base/compiler_specific.h>
 #include <base/strings/string_util.h>
 #include <brillo/cryptohome.h>
-
 #include <login_manager/proto_bindings/policy_descriptor.pb.h>
 #include <login_manager/session_manager_impl.h>
 
@@ -80,9 +78,9 @@ bool ValidateExtensionId(const std::string& id) {
 }
 
 bool IsIncognitoAccountId(const std::string& account_id) {
-  using brillo::cryptohome::home::kGuestUserName;
+  using brillo::cryptohome::home::GetGuestUsername;
   const std::string lower_case_id(base::ToLowerASCII(account_id));
-  return lower_case_id == kGuestUserName || lower_case_id == kDemoUser;
+  return lower_case_id == *GetGuestUsername() || lower_case_id == kDemoUser;
 }
 
 bool ValidateAccountId(const std::string& account_id,
@@ -118,11 +116,6 @@ bool ValidatePolicyDescriptor(const PolicyDescriptor& descriptor,
         return false;
       break;
 
-    case ACCOUNT_TYPE_SESSIONLESS_USER:
-      // Can only retrieve policy for sessionless users, i.e. from login screen.
-      if (usage != PolicyDescriptorUsage::kRetrieve)
-        return false;
-      FALLTHROUGH;
     case ACCOUNT_TYPE_USER:
       if (!ValidateAccountId(descriptor.account_id(), nullptr))
         return false;

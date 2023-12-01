@@ -1,0 +1,29 @@
+From 4431671a127072c6949604a48b38608b4819165c Mon Sep 17 00:00:00 2001
+From: Bas Nieuwenhuizen <bas@basnieuwenhuizen.nl>
+Date: Wed, 19 Jun 2019 15:16:51 +0200
+Subject: [PATCH] meson: Allow building radeonsi with just the android
+ platform.
+
+Just as was allowed by autotools.
+
+Fixes: 108d257a168 "meson: build libEGL"
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index a2978117409..c1fc6e6f1eb 100644
+--- a/meson.build
++++ b/meson.build
+@@ -353,7 +353,7 @@ else
+   with_egl = false
+ endif
+ 
+-if with_egl and not (with_platform_drm or with_platform_surfaceless)
++if with_egl and not (with_platform_drm or with_platform_surfaceless or with_platform_android)
+   if with_gallium_radeonsi
+     error('RadeonSI requires drm or surfaceless platform when using EGL')
+   endif
+-- 
+2.21.0
+

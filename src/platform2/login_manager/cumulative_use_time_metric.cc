@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 #include <limits>
 #include <utility>
 
-#include <base/bind.h>
 #include <base/check.h>
 #include <base/files/file_util.h>
+#include <base/functional/bind.h>
 #include <base/hash/hash.h>
 #include <base/json/json_reader.h>
 #include <base/json/json_writer.h>
+#include <base/logging.h>
 #include <base/values.h>
 #include <metrics/metrics_library.h>
 
@@ -151,19 +152,20 @@ bool CumulativeUseTimeMetric::AccumulatedActiveTime::ReadMetricsFile() {
     return false;
   }
 
-  auto os_version_hash = data->FindIntKey(kOsVersionHashKey);
+  auto& dict = data->GetDict();
+  auto os_version_hash = dict.FindInt(kOsVersionHashKey);
   if (!os_version_hash) {
     LOG(ERROR) << "OS version hash missing in " << metrics_file_.value();
     return false;
   }
 
-  auto start_day = data->FindIntKey(kStartDayKey);
+  auto start_day = dict.FindInt(kStartDayKey);
   if (!start_day) {
     LOG(ERROR) << "Start day missing in " << metrics_file_.value();
     return false;
   }
 
-  auto elapsed_milliseconds = data->FindIntKey(kElapsedMillisecondsKey);
+  auto elapsed_milliseconds = dict.FindInt(kElapsedMillisecondsKey);
   if (!elapsed_milliseconds) {
     LOG(ERROR) << "Elapsed milliseconds missing in " << metrics_file_.value();
     return false;
@@ -171,14 +173,14 @@ bool CumulativeUseTimeMetric::AccumulatedActiveTime::ReadMetricsFile() {
 
   os_version_hash_ = *os_version_hash;
   start_day_ = *start_day;
-  accumulated_time_ = base::TimeDelta::FromMilliseconds(*elapsed_milliseconds);
+  accumulated_time_ = base::Milliseconds(*elapsed_milliseconds);
   return true;
 }
 
 bool CumulativeUseTimeMetric::AccumulatedActiveTime::WriteMetricsFile() {
-  base::Value data(base::Value::Type::DICTIONARY);
-  data.SetIntKey(kOsVersionHashKey, os_version_hash_);
-  data.SetIntKey(kStartDayKey, start_day_);
+  base::Value::Dict data;
+  data.Set(kOsVersionHashKey, os_version_hash_);
+  data.Set(kStartDayKey, start_day_);
   int64_t elapsed_milliseconds = accumulated_time_.InMilliseconds();
   if (elapsed_milliseconds < 0 ||
       elapsed_milliseconds > std::numeric_limits<int>::max()) {
@@ -188,8 +190,7 @@ bool CumulativeUseTimeMetric::AccumulatedActiveTime::WriteMetricsFile() {
     accumulated_time_ = base::TimeDelta();
     elapsed_milliseconds = 0;
   }
-  data.SetIntKey(kElapsedMillisecondsKey,
-                 static_cast<int>(elapsed_milliseconds));
+  data.Set(kElapsedMillisecondsKey, static_cast<int>(elapsed_milliseconds));
 
   std::string data_json;
   if (!base::JSONWriter::Write(data, &data_json)) {
@@ -241,9 +242,9 @@ void CumulativeUseTimeMetric::Start() {
 
   // Timer will be stopped when this goes out of scope, so Unretained is safe.
   update_stats_timer_.Start(
-      FROM_HERE, base::TimeDelta::FromSeconds(kMetricsUpdateIntervalSeconds),
-      base::Bind(&CumulativeUseTimeMetric::UpdateStats,
-                 base::Unretained(this)));
+      FROM_HERE, base::Seconds(kMetricsUpdateIntervalSeconds),
+      base::BindRepeating(&CumulativeUseTimeMetric::UpdateStats,
+                          base::Unretained(this)));
 }
 
 void CumulativeUseTimeMetric::Stop() {
@@ -256,11 +257,11 @@ void CumulativeUseTimeMetric::Stop() {
 }
 
 base::TimeDelta CumulativeUseTimeMetric::GetMetricsUpdateCycle() const {
-  return base::TimeDelta::FromSeconds(kMetricsUpdateIntervalSeconds);
+  return base::Seconds(kMetricsUpdateIntervalSeconds);
 }
 
 base::TimeDelta CumulativeUseTimeMetric::GetMetricsUploadCycle() const {
-  return base::TimeDelta::FromSeconds(kSecondsInADay);
+  return base::Seconds(kSecondsInADay);
 }
 
 base::FilePath CumulativeUseTimeMetric::GetMetricsFileForTest() const {
@@ -307,7 +308,7 @@ void CumulativeUseTimeMetric::IncreaseActiveTimeAndSendUmaIfNeeded(
   // Keep any data unreported due to rounding time to seconds, and set the time
   // accumulation start day to the new value.
   accumulated_active_time_->Reset(
-      accumulated_time - base::TimeDelta::FromSeconds(seconds_to_send), day);
+      accumulated_time - base::Seconds(seconds_to_send), day);
 }
 
 }  // namespace login_manager

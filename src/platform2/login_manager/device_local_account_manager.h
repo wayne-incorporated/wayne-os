@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@
 #include <vector>
 
 #include <base/files/file_path.h>
-#include <base/macros.h>
 #include <base/memory/ref_counted.h>
 #include <gtest/gtest_prod.h>
 
@@ -53,9 +52,6 @@ class DeviceLocalAccountManager {
   // |account_id| after checking that |account_id| is valid. The PolicyService
   // is lazily created on the fly if not present yet.
   PolicyService* GetPolicyService(const std::string& account_id);
-
-  // Persists policy for accounts and namespaces.
-  void PersistAllPolicy();
 
  private:
   // Migrate uppercase local-account directories to their lowercase variants.

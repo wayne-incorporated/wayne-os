@@ -1,0 +1,180 @@
+# Copyright 2020 The ChromiumOS Authors
+#
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+audio_config: &audio_config
+  main: &audio_config_main
+    cras-config-dir: "{{$device-name}}"
+    ucm-suffix: "{{$device-name}}"
+    files:
+      - source: "{{$cras-source}}/{{$card}}"
+        destination: "{{$cras-dest}}/{{$card}}"
+      - source: "{{$cras-source}}/dsp.ini"
+        destination: "{{$cras-dest}}/dsp.ini"
+      - source: "{{$ucm-source}}/{{$card}}.{{ucm-suffix}}/HiFi.conf"
+        destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card}}.{{ucm-suffix}}/{{$card}}.{{ucm-suffix}}.conf"
+        destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}/{{$card}}.{{ucm-suffix}}.conf"
+
+audio_config_2cards: &audio_config_2cards
+  main:
+    <<: *audio_config_main
+
+    files:
+      - source: "{{$cras-source}}/dsp.ini"
+        destination: "{{$cras-dest}}/dsp.ini"
+
+      - source: "{{$cras-source}}/{{$card}}"
+        destination: "{{$cras-dest}}/{{$card}}"
+      - source: "{{$ucm-source}}/{{$card}}.{{ucm-suffix}}/HiFi.conf"
+        destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card}}.{{ucm-suffix}}/{{$card}}.{{ucm-suffix}}.conf"
+        destination: "{{$ucm-dest}}/{{$card}}.{{ucm-suffix}}/{{$card}}.{{ucm-suffix}}.conf"
+
+      - source: "{{$cras-source}}/{{$card2}}"
+        destination: "{{$cras-dest}}/{{$card2}}"
+      - source: "{{$ucm-source}}/{{$card2}}.{{ucm-suffix}}/HiFi.conf"
+        destination: "{{$ucm-dest}}/{{$card2}}.{{ucm-suffix}}/HiFi.conf"
+      - source: "{{$ucm-source}}/{{$card2}}.{{ucm-suffix}}/{{$card2}}.{{ucm-suffix}}.conf"
+        destination: "{{$ucm-dest}}/{{$card2}}.{{ucm-suffix}}/{{$card2}}.{{ucm-suffix}}.conf"
+
+common_config: &common_config
+  $cras_root: "/etc/cras"
+  $ucm_root: "/usr/share/alsa/ucm"
+  $cras-source: "{{cras-config-dir}}/audio/cras-config"
+  $cras-dest: "{{$cras_root}}/{{cras-config-dir}}"
+  $ucm-source: "{{cras-config-dir}}/audio/ucm-config"
+  $ucm-dest: "{{$ucm_root}}"
+  name: "{{$device-name}}"
+  identity: &identity
+    platform-name: "Asurada"
+    frid: "{{$fw-name}}"
+  firmware: &firmware_common
+    build-targets: &firmware_build_targets_common
+      bmpblk: "asurada"
+      coreboot: "{{$fw-build-name}}"
+      ec: "{{$fw-build-name}}"
+      depthcharge: "asurada"
+      libpayload: "asurada"
+    no-firmware: true
+  firmware-signing:
+    key-id: "{{$key-id}}"
+    signature-id: "{{$device-name}}"
+  test-label: "{{$device-name}}"
+  power: &power_common
+    low-battery-shutdown-percent: "4.0"
+    disable-dark-resume: "0"
+    $has-keyboard-backlight: "0"
+    has-keyboard-backlight: "{{$has-keyboard-backlight}}"
+  hardware-properties:
+    form-factor: CHROMEBOOK
+    psu-type: battery
+  nnapi:
+    drivers:
+      - name: "xnnpack"
+        shared-library: "libxnn-driver.so"
+  scheduler-tune:
+    boost-top-app: 60
+
+base-zephyr-firmware: &common_config_with_zephyr
+  <<: *common_config
+  firmware:
+    <<: *firmware_common
+    build-targets:
+      <<: *firmware_build_targets_common
+      zephyr-ec: "{{$fw-build-name}}"
+
+asurada-config: &asurada_config
+  <<: *common_config
+  $fw-name: "Google_Asurada"
+  $fw-build-name: "asurada"
+  $key-id: "DEFAULT"
+  $card: "mt8192_mt6359_rt1015_rt5682"
+  identity:
+    <<: *identity
+  audio: *audio_config
+
+hayato-config: &hayato_config
+  <<: *common_config_with_zephyr
+  $fw-name: "Google_Hayato"
+  $fw-build-name: "hayato"
+  $key-id: "ASURADAA"
+  $card: "mt8192_mt6359_rt1015p_rt5682"
+  $card2: "mt8192_mt6359_rt1015p_rt5682s"
+  identity:
+    <<: *identity
+  audio: *audio_config_2cards
+  wifi:
+    non-tablet-mode-power-table-rtw:
+      limit-2g: 108
+      limit-5g-1: 88
+      limit-5g-3: 92
+      limit-5g-4: 80
+    tablet-mode-power-table-rtw:
+      limit-2g: 112
+      limit-5g-1: 76
+      limit-5g-3: 80
+      limit-5g-4: 80
+  power:
+    <<: *power_common
+    set-wifi-transmit-power-for-tablet-mode: "1"
+
+identity-sku-config: &identity_sku_config
+  <<: *identity
+  sku-id: "{{$sku-id}}"
+
+spherion-config: &spherion_config
+  <<: *common_config
+  $fw-name: "Google_Spherion"
+  $fw-build-name: "spherion"
+  $key-id: "ASURADAB"
+  $card: "mt8192_mt6359_rt1015p_rt5682"
+  $card2: "mt8192_mt6359_rt1015p_rt5682s"
+  identity:
+    <<: *identity_sku_config
+  audio: *audio_config_2cards
+
+spherion-config-sar-mtk: &spherion_config_sar_mtk
+  <<: *spherion_config
+  wifi:
+    non-tablet-mode-power-table-mtk:
+      limit-2g: 58
+      limit-5g-1: 54
+      limit-5g-2: 54
+      limit-5g-3: 50
+      limit-5g-4: 54
+  power:
+    <<: *power_common
+    wifi-transmit-power-mode-for-static-device: "non-tablet"
+
+chromeos:
+  devices:
+    - $device-name: "asurada"
+      skus:
+        - config: *asurada_config
+    - $device-name: "hayato"
+      skus:
+        - config: *hayato_config
+    - $device-name: "spherion"
+      skus:
+        - $sku-id: 0
+          $has-keyboard-backlight: "1"
+          config: *spherion_config
+        - $sku-id: 1
+          $has-keyboard-backlight: "1"
+          config: *spherion_config_sar_mtk
+        - $sku-id: 2
+          config: *spherion_config
+        - $sku-id: 3
+          config: *spherion_config_sar_mtk
+        - $sku-id: 4
+          $has-keyboard-backlight: "1"
+          config: *spherion_config
+        - $sku-id: 5
+          $has-keyboard-backlight: "1"
+          config: *spherion_config_sar_mtk
+        - $sku-id: 6
+          config: *spherion_config
+        - $sku-id: 7
+          config: *spherion_config_sar_mtk

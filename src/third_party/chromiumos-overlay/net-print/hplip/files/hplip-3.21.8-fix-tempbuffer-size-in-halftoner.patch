@@ -1,0 +1,24 @@
+From: Piotr Pawliczek <pawliczek@chromium.org>
+
+The size of tempBuffer was determined by OutputWidth[K]. However, the plane K
+may be omitted and when StartPlane != K then OutputWidth[K] == 0.
+
+--- a/prnt/hpcups/Halftoner.cpp
++++ b/prnt/hpcups/Halftoner.cpp
+@@ -142,14 +142,14 @@ Halftoner::Halftoner
+     }
+ 
+     // need to expand input data (easier than expanding bit-pixels after) on K row
+-    tempBuffer = (BYTE*) new BYTE[(OutputWidth[K])];
++    tempBuffer = (BYTE*) new BYTE[(OutputWidth[StartPlane])];
+     if (tempBuffer == NULL)
+     {
+         goto MemoryError;
+     }
+     if (EndPlane > Y)
+     {
+-        tempBuffer2 = (BYTE*) new BYTE[(OutputWidth[K])];
++        tempBuffer2 = (BYTE*) new BYTE[(OutputWidth[StartPlane])];
+         if (tempBuffer2 == NULL)
+         {
+             goto MemoryError;

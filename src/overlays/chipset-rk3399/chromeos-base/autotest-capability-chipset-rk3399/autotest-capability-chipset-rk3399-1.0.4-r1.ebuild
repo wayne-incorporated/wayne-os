@@ -1,0 +1,1 @@
+autotest-capability-chipset-rk3399-1.0.4.ebuild

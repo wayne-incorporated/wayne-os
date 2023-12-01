@@ -1,0 +1,82 @@
+--- xkeyboard-config-2.15/symbols/us.orig	2017-06-16 14:30:32.734107967 -0400
++++ xkeyboard-config-2.15/symbols/us	2017-06-16 14:31:56.686035932 -0400
+@@ -1562,3 +1562,79 @@
+ 	xkb_symbols "sun_type6" {
+ 	include "sun_vndr/us(sun_type6)"
+ };
++
++// ChromeOS PC-style US/BR International layout.
++//
++// Note that this layout requires special handling of the non-standard
++// dead key keysyms, and will not work on other systems using XKB.
++// Keysyms expressed numerically in the 0x0800xxxx range are mapped to
++// DomKey::Dead<U+xxxx>. The dead keys in this layout encode printable
++// characters (e.g. 0x08000027 -> Dead<U+0027> = Dead<APOSTROPHE>),
++// whereas the regular XKB dead_* keysyms encode combining characters
++// (e.g. dead_acute -> Dead<U+0301> = Dead<COMBINING ACUTE ACCENT>)
++// and the two are handled differently by character composition.
++//
++// Reference:
++//  https://en.wikipedia.org/wiki/File:KB_US-International.svg
++//
++partial alphanumeric_keys
++xkb_symbols "intl_pc" {
++
++    include "us(basic)"
++    name[Group1]= "English (US, international with PC-style dead keys)";
++
++    key <TLDE> { [0x08000060, 0x0800007E,         grave,       asciitilde ] };
++    key <AE01> { [	   1,     exclam,    exclamdown,      onesuperior ] };
++    key <AE02> { [	   2,         at,   twosuperior,      twosuperior ] };
++    key <AE03> { [	   3, numbersign, threesuperior,    threesuperior ] };
++    key <AE04> { [	   4,     dollar,      currency,         sterling ] };
++    key <AE05> { [	   5,    percent,      EuroSign,            U20A2 ] };
++    key <AE06> { [         6, 0x0800005E,    onequarter,      asciicircum ] };
++    key <AE07> { [	   7,  ampersand,       onehalf,          onehalf ] };
++    key <AE08> { [	   8,   asterisk, threequarters,    threequarters ] };
++    key <AE09> { [	   9,  parenleft, leftsinglequotemark, leftsinglequotemark ] };
++    key <AE10> { [	   0, parenright, rightsinglequotemark, rightsinglequotemark ] };
++    key <AE11> { [     minus, underscore,           yen,              yen ] };
++    key <AE12> { [     equal,       plus,      multiply,         division ] };
++
++    key <AD01> { [	   q,          Q,    adiaeresis,       Adiaeresis ] };
++    key <AD02> { [	   w,          W,         aring,            Aring ] };
++    key <AD03> { [	   e,          E,        eacute,           Eacute ] };
++    key <AD04> { [	   r,          R,    registered,       registered ] };
++    key <AD05> { [	   t,          T,         thorn,            THORN ] };
++    key <AD06> { [	   y,          Y,    udiaeresis,       Udiaeresis ] };
++    key <AD07> { [	   u,          U,        uacute,           Uacute ] };
++    key <AD08> { [	   i,          I,        iacute,           Iacute ] };
++    key <AD09> { [	   o,          O,        oacute,           Oacute ] };
++    key <AD10> { [	   p,          P,    odiaeresis,       Odiaeresis ] };
++    key <AD11> { [ bracketleft,  braceleft,  guillemotleft, leftdoublequotemark ] };
++    key <AD12> { [bracketright, braceright, guillemotright, rightdoublequotemark ] };
++
++    key <AC01> { [	   a,          A,        aacute,           Aacute ] };
++    key <AC02> { [	   s,          S,        ssharp,          section ] };
++    key <AC03> { [	   d,          D,           eth,              ETH ] };
++    key <AC04> { [	   f,          F,             f,                F ] };
++    key <AC05> { [	   g,          G,             g,                G ] };
++    key <AC06> { [	   h,          H,             h,                H ] };
++    key <AC07> { [	   j,          J,             j,                J ] };
++    key <AC08> { [	   k,          K,            oe,               OE ] };
++
++    key <AC09> { [	   l,          L,        oslash,         Ooblique ] };
++    key <AC10> { [ semicolon,      colon,     paragraph,           degree ] };
++    key <AC11> { [0x08000027, 0x08000022,     apostrophe,        quotedbl ] };
++
++    key <AB01> { [	   z,          Z,            ae,               AE ] };
++    key <AB02> { [	   x,          X,             x,                X ] };
++    key <AB03> { [	   c,          C,     copyright,             cent ] };
++    key <AB04> { [	   v,          V,             v,                V ] };
++    key <AB05> { [	   b,          B,             b,                B ] };
++    key <AB06> { [	   n,          N,        ntilde,           Ntilde ] };
++    key <AB07> { [	   m,          M,            mu,               mu ] };
++    key <AB08> { [     comma,       less,      ccedilla,         Ccedilla ] };
++    key <AB09> { [    period,    greater,        period,          greater ] };
++    key <AB10> { [     slash,   question,  questiondown,     questiondown ] };
++    key <BKSL> { [ backslash,        bar,       notsign,        brokenbar ] };
++    key <LSGT> { [ backslash,        bar,      backslash,             bar ] };
++
++    include "level3(ralt_switch)"
++};

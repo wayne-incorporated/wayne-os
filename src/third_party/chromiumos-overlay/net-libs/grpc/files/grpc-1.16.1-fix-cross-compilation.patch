@@ -1,0 +1,29 @@
+From b9e631dad111f725c1a4e8b69ff1960397a5cc22 Mon Sep 17 00:00:00 2001
+From: Chirantan Ekbote <chirantan@google.com>
+Date: Mon, 10 Jul 2017 13:19:35 -0700
+Subject: [PATCH 2/5] grpc-1.3.0: Fix cross-compiling
+
+Cross-compiling was severely broken in the Makefile.  Fix it.
+
+Sent upstream as https://github.com/grpc/grpc/pull/11476.
+diff --git a/Makefile b/Makefile
+index 520ccd4..1f8ec2e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -457,11 +457,11 @@ LDFLAGS += $(EXTRA_LDFLAGS)
+ DEFINES += $(EXTRA_DEFINES)
+ LDLIBS += $(EXTRA_LDLIBS)
+ 
+-HOST_CPPFLAGS = $(CPPFLAGS)
+-HOST_CFLAGS = $(CFLAGS)
+-HOST_CXXFLAGS = $(CXXFLAGS)
+-HOST_LDFLAGS = $(LDFLAGS)
+-HOST_LDLIBS = $(LDLIBS)
++HOST_CPPFLAGS = $(CPPFLAGS_NO_ARCH) -g -Wall -Wextra -Werror -Wno-long-long -Wno-unused-parameter -DOSATOMIC_USE_INLINED=1 -Wno-deprecated-declarations -Ithird_party/nanopb -DPB_FIELD_32BIT
++HOST_CFLAGS = -std=c99 -Wsign-conversion -Wconversion $(W_SHADOW) $(W_EXTRA_SEMI)
++HOST_CXXFLAGS = -std=c++11 -Wnon-virtual-dtor
++HOST_LDFLAGS = -g -fPIC -Llibs/$(CONFIG)
++HOST_LDLIBS = -lprotoc
+ HOST_AROPTS = $(AROPTS)
+ 
+ # These are automatically computed variables.

@@ -1,0 +1,76 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+group("all") {
+  deps = [
+    ":cros-minidiag-tool",
+    ":install_upstart_config",
+  ]
+  if (use.test) {
+    deps += [ ":cros_minidiag_test" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":minidiag_utils_fuzzer" ]
+  }
+}
+
+pkg_config("libcros-minidiag-tool-pkg-deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libmetrics",
+  ]
+}
+
+source_set("libcros-minidiag-tool") {
+  sources = [
+    "elog_manager.cc",
+    "minidiag_metrics.cc",
+    "utils.cc",
+  ]
+  configs += [ ":libcros-minidiag-tool-pkg-deps" ]
+}
+
+executable("cros-minidiag-tool") {
+  sources = [ "main.cc" ]
+  configs += [ ":libcros-minidiag-tool-pkg-deps" ]
+  deps = [ ":libcros-minidiag-tool" ]
+  install_path = "bin"
+}
+
+install_config("install_upstart_config") {
+  sources = [ "upstart/send-boot-elog-metrics.conf" ]
+  install_path = "/etc/init"
+}
+
+if (use.test) {
+  executable("cros_minidiag_test") {
+    sources = [
+      "elog_manager_test.cc",
+      "utils_test.cc",
+    ]
+    configs += [
+      ":libcros-minidiag-tool-pkg-deps",
+      "//common-mk:test",
+    ]
+    run_test = true
+    deps = [
+      ":libcros-minidiag-tool",
+      "//common-mk/testrunner",
+    ]
+    pkg_deps = [ "libchrome-test" ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("minidiag_utils_fuzzer") {
+    sources = [ "utils_fuzzer.cc" ]
+    configs += [
+      ":libcros-minidiag-tool-pkg-deps",
+      "//common-mk/common_fuzzer:common_fuzzer",
+      "//common-mk:test",
+    ]
+    deps = [ ":libcros-minidiag-tool" ]
+  }
+}

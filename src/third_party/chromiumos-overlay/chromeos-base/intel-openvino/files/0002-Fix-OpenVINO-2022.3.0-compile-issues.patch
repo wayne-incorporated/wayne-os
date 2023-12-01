@@ -1,0 +1,32 @@
+From eb946a86505f1b4c52e3c59ef1feb1a72a9bd021 Mon Sep 17 00:00:00 2001
+From: Dalibor Segan <dalibor.segan@intel.com>
+Date: Wed, 1 Feb 2023 21:38:55 -0800
+Subject: [PATCH 2/2] Fix OpenVINO 2022.3.0 compile issues
+
+---
+ src/core/include/openvino/op/constant.hpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/include/openvino/op/constant.hpp b/src/core/include/openvino/op/constant.hpp
+index 23aed791cf..8f52c9193b 100644
+--- a/src/core/include/openvino/op/constant.hpp
++++ b/src/core/include/openvino/op/constant.hpp
+@@ -521,13 +521,13 @@ private:
+         if (!std::is_same<T, StorageDataType>::value) {
+             OPENVINO_ASSERT(!std::numeric_limits<T>::is_signed ||
+                             std::numeric_limits<StorageDataType>::lowest() <= value);
+-            OPENVINO_ASSERT(value <= std::numeric_limits<StorageDataType>::max());
++            OPENVINO_ASSERT(std::numeric_limits<StorageDataType>::max() >= value);
+         }
+ #if defined(_MSC_VER)
+ #    pragma warning(pop)
+ #endif
+ #ifdef __clang__
+-#    pragma GangC diagnostic pop
++#    pragma clang diagnostic pop
+ #endif
+ #ifdef __GNUC__
+ #    pragma GCC diagnostic pop
+-- 
+2.34.1
+

@@ -1,0 +1,29 @@
+From d20ea5595a892dd6c7e2f8da0b9927e70bccba3b Mon Sep 17 00:00:00 2001
+From: Mattias Nissler <mnissler@chromium.org>
+Date: Fri, 3 Jul 2020 12:10:05 +0200
+Subject: [PATCH] Don't read udev rules from /run
+
+Udev rules may contain command in RUN attributes. All runnable code in
+Chrome OS must be subject to code verification, e.g. be located on the
+verified root file system. /run isn't verified and mounted noexec, so
+it's not appropriate to place code there. See also crbug.com/1072486.
+---
+ src/udev/udev-rules.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+--- a/src/udev/udev-rules.c
++++ b/src/udev/udev-rules.c
+@@ -49,7 +49,9 @@ struct uid_gid {
+ 
+ static const char* const rules_dirs[] = {
+         "/etc/udev/rules.d",
+-        "/run/udev/rules.d",
++        // Disabled on Chrome OS due to the policy that code and scripts must
++        // live on the verified root file system. See crbug.com/1072486
++        //"/run/udev/rules.d",
+         UDEVLIBEXECDIR "/rules.d",
+         NULL};
+ 
+-- 
+2.26.2
+

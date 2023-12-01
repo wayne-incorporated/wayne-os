@@ -1,0 +1,32 @@
+From 97406d925e902f8a8789b71e2aa90fbe6fff8ee7 Mon Sep 17 00:00:00 2001
+From: Lepton Wu <lepton@chromium.org>
+Date: Mon, 30 Jan 2023 18:03:48 -0800
+Subject: [PATCH] egl/dri2: Don't filter egl devices when required.
+
+In some use case, we still want that eglQueryDevicesEXT returns devices
+without render node. Do this when the build environment specifies the
+EGL_RETURN_ALL_DEVICES_FOR_QUERY flag.
+
+Signed-off-by: Lepton Wu <lepton@chromium.org>
+---
+ src/egl/main/egldevice.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/egl/main/egldevice.c b/src/egl/main/egldevice.c
+index 68c272d282d..7f5fab5c582 100644
+--- a/src/egl/main/egldevice.c
++++ b/src/egl/main/egldevice.c
+@@ -284,8 +284,10 @@ _eglRefreshDeviceList(void)
+ 
+    num_devs = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
+    for (int i = 0; i < num_devs; i++) {
++#ifndef EGL_RETURN_ALL_DEVICES_FOR_QUERY
+       if (!(devices[i]->available_nodes & (1 << DRM_NODE_RENDER)))
+          continue;
++#endif
+ 
+       ret = _eglAddDRMDevice(devices[i], NULL);
+ 
+-- 
+2.39.1.581.gbfd45094c4-goog
+

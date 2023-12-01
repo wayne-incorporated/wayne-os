@@ -1,0 +1,1 @@
+ko-nanumfonts-3.20.ebuild

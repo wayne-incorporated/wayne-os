@@ -1,0 +1,172 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+group("all") {
+  deps = [
+    ":hermes",
+    ":install_minijail_conf",
+    ":libhermes",
+  ]
+  if (use.test) {
+    deps += [ ":hermes_test" ]
+  }
+  if (use.fuzzer) {
+    deps += [ ":hermes_modem_mbim_fuzzer" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "ModemManager",
+    "dbus-1",
+    "gio-2.0",
+    "gio-unix-2.0",
+    "glib-2.0",
+    "google-lpa",
+    "gthread-2.0",
+    "jsoncpp",
+    "libbrillo",
+    "libchrome",
+    "libglib_bridge",
+    "libmetrics",
+    "openssl",
+    "protobuf-lite",
+    "re2",
+    "system_api",
+  ]
+  if (use.qrtr) {
+    libs = [ "qrtr" ]
+  } else {
+    libs = [ "mbim-glib" ]
+  }
+
+  if (use.internal) {
+    pkg_deps += [ "gemalto-firmware" ]
+  }
+}
+
+install_config("install_minijail_conf") {
+  sources = [ "minijail/hermes.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+generate_dbus_proxies("modemmanager_proxies") {
+  modemmanager_in_dir = "${sysroot}/usr/share/dbus-1/interfaces/"
+  proxy_output_file = "include/hermes/dbus_bindings/mm-proxies.h"
+  sources = [
+    "${modemmanager_in_dir}/org.freedesktop.ModemManager1.Modem.xml",
+    "${modemmanager_in_dir}/org.freedesktop.ModemManager1.xml",
+    "dbus_bindings/dbus-objectmanager.dbus-xml",
+  ]
+}
+
+generate_dbus_adaptors("hermes_adaptors") {
+  dbus_service_config = "dbus_bindings/dbus-service-config.json"
+  dbus_adaptors_out_dir = "include/hermes/dbus_bindings"
+  sources = [
+    "dbus_bindings/org.chromium.Hermes.Euicc.xml",
+    "dbus_bindings/org.chromium.Hermes.Manager.xml",
+    "dbus_bindings/org.chromium.Hermes.Profile.xml",
+  ]
+}
+
+proto_library("hermes-protos") {
+  proto_in_dir = "./proto/"
+  proto_out_dir = "include/hermes/"
+  sources = [ "${proto_in_dir}/cached_euicc.proto" ]
+}
+
+static_library("libhermes") {
+  sources = [
+    "adaptor_factory.cc",
+    "apdu.cc",
+    "context.cc",
+    "daemon.cc",
+    "euicc.cc",
+    "euicc_cache.cc",
+    "euicc_dbus_adaptor.cc",
+    "euicc_event.cc",
+    "executor.cc",
+    "hermes_common.cc",
+    "lpa_util.cc",
+    "manager.cc",
+    "manager_dbus_adaptor.cc",
+    "modem_manager_proxy.cc",
+    "profile.cc",
+    "smdp.cc",
+    "smds.cc",
+  ]
+
+  if (use.qrtr) {
+    sources += [
+      "dms_cmd.cc",
+      "modem_qrtr.cc",
+      "socket_qrtr.cc",
+      "uim_cmd.cc",
+    ]
+  } else {
+    sources += [
+      "libmbim_impl.cc",
+      "modem_mbim.cc",
+    ]
+  }
+
+  configs += [ ":target_defaults" ]
+  defines = [ "USE_QRTR=${use.qrtr}" ]
+  defines += [ "USE_INTERNAL=${use.internal}" ]
+  deps = [
+    ":hermes-protos",
+    ":hermes_adaptors",
+    ":modemmanager_proxies",
+  ]
+  pkg_deps = [ "libstructuredmetrics" ]
+}
+
+executable("hermes") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libhermes" ]
+}
+
+if (use.test) {
+  pkg_config("test_config") {
+    pkg_deps = [ "libchrome-test" ]
+  }
+
+  executable("hermes_test") {
+    sources = [ "apdu_test.cc" ]
+    if (use.qrtr) {
+      sources += [ "modem_qrtr_test.cc" ]
+    } else {
+      sources += [ "modem_mbim_test.cc" ]
+    }
+    configs += [
+      # //common-mk:test should be at the top. crbug.com/887845
+      # TODO(crbug.com/887845): Remove this note after library order issue is resolved.
+      "//common-mk:test",
+      ":target_defaults",
+      ":test_config",
+    ]
+    deps = [
+      ":libhermes",
+      "//common-mk/testrunner",
+    ]
+  }
+}
+
+if (use.fuzzer) {
+  executable("hermes_modem_mbim_fuzzer") {
+    sources = [ "modem_mbim_fuzzer.cc" ]
+    configs += [
+      "//common-mk/common_fuzzer",
+      ":target_defaults",
+    ]
+    deps = [ ":libhermes" ]
+  }
+}

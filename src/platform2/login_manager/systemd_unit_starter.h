@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,14 @@
 #include <string>
 #include <vector>
 
-#include <base/macros.h>
-
 #include "login_manager/init_daemon_controller.h"
 
+namespace base {
+class TimeDelta;
+}
 namespace dbus {
 class ObjectProxy;
+class ScopedDBusError;
 }
 
 namespace login_manager {
@@ -35,6 +37,13 @@ class SystemdUnitStarter : public InitDaemonController {
       const std::string& unit_name,
       const std::vector<std::string>& args_keyvals,
       TriggerMode mode) override;
+
+  std::unique_ptr<dbus::Response> TriggerImpulseWithTimeoutAndError(
+      const std::string& unit_name,
+      const std::vector<std::string>& args_keyvals,
+      TriggerMode mode,
+      base::TimeDelta timeout,
+      dbus::ScopedDBusError* error) override;
 
  private:
   dbus::ObjectProxy* systemd_dbus_proxy_;  // Weak, owned by caller.

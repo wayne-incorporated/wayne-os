@@ -1,0 +1,24 @@
+From 2d7ea4ecf565a2647f13160dffe09c7c9b8ac84f Mon Sep 17 00:00:00 2001
+From: Zubin Mithra <zsm@google.com>
+Date: Wed, 22 Feb 2023 13:13:17 -0800
+Subject: [PATCH 8/8] cros-syzkaller: do not use "-F /dev/null" for SSH
+
+---
+ vm/vmimpl/util.go | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/vm/vmimpl/util.go b/vm/vmimpl/util.go
+index 9a007b386..da1a72599 100644
+--- a/vm/vmimpl/util.go
++++ b/vm/vmimpl/util.go
+@@ -70,7 +70,6 @@ func SCPArgs(debug bool, sshKey string, port int) []string {
+ func sshArgs(debug bool, sshKey, portArg string, port, forwardPort int) []string {
+ 	args := []string{
+ 		portArg, fmt.Sprint(port),
+-		"-F", "/dev/null",
+ 		"-o", "UserKnownHostsFile=/dev/null",
+ 		"-o", "BatchMode=yes",
+ 		"-o", "IdentitiesOnly=yes",
+-- 
+2.39.2.722.g9855ee24e9-goog
+

@@ -1,0 +1,66 @@
+From 12856795dbf9952e844b02bc19a87103b1f116dc Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Thu, 24 Mar 2022 16:03:16 -0300
+Subject: [PATCH 125/163] stdio: Suppress clang warnings for tst-unlockedio.c
+
+Clang issues the following warnings:
+
+  tst-unlockedio.c:63:36: error: implicit conversion from 'double' to
+  'size_t' (aka 'unsigned long') changes value from -0 to 0
+  [-Werror,-Wliteral-conversion]
+        || fwrite_unlocked (blah, 0, -0.0, fp) != 0
+           ~~~~~~~~~~~~~~~           ^~~~
+  tst-unlockedio.c:61:33: error: implicit conversion from 'double' to
+  'size_t' (aka 'unsigned long') changes value from 0.25 to 0
+  [-Werror,-Wliteral-conversion]
+        || fwrite_unlocked (--cp, 0.25, 16, fp) != 0
+           ~~~~~~~~~~~~~~~        ^~~~
+  tst-unlockedio.c:59:37: error: implicit conversion from 'double' to
+  'size_t' (aka 'unsigned long') changes value from 0.25 to 0
+  [-Werror,-Wliteral-conversion]
+        || fwrite_unlocked (cp++, 16, 0.25, fp) != 0
+           ~~~~~~~~~~~~~~~            ^~~~
+  tst-unlockedio.c:116:34: error: implicit conversion from 'double' to
+  'size_t' (aka 'unsigned long') changes value from -0 to 0
+  [-Werror,-Wliteral-conversion]
+        || fread_unlocked (buf, 0, -0.0, fp) != 0
+           ~~~~~~~~~~~~~~          ^~~~
+  tst-unlockedio.c:114:32: error: implicit conversion from 'double' to
+  'size_t' (aka 'unsigned long') changes value from 0.25 to 0
+  [-Werror,-Wliteral-conversion]
+        || fread_unlocked (--wp, 0.25, 16, fp) != 0
+           ~~~~~~~~~~~~~~        ^~~~
+  tst-unlockedio.c:112:36: error: implicit conversion from 'double' to
+  'size_t' (aka 'unsigned long') changes value from 0.25 to 0
+  [-Werror,-Wliteral-conversion]
+        || fread_unlocked (wp++, 16, 0.25, fp) != 0
+           ~~~~~~~~~~~~~~            ^~~~
+---
+ stdio-common/tst-unlockedio.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/stdio-common/tst-unlockedio.c b/stdio-common/tst-unlockedio.c
+index 83b3e5594a..6f109ba330 100644
+--- a/stdio-common/tst-unlockedio.c
++++ b/stdio-common/tst-unlockedio.c
+@@ -51,6 +51,9 @@ do_test (void)
+      fread_unlocked below as well.  */
+   DIAG_PUSH_NEEDS_COMMENT;
+   DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wdiv-by-zero");
++  /* clang warns about the implicit conversion from double to size_t,
++     which is required by this tests.  */
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wliteral-conversion");
+   if (ftello (fp) != 0
+       || fwrite_unlocked (blah, blah - blah, strlen (blah), f++) != 0
+       || f != fp + 1
+@@ -104,6 +107,7 @@ do_test (void)
+   /* See explanation above.  */
+   DIAG_PUSH_NEEDS_COMMENT;
+   DIAG_IGNORE_NEEDS_COMMENT (4.9, "-Wdiv-by-zero");
++  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wliteral-conversion");
+   if (ftello (fp) != 0
+       || fread_unlocked (buf, buf - buf, strlen (blah), f++) != 0
+       || f != fp + 1
+-- 
+2.37.2
+

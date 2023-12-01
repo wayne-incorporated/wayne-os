@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium OS Authors. All rights reserved.
+// Copyright 2016 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ namespace login_manager {
 class VpdProcess {
  public:
   using KeyValuePairs = std::vector<std::pair<std::string, std::string>>;
-  using CompletionCallback = base::Callback<void(bool)>;
+  using CompletionCallback = base::OnceCallback<void(bool)>;
 
   // Update values in RW_VPD by running the update_rw_vpd utility in a separate
   // process. Keys with empty string values are deleted. update_rw_vpd will not
@@ -27,7 +27,7 @@ class VpdProcess {
   // whether fork() was successful.
   virtual bool RunInBackground(const KeyValuePairs& updates,
                                bool ignore_cache,
-                               const CompletionCallback& completion) = 0;
+                               CompletionCallback completion) = 0;
 };
 
 }  // namespace login_manager

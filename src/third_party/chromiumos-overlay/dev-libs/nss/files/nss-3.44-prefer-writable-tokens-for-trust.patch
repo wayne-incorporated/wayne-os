@@ -1,0 +1,87 @@
+This patch makes CERT_SetCertTrust prefer writable tokens that already contain
+the certificate when choosing where to store trust settings.
+See crbug.com/1132030 .
+
+Upstream bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1680453
+Upstream review: https://phabricator.services.mozilla.com/D99840
+
+--- nss/lib/pki/pki3hack.c
++++ nss/lib/pki/pki3hack.c
+@@ -1048,9 +1048,9 @@ static NSSToken *
+ stan_GetTrustToken(
+     NSSCertificate *c)
+ {
+-    NSSToken *ttok = NULL;
+-    NSSToken *rtok = NULL;
+-    NSSToken *tok = NULL;
++    NSSToken *token_with_trust_object = NULL;
++    NSSToken *ro_token_without_trust_object = NULL;
++    NSSToken *rw_token_without_trust_object = NULL;
+     nssCryptokiObject **ip;
+     nssCryptokiObject **instances = nssPKIObject_GetInstances(&c->object);
+     if (!instances) {
+@@ -1058,30 +1058,48 @@ stan_GetTrustToken(
+     }
+     for (ip = instances; *ip; ip++) {
+         nssCryptokiObject *instance = *ip;
+-        nssCryptokiObject *to =
++        nssCryptokiObject *trust_object =
+             nssToken_FindTrustForCertificate(instance->token, NULL,
+                                              &c->encoding, &c->issuer, &c->serial,
+                                              nssTokenSearchType_TokenOnly);
+-        NSSToken *ctok = instance->token;
+-        PRBool ro = PK11_IsReadOnly(ctok->pk11slot);
+-
+-        if (to) {
+-            nssCryptokiObject_Destroy(to);
+-            ttok = ctok;
+-            if (!ro) {
++        NSSToken *current_token = instance->token;
++        PRBool is_read_only = PK11_IsReadOnly(current_token->pk11slot);
++
++        if (trust_object) {
++            nssCryptokiObject_Destroy(trust_object);
++            token_with_trust_object = current_token;
++            if (!is_read_only) {
++                // No point iterating further, as the read-write token that
++                // already has a trust object will be preferred anyway.
+                 break;
+             }
+-        } else {
+-            if (!rtok && ro) {
+-                rtok = ctok;
+-            }
+-            if (!tok && !ro) {
+-                tok = ctok;
+-            }
++            continue;
++        }
++        if (!rw_token_without_trust_object && !is_read_only) {
++          rw_token_without_trust_object = current_token;
++          continue;
++        }
++        if (!ro_token_without_trust_object && is_read_only) {
++          ro_token_without_trust_object = current_token;
+         }
+     }
+     nssCryptokiObjectArray_Destroy(instances);
+-    return ttok ? ttok : (tok ? tok : rtok);
++
++    // Precedence rules:
++    // Note that all tokens considered here have the certificate on them.
++    // read-write token with trust object > any read-write token >
++    //    read-only token with trust object > any read-only token
++    if (token_with_trust_object &&
++        !PK11_IsReadOnly(token_with_trust_object->pk11slot)) {
++      return token_with_trust_object;
++    }
++    if (rw_token_without_trust_object ) {
++      return rw_token_without_trust_object;
++    }
++    if (token_with_trust_object) {
++      return token_with_trust_object;
++    }
++    return ro_token_without_trust_object;
+ }
+ 
+ NSS_EXTERN PRStatus

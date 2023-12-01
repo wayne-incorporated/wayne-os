@@ -1,0 +1,36 @@
+From 404b0e6fe7a228495cba2525ad58d8a7cb022409 Mon Sep 17 00:00:00 2001
+From: Abhishek Kumar <abhishek4.kumar@intel.com>
+Date: Tue, 3 Dec 2019 00:33:26 +0530
+Subject: [PATCH] intel/compiler: force simd8 when dual src blending on gen8
+
+Change-Id: I31ff3c98c4a5514cff7358df5af2bb17be8c0177
+Closes: https://gitlab.freedesktop.org/mesa/mesa/issues/1917
+---
+ src/intel/compiler/brw_fs.cpp | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/intel/compiler/brw_fs.cpp b/src/intel/compiler/brw_fs.cpp
+index 8dd3b94fbd51..65f54e53ab8a 100644
+--- a/src/intel/compiler/brw_fs.cpp
++++ b/src/intel/compiler/brw_fs.cpp
+@@ -7600,8 +7600,16 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+       prog_data->reg_blocks_8 = brw_register_blocks(v8.grf_used);
+    }
+
++   bool force_simd8 = false;
++
++   /* Force simd8 with dual source blending on gen8.
++   * https://gitlab.freedesktop.org/mesa/mesa/issues/1917
++   */
++   if (devinfo->gen == 8 && prog_data->dual_src_blend)
++      force_simd8 = true;
++
+    if (v8.max_dispatch_width >= 16 &&
+-       likely(!(INTEL_DEBUG & DEBUG_NO16) || use_rep_send)) {
++       likely(!(INTEL_DEBUG & DEBUG_NO16) || use_rep_send) && !force_simd8) {
+       /* Try a SIMD16 compile */
+       fs_visitor v16(compiler, log_data, mem_ctx, key,
+                      &prog_data->base, prog, shader, 16,
+--
+2.7.4
+

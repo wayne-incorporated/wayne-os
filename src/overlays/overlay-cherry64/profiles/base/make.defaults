@@ -1,0 +1,28 @@
+# Copyright 2021 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+USE=""
+
+USE="${USE} -tpm tpm2"
+
+USE="${USE} cherry64"
+
+# Don't build coreboot firmware
+USE="${USE} -bootimage -coreboot -cros_ec"
+
+USE="${USE} -mosys_platform_generic mosys_platform_cherry"
+
+# Enable unibuild
+USE="${USE} unibuild has_chromeos_config_bsp"
+
+# VIDEO_CARDS gets reset to the default value in the arm64 base chromeos
+# profile because it is inherited after overlay-cherry (see parent in this
+# directory). Add back what overlay-cherry would have.
+VIDEO_CARDS="mediatek"
+
+# INPUT_DEVICES gets reset to the default value in the arm64 base chromeos
+# profile because it is inherited after overlay-cherry (see parent in this
+# directory). Add back what overlay-cherry would have.
+INPUT_DEVICES="${INPUT_DEVICES} elan_i2chid"

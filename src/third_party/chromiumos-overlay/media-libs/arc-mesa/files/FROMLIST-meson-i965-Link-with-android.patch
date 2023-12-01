@@ -1,0 +1,87 @@
+From 7be0f8eab3d8ee94db0ad902abf1e5bf76fee621 Mon Sep 17 00:00:00 2001
+From: Bas Nieuwenhuizen <bas@basnieuwenhuizen.nl>
+Date: Fri, 26 Jul 2019 13:49:59 +0200
+Subject: [PATCH 3/3] meson,i965: Link with android deps when building for
+ android.
+
+The DBG marco in brw_blorp.c ends up calling an android log function:
+
+error: undefined reference to '__android_log_print'
+
+v2: On suggestion from Lionel, hang the Android dependency onto a new
+    libintel_common dependency.
+
+Change-Id: Ia3df58d47b5fcb450f9439c5c675438256938698
+---
+ src/intel/common/meson.build          | 10 ++++++++++
+ src/intel/vulkan/meson.build          |  7 +++----
+ src/mesa/drivers/dri/i965/meson.build |  7 ++++---
+ 3 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/src/intel/common/meson.build b/src/intel/common/meson.build
+index 332e978b0ad..0e737c71788 100644
+--- a/src/intel/common/meson.build
++++ b/src/intel/common/meson.build
+@@ -45,3 +45,13 @@ libintel_common = static_library(
+   link_with : [libisl],
+   dependencies : [dep_expat, dep_libdrm, dep_thread],
+ )
++
++libintel_extra_dependencies = []
++if with_platform_android
++  libintel_extra_dependencies += dep_android
++endif
++
++idep_libintel_common = declare_dependency(
++  link_with: [libintel_common],
++  dependencies: [libintel_extra_dependencies],
++)
+diff --git a/src/intel/vulkan/meson.build b/src/intel/vulkan/meson.build
+index 0a694e56c4b..229d5034171 100644
+--- a/src/intel/vulkan/meson.build
++++ b/src/intel/vulkan/meson.build
+@@ -176,7 +176,6 @@ if with_xlib_lease
+ endif
+ 
+ if with_platform_android
+-  anv_deps += dep_android
+   anv_flags += '-DVK_USE_PLATFORM_ANDROID_KHR'
+   libanv_files += files('anv_android.c')
+ else
+@@ -206,11 +205,11 @@ libvulkan_intel = shared_library(
+   ],
+   link_whole : [libanv_common, libanv_gen_libs],
+   link_with : [
+-    libintel_compiler, libintel_common, libintel_dev, libisl, libblorp,
+-    libvulkan_util, libvulkan_wsi, libmesa_util,
++    libintel_compiler, libintel_dev, libisl, libblorp, libvulkan_util,
++    libvulkan_wsi, libmesa_util,
+   ],
+   dependencies : [
+-    dep_thread, dep_dl, dep_m, anv_deps, idep_nir,
++    dep_thread, dep_dl, dep_m, anv_deps, idep_libintel_common, idep_nir,
+   ],
+   c_args : anv_flags,
+   link_args : ['-Wl,--build-id=sha1', ld_args_bsymbolic, ld_args_gc_sections],
+diff --git a/src/mesa/drivers/dri/i965/meson.build b/src/mesa/drivers/dri/i965/meson.build
+index cd3683ae7ec..e53562ffe95 100644
+--- a/src/mesa/drivers/dri/i965/meson.build
++++ b/src/mesa/drivers/dri/i965/meson.build
+@@ -184,10 +184,11 @@ libi965 = static_library(
+   c_args : [c_vis_args, no_override_init_args, c_sse2_args],
+   cpp_args : [cpp_vis_args, c_sse2_args],
+   link_with : [
+-    i965_gen_libs, libintel_common, libintel_dev, libisl, libintel_compiler,
+-    libblorp
++    i965_gen_libs, libintel_dev, libisl, libintel_compiler, libblorp,
++  ],
++  dependencies : [
++    dep_libdrm, dep_valgrind, idep_libintel_common, idep_nir_headers,
+   ],
+-  dependencies : [dep_libdrm, dep_valgrind, idep_nir_headers],
+ )
+ 
+ dri_drivers += libi965
+-- 
+2.22.0.709.g102302147b-goog
+

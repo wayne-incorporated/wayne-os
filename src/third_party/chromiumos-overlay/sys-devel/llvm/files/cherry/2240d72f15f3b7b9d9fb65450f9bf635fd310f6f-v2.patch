@@ -1,0 +1,910 @@
+commit 97398da2580309352e2f85bc1e44fdf81f2fdba2
+Author: George Burgess IV <gbiv@google.com>
+Date:   Tue Jul 19 18:12:54 2022 -0700
+
+    .
+
+diff --git a/clang/include/clang/Basic/Attr.td b/clang/include/clang/Basic/Attr.td
+index 5f77073413fb..b3db0335c8f1 100644
+--- a/clang/include/clang/Basic/Attr.td
++++ b/clang/include/clang/Basic/Attr.td
+@@ -4019,3 +4019,14 @@ def NoRandomizeLayout : InheritableAttr {
+   let LangOpts = [COnly];
+ }
+ def : MutualExclusions<[RandomizeLayout, NoRandomizeLayout]>;
++
++def FunctionReturnThunks : InheritableAttr,
++    TargetSpecificAttr<TargetAnyX86> {
++  let Spellings = [GCC<"function_return">];
++  let Args = [EnumArgument<"ThunkType", "Kind",
++    ["keep", "thunk-extern"],
++    ["Keep", "Extern"]
++  >];
++  let Subjects = SubjectList<[Function]>;
++  let Documentation = [FunctionReturnThunksDocs];
++}
+diff --git a/clang/include/clang/Basic/AttrDocs.td b/clang/include/clang/Basic/AttrDocs.td
+index dbb7f695a5a2..e431f3be5a72 100644
+--- a/clang/include/clang/Basic/AttrDocs.td
++++ b/clang/include/clang/Basic/AttrDocs.td
+@@ -6586,3 +6586,25 @@ evaluate to NULL.
+ 
+   }];
+ }
++
++def FunctionReturnThunksDocs : Documentation {
++  let Category = DocCatFunction;
++  let Content = [{
++The attribute ``function_return`` can replace return instructions with jumps to
++target-specific symbols. This attribute supports 2 possible values,
++corresponding to the values supported by the ``-mfunction-return=`` command
++line flag:
++* ``__attribute__((function_return("keep")))`` to disable related transforms.
++  This is useful for undoing global setting from ``-mfunction-return=`` locally
++  for individual functions.
++* ``__attribute__((function_return("thunk-extern")))`` to replace returns with
++  jumps, while NOT emitting the thunk.
++
++The values ``thunk`` and ``thunk-inline`` from GCC are not supported.
++
++The symbol used for ``thunk-extern`` is target specific:
++* X86: ``__x86_return_thunk``
++
++As such, this function attribute is currently only supported on X86 targets.
++   }];
++ }
+diff --git a/clang/include/clang/Basic/CodeGenOptions.def b/clang/include/clang/Basic/CodeGenOptions.def
+index 8e89106993c2..a2c225cf2e19 100644
+--- a/clang/include/clang/Basic/CodeGenOptions.def
++++ b/clang/include/clang/Basic/CodeGenOptions.def
+@@ -107,6 +107,7 @@ CODEGENOPT(CFProtectionReturn , 1, 0) ///< if -fcf-protection is
+ CODEGENOPT(CFProtectionBranch , 1, 0) ///< if -fcf-protection is
+                                       ///< set to full or branch.
+ CODEGENOPT(IBTSeal, 1, 0)             ///< set to optimize CFProtectionBranch.
++CODEGENOPT(FunctionReturnThunks, 1, 0) ///< -mfunction-return={keep|thunk-extern}
+ 
+ CODEGENOPT(XRayInstrumentFunctions , 1, 0) ///< Set when -fxray-instrument is
+                                            ///< enabled.
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index 5fa681f53819..eb6535db6000 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -1989,6 +1989,13 @@ def fcf_protection : Flag<["-"], "fcf-protection">, Group<f_Group>, Flags<[CoreO
+   HelpText<"Enable cf-protection in 'full' mode">;
+ def mibt_seal : Flag<["-"], "mibt-seal">, Group<m_Group>, Flags<[CoreOption, CC1Option]>,
+   HelpText<"Optimize fcf-protection=branch/full (requires LTO).">;
++def mfunction_return_EQ : Joined<["-"], "mfunction-return=">,
++  Group<m_Group>, Flags<[CoreOption, CC1Option]>,
++  HelpText<"Replace returns with jumps to ``__x86_return_thunk`` (x86 only, error otherwise)">,
++  Values<"keep,thunk-extern">,
++  NormalizedValues<["Keep", "Extern"]>,
++  NormalizedValuesScope<"llvm::FunctionReturnThunksKind">,
++  MarshallingInfoEnum<CodeGenOpts<"FunctionReturnThunks">, "Keep">;
+ 
+ defm xray_instrument : BoolFOption<"xray-instrument",
+   LangOpts<"XRayInstrument">, DefaultFalse,
+diff --git a/clang/lib/CodeGen/CodeGenFunction.cpp b/clang/lib/CodeGen/CodeGenFunction.cpp
+index 7d75d186969a..ecc7808c419a 100644
+--- a/clang/lib/CodeGen/CodeGenFunction.cpp
++++ b/clang/lib/CodeGen/CodeGenFunction.cpp
+@@ -920,6 +920,20 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
+   if (D && D->hasAttr<NoProfileFunctionAttr>())
+     Fn->addFnAttr(llvm::Attribute::NoProfile);
+ 
++  if (D) {
++    // Function attributes take precedence over command line flags.
++    if (auto *A = D->getAttr<FunctionReturnThunksAttr>()) {
++      switch (A->getThunkType()) {
++      case FunctionReturnThunksAttr::Kind::Keep:
++        break;
++      case FunctionReturnThunksAttr::Kind::Extern:
++        Fn->addFnAttr(llvm::Attribute::FnRetThunkExtern);
++        break;
++      }
++    } else if (CGM.getCodeGenOpts().FunctionReturnThunks)
++      Fn->addFnAttr(llvm::Attribute::FnRetThunkExtern);
++  }
++
+   if (FD && getLangOpts().OpenCL) {
+     // Add metadata for a kernel function.
+     EmitOpenCLKernelMetadata(FD, Fn);
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 43373083f8aa..11fe73fb9faf 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -6307,6 +6307,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+   if (IsUsingLTO)
+     Args.AddLastArg(CmdArgs, options::OPT_mibt_seal);
+ 
++  if (Arg *A = Args.getLastArg(options::OPT_mfunction_return_EQ))
++    CmdArgs.push_back(
++        Args.MakeArgString(Twine("-mfunction-return=") + A->getValue()));
++
+   // Forward -f options with positive and negative forms; we translate these by
+   // hand.  Do not propagate PGO options to the GPU-side compilations as the
+   // profile info is for the host-side compilation only.
+diff --git a/clang/lib/Frontend/CompilerInvocation.cpp b/clang/lib/Frontend/CompilerInvocation.cpp
+index 5d7916ace87e..dff5bc289308 100644
+--- a/clang/lib/Frontend/CompilerInvocation.cpp
++++ b/clang/lib/Frontend/CompilerInvocation.cpp
+@@ -1485,6 +1485,9 @@ void CompilerInvocation::GenerateCodeGenArgs(
+   if (Opts.IBTSeal)
+     GenerateArg(Args, OPT_mibt_seal, SA);
+ 
++  if (Opts.FunctionReturnThunks)
++    GenerateArg(Args, OPT_mfunction_return_EQ, "thunk-extern", SA);
++
+   for (const auto &F : Opts.LinkBitcodeFiles) {
+     bool Builtint = F.LinkFlags == llvm::Linker::Flags::LinkOnlyNeeded &&
+                     F.PropagateAttrs && F.Internalize;
+@@ -1825,6 +1828,27 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
+       Diags.Report(diag::err_drv_invalid_value) << A->getAsString(Args) << Name;
+   }
+ 
++  if (const Arg *A = Args.getLastArg(OPT_mfunction_return_EQ)) {
++    auto Val = llvm::StringSwitch<llvm::FunctionReturnThunksKind>(A->getValue())
++                   .Case("keep", llvm::FunctionReturnThunksKind::Keep)
++                   .Case("thunk-extern", llvm::FunctionReturnThunksKind::Extern)
++                   .Default(llvm::FunctionReturnThunksKind::Invalid);
++    // SystemZ might want to add support for "expolines."
++    if (!T.isX86())
++      Diags.Report(diag::err_drv_argument_not_allowed_with)
++          << A->getSpelling() << T.getTriple();
++    else if (Val == llvm::FunctionReturnThunksKind::Invalid)
++      Diags.Report(diag::err_drv_invalid_value)
++          << A->getAsString(Args) << A->getValue();
++    else if (Val == llvm::FunctionReturnThunksKind::Extern &&
++             Args.getLastArgValue(OPT_mcmodel_EQ).equals("large"))
++      Diags.Report(diag::err_drv_argument_not_allowed_with)
++          << A->getAsString(Args)
++          << Args.getLastArg(OPT_mcmodel_EQ)->getAsString(Args);
++    else
++      Opts.FunctionReturnThunks = static_cast<unsigned>(Val);
++  }
++
+   if (Opts.PrepareForLTO && Args.hasArg(OPT_mibt_seal))
+     Opts.IBTSeal = 1;
+ 
+diff --git a/clang/lib/Sema/SemaDeclAttr.cpp b/clang/lib/Sema/SemaDeclAttr.cpp
+index bd4d9414365e..8d45fb4465ad 100644
+--- a/clang/lib/Sema/SemaDeclAttr.cpp
++++ b/clang/lib/Sema/SemaDeclAttr.cpp
+@@ -7996,6 +7996,26 @@ static void handleZeroCallUsedRegsAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+   D->addAttr(ZeroCallUsedRegsAttr::Create(S.Context, Kind, AL));
+ }
+ 
++static void handleFunctionReturnThunksAttr(Sema &S, Decl *D,
++                                           const ParsedAttr &AL) {
++  StringRef KindStr;
++  SourceLocation LiteralLoc;
++  if (!S.checkStringLiteralArgumentAttr(AL, 0, KindStr, &LiteralLoc))
++    return;
++
++  FunctionReturnThunksAttr::Kind Kind;
++  if (!FunctionReturnThunksAttr::ConvertStrToKind(KindStr, Kind)) {
++    S.Diag(LiteralLoc, diag::warn_attribute_type_not_supported)
++        << AL << KindStr;
++    return;
++  }
++  // FIXME: it would be good to better handle attribute merging rather than
++  // silently replacing the existing attribute, so long as it does not break
++  // the expected codegen tests.
++  D->dropAttr<FunctionReturnThunksAttr>();
++  D->addAttr(FunctionReturnThunksAttr::Create(S.Context, Kind, AL));
++}
++
+ static void handleSYCLKernelAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+   // The 'sycl_kernel' attribute applies only to function templates.
+   const auto *FD = cast<FunctionDecl>(D);
+@@ -8862,6 +8882,9 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
+   case ParsedAttr::AT_ZeroCallUsedRegs:
+     handleZeroCallUsedRegsAttr(S, D, AL);
+     break;
++  case ParsedAttr::AT_FunctionReturnThunks:
++    handleFunctionReturnThunksAttr(S, D, AL);
++    break;
+ 
+   // Microsoft attributes:
+   case ParsedAttr::AT_LayoutVersion:
+diff --git a/clang/test/CodeGen/attr-function-return.c b/clang/test/CodeGen/attr-function-return.c
+new file mode 100644
+index 000000000000..8b68cfe52afa
+--- /dev/null
++++ b/clang/test/CodeGen/attr-function-return.c
+@@ -0,0 +1,96 @@
++// RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-NOM
++// RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:   -mfunction-return=keep | FileCheck %s \
++// RUN:   --check-prefixes=CHECK,CHECK-KEEP
++// RUN: %clang_cc1 -std=gnu2x -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:  -mfunction-return=thunk-extern | FileCheck %s \
++// RUN:  --check-prefixes=CHECK,CHECK-EXTERN
++
++#if !__has_attribute(function_return)
++#error "missing attribute support for function_return"
++#endif
++
++// CHECK: @keep() [[KEEP:#[0-9]+]]
++__attribute__((function_return("keep"))) void keep(void) {}
++
++// CHECK: @keep2() [[KEEP:#[0-9]+]]
++[[gnu::function_return("keep")]] void keep2(void) {}
++
++// CHECK: @thunk_extern() [[EXTERN:#[0-9]+]]
++__attribute__((function_return("thunk-extern"))) void thunk_extern(void) {}
++
++// CHECK: @thunk_extern2() [[EXTERN:#[0-9]+]]
++[[gnu::function_return("thunk-extern")]] void thunk_extern2(void) {}
++
++// CHECK: @double_thunk_keep() [[KEEP]]
++// clang-format off
++__attribute__((function_return("thunk-extern")))
++__attribute__((function_return("keep")))
++void double_thunk_keep(void) {}
++
++// CHECK: @double_thunk_keep2() [[KEEP]]
++[[gnu::function_return("thunk-extern")]][[gnu::function_return("keep")]]
++void double_thunk_keep2(void) {}
++
++// CHECK: @double_keep_thunk() [[EXTERN]]
++__attribute__((function_return("keep")))
++__attribute__((function_return("thunk-extern")))
++void double_keep_thunk(void) {}
++
++// CHECK: @double_keep_thunk2() [[EXTERN]]
++[[gnu::function_return("thunk-keep")]][[gnu::function_return("thunk-extern")]]
++void double_keep_thunk2(void) {}
++
++// CHECK: @thunk_keep() [[KEEP]]
++__attribute__((function_return("thunk-extern"), function_return("keep")))
++void thunk_keep(void) {}
++
++// CHECK: @thunk_keep2() [[KEEP]]
++[[gnu::function_return("thunk-extern"), gnu::function_return("keep")]]
++void thunk_keep2(void) {}
++
++// CHECK: @keep_thunk() [[EXTERN]]
++__attribute__((function_return("keep"), function_return("thunk-extern")))
++void keep_thunk(void) {}
++
++// CHECK: @keep_thunk2() [[EXTERN]]
++[[gnu::function_return("keep"), gnu::function_return("thunk-extern")]]
++void keep_thunk2(void) {}
++// clang-format on
++
++void undef(void);
++// CHECK: @undef() [[KEEP]]
++__attribute__((function_return("keep"))) void undef(void) {}
++
++void undef2(void);
++// CHECK: @undef2() [[EXTERN]]
++__attribute__((function_return("thunk-extern"))) void undef2(void) {}
++
++__attribute__((function_return("thunk-extern"))) void change_def(void);
++// CHECK: @change_def() [[KEEP]]
++__attribute__((function_return("keep"))) void change_def(void) {}
++
++__attribute__((function_return("keep"))) void change_def2(void);
++// CHECK: @change_def2() [[EXTERN]]
++__attribute__((function_return("thunk-extern"))) void change_def2(void) {}
++
++__attribute__((function_return("thunk-extern"))) void change_def3(void);
++// CHECK: @change_def3() [[KEEP]]
++[[gnu::function_return("keep")]] void change_def3(void) {}
++
++[[gnu::function_return("keep")]] void change_def4(void);
++// CHECK: @change_def4() [[EXTERN]]
++__attribute__((function_return("thunk-extern"))) void change_def4(void) {}
++
++// When there is no -mfunction-return= flag set (NOM) or it's set to keep,
++// we don't emit anything into the IR for unattributed functions.
++
++// CHECK-NOM:    @no_attrs() [[NOATTR:#[0-9]+]]
++// CHECK-KEEP:   @no_attrs() [[NOATTR:#[0-9]+]]
++// CHECK-EXTERN: @no_attrs() [[EXTERN]]
++void no_attrs(void) {}
++
++// CHECK-NOM-NOT:  [[NOATTR]] = {{.*}}fn_ret_thunk_extern
++// CHECK-KEEP-NOT: [[NOATTR]] = {{.*}}fn_ret_thunk_extern
++// CHECK: [[EXTERN]] = {{.*}}fn_ret_thunk_extern
+diff --git a/clang/test/CodeGen/attr-function-return.cpp b/clang/test/CodeGen/attr-function-return.cpp
+new file mode 100644
+index 000000000000..9d58b7b2f857
+--- /dev/null
++++ b/clang/test/CodeGen/attr-function-return.cpp
+@@ -0,0 +1,52 @@
++// RUN: %clang_cc1 -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:   | FileCheck %s --check-prefixes=CHECK,CHECK-NOM
++// RUN: %clang_cc1 -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:   -mfunction-return=keep | FileCheck %s \
++// RUN:   --check-prefixes=CHECK,CHECK-KEEP
++// RUN: %clang_cc1 -triple x86_64-linux-gnu %s -emit-llvm -o - \
++// RUN:  -mfunction-return=thunk-extern | FileCheck %s \
++// RUN:  --check-prefixes=CHECK,CHECK-EXTERN
++
++int foo(void) {
++  // CHECK: @"_ZZ3foovENK3$_0clEv"({{.*}}) [[NOATTR:#[0-9]+]]
++  return []() {
++    return 42;
++  }();
++}
++int bar(void) {
++  // CHECK: @"_ZZ3barvENK3$_1clEv"({{.*}}) [[EXTERN:#[0-9]+]]
++  return []() __attribute__((function_return("thunk-extern"))) {
++    return 42;
++  }
++  ();
++}
++int baz(void) {
++  // CHECK: @"_ZZ3bazvENK3$_2clEv"({{.*}}) [[KEEP:#[0-9]+]]
++  return []() __attribute__((function_return("keep"))) {
++    return 42;
++  }
++  ();
++}
++
++class Foo {
++public:
++  // CHECK: @_ZN3Foo3fooEv({{.*}}) [[EXTERN]]
++  __attribute__((function_return("thunk-extern"))) int foo() { return 42; }
++};
++
++int quux() {
++  Foo my_foo;
++  return my_foo.foo();
++}
++
++// CHECK: @extern_c() [[EXTERN]]
++extern "C" __attribute__((function_return("thunk-extern"))) void extern_c() {}
++extern "C" {
++// CHECK: @extern_c2() [[EXTERN]]
++__attribute__((function_return("thunk-extern"))) void extern_c2() {}
++}
++
++// CHECK-NOM-NOT:   [[NOATTR]] = {{.*}}fn_ret_thunk_extern
++// CHECK-KEEP-NOT:  [[NOATTR]] = {{.*}}fn_ret_thunk_extern
++// CHECK-KEEP-NOT:  [[KEEP]] = {{.*}}fn_ret_thunk_extern
++// CHECK-EXTERN:    [[EXTERN]] = {{.*}}fn_ret_thunk_extern
+diff --git a/clang/test/Driver/mfunction-return.c b/clang/test/Driver/mfunction-return.c
+new file mode 100644
+index 000000000000..fca010aefa55
+--- /dev/null
++++ b/clang/test/Driver/mfunction-return.c
+@@ -0,0 +1,22 @@
++// RUN: %clang -mfunction-return= -### %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-VALID %s
++// RUN: not %clang -mfunction-return -### %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-INVALID %s
++
++// RUN: %clang -mfunction-return=keep -### %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-KEEP %s
++// RUN: %clang -mfunction-return=thunk-extern -### %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-EXTERN %s
++
++// RUN: %clang -mfunction-return=keep -mfunction-return=thunk-extern -### %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-EXTERN %s
++// RUN: %clang -mfunction-return=thunk-extern -mfunction-return=keep -### %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-KEEP %s
++
++// CHECK-VALID:   "-mfunction-return="
++// CHECK-INVALID: error: unknown argument: '-mfunction-return'
++
++// CHECK-KEEP:       "-mfunction-return=keep"
++// CHECK-KEEP-NOT:   "-mfunction-return=thunk-extern"
++// CHECK-EXTERN:     "-mfunction-return=thunk-extern"
++// CHECK-EXTERN-NOT: "-mfunction-return=keep"
+diff --git a/clang/test/Frontend/mfunction-return.c b/clang/test/Frontend/mfunction-return.c
+new file mode 100644
+index 000000000000..9aefa0f8c0a8
+--- /dev/null
++++ b/clang/test/Frontend/mfunction-return.c
+@@ -0,0 +1,20 @@
++// RUN: %clang_cc1 -mfunction-return=keep -triple x86_64-linux-gnu %s
++// RUN: %clang_cc1 -mfunction-return=thunk-extern -triple x86_64-linux-gnu %s
++
++// RUN: not %clang_cc1 -mfunction-return=thunk -triple x86_64-linux-gnu %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-THUNK %s
++// RUN: not %clang_cc1 -mfunction-return=thunk-inline -triple x86_64-linux-gnu %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-INLINE %s
++// RUN: not %clang_cc1 -mfunction-return=invalid -triple x86_64-linux-gnu %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-INVALID %s
++// RUN: not %clang_cc1 -mfunction-return=thunk-extern -triple s390x-linux-gnu %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-TARGET %s
++// RUN: not %clang_cc1 -mfunction-return=thunk-extern -mcmodel=large \
++// RUN:   -triple x86_64-linux-gnu %s 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-LARGE %s
++
++// CHECK-THUNK: error: invalid value 'thunk' in '-mfunction-return=thunk'
++// CHECK-INLINE: error: invalid value 'thunk-inline' in '-mfunction-return=thunk-inline'
++// CHECK-INVALID: error: invalid value 'invalid' in '-mfunction-return=invalid'
++// CHECK-TARGET: error: invalid argument '-mfunction-return=' not allowed with 's390x-unknown-linux-gnu'
++// CHECK-LARGE: error: invalid argument '-mfunction-return=thunk-extern' not allowed with '-mcmodel=large'
+diff --git a/clang/test/Misc/pragma-attribute-supported-attributes-list.test b/clang/test/Misc/pragma-attribute-supported-attributes-list.test
+index b9499229c066..64e2bf619004 100644
+--- a/clang/test/Misc/pragma-attribute-supported-attributes-list.test
++++ b/clang/test/Misc/pragma-attribute-supported-attributes-list.test
+@@ -69,6 +69,7 @@
+ // CHECK-NEXT: ExternalSourceSymbol ((SubjectMatchRule_record, SubjectMatchRule_enum, SubjectMatchRule_enum_constant, SubjectMatchRule_field, SubjectMatchRule_function, SubjectMatchRule_namespace, SubjectMatchRule_objc_category, SubjectMatchRule_objc_implementation, SubjectMatchRule_objc_interface, SubjectMatchRule_objc_method, SubjectMatchRule_objc_property, SubjectMatchRule_objc_protocol, SubjectMatchRule_record, SubjectMatchRule_type_alias, SubjectMatchRule_variable))
+ // CHECK-NEXT: FlagEnum (SubjectMatchRule_enum)
+ // CHECK-NEXT: Flatten (SubjectMatchRule_function)
++// CHECK-NEXT: FunctionReturnThunks (SubjectMatchRule_function)
+ // CHECK-NEXT: GNUInline (SubjectMatchRule_function)
+ // CHECK-NEXT: HIPManaged (SubjectMatchRule_variable)
+ // CHECK-NEXT: Hot (SubjectMatchRule_function)
+diff --git a/clang/test/Sema/attr-function-return-unsupported-target.c b/clang/test/Sema/attr-function-return-unsupported-target.c
+new file mode 100644
+index 000000000000..e00eecc50ad9
+--- /dev/null
++++ b/clang/test/Sema/attr-function-return-unsupported-target.c
+@@ -0,0 +1,16 @@
++// RUN: %clang_cc1 -triple s390x-linux-gnu -fsyntax-only -verify %s
++
++// expected-warning@+1 {{unknown attribute 'function_return' ignored}}
++__attribute__((function_return("keep"))) void x(void) {}
++
++// expected-warning@+1 {{unknown attribute 'function_return' ignored}}
++__attribute__((function_return("thunk"))) void y(void) {}
++
++// expected-warning@+1 {{unknown attribute 'function_return' ignored}}
++__attribute__((function_return("thunk-inline"))) void z(void) {}
++
++// expected-warning@+1 {{unknown attribute 'function_return' ignored}}
++__attribute__((function_return("thunk-extern"))) void w(void) {}
++
++// expected-warning@+1 {{unknown attribute 'function_return' ignored}}
++__attribute__((function_return("invalid"))) void v(void) {}
+diff --git a/clang/test/Sema/attr-function-return.c b/clang/test/Sema/attr-function-return.c
+new file mode 100644
+index 000000000000..c6fe88b821e3
+--- /dev/null
++++ b/clang/test/Sema/attr-function-return.c
+@@ -0,0 +1,23 @@
++// RUN: %clang_cc1 -triple x86_64-linux-gnu -fsyntax-only -verify %s
++
++__attribute__((function_return("keep"))) void x(void) {}
++
++// expected-warning@+1 {{'function_return' attribute argument not supported: thunk}}
++__attribute__((function_return("thunk"))) void y(void) {}
++
++// expected-warning@+1 {{'function_return' attribute argument not supported: thunk-inline}}
++__attribute__((function_return("thunk-inline"))) void z(void) {}
++
++__attribute__((function_return("thunk-extern"))) void w(void) {}
++
++// expected-warning@+1 {{'function_return' attribute argument not supported: invalid}}
++__attribute__((function_return("invalid"))) void v(void) {}
++
++// expected-error@+1 {{'function_return' attribute requires a string}}
++__attribute__((function_return(5))) void a(void) {}
++
++// expected-error@+1 {{'function_return' attribute takes one argument}}
++__attribute__((function_return)) void b(void) {}
++
++// expected-warning@+1 {{'function_return' attribute only applies to functions}}
++__attribute__((function_return)) int c;
+diff --git a/llvm/docs/LangRef.rst b/llvm/docs/LangRef.rst
+index d11283d73087..bdecba2675fa 100644
+--- a/llvm/docs/LangRef.rst
++++ b/llvm/docs/LangRef.rst
+@@ -1678,6 +1678,10 @@ example:
+     Front ends can provide optional ``srcloc`` metadata nodes on call sites of
+     such callees to attach information about where in the source language such a
+     call came from. A string value can be provided as a note.
++``fn_ret_thunk_extern``
++    This attribute tells the code generator that returns from functions should
++    be replaced with jumps to externally-defined architecture-specific symbols.
++    For X86, this symbol's identifier is ``__x86_return_thunk``.
+ ``"frame-pointer"``
+     This attribute tells the code generator whether the function
+     should keep the frame pointer. The code generator may emit the frame pointer
+diff --git a/llvm/include/llvm/Bitcode/LLVMBitCodes.h b/llvm/include/llvm/Bitcode/LLVMBitCodes.h
+index 5d96204ba42a..66d0acbce9ad 100644
+--- a/llvm/include/llvm/Bitcode/LLVMBitCodes.h
++++ b/llvm/include/llvm/Bitcode/LLVMBitCodes.h
+@@ -686,6 +686,7 @@ enum AttributeKindCodes {
+   ATTR_KIND_ALLOCATED_POINTER = 81,
+   ATTR_KIND_ALLOC_KIND = 82,
+   ATTR_KIND_PRESPLIT_COROUTINE = 83,
++  ATTR_KIND_FNRETTHUNK_EXTERN = 84,
+ };
+ 
+ enum ComdatSelectionKindCodes {
+diff --git a/llvm/include/llvm/IR/Attributes.td b/llvm/include/llvm/IR/Attributes.td
+index 7b955b40b0a8..ea4bf80205f8 100644
+--- a/llvm/include/llvm/IR/Attributes.td
++++ b/llvm/include/llvm/IR/Attributes.td
+@@ -102,6 +102,10 @@ def DisableSanitizerInstrumentation: EnumAttr<"disable_sanitizer_instrumentation
+ /// Provide pointer element type to intrinsic.
+ def ElementType : TypeAttr<"elementtype", [ParamAttr]>;
+ 
++/// Whether to keep return instructions, or replace with a jump to an external
++/// symbol.
++def FnRetThunkExtern : EnumAttr<"fn_ret_thunk_extern", [FnAttr]>;
++
+ /// Function may only access memory that is inaccessible from IR.
+ def InaccessibleMemOnly : EnumAttr<"inaccessiblememonly", [FnAttr]>;
+ 
+diff --git a/llvm/include/llvm/Support/CodeGen.h b/llvm/include/llvm/Support/CodeGen.h
+index 71d0ddbfe05e..425d3a3d95d4 100644
+--- a/llvm/include/llvm/Support/CodeGen.h
++++ b/llvm/include/llvm/Support/CodeGen.h
+@@ -103,6 +103,13 @@ namespace llvm {
+     Async = 2, ///< "Asynchronous" unwind tables (instr precise)
+     Default = 2,
+   };
++
++  enum class FunctionReturnThunksKind : unsigned int {
++    Keep = 0,    ///< No function return thunk.
++    Extern = 1,  ///< Replace returns with jump to thunk, don't emit thunk.
++    Invalid = 2, ///< Not used.
++  };
++
+   } // namespace llvm
+ 
+ #endif
+diff --git a/llvm/lib/Bitcode/Reader/BitcodeReader.cpp b/llvm/lib/Bitcode/Reader/BitcodeReader.cpp
+index 6a7cd68d5a2f..a083cfa8d5db 100644
+--- a/llvm/lib/Bitcode/Reader/BitcodeReader.cpp
++++ b/llvm/lib/Bitcode/Reader/BitcodeReader.cpp
+@@ -1490,6 +1490,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
+     return Attribute::DisableSanitizerInstrumentation;
+   case bitc::ATTR_KIND_ELEMENTTYPE:
+     return Attribute::ElementType;
++  case bitc::ATTR_KIND_FNRETTHUNK_EXTERN:
++    return Attribute::FnRetThunkExtern;
+   case bitc::ATTR_KIND_INACCESSIBLEMEM_ONLY:
+     return Attribute::InaccessibleMemOnly;
+   case bitc::ATTR_KIND_INACCESSIBLEMEM_OR_ARGMEMONLY:
+diff --git a/llvm/lib/Bitcode/Writer/BitcodeWriter.cpp b/llvm/lib/Bitcode/Writer/BitcodeWriter.cpp
+index f5ccc80584bd..e2d6dd3cd341 100644
+--- a/llvm/lib/Bitcode/Writer/BitcodeWriter.cpp
++++ b/llvm/lib/Bitcode/Writer/BitcodeWriter.cpp
+@@ -632,6 +632,8 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
+     return bitc::ATTR_KIND_COLD;
+   case Attribute::DisableSanitizerInstrumentation:
+     return bitc::ATTR_KIND_DISABLE_SANITIZER_INSTRUMENTATION;
++  case Attribute::FnRetThunkExtern:
++    return bitc::ATTR_KIND_FNRETTHUNK_EXTERN;
+   case Attribute::Hot:
+     return bitc::ATTR_KIND_HOT;
+   case Attribute::ElementType:
+diff --git a/llvm/lib/Target/X86/CMakeLists.txt b/llvm/lib/Target/X86/CMakeLists.txt
+index fadd272049f4..312d347e2b2c 100644
+--- a/llvm/lib/Target/X86/CMakeLists.txt
++++ b/llvm/lib/Target/X86/CMakeLists.txt
+@@ -74,6 +74,7 @@ set(sources
+   X86PartialReduction.cpp
+   X86RegisterBankInfo.cpp
+   X86RegisterInfo.cpp
++  X86ReturnThunks.cpp
+   X86SelectionDAGInfo.cpp
+   X86ShuffleDecodeConstantPool.cpp
+   X86SpeculativeLoadHardening.cpp
+diff --git a/llvm/lib/Target/X86/X86.h b/llvm/lib/Target/X86/X86.h
+index 7344900f2e31..0ac916527495 100644
+--- a/llvm/lib/Target/X86/X86.h
++++ b/llvm/lib/Target/X86/X86.h
+@@ -132,6 +132,9 @@ FunctionPass *createX86EvexToVexInsts();
+ /// This pass creates the thunks for the retpoline feature.
+ FunctionPass *createX86IndirectThunksPass();
+ 
++/// This pass replaces ret instructions with jmp's to __x86_return thunk.
++FunctionPass *createX86ReturnThunksPass();
++
+ /// This pass ensures instructions featuring a memory operand
+ /// have distinctive <LineNumber, Discriminator> (with respect to eachother)
+ FunctionPass *createX86DiscriminateMemOpsPass();
+@@ -185,6 +188,7 @@ void initializeX86LowerAMXTypeLegacyPassPass(PassRegistry &);
+ void initializeX86PreAMXConfigPassPass(PassRegistry &);
+ void initializeX86LowerTileCopyPass(PassRegistry &);
+ void initializeX86LowerAMXIntrinsicsLegacyPassPass(PassRegistry &);
++void initializeX86ReturnThunksPass(PassRegistry &);
+ 
+ namespace X86AS {
+ enum : unsigned {
+diff --git a/llvm/lib/Target/X86/X86ReturnThunks.cpp b/llvm/lib/Target/X86/X86ReturnThunks.cpp
+new file mode 100644
+index 000000000000..4b203229ba83
+--- /dev/null
++++ b/llvm/lib/Target/X86/X86ReturnThunks.cpp
+@@ -0,0 +1,92 @@
++//==- X86ReturnThunks.cpp - Replace rets with thunks or inline thunks --=//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++/// \file
++///
++/// Pass that replaces ret instructions with a jmp to __x86_return_thunk.
++///
++/// This corresponds to -mfunction-return=thunk-extern or
++/// __attribute__((function_return("thunk-extern").
++///
++/// This pass is a minimal implementation necessary to help mitigate
++/// RetBleed for the Linux kernel.
++///
++/// Should support for thunk or thunk-inline be necessary in the future, then
++/// this pass should be combined with x86-retpoline-thunks which already has
++/// machinery to emit thunks. Until then, YAGNI.
++///
++/// This pass is very similar to x86-lvi-ret.
++///
++//===----------------------------------------------------------------------===//
++
++#include "X86.h"
++#include "X86InstrInfo.h"
++#include "X86Subtarget.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/StringRef.h"
++#include "llvm/ADT/Triple.h"
++#include "llvm/CodeGen/MachineBasicBlock.h"
++#include "llvm/CodeGen/MachineFunction.h"
++#include "llvm/CodeGen/MachineFunctionPass.h"
++#include "llvm/CodeGen/MachineInstr.h"
++#include "llvm/CodeGen/MachineInstrBuilder.h"
++#include "llvm/MC/MCInstrDesc.h"
++#include "llvm/Support/Debug.h"
++
++using namespace llvm;
++
++#define PASS_KEY "x86-return-thunks"
++#define DEBUG_TYPE PASS_KEY
++
++struct X86ReturnThunks final : public MachineFunctionPass {
++  static char ID;
++  X86ReturnThunks() : MachineFunctionPass(ID) {}
++  StringRef getPassName() const override { return "X86 Return Thunks"; }
++  bool runOnMachineFunction(MachineFunction &MF) override;
++};
++
++char X86ReturnThunks::ID = 0;
++
++bool X86ReturnThunks::runOnMachineFunction(MachineFunction &MF) {
++  LLVM_DEBUG(dbgs() << getPassName() << "\n");
++
++  bool Modified = false;
++
++  if (!MF.getFunction().hasFnAttribute(llvm::Attribute::FnRetThunkExtern))
++    return Modified;
++
++  StringRef ThunkName = "__x86_return_thunk";
++  if (MF.getFunction().getName() == ThunkName)
++    return Modified;
++
++  const auto &ST = MF.getSubtarget<X86Subtarget>();
++  const bool Is64Bit = ST.getTargetTriple().getArch() == Triple::x86_64;
++  const unsigned RetOpc = Is64Bit ? X86::RET64 : X86::RET32;
++  SmallVector<MachineInstr *, 16> Rets;
++
++  for (MachineBasicBlock &MBB : MF)
++    for (MachineInstr &Term : MBB.terminators())
++      if (Term.getOpcode() == RetOpc)
++        Rets.push_back(&Term);
++
++  const MCInstrDesc &JMP = ST.getInstrInfo()->get(X86::TAILJMPd);
++
++  for (MachineInstr *Ret : Rets) {
++    BuildMI(Ret->getParent(), Ret->getDebugLoc(), JMP)
++        .addExternalSymbol(ThunkName.data());
++    Ret->eraseFromParent();
++    Modified = true;
++  }
++
++  return Modified;
++}
++
++INITIALIZE_PASS(X86ReturnThunks, PASS_KEY, "X86 Return Thunks", false, false)
++
++FunctionPass *llvm::createX86ReturnThunksPass() {
++  return new X86ReturnThunks();
++}
+diff --git a/llvm/lib/Target/X86/X86TargetMachine.cpp b/llvm/lib/Target/X86/X86TargetMachine.cpp
+index 3818a4955821..776a0dded11f 100644
+--- a/llvm/lib/Target/X86/X86TargetMachine.cpp
++++ b/llvm/lib/Target/X86/X86TargetMachine.cpp
+@@ -94,6 +94,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeX86Target() {
+   initializeX86OptimizeLEAPassPass(PR);
+   initializeX86PartialReductionPass(PR);
+   initializePseudoProbeInserterPass(PR);
++  initializeX86ReturnThunksPass(PR);
+ }
+ 
+ static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
+@@ -569,6 +570,7 @@ void X86PassConfig::addPreEmitPass2() {
+   // hand inspection of the codegen output.
+   addPass(createX86SpeculativeExecutionSideEffectSuppression());
+   addPass(createX86IndirectThunksPass());
++  addPass(createX86ReturnThunksPass());
+ 
+   // Insert extra int3 instructions after trailing call instructions to avoid
+   // issues in the unwinder.
+diff --git a/llvm/lib/Transforms/Utils/CodeExtractor.cpp b/llvm/lib/Transforms/Utils/CodeExtractor.cpp
+index c4ef979790be..4e412aeb3317 100644
+--- a/llvm/lib/Transforms/Utils/CodeExtractor.cpp
++++ b/llvm/lib/Transforms/Utils/CodeExtractor.cpp
+@@ -927,6 +927,7 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
+       case Attribute::AlwaysInline:
+       case Attribute::Cold:
+       case Attribute::DisableSanitizerInstrumentation:
++      case Attribute::FnRetThunkExtern:
+       case Attribute::Hot:
+       case Attribute::NoRecurse:
+       case Attribute::InlineHint:
+diff --git a/llvm/test/Bitcode/attributes.ll b/llvm/test/Bitcode/attributes.ll
+index ee582cab628d..78b54a5cf5c3 100644
+--- a/llvm/test/Bitcode/attributes.ll
++++ b/llvm/test/Bitcode/attributes.ll
+@@ -532,6 +532,9 @@ define void @f86() nosanitize_bounds
+         ret void;
+ }
+ 
++; CHECK: define void @f87() [[FNRETTHUNKEXTERN:#[0-9]+]]
++define void @f87() fn_ret_thunk_extern { ret void }
++
+ ; CHECK: attributes #0 = { noreturn }
+ ; CHECK: attributes #1 = { nounwind }
+ ; CHECK: attributes #2 = { readnone }
+@@ -585,4 +588,5 @@ define void @f86() nosanitize_bounds
+ ; CHECK: attributes #50 = { disable_sanitizer_instrumentation }
+ ; CHECK: attributes #51 = { uwtable(sync) }
+ ; CHECK: attributes #52 = { nosanitize_bounds }
++; CHECK: attributes [[FNRETTHUNKEXTERN]] = { fn_ret_thunk_extern }
+ ; CHECK: attributes #[[NOBUILTIN]] = { nobuiltin }
+diff --git a/llvm/test/CodeGen/X86/O0-pipeline.ll b/llvm/test/CodeGen/X86/O0-pipeline.ll
+index 43d0c0839940..cf0e0d401df2 100644
+--- a/llvm/test/CodeGen/X86/O0-pipeline.ll
++++ b/llvm/test/CodeGen/X86/O0-pipeline.ll
+@@ -71,8 +71,9 @@
+ ; CHECK-NEXT:       Live DEBUG_VALUE analysis
+ ; CHECK-NEXT:       X86 Speculative Execution Side Effect Suppression
+ ; CHECK-NEXT:       X86 Indirect Thunks
++; CHECK-NEXT:       X86 Return Thunks
+ ; CHECK-NEXT:       Check CFA info and insert CFI instructions if needed
+-; CHECK-NEXT:       X86 Load Value Injection (LVI) Ret-Hardening  
++; CHECK-NEXT:       X86 Load Value Injection (LVI) Ret-Hardening
+ ; CHECK-NEXT:       Pseudo Probe Inserter
+ ; CHECK-NEXT:       Lazy Machine Block Frequency Analysis
+ ; CHECK-NEXT:       Machine Optimization Remark Emitter
+diff --git a/llvm/test/CodeGen/X86/attr-function-return.ll b/llvm/test/CodeGen/X86/attr-function-return.ll
+new file mode 100644
+index 000000000000..f40d971ed355
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/attr-function-return.ll
+@@ -0,0 +1,11 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py
++; RUN: llc --mtriple=i386-linux-gnu %s -o - -verify-machineinstrs \
++; RUN:   | FileCheck %s
++; RUN: llc --mtriple=x86_64-linux-gnu %s -o - -verify-machineinstrs \
++; RUN:   | FileCheck %s
++define void @x() fn_ret_thunk_extern {
++; CHECK-LABEL: x:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:    jmp __x86_return_thunk
++  ret void
++}
+diff --git a/llvm/test/CodeGen/X86/attr-function-return.mir b/llvm/test/CodeGen/X86/attr-function-return.mir
+new file mode 100644
+index 000000000000..91c03e862182
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/attr-function-return.mir
+@@ -0,0 +1,62 @@
++# NOTE: Assertions have been autogenerated by utils/update_mir_test_checks.py
++# RUN: llc --mtriple=x86_64-linux-gnu -run-pass=x86-return-thunks \
++# RUN:   -verify-machineinstrs %s -o - | FileCheck %s
++--- |
++  ; ModuleID = 'y.ll'
++  source_filename = "y.ll"
++  target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
++
++  define void @x() #0 {
++    ret void
++  }
++
++  attributes #0 = { fn_ret_thunk_extern }
++
++...
++---
++name:            x
++alignment:       16
++exposesReturnsTwice: false
++legalized:       false
++regBankSelected: false
++selected:        false
++failedISel:      false
++tracksRegLiveness: true
++hasWinCFI:       false
++failsVerification: false
++tracksDebugUserValues: true
++registers:       []
++liveins:         []
++frameInfo:
++  isFrameAddressTaken: false
++  isReturnAddressTaken: false
++  hasStackMap:     false
++  hasPatchPoint:   false
++  stackSize:       0
++  offsetAdjustment: 0
++  maxAlignment:    1
++  adjustsStack:    false
++  hasCalls:        false
++  stackProtector:  ''
++  maxCallFrameSize: 0
++  cvBytesOfCalleeSavedRegisters: 0
++  hasOpaqueSPAdjustment: false
++  hasVAStart:      false
++  hasMustTailInVarArgFunc: false
++  hasTailCall:     false
++  localFrameSize:  0
++  savePoint:       ''
++  restorePoint:    ''
++fixedStack:      []
++stack:           []
++callSites:       []
++debugValueSubstitutions: []
++constants:       []
++machineFunctionInfo: {}
++body:             |
++  bb.0 (%ir-block.0):
++    ; CHECK-LABEL: name: x
++    ; CHECK: TAILJMPd &__x86_return_thunk, implicit $esp, implicit $ssp
++    RET64
++
++...
+diff --git a/llvm/test/CodeGen/X86/opt-pipeline.ll b/llvm/test/CodeGen/X86/opt-pipeline.ll
+index 8552ebc348cb..cab34b96c233 100644
+--- a/llvm/test/CodeGen/X86/opt-pipeline.ll
++++ b/llvm/test/CodeGen/X86/opt-pipeline.ll
+@@ -203,6 +203,7 @@
+ ; CHECK-NEXT:       Live DEBUG_VALUE analysis
+ ; CHECK-NEXT:       X86 Speculative Execution Side Effect Suppression
+ ; CHECK-NEXT:       X86 Indirect Thunks
++; CHECK-NEXT:       X86 Return Thunks
+ ; CHECK-NEXT:       Check CFA info and insert CFI instructions if needed
+ ; CHECK-NEXT:       X86 Load Value Injection (LVI) Ret-Hardening
+ ; CHECK-NEXT:       Pseudo Probe Inserter
+diff --git a/llvm/test/Transforms/Inline/attributes.ll b/llvm/test/Transforms/Inline/attributes.ll
+index 07d1b36e485b..e668013926bf 100644
+--- a/llvm/test/Transforms/Inline/attributes.ll
++++ b/llvm/test/Transforms/Inline/attributes.ll
+@@ -600,6 +600,33 @@ define i32 @test_unsafe-fp-math3(i32 %i) "unsafe-fp-math"="true" {
+ ; CHECK-NEXT: ret i32
+ }
+ 
++; Test that fn_ret_thunk_extern has no CompatRule; inlining is permitted.
++; Test that fn_ret_thunk_extern has no MergeRule; fn_ret_thunk_extern is not
++; propagated or dropped on the caller after inlining.
++define i32 @thunk_extern_callee() fn_ret_thunk_extern {
++; CHECK: @thunk_extern_callee() [[FNRETTHUNK_EXTERN:#[0-9]+]]
++  ret i32 42
++}
++
++define i32 @thunk_keep_caller() {
++; CHECK: @thunk_keep_caller() {
++; CHECK-NEXT: ret i32 42
++  %1 = call i32 @thunk_extern_callee()
++  ret i32 %1
++}
++
++define i32 @thunk_keep_callee() {
++; CHECK: @thunk_keep_callee() {
++  ret i32 42
++}
++
++define i32 @thunk_extern_caller() fn_ret_thunk_extern {
++; CHECK: @thunk_extern_caller() [[FNRETTHUNK_EXTERN]]
++; CHECK-NEXT: ret i32 42
++  %1 = call i32 @thunk_keep_callee()
++  ret i32 %1
++}
++
+ ; CHECK: attributes [[SLH]] = { speculative_load_hardening }
+ ; CHECK: attributes [[FPMAD_FALSE]] = { "less-precise-fpmad"="false" }
+ ; CHECK: attributes [[FPMAD_TRUE]] = { "less-precise-fpmad"="true" }
+@@ -614,3 +641,4 @@ define i32 @test_unsafe-fp-math3(i32 %i) "unsafe-fp-math"="true" {
+ ; CHECK: attributes [[NO_SIGNED_ZEROS_FPMATH_TRUE]] = { "no-signed-zeros-fp-math"="true" }
+ ; CHECK: attributes [[UNSAFE_FPMATH_FALSE]] = { "unsafe-fp-math"="false" }
+ ; CHECK: attributes [[UNSAFE_FPMATH_TRUE]] = { "unsafe-fp-math"="true" }
++; CHECK: attributes [[FNRETTHUNK_EXTERN]] = { fn_ret_thunk_extern }

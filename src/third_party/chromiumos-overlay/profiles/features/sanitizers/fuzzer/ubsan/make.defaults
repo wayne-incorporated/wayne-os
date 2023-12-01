@@ -1,0 +1,11 @@
+# Copyright 2019 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file
+
+# Compiler flags to build all packages with ubsan fuzzing.
+UBSAN_ENABLED_FLAGS="alignment,array-bounds,function,pointer-overflow"
+UBSAN_ENABLED_FLAGS="${UBSAN_ENABLED_FLAGS},signed-integer-overflow,shift,vla-bound,vptr,fuzzer-no-link"
+
+CFLAGS=" -fsanitize=${UBSAN_ENABLED_FLAGS} -fno-sanitize-recover=all"
+CXXFLAGS=" -fsanitize=${UBSAN_ENABLED_FLAGS} -fno-sanitize-recover=all -frtti"
+LDFLAGS=" -Xcompiler -fsanitize=${UBSAN_ENABLED_FLAGS} -Xcompiler -fno-sanitize-recover=all -Wl,--allow-shlib-undefined"

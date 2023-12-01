@@ -1,0 +1,162 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-adaptors.gni")
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [
+    ":install_dbus_config",
+    ":install_init",
+    ":install_minijail_config",
+    ":install_system_service",
+    ":lorgnette",
+    ":lorgnette_cli",
+    "//lorgnette/tmpfiles.d",
+  ]
+  if (use.test) {
+    deps += [ ":lorgnette_unittest" ]
+  }
+}
+
+pkg_config("target_defaults_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libjpeg",
+    "libmetrics",
+    "libpng",
+    "libusb-1.0",
+    "protobuf-lite",
+    "re2",
+    "sane-backends",
+    "system_api",
+    "uuid",
+  ]
+}
+
+config("target_defaults") {
+  cflags_c = [ "-Wextra" ]
+  cflags_cc = [
+    "-Woverloaded-virtual",
+    "-Wconditional-uninitialized",
+  ]
+  configs = [ ":target_defaults_deps" ]
+}
+
+generate_dbus_adaptors("lorgnette-adaptors") {
+  sources = [ "dbus_bindings/org.chromium.lorgnette.Manager.xml" ]
+  dbus_adaptors_out_dir = "include/lorgnette/dbus_adaptors"
+}
+
+generate_dbus_proxies("lorgnette-proxies") {
+  sources = [ "dbus_bindings/org.chromium.lorgnette.Manager.xml" ]
+  proxy_output_file = "include/lorgnette/dbus-proxies.h"
+}
+
+pkg_config("liblorgnette_config") {
+  pkg_deps = [ "libpermission_broker-client" ]
+}
+
+static_library("liblorgnette") {
+  sources = [
+    "daemon.cc",
+    "dbus_service_adaptor.cc",
+    "debug_log.cc",
+    "device_tracker.cc",
+    "enums.cc",
+    "epson_probe.cc",
+    "firewall_manager.cc",
+    "guess_source.cc",
+    "image_readers/image_reader.cc",
+    "image_readers/jpeg_reader.cc",
+    "image_readers/png_reader.cc",
+    "ippusb_device.cc",
+    "manager.cc",
+    "sane_client.cc",
+    "sane_client_fake.cc",
+    "sane_client_impl.cc",
+    "usb/libusb_wrapper_impl.cc",
+    "usb/usb_device.cc",
+    "usb/usb_device_impl.cc",
+    "uuid_util.cc",
+  ]
+  all_dependent_configs = [ ":liblorgnette_config" ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":lorgnette-adaptors" ]
+}
+
+executable("lorgnette") {
+  sources = [ "main.cc" ]
+  configs += [ ":target_defaults" ]
+  install_path = "bin"
+  deps = [ ":liblorgnette" ]
+}
+
+executable("lorgnette_cli") {
+  sources = [
+    "cli/async_handler.cc",
+    "cli/discovery_handler.cc",
+    "cli/scan_handler.cc",
+    "guess_source.cc",
+    "lorgnette_cli.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":lorgnette-proxies" ]
+}
+
+install_config("install_dbus_config") {
+  sources = [ "dbus_permissions/org.chromium.lorgnette.conf" ]
+  install_path = "/etc/dbus-1/system.d"
+}
+
+install_config("install_system_service") {
+  sources = [ "dbus_service/org.chromium.lorgnette.service" ]
+  install_path = "/usr/share/dbus-1/system-services"
+}
+
+install_config("install_init") {
+  sources = [ "init/lorgnette.conf" ]
+  install_path = "/etc/init"
+}
+
+install_config("install_minijail_config") {
+  sources = [ "minijail/lorgnette.conf" ]
+  install_path = "/usr/share/minijail"
+}
+
+if (use.test) {
+  pkg_config("liblorgnette_config_test") {
+    pkg_deps = [ "libpermission_broker-client-test" ]
+  }
+
+  executable("lorgnette_unittest") {
+    sources = [
+      "dbus_service_adaptor_test.cc",
+      "debug_log_test.cc",
+      "device_tracker_test.cc",
+      "firewall_manager_test.cc",
+      "image_readers/jpeg_reader_test.cc",
+      "image_readers/png_reader_test.cc",
+      "ippusb_device_test.cc",
+      "manager_test.cc",
+      "sane_client_test.cc",
+      "test_util.cc",
+      "test_util_test.cc",
+      "usb/libusb_wrapper_fake.cc",
+      "usb/usb_device_fake.cc",
+      "usb/usb_device_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":liblorgnette_config_test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":liblorgnette",
+      "//common-mk/testrunner:testrunner",
+    ]
+  }
+}

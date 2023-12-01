@@ -1,0 +1,36 @@
+From 20325b40da2f8745b95b7ee708ab9d88781a06f9 Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Thu, 13 Jan 2022 18:58:26 +0200
+Subject: [PATCH] configure.ac: fix LD, STRIP and RANLIB hardcoding
+
+When building the project with LLVM/Clang it is desirable to
+be able to use the LLD linker as well as llvm-strip/ranlib
+so replace the path-based hardcoded tool name search with a
+more flexible AC_CHECK_TOOL search.
+
+Suggested-by: Dave Mielke <Dave@Mielke.cc>
+Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.com>
+---
+ configure.ac | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index e4cc69eea..56262d071 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -404,9 +404,9 @@ else
+ fi
+ AC_SUBST([LIBCXXFLAGS])
+ 
+-AC_PATH_TOOL([LD], [ld])
+-AC_PATH_TOOL([STRIP], [strip])
+-AC_PATH_TOOL([RANLIB], [ranlib])
++AC_CHECK_TOOL([LD], [ld])
++AC_CHECK_TOOL([STRIP], [strip])
++AC_CHECK_TOOL([RANLIB], [ranlib])
+ 
+ AC_PROG_AWK
+ AC_PROG_LN_S
+-- 
+2.35.0
+

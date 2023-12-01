@@ -1,0 +1,1 @@
+autotest-capability-chipset-adl-1.0.1.ebuild

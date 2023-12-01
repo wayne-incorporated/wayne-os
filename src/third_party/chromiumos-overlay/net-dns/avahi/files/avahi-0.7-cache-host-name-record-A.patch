@@ -1,0 +1,212 @@
+From: Pranav Batra <batrapranav@chromium.org>
+Subject: Cache mDNS host name records (IPv4, record A) for 12-24 hours after expiration.
+
+By default, the address record for a .local mDNS domain name is removed from the cache after 2 minutes.
+When resolving a host name, if the address record is not found in the cache, avahi attempts to query the
+network for the record. If a response is not received within 5 seconds (see TIMEOUT_MSEC in
+avahi-core/resolve_service.c), avahi will return an error.
+
+With this patch, instead of returning an error, avahi will attempt to query a backup resource record
+cache that holds IPv4 address records (A) for an additional 12-24 hours and if a record is found,
+return that record instead of an error.
+
+Note that as the code block that adds entries to the cache and the code block that queries the cache
+both run under the same process id and thread id, no mutex is necessary.
+
+Also note that avahi is configured with IPv6 support disabled, so there is no need
+to store AAAA records in the backup resource record cache.
+--- a/avahi-core/browse.h
++++ b/avahi-core/browse.h
+@@ -20,6 +20,8 @@
+   USA.
+ ***/
+ 
++#include <time.h>
++
+ #include <avahi-common/llist.h>
+ 
+ #include "core.h"
+@@ -28,6 +30,17 @@
+ #include "dns.h"
+ #include "lookup.h"
+ 
++extern AvahiHashmap *host_cache_archive;
++extern AvahiHashmap *host_cache_current;
++extern AvahiIfIndex host_interface;
++
++typedef struct HostCacheRecord HostCacheRecord;
++
++struct HostCacheRecord {
++    AvahiRecord *record;
++    time_t time;
++};
++
+ typedef struct AvahiSRBLookup AvahiSRBLookup;
+ 
+ struct AvahiSRecordBrowser {
+--- a/avahi-core/resolve-host-name.c
++++ b/avahi-core/resolve-host-name.c
+@@ -84,17 +84,59 @@ static void finish(AvahiSHostNameResolver *r, AvahiResolverEvent event) {
+             }
+             char addr[AVAHI_ADDRESS_STR_MAX];
+             avahi_address_snprint(addr, sizeof(addr), &a);
+-            avahi_log_info("Resolved hostname %s: %s", r->host_name, addr);
+-
++            avahi_log_info("Resolved hostname %s (%s): %s (interface %d, protocol %d, flags %d, IPv4 %s, IPv6 %s, ttl %d)",
++                r->host_name,
++                r->address_record->key->name,
++                addr,
++                r->interface,
++                r->protocol,
++                r->flags,
++                r->record_browser_a?"yes":"no",
++                r->record_browser_aaaa?"yes":"no",
++                r->address_record->ttl);
+             r->callback(r, r->interface, r->protocol, AVAHI_RESOLVER_FOUND, r->address_record->key->name, &a, r->flags, r->userdata);
+             break;
+ 
+         }
+ 
+-        case AVAHI_RESOLVER_FAILURE:
+-            avahi_log_warn("Failed to resolve hostname %s", r->host_name);
+-            r->callback(r, r->interface, r->protocol, event, r->host_name, NULL, r->flags, r->userdata);
++        case AVAHI_RESOLVER_FAILURE: {
++            HostCacheRecord *record = NULL;
++            if (host_cache_current)
++                record = avahi_hashmap_lookup(host_cache_current, r->host_name);
++            if (!record && host_cache_archive)
++                record = avahi_hashmap_lookup(host_cache_archive, r->host_name);
++            if (!record ||
++                !r->record_browser_a ||
++                (r->protocol != AVAHI_PROTO_INET && r->protocol != AVAHI_PROTO_UNSPEC) ||
++                r->address_record) {
++                // Although avahi is configured to only use the IPv4 mDNS broadcast address (224.0.0.251),
++                // it turns out IPv6 host address records (AAAA) can be sent via IPv4.
++                // r->protocol is based on the mDNS broadcast address used and will generally always be
++                // -1 (any protocol) or 0 (IPv4; AVAHI_PROTO_INET).
++                // If an IPv4 address is requested (avahi-resolve-host-name -4), r->record_browser_a will be initialized.
++                // If an IPv6 address is requested (avahi-resolve-host-name -6), r->record_browser_aaaa will be initialized.
++                // Both data structures will be initialized if the address type aprotocol is unspecified.
++                avahi_log_warn("Failed to resolve hostname %s (interface %d, protocol %d, flags %d, IPv4 %s, IPv6 %s)",
++                    r->host_name,
++                    r->interface,
++                    r->protocol,
++                    r->flags,
++                    r->record_browser_a?"yes":"no",
++                    r->record_browser_aaaa?"yes":"no");
++                if (r->address_record)
++                    avahi_log_error("Assertion failed: !r->address_record");
++                r->callback(r, r->interface, r->protocol, event, r->host_name, NULL, r->flags, r->userdata);
++                break;
++            }
++            avahi_log_warn("Using stale mDNS A record for %s (%d seconds old)", r->host_name, time(NULL) - record->time);
++            r->flags = AVAHI_LOOKUP_RESULT_CACHED | AVAHI_LOOKUP_RESULT_MULTICAST; // 5
++            r->protocol = AVAHI_PROTO_INET;
++            if (r->interface <= 0)
++                r->interface = host_interface;
++            r->address_record = avahi_record_ref(record->record);
++            finish(r, AVAHI_RESOLVER_FOUND);
+             break;
++        }
+     }
+ }
+ 
+--- a/avahi-core/server.c
++++ b/avahi-core/server.c
+@@ -26,12 +26,14 @@
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
+ #include <string.h>
++#include <strings.h>
+ #include <sys/utsname.h>
+ #include <unistd.h>
+ #include <errno.h>
+ #include <stdio.h>
+ #include <assert.h>
+ #include <stdlib.h>
++#include <ctype.h>
+ 
+ #include <avahi-common/domain.h>
+ #include <avahi-common/timeval.h>
+@@ -51,6 +53,11 @@
+ 
+ #define AVAHI_DEFAULT_CACHE_ENTRIES_MAX 4096
+ 
++AvahiHashmap *host_cache_archive = NULL;
++AvahiHashmap *host_cache_current = NULL;
++AvahiIfIndex host_interface = AVAHI_IF_UNSPEC;
++time_t host_time = 0;
++
+ static void enum_aux_records(AvahiServer *s, AvahiInterface *i, const char *name, uint16_t type, void (*callback)(AvahiServer *s, AvahiRecord *r, int flush_cache, void* userdata), void* userdata) {
+     assert(s);
+     assert(i);
+@@ -655,6 +662,45 @@ fail:
+     avahi_record_list_flush(s->record_list);
+ }
+ 
++static unsigned string_case_hash(const void *data) {
++    const char *p = data;
++    unsigned hash = 0;
++
++    assert(p);
++
++    for (; *p; p++)
++        hash = 31 * hash + tolower(*p);
++
++    return hash;
++}
++
++static int string_case_equal(const void *a, const void *b) {
++    const char *p = a, *q = b;
++
++    assert(p);
++    assert(q);
++
++    return strcasecmp(p, q) == 0;
++}
++
++static void free_host_record(void* p) {
++    HostCacheRecord *r = p;
++    assert(r);
++    avahi_record_unref(r->record);
++    avahi_free(r);
++}
++
++static AvahiHashmap *new_host_hashmap() {
++    return avahi_hashmap_new(string_case_hash, string_case_equal, avahi_free, free_host_record);
++}
++
++static HostCacheRecord *new_host_record(AvahiRecord *r, time_t t) {
++   HostCacheRecord *record = avahi_new(HostCacheRecord, 1);
++   record->record = avahi_record_ref(r);
++   record->time = t;
++   return record;
++}
++
+ static void handle_response_packet(AvahiServer *s, AvahiDnsPacket *p, AvahiInterface *i, const AvahiAddress *a, int from_local_iface) {
+     unsigned n;
+ 
+@@ -680,6 +726,23 @@ static void handle_response_packet(AvahiServer *s, AvahiDnsPacket *p, AvahiInter
+                     reflect_response(s, i, record, cache_flush);
+                 avahi_cache_update(i->cache, record, cache_flush, a);
+                 avahi_response_scheduler_incoming(i->response_scheduler, record, cache_flush);
++                if (record->key->type == AVAHI_DNS_TYPE_A) {
++                        host_interface = i->hardware->index;
++                        // This is always called before we resolve an address if we've seen valid records.
++                        if (!host_cache_archive)
++                            host_cache_archive = new_host_hashmap();
++                        if (!host_cache_current)
++                            host_cache_current = new_host_hashmap();
++                        time_t current_time = time(NULL);
++                        if (current_time > host_time + 12*3600) { // Rotate the cache every 12 hours.
++                            host_time = current_time;
++                            avahi_hashmap_free(host_cache_archive);
++                            host_cache_archive = host_cache_current;
++                            host_cache_current = new_host_hashmap();
++                        }
++                        avahi_hashmap_remove(host_cache_archive, record->key->name);
++                        avahi_hashmap_replace(host_cache_current, avahi_strdup(record->key->name), new_host_record(record, current_time));
++                }
+             }
+         }
+ 

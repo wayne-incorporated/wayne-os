@@ -1,0 +1,116 @@
+commit a680bc3a31d36d321ccf3801bdcff74d58842bfa
+Author: Nick Desaulniers <ndesaulniers@google.com>
+Date:   Thu Feb 11 09:00:11 2021 -0800
+
+    [clang][Arm] Fix handling of -Wa,-implicit-it=
+    
+    Similiar to D95872, this flag can be set for the assembler directly.
+    Move validation code into a reusable helper function.
+    
+    Link: https://bugs.llvm.org/show_bug.cgi?id=49023
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1270
+    Reported-by: Arnd Bergmann <arnd@kernel.org>
+    Signed-off-by: Nick Desaulniers <ndesaulniers@google.com>
+    
+    Reviewed By: DavidSpickett
+    
+    Differential Revision: https://reviews.llvm.org/D96285
+
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index d2a9ea3c9ef8..c2b195a8088f 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -2304,6 +2304,17 @@ void Clang::DumpCompilationDatabaseFragmentToDir(
+   DumpCompilationDatabase(C, "", Target, Output, Input, Args);
+ }
+ 
++static bool AddARMImplicitITArgs(const ArgList &Args, ArgStringList &CmdArgs,
++                                 StringRef Value) {
++  if (Value == "always" || Value == "never" || Value == "arm" ||
++      Value == "thumb") {
++    CmdArgs.push_back("-mllvm");
++    CmdArgs.push_back(Args.MakeArgString("-arm-implicit-it=" + Value));
++    return true;
++  }
++  return false;
++}
++
+ static void CollectArgsForIntegratedAssembler(Compilation &C,
+                                               const ArgList &Args,
+                                               ArgStringList &CmdArgs,
+@@ -2327,14 +2338,9 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
+   case llvm::Triple::thumbeb:
+     if (Arg *A = Args.getLastArg(options::OPT_mimplicit_it_EQ)) {
+       StringRef Value = A->getValue();
+-      if (Value == "always" || Value == "never" || Value == "arm" ||
+-          Value == "thumb") {
+-        CmdArgs.push_back("-mllvm");
+-        CmdArgs.push_back(Args.MakeArgString("-arm-implicit-it=" + Value));
+-      } else {
++      if (!AddARMImplicitITArgs(Args, CmdArgs, Value))
+         D.Diag(diag::err_drv_unsupported_option_argument)
+             << A->getOption().getName() << Value;
+-      }
+     }
+     break;
+   default:
+@@ -2376,6 +2382,9 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
+       case llvm::Triple::thumbeb:
+       case llvm::Triple::arm:
+       case llvm::Triple::armeb:
++        if (Value.startswith("-mimplicit-it=") &&
++            AddARMImplicitITArgs(Args, CmdArgs, Value.split("=").second))
++          continue;
+         if (Value == "-mthumb")
+           // -mthumb has already been processed in ComputeLLVMTriple()
+           // recognize but skip over here.
+diff --git a/clang/test/Driver/arm-target-as-mimplicit-it.s b/clang/test/Driver/arm-target-as-mimplicit-it.s
+new file mode 100644
+index 000000000000..b13b4918780c
+--- /dev/null
++++ b/clang/test/Driver/arm-target-as-mimplicit-it.s
+@@ -0,0 +1,44 @@
++/// Simple tests for valid input.
++/// -Wa,-implicit-it=
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always %s 2>&1 | FileCheck %s --check-prefix=ALWAYS
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=never %s 2>&1 | FileCheck %s --check-prefix=NEVER
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=arm %s 2>&1 | FileCheck %s --check-prefix=ARM
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=thumb %s 2>&1 | FileCheck %s --check-prefix=THUMB
++/// -Xassembler -mimplicit-it=
++// RUN: %clang -target arm-linux-gnueabi -### -Xassembler -mimplicit-it=always %s 2>&1 | FileCheck %s --check-prefix=ALWAYS
++// RUN: %clang -target arm-linux-gnueabi -### -Xassembler -mimplicit-it=never %s 2>&1 | FileCheck %s --check-prefix=NEVER
++// RUN: %clang -target arm-linux-gnueabi -### -Xassembler -mimplicit-it=arm %s 2>&1 | FileCheck %s --check-prefix=ARM
++// RUN: %clang -target arm-linux-gnueabi -### -Xassembler -mimplicit-it=thumb %s 2>&1 | FileCheck %s --check-prefix=THUMB
++/// Test space separated -Wa,- arguments (latter wins).
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=never -Wa,-mimplicit-it=always %s 2>&1 | FileCheck %s --check-prefix=ALWAYS
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always -Wa,-mimplicit-it=never %s 2>&1 | FileCheck %s --check-prefix=NEVER
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always -Wa,-mimplicit-it=arm %s 2>&1 | FileCheck %s --check-prefix=ARM
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always -Wa,-mimplicit-it=thumb %s 2>&1 | FileCheck %s --check-prefix=THUMB
++/// Test comma separated -Wa,- arguments (latter wins).
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=never,-mimplicit-it=always %s 2>&1 | FileCheck %s --check-prefix=ALWAYS
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always,-mimplicit-it=never %s 2>&1 | FileCheck %s --check-prefix=NEVER
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always,-mimplicit-it=arm %s 2>&1 | FileCheck %s --check-prefix=ARM
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always,-mimplicit-it=thumb %s 2>&1 | FileCheck %s --check-prefix=THUMB
++
++/// Mix -implicit-it= (compiler) with -Wa,-mimplicit-it= (assembler), assembler
++/// takes priority. -mllvm -arm-implicit-it= will be repeated, with the
++/// assembler flag appearing last (latter wins).
++// RUN: %clang -target arm-linux-gnueabi -### -mimplicit-it=never -Wa,-mimplicit-it=always %S/Inputs/wildcard1.c 2>&1 | FileCheck %s --check-prefix=NEVER_ALWAYS
++// RUN: %clang -target arm-linux-gnueabi -### -mimplicit-it=always -Wa,-mimplicit-it=never %S/Inputs/wildcard1.c 2>&1 | FileCheck %s --check-prefix=ALWAYS_NEVER
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=never -mimplicit-it=always %S/Inputs/wildcard1.c 2>&1 | FileCheck %s --check-prefix=ALWAYS_NEVER
++
++/// Test invalid input.
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=foo %s 2>&1 | FileCheck %s --check-prefix=INVALID
++// RUN: %clang -target arm-linux-gnueabi -### -Xassembler -mimplicit-it=foo %s 2>&1 | FileCheck %s --check-prefix=XINVALID
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always -Wa,-mimplicit-it=foo %s 2>&1 | FileCheck %s --check-prefix=INVALID
++// RUN: %clang -target arm-linux-gnueabi -### -Wa,-mimplicit-it=always,-mimplicit-it=foo %s 2>&1 | FileCheck %s --check-prefix=INVALID
++
++
++// ALWAYS: "-mllvm" "-arm-implicit-it=always"
++// NEVER: "-mllvm" "-arm-implicit-it=never"
++// ARM: "-mllvm" "-arm-implicit-it=arm"
++// THUMB: "-mllvm" "-arm-implicit-it=thumb"
++// NEVER_ALWAYS: "-mllvm" "-arm-implicit-it=never" "-mllvm" "-arm-implicit-it=always"
++// ALWAYS_NEVER: "-mllvm" "-arm-implicit-it=always" "-mllvm" "-arm-implicit-it=never"
++// INVALID: error: unsupported argument '-mimplicit-it=foo' to option 'Wa,'
++// XINVALID: error: unsupported argument '-mimplicit-it=foo' to option 'Xassembler'

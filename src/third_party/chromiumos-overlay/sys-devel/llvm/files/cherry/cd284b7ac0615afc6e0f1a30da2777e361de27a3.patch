@@ -1,0 +1,45 @@
+From cd284b7ac0615afc6e0f1a30da2777e361de27a3 Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Tue, 28 Dec 2021 12:48:30 -0800
+Subject: [PATCH] [clang][ARM] re-use arm::isHardTPSupported for hardware TLS
+ check
+
+This conditional check for -mstack-protector-guard=tls got out of sync
+with the conditional check for -mtp=cp15 by me in D114116, because I
+forgot about the similar check added in D113026.
+
+Re-use the code in arm::isHardTPSupported so that these aren't out of
+sync.
+
+Interestingly, our CI reported this when testing
+-mstack-protector-guard=tls; it was only reproducible with Debian's LLVM
+and not upstream LLVM due to this out of tree patch:
+https://salsa.debian.org/pkg-llvm-team/llvm-toolchain/-/blob/snapshot/debian/patches/930008-arm.diff
+
+Fixes: https://github.com/ClangBuiltLinux/linux/issues/1502
+
+Reviewed By: ardb
+
+Differential Revision: https://reviews.llvm.org/D116233
+---
+ clang/lib/Driver/ToolChains/Clang.cpp | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 65347a38490e..2c3439215093 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -3217,9 +3217,7 @@ static void RenderSSPOptions(const Driver &D, const ToolChain &TC,
+         return;
+       }
+       // Check whether the target subarch supports the hardware TLS register
+-      if (arm::getARMSubArchVersionNumber(EffectiveTriple) < 7 &&
+-          llvm::ARM::parseArch(EffectiveTriple.getArchName()) !=
+-              llvm::ARM::ArchKind::ARMV6T2) {
++      if (!arm::isHardTPSupported(EffectiveTriple)) {
+         D.Diag(diag::err_target_unsupported_tp_hard)
+             << EffectiveTriple.getArchName();
+         return;
+-- 
+2.35.1.265.g69c8d7142f-goog
+

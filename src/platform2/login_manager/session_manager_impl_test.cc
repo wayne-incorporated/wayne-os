@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,32 +15,32 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include <base/bind.h>
-#include <base/callback.h>
 #include <base/check.h>
 #include <base/command_line.h>
-#include <base/compiler_specific.h>
 #include <base/files/file_path.h>
 #include <base/files/file_util.h>
 #include <base/files/scoped_file.h>
 #include <base/files/scoped_temp_dir.h>
+#include <base/functional/bind.h>
+#include <base/functional/callback.h>
 #include <base/memory/ptr_util.h>
 #include <base/memory/ref_counted.h>
 #include <base/memory/weak_ptr.h>
 #include <base/notreached.h>
-#include <base/optional.h>
 #include <base/posix/unix_domain_socket.h>
 #include <base/run_loop.h>
 #include <base/strings/string_util.h>
 #include <base/task/single_thread_task_executor.h>
 #include <base/test/bind.h>
 #include <base/test/simple_test_tick_clock.h>
+#include <base/test/test_future.h>
 #include <brillo/cryptohome.h>
 #include <brillo/dbus/dbus_param_writer.h>
 #include <brillo/errors/error.h>
@@ -56,8 +56,10 @@
 #include <libpasswordprovider/password.h>
 #include <libpasswordprovider/password_provider.h>
 
+#include "arc/arc.pb.h"
 #include "bindings/chrome_device_policy.pb.h"
 #include "bindings/device_management_backend.pb.h"
+#include "dbus/login_manager/dbus-constants.h"
 #include "libpasswordprovider/fake_password_provider.h"
 #include "login_manager/blob_util.h"
 #include "login_manager/dbus_test_util.h"
@@ -69,6 +71,7 @@
 #include "login_manager/file_checker.h"
 #include "login_manager/matchers.h"
 #include "login_manager/mock_arc_sideload_status.h"
+#include "login_manager/mock_device_identifier_generator.h"
 #include "login_manager/mock_device_policy_service.h"
 #include "login_manager/mock_file_checker.h"
 #include "login_manager/mock_init_daemon_controller.h"
@@ -79,16 +82,15 @@
 #include "login_manager/mock_policy_key.h"
 #include "login_manager/mock_policy_service.h"
 #include "login_manager/mock_process_manager_service.h"
-#include "login_manager/mock_server_backed_state_key_generator.h"
 #include "login_manager/mock_system_utils.h"
 #include "login_manager/mock_user_policy_service_factory.h"
 #include "login_manager/mock_vpd_process.h"
-#include "login_manager/proto_bindings/arc.pb.h"
 #include "login_manager/proto_bindings/login_screen_storage.pb.h"
 #include "login_manager/proto_bindings/policy_descriptor.pb.h"
 #include "login_manager/secret_util.h"
 #include "login_manager/system_utils_impl.h"
 
+using ::base::test::TestFuture;
 using ::testing::_;
 using ::testing::AnyNumber;
 using ::testing::AtLeast;
@@ -114,10 +116,10 @@ using ::testing::StartsWith;
 using ::testing::StrEq;
 using ::testing::WithArg;
 
-using brillo::cryptohome::home::GetRootPath;
-using brillo::cryptohome::home::kGuestUserName;
+using brillo::cryptohome::home::GetGuestUsername;
 using brillo::cryptohome::home::SanitizeUserName;
 using brillo::cryptohome::home::SetSystemSalt;
+using brillo::cryptohome::home::Username;
 
 ACTION_TEMPLATE(MovePointee,
                 HAS_1_TEMPLATE_PARAMS(int, k),
@@ -273,8 +275,8 @@ constexpr char kLoginScreenStoragePath[] = "login_screen_storage";
 #if USE_CHEETS
 constexpr char kDefaultLocale[] = "en_US";
 
-UpgradeArcContainerRequest CreateUpgradeArcContainerRequest() {
-  UpgradeArcContainerRequest request;
+arc::UpgradeArcContainerRequest CreateUpgradeArcContainerRequest() {
+  arc::UpgradeArcContainerRequest request;
   request.set_account_id(kSaneEmail);
   request.set_locale(kDefaultLocale);
   return request;
@@ -312,6 +314,10 @@ std::string ExpectedSkipGmsCoreCacheSetupFlagValue(bool enabled) {
   return base::StringPrintf("SKIP_GMS_CORE_CACHE_SETUP=%d", enabled);
 }
 
+std::string ExpectedSkipTtsCacheSetupFlagValue(bool enabled) {
+  return base::StringPrintf("SKIP_TTS_CACHE_SETUP=%d", enabled);
+}
+
 #endif  // USE_CHEETS
 
 }  // namespace
@@ -321,14 +327,16 @@ class SessionManagerImplTest : public ::testing::Test,
  public:
   SessionManagerImplTest()
       : bus_(new FakeBus()),
-        state_key_generator_(&utils_, &metrics_),
+        device_identifier_generator_(&utils_, &metrics_),
         android_container_(kAndroidPid),
         powerd_proxy_(new dbus::MockObjectProxy(
             nullptr, "", dbus::ObjectPath("/fake/powerd"))),
         system_clock_proxy_(new dbus::MockObjectProxy(
             nullptr, "", dbus::ObjectPath("/fake/clock"))),
         debugd_proxy_(new dbus::MockObjectProxy(
-            nullptr, "", dbus::ObjectPath("/fake/debugd"))) {}
+            nullptr, "", dbus::ObjectPath("/fake/debugd"))),
+        fwmp_proxy_(new dbus::MockObjectProxy(
+            nullptr, "", dbus::ObjectPath("/fake/fwmp"))) {}
   SessionManagerImplTest(const SessionManagerImplTest&) = delete;
   SessionManagerImplTest& operator=(const SessionManagerImplTest&) = delete;
 
@@ -377,10 +385,11 @@ class SessionManagerImplTest : public ::testing::Test,
     arc_sideload_status_ = new MockArcSideloadStatus();
     impl_ = std::make_unique<SessionManagerImpl>(
         this /* delegate */, base::WrapUnique(init_controller_), bus_.get(),
-        &key_gen_, &state_key_generator_, &manager_, &metrics_, &nss_,
-        base::nullopt, &utils_, &crossystem_, &vpd_process_, &owner_key_,
+        &key_gen_, &device_identifier_generator_, &manager_, &metrics_, &nss_,
+        std::nullopt, &utils_, &crossystem_, &vpd_process_, &owner_key_,
         &android_container_, &install_attributes_reader_, powerd_proxy_.get(),
-        system_clock_proxy_.get(), debugd_proxy_.get(), arc_sideload_status_);
+        system_clock_proxy_.get(), debugd_proxy_.get(), fwmp_proxy_.get(),
+        arc_sideload_status_);
     impl_->SetSystemClockLastSyncInfoRetryDelayForTesting(base::TimeDelta());
     impl_->SetUiLogSymlinkPathForTesting(log_symlink_);
 
@@ -398,10 +407,6 @@ class SessionManagerImplTest : public ::testing::Test,
     ON_CALL(*user_policy_service_factory_, Create(_))
         .WillByDefault(
             Invoke(this, &SessionManagerImplTest::CreateUserPolicyService));
-    ON_CALL(*user_policy_service_factory_, CreateForHiddenUserHome(_))
-        .WillByDefault(Invoke(
-            this,
-            &SessionManagerImplTest::ReturnUserPolicyServiceForHiddenUserHome));
 
     device_local_accounts_dir_ =
         tmpdir_.GetPath().Append(kDeviceLocalAccountsDir);
@@ -416,7 +421,7 @@ class SessionManagerImplTest : public ::testing::Test,
 
     // Start at an arbitrary non-zero time.
     tick_clock_ = new base::SimpleTestTickClock();
-    tick_clock_->SetNowTicks(base::TimeTicks() + base::TimeDelta::FromHours(1));
+    tick_clock_->SetNowTicks(base::TimeTicks() + base::Hours(1));
     impl_->SetTickClockForTesting(base::WrapUnique(tick_clock_));
 
     login_screen_storage_path_ =
@@ -512,11 +517,6 @@ class SessionManagerImplTest : public ::testing::Test,
       return *this;
     }
 
-    StartArcInstanceExpectationsBuilder& SetDisableSystemDefaultApp(bool v) {
-      disable_system_default_app_ = v;
-      return *this;
-    }
-
     StartArcInstanceExpectationsBuilder& SetDisableMediaStoreMaintenance(
         bool v) {
       disable_media_store_maintenance_ = v;
@@ -528,13 +528,34 @@ class SessionManagerImplTest : public ::testing::Test,
       return *this;
     }
 
+    StartArcInstanceExpectationsBuilder& SetDisableUreadahead(bool v) {
+      disable_ureadahead_ = v;
+      return *this;
+    }
+
+    StartArcInstanceExpectationsBuilder& SetEnableNotificationRefresh(bool v) {
+      enable_notification_refresh_ = v;
+      return *this;
+    }
+
+    StartArcInstanceExpectationsBuilder& SetEnableConsumerAutoUpdateToggle(
+        int v) {
+      enable_consumer_auto_update_toggle_ = v;
+      return *this;
+    }
+
+    StartArcInstanceExpectationsBuilder& SetEnablePrivacyHubForChrome(int v) {
+      enable_privacy_hub_for_chrome_ = v;
+      return *this;
+    }
+
     StartArcInstanceExpectationsBuilder& SetArcGeneratePai(bool v) {
       arc_generate_pai_ = v;
       return *this;
     }
 
     StartArcInstanceExpectationsBuilder& SetPlayStoreAutoUpdate(
-        StartArcMiniContainerRequest_PlayStoreAutoUpdate v) {
+        arc::StartArcMiniInstanceRequest_PlayStoreAutoUpdate v) {
       play_store_auto_update_ = v;
       return *this;
     }
@@ -545,8 +566,18 @@ class SessionManagerImplTest : public ::testing::Test,
     }
 
     StartArcInstanceExpectationsBuilder& SetDalvikMemoryProfile(
-        StartArcMiniContainerRequest_DalvikMemoryProfile v) {
+        arc::StartArcMiniInstanceRequest_DalvikMemoryProfile v) {
       dalvik_memory_profile_ = v;
+      return *this;
+    }
+
+    StartArcInstanceExpectationsBuilder& SetEnableTTSCaching(bool v) {
+      enable_tts_caching_ = v;
+      return *this;
+    }
+
+    StartArcInstanceExpectationsBuilder& SetHostUreadaheadGeneration(bool v) {
+      host_ureadahead_generation_ = v;
       return *this;
     }
 
@@ -560,12 +591,20 @@ class SessionManagerImplTest : public ::testing::Test,
               std::to_string(arc_file_picker_experiment_),
           "ARC_CUSTOM_TABS_EXPERIMENT=" +
               std::to_string(arc_custom_tab_experiment_),
-          "DISABLE_SYSTEM_DEFAULT_APP=" +
-              std::to_string(disable_system_default_app_),
           "DISABLE_MEDIA_STORE_MAINTENANCE=" +
               std::to_string(disable_media_store_maintenance_),
           "DISABLE_DOWNLOAD_PROVIDER=" +
               std::to_string(disable_download_provider_),
+          "DISABLE_UREADAHEAD=" + std::to_string(disable_ureadahead_),
+          "ENABLE_CONSUMER_AUTO_UPDATE_TOGGLE=" +
+              std::to_string(enable_consumer_auto_update_toggle_),
+          "ENABLE_NOTIFICATIONS_REFRESH=" +
+              std::to_string(enable_notification_refresh_),
+          "ENABLE_PRIVACY_HUB_FOR_CHROME=" +
+              std::to_string(enable_privacy_hub_for_chrome_),
+          "ENABLE_TTS_CACHING=" + std::to_string(enable_tts_caching_),
+          "HOST_UREADAHEAD_GENERATION=" +
+              std::to_string(host_ureadahead_generation_),
       });
 
       if (arc_generate_pai_)
@@ -577,12 +616,12 @@ class SessionManagerImplTest : public ::testing::Test,
       }
 
       switch (play_store_auto_update_) {
-        case StartArcMiniContainerRequest::AUTO_UPDATE_DEFAULT:
+        case arc::StartArcMiniInstanceRequest::AUTO_UPDATE_DEFAULT:
           break;
-        case StartArcMiniContainerRequest::AUTO_UPDATE_ON:
+        case arc::StartArcMiniInstanceRequest::AUTO_UPDATE_ON:
           result.emplace_back("PLAY_STORE_AUTO_UPDATE=1");
           break;
-        case StartArcMiniContainerRequest::AUTO_UPDATE_OFF:
+        case arc::StartArcMiniInstanceRequest::AUTO_UPDATE_OFF:
           result.emplace_back("PLAY_STORE_AUTO_UPDATE=0");
           break;
         default:
@@ -590,15 +629,15 @@ class SessionManagerImplTest : public ::testing::Test,
       }
 
       switch (dalvik_memory_profile_) {
-        case StartArcMiniContainerRequest::MEMORY_PROFILE_DEFAULT:
+        case arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_DEFAULT:
           break;
-        case StartArcMiniContainerRequest::MEMORY_PROFILE_4G:
+        case arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_4G:
           result.emplace_back("DALVIK_MEMORY_PROFILE=4G");
           break;
-        case StartArcMiniContainerRequest::MEMORY_PROFILE_8G:
+        case arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_8G:
           result.emplace_back("DALVIK_MEMORY_PROFILE=8G");
           break;
-        case StartArcMiniContainerRequest::MEMORY_PROFILE_16G:
+        case arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_16G:
           result.emplace_back("DALVIK_MEMORY_PROFILE=16G");
           break;
         default:
@@ -614,15 +653,22 @@ class SessionManagerImplTest : public ::testing::Test,
     bool arc_file_picker_experiment_ = false;
     bool arc_custom_tab_experiment_ = false;
 
-    bool disable_system_default_app_ = false;
     bool disable_media_store_maintenance_ = false;
     bool disable_download_provider_ = false;
+    bool disable_ureadahead_ = false;
+    bool enable_consumer_auto_update_toggle_ = false;
+    bool enable_notification_refresh_ = false;
+    bool enable_privacy_hub_for_chrome_ = false;
+    bool enable_tts_caching_ = false;
+    bool host_ureadahead_generation_ = false;
     bool arc_generate_pai_ = false;
-    StartArcMiniContainerRequest_PlayStoreAutoUpdate play_store_auto_update_ =
-        StartArcMiniContainerRequest_PlayStoreAutoUpdate_AUTO_UPDATE_DEFAULT;
+    arc::StartArcMiniInstanceRequest_PlayStoreAutoUpdate
+        play_store_auto_update_ = arc::
+            StartArcMiniInstanceRequest_PlayStoreAutoUpdate_AUTO_UPDATE_DEFAULT;
     int arc_lcd_density_ = -1;
-    StartArcMiniContainerRequest_DalvikMemoryProfile dalvik_memory_profile_ =
-        StartArcMiniContainerRequest_DalvikMemoryProfile_MEMORY_PROFILE_DEFAULT;
+    arc::StartArcMiniInstanceRequest_DalvikMemoryProfile
+        dalvik_memory_profile_ =
+            arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_DEFAULT;
   };
 
   class UpgradeContainerExpectationsBuilder {
@@ -686,8 +732,23 @@ class SessionManagerImplTest : public ::testing::Test,
       return *this;
     }
 
-    UpgradeContainerExpectationsBuilder& SetManagementTransition(int v) {
+    UpgradeContainerExpectationsBuilder& SetEnableArcNearbyShare(int v) {
+      enable_arc_nearby_share_ = v;
+      return *this;
+    }
+
+    UpgradeContainerExpectationsBuilder& SetDisableUreadahead(bool v) {
+      disable_ureadahead_ = v;
+      return *this;
+    }
+
+    UpgradeContainerExpectationsBuilder& SetManagementTransition(bool v) {
       management_transition_ = v;
+      return *this;
+    }
+
+    UpgradeContainerExpectationsBuilder& SetSkipTtsCache(bool v) {
+      skip_tts_cache_ = v;
       return *this;
     }
 
@@ -703,9 +764,12 @@ class SessionManagerImplTest : public ::testing::Test,
           "IS_DEMO_SESSION=" + std::to_string(is_demo_session_),
           "MANAGEMENT_TRANSITION=" + std::to_string(management_transition_),
           "ENABLE_ADB_SIDELOAD=" + std::to_string(enable_adb_sideload_),
+          "ENABLE_ARC_NEARBY_SHARE=" + std::to_string(enable_arc_nearby_share_),
+          "DISABLE_UREADAHEAD=" + std::to_string(disable_ureadahead_),
           ExpectedSkipPackagesCacheSetupFlagValue(skip_packages_cache_),
           ExpectedCopyPackagesCacheFlagValue(copy_packages_cache_),
           ExpectedSkipGmsCoreCacheSetupFlagValue(skip_gms_core_cache_),
+          ExpectedSkipTtsCacheSetupFlagValue(skip_tts_cache_),
           "LOCALE=" + locale_, "PREFERRED_LANGUAGES=" + preferred_languages_};
     }
 
@@ -721,6 +785,9 @@ class SessionManagerImplTest : public ::testing::Test,
     std::string preferred_languages_;
     int management_transition_ = 0;
     bool enable_adb_sideload_ = false;
+    bool enable_arc_nearby_share_ = false;
+    bool disable_ureadahead_ = false;
+    bool skip_tts_cache_ = false;
   };
 #endif
 
@@ -738,7 +805,7 @@ class SessionManagerImplTest : public ::testing::Test,
   }
 
   void ExpectGuestSession() {
-    ExpectSessionBoilerplate(kGuestUserName, true /* guest */,
+    ExpectSessionBoilerplate(*GetGuestUsername(), true /* guest */,
                              false /* for_owner */);
   }
 
@@ -765,33 +832,23 @@ class SessionManagerImplTest : public ::testing::Test,
                                          false);  // key_gen
   }
 
-  void ExpectStartSessionActiveDirectory(const string& account_id_string) {
-    ExpectStartSessionUnownedBoilerplate(account_id_string,
-                                         false,   // mitigating
-                                         false);  // key_gen
-  }
-
   void ExpectLockScreen() { expected_locks_ = 1; }
 
-  void ExpectDeviceRestart() { expected_restarts_ = 1; }
+  // Since expected_restarts_ is 0 by default, ExpectDeviceRestart(0) initially
+  // is equivalent to no-op. In the tests ExpectDeviceRestart(0) is used
+  // to make the setup more explicit.
+  void ExpectDeviceRestart(uint32_t count) { expected_restarts_ = count; }
 
   void ExpectStorePolicy(MockDevicePolicyService* service,
                          const std::vector<uint8_t>& policy_blob,
-                         int flags,
-                         SignatureCheck signature_check) {
-    EXPECT_CALL(*service, Store(MakeChromePolicyNamespace(), policy_blob, flags,
-                                signature_check, _))
-        .WillOnce(Return(true));
-  }
-
-  void ExpectDeletePolicy(MockDevicePolicyService* service) {
+                         int flags) {
     EXPECT_CALL(*service,
-                Delete(IsComponentNamespace(), SignatureCheck::kDisabled))
+                Store(MakeChromePolicyNamespace(), policy_blob, flags, _))
         .WillOnce(Return(true));
   }
 
   void ExpectNoStorePolicy(MockDevicePolicyService* service) {
-    EXPECT_CALL(*service, Store(_, _, _, _, _)).Times(0);
+    EXPECT_CALL(*service, Store(_, _, _, _)).Times(0);
   }
 
   void ExpectAndRunStartSession(const string& email) {
@@ -805,7 +862,7 @@ class SessionManagerImplTest : public ::testing::Test,
   void ExpectAndRunGuestSession() {
     ExpectGuestSession();
     brillo::ErrorPtr error;
-    EXPECT_TRUE(impl_->StartSession(&error, kGuestUserName, kNothing));
+    EXPECT_TRUE(impl_->StartSession(&error, *GetGuestUsername(), kNothing));
     EXPECT_FALSE(error.get());
     VerifyAndClearExpectations();
   }
@@ -816,12 +873,6 @@ class SessionManagerImplTest : public ::testing::Test,
         std::make_unique<MockPolicyService>();
     user_policy_services_[username] = policy_service.get();
     return policy_service;
-  }
-
-  std::unique_ptr<PolicyService> ReturnUserPolicyServiceForHiddenUserHome(
-      const string& username) {
-    EXPECT_EQ(username, hidden_user_home_expected_username_);
-    return std::move(hidden_user_home_policy_service_);
   }
 
   void SetDevicePolicy(const em::ChromeDeviceSettingsProto& settings) {
@@ -840,7 +891,7 @@ class SessionManagerImplTest : public ::testing::Test,
 
     brillo::ErrorPtr error;
     EXPECT_TRUE(impl_->StartArcMiniContainer(
-        &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+        &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
     VerifyAndClearExpectations();
   }
 #endif
@@ -879,7 +930,8 @@ class SessionManagerImplTest : public ::testing::Test,
 
   base::FilePath GetDeviceLocalAccountPolicyPath(
       const std::string& account_id) {
-    return device_local_accounts_dir_.Append(SanitizeUserName(account_id))
+    return device_local_accounts_dir_
+        .Append(*SanitizeUserName(Username(account_id)))
         .Append(DeviceLocalAccountManager::kPolicyDir)
         .Append(PolicyService::kChromePolicyFileName);
   }
@@ -929,17 +981,11 @@ class SessionManagerImplTest : public ::testing::Test,
   MockArcSideloadStatus* arc_sideload_status_ = nullptr;
   base::SimpleTestTickClock* tick_clock_ = nullptr;
   map<string, MockPolicyService*> user_policy_services_;
-  // The username which is expected to be passed to
-  // MockUserPolicyServiceFactory::CreateForHiddenUserHome.
-  std::string hidden_user_home_expected_username_;
-  // The policy service which shall be returned from
-  // MockUserPolicyServiceFactory::CreateForHiddenUserHome.
-  std::unique_ptr<MockPolicyService> hidden_user_home_policy_service_;
   em::PolicyFetchResponse device_policy_;
 
   scoped_refptr<FakeBus> bus_;
   MockKeyGenerator key_gen_;
-  MockServerBackedStateKeyGenerator state_key_generator_;
+  MockDeviceIdentifierGenerator device_identifier_generator_;
   MockProcessManagerService manager_;
   MockMetrics metrics_;
   MockNssUtil nss_;
@@ -959,6 +1005,7 @@ class SessionManagerImplTest : public ::testing::Test,
   dbus::ObjectProxy::WaitForServiceToBeAvailableCallback available_callback_;
 
   scoped_refptr<dbus::MockObjectProxy> debugd_proxy_;
+  scoped_refptr<dbus::MockObjectProxy> fwmp_proxy_;
 
   password_provider::FakePasswordProvider* password_provider_ = nullptr;
 
@@ -987,18 +1034,24 @@ class SessionManagerImplTest : public ::testing::Test,
   void ExpectSessionBoilerplate(const string& account_id_string,
                                 bool guest,
                                 bool for_owner) {
-    EXPECT_CALL(manager_, SetBrowserSessionForUser(
-                              StrEq(account_id_string),
-                              StrEq(SanitizeUserName(account_id_string))))
+    EXPECT_CALL(manager_,
+                SetBrowserSessionForUser(
+                    StrEq(account_id_string),
+                    StrEq(*SanitizeUserName(Username(account_id_string)))))
         .Times(1);
     // Expect initialization of the device policy service, return success.
-    EXPECT_CALL(*device_policy_service_,
-                CheckAndHandleOwnerLogin(StrEq(account_id_string), _, _, _))
-        .WillOnce(DoAll(SetArgPointee<2>(for_owner), Return(true)));
-    // Confirm that the key is present.
-    EXPECT_CALL(*device_policy_service_, KeyMissing()).WillOnce(Return(false));
+    EXPECT_CALL(*device_policy_service_, UserIsOwner)
+        .WillOnce(Return(for_owner));
+    if (for_owner) {
+      EXPECT_CALL(*device_policy_service_,
+                  HandleOwnerLogin(StrEq(account_id_string), _, _))
+          .WillOnce(Return(true));
+      // Confirm that the key is present.
+      EXPECT_CALL(*device_policy_service_, KeyMissing())
+          .Times(2)
+          .WillRepeatedly(Return(false));
+    }
 
-    EXPECT_CALL(metrics_, SendLoginUserType(false, guest, for_owner)).Times(1);
     EXPECT_CALL(*init_controller_,
                 TriggerImpulse(SessionManagerImpl::kStartUserSessionImpulse,
                                ElementsAre(StartsWith("CHROMEOS_USER=")),
@@ -1015,19 +1068,20 @@ class SessionManagerImplTest : public ::testing::Test,
                                             bool key_gen) {
     CHECK(!(mitigating && key_gen));
 
-    EXPECT_CALL(manager_, SetBrowserSessionForUser(
-                              StrEq(account_id_string),
-                              StrEq(SanitizeUserName(account_id_string))))
+    EXPECT_CALL(manager_,
+                SetBrowserSessionForUser(
+                    StrEq(account_id_string),
+                    StrEq(*SanitizeUserName(Username(account_id_string)))))
         .Times(1);
 
     // Expect initialization of the device policy service, return success.
-    EXPECT_CALL(*device_policy_service_,
-                CheckAndHandleOwnerLogin(StrEq(account_id_string), _, _, _))
-        .WillOnce(DoAll(SetArgPointee<2>(false), Return(true)));
+    EXPECT_CALL(*device_policy_service_, UserIsOwner).WillOnce(Return(false));
 
     // Indicate that there is no owner key in order to trigger a new one to be
     // generated.
-    EXPECT_CALL(*device_policy_service_, KeyMissing()).WillOnce(Return(true));
+    EXPECT_CALL(*device_policy_service_, KeyMissing())
+        .Times(2)
+        .WillRepeatedly(Return(true));
     EXPECT_CALL(*device_policy_service_, Mitigating())
         .WillRepeatedly(Return(mitigating));
     if (key_gen)
@@ -1035,7 +1089,6 @@ class SessionManagerImplTest : public ::testing::Test,
     else
       EXPECT_CALL(key_gen_, Start(_, _)).Times(0);
 
-    EXPECT_CALL(metrics_, SendLoginUserType(false, false, false)).Times(1);
     EXPECT_CALL(*init_controller_,
                 TriggerImpulse(SessionManagerImpl::kStartUserSessionImpulse,
                                ElementsAre(StartsWith("CHROMEOS_USER=")),
@@ -1062,7 +1115,9 @@ class SessionManagerImplTest : public ::testing::Test,
 class SessionManagerPackagesCacheTest
     : public SessionManagerImplTest,
       public testing::WithParamInterface<
-          std::tuple<UpgradeArcContainerRequest_PackageCacheMode, bool>> {
+          std::tuple<arc::UpgradeArcContainerRequest_PackageCacheMode,
+                     bool,
+                     bool>> {
  public:
   SessionManagerPackagesCacheTest() = default;
   SessionManagerPackagesCacheTest(const SessionManagerPackagesCacheTest&) =
@@ -1076,7 +1131,7 @@ class SessionManagerPackagesCacheTest
 class SessionManagerPlayStoreAutoUpdateTest
     : public SessionManagerImplTest,
       public testing::WithParamInterface<
-          StartArcMiniContainerRequest_PlayStoreAutoUpdate> {
+          arc::StartArcMiniInstanceRequest_PlayStoreAutoUpdate> {
  public:
   SessionManagerPlayStoreAutoUpdateTest() = default;
   SessionManagerPlayStoreAutoUpdateTest(
@@ -1090,7 +1145,7 @@ class SessionManagerPlayStoreAutoUpdateTest
 class SessionManagerDalvikMemoryProfileTest
     : public SessionManagerImplTest,
       public testing::WithParamInterface<
-          StartArcMiniContainerRequest_DalvikMemoryProfile> {
+          arc::StartArcMiniInstanceRequest_DalvikMemoryProfile> {
  public:
   SessionManagerDalvikMemoryProfileTest() = default;
   SessionManagerDalvikMemoryProfileTest(
@@ -1242,6 +1297,20 @@ TEST_F(SessionManagerImplTest, StartSession_TwoUsers) {
   EXPECT_FALSE(error.get());
 }
 
+TEST_F(SessionManagerImplTest, StartSession_TwoUsers_MultiUserSession) {
+  // Test that starting an extra session on top of the primary user i.e.
+  // multi-user session, results in calling of |SetMultiUserSessionStarted()|.
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartSession(&error, kSaneEmail, kNothing));
+  EXPECT_FALSE(error.get());
+
+  EXPECT_CALL(manager_, SetMultiUserSessionStarted());
+  constexpr char kEmail2[] = "user2@somewhere";
+  EXPECT_TRUE(impl_->StartSession(&error, kEmail2, kNothing));
+  EXPECT_FALSE(error.get());
+  VerifyAndClearExpectations();
+}
+
 TEST_F(SessionManagerImplTest, StartSession_OwnerAndOther) {
   ExpectStartSessionUnowned(kSaneEmail);
   brillo::ErrorPtr error;
@@ -1270,6 +1339,8 @@ TEST_F(SessionManagerImplTest, StartSession_OwnerRace) {
 
 TEST_F(SessionManagerImplTest, StartSession_BadNssDB) {
   nss_.MakeBadDB();
+  // Force SessionManagerImpl to attempt opening the NSS database.
+  EXPECT_CALL(*device_policy_service_, KeyMissing).WillOnce(Return(true));
   brillo::ErrorPtr error;
   EXPECT_FALSE(impl_->StartSession(&error, kSaneEmail, kNothing));
   ASSERT_TRUE(error.get());
@@ -1277,11 +1348,11 @@ TEST_F(SessionManagerImplTest, StartSession_BadNssDB) {
 }
 
 TEST_F(SessionManagerImplTest, StartSession_DevicePolicyFailure) {
+  EXPECT_CALL(*device_policy_service_, UserIsOwner).WillOnce(Return(true));
   // Upon the owner login check, return an error.
-
   EXPECT_CALL(*device_policy_service_,
-              CheckAndHandleOwnerLogin(StrEq(kSaneEmail), _, _, _))
-      .WillOnce(WithArg<3>(Invoke([](brillo::ErrorPtr* error) {
+              HandleOwnerLogin(StrEq(kSaneEmail), _, _))
+      .WillOnce(WithArg<2>(Invoke([](brillo::ErrorPtr* error) {
         *error = CreateError(dbus_error::kPubkeySetIllegal, "test");
         return false;
       })));
@@ -1300,15 +1371,6 @@ TEST_F(SessionManagerImplTest, StartSession_Owner) {
 
 TEST_F(SessionManagerImplTest, StartSession_KeyMitigation) {
   ExpectStartSessionOwnerLost(kSaneEmail);
-  brillo::ErrorPtr error;
-  EXPECT_TRUE(impl_->StartSession(&error, kSaneEmail, kNothing));
-  EXPECT_FALSE(error.get());
-}
-
-// Ensure that starting Active Directory session does not create owner key.
-TEST_F(SessionManagerImplTest, StartSession_ActiveDirectorManaged) {
-  SetDeviceMode("enterprise_ad");
-  ExpectStartSessionActiveDirectory(kSaneEmail);
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartSession(&error, kSaneEmail, kNothing));
   EXPECT_FALSE(error.get());
@@ -1368,15 +1430,14 @@ TEST_F(SessionManagerImplTest, LoginScreenStorage_StoreEphemeral) {
   EXPECT_FALSE(error.get());
   EXPECT_FALSE(base::PathExists(GetTestLoginScreenStoragePath(kTestKey)));
 
-  brillo::dbus_utils::FileDescriptor out_value_fd;
+  base::ScopedFD out_value_fd;
   uint64_t out_value_size;
   impl_->LoginScreenStorageRetrieve(&error, kTestKey, &out_value_size,
                                     &out_value_fd);
   EXPECT_FALSE(error.get());
-  base::ScopedFD scoped_fd(out_value_fd.release());
   std::vector<uint8_t> out_value;
   EXPECT_TRUE(shared_memory_util_->ReadDataFromSharedMemory(
-      scoped_fd, out_value_size, &out_value));
+      out_value_fd, out_value_size, &out_value));
   EXPECT_EQ(out_value,
             std::vector<uint8_t>(kTestValue.begin(), kTestValue.end()));
 }
@@ -1397,15 +1458,14 @@ TEST_F(SessionManagerImplTest, LoginScreenStorage_StorePersistent) {
   EXPECT_FALSE(error.get());
   EXPECT_TRUE(base::PathExists(GetTestLoginScreenStoragePath(kTestKey)));
 
-  brillo::dbus_utils::FileDescriptor out_value_fd;
+  base::ScopedFD out_value_fd;
   uint64_t out_value_size;
   impl_->LoginScreenStorageRetrieve(&error, kTestKey, &out_value_size,
                                     &out_value_fd);
   EXPECT_FALSE(error.get());
-  base::ScopedFD scoped_fd(out_value_fd.release());
   std::vector<uint8_t> out_value;
   EXPECT_TRUE(shared_memory_util_->ReadDataFromSharedMemory(
-      scoped_fd, out_value_size, &out_value));
+      out_value_fd, out_value_size, &out_value));
   EXPECT_EQ(out_value,
             std::vector<uint8_t>(kTestValue.begin(), kTestValue.end()));
 }
@@ -1428,7 +1488,7 @@ TEST_F(SessionManagerImplTest,
       kTestValue.size(), value_fd);
   EXPECT_TRUE(error.get());
   EXPECT_FALSE(base::PathExists(GetTestLoginScreenStoragePath(kTestKey)));
-  brillo::dbus_utils::FileDescriptor out_value_fd;
+  base::ScopedFD out_value_fd;
   uint64_t out_value_size;
   impl_->LoginScreenStorageRetrieve(&error, kTestKey, &out_value_size,
                                     &out_value_fd);
@@ -1437,8 +1497,7 @@ TEST_F(SessionManagerImplTest,
 
 TEST_F(SessionManagerImplTest, StorePolicyEx_NoSession) {
   const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  ExpectStorePolicy(device_policy_service_, policy_blob, kAllKeyFlags,
-                    SignatureCheck::kEnabled);
+  ExpectStorePolicy(device_policy_service_, policy_blob, kAllKeyFlags);
   ResponseCapturer capturer;
   impl_->StorePolicyEx(
       capturer.CreateMethodResponse<>(),
@@ -1449,63 +1508,12 @@ TEST_F(SessionManagerImplTest, StorePolicyEx_SessionStarted) {
   ExpectAndRunStartSession(kSaneEmail);
   const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
   ExpectStorePolicy(device_policy_service_, policy_blob,
-                    PolicyService::KEY_ROTATE, SignatureCheck::kEnabled);
+                    PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW);
 
   ResponseCapturer capturer;
   impl_->StorePolicyEx(
       capturer.CreateMethodResponse<>(),
       MakePolicyDescriptor(ACCOUNT_TYPE_DEVICE, kEmptyAccountId), policy_blob);
-}
-
-TEST_F(SessionManagerImplTest, StorePolicyEx_NoSignatureConsumer) {
-  const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  ExpectNoStorePolicy(device_policy_service_);
-
-  ResponseCapturer capturer;
-  impl_->StoreUnsignedPolicyEx(
-      capturer.CreateMethodResponse<>(),
-      MakePolicyDescriptor(ACCOUNT_TYPE_DEVICE, kEmptyAccountId), policy_blob);
-}
-
-TEST_F(SessionManagerImplTest, StorePolicyEx_NoSignatureEnterprise) {
-  const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  SetDeviceMode("enterprise");
-  ExpectNoStorePolicy(device_policy_service_);
-
-  ResponseCapturer capturer;
-  impl_->StoreUnsignedPolicyEx(
-      capturer.CreateMethodResponse<>(),
-      MakePolicyDescriptor(ACCOUNT_TYPE_DEVICE, kEmptyAccountId), policy_blob);
-}
-
-TEST_F(SessionManagerImplTest, StorePolicyEx_NoSignatureEnterpriseAD) {
-  const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  SetDeviceMode("enterprise_ad");
-  ExpectStorePolicy(device_policy_service_, policy_blob, kAllKeyFlags,
-                    SignatureCheck::kDisabled);
-
-  ResponseCapturer capturer;
-  impl_->StoreUnsignedPolicyEx(
-      capturer.CreateMethodResponse<>(),
-      MakePolicyDescriptor(ACCOUNT_TYPE_DEVICE, kEmptyAccountId), policy_blob);
-}
-
-TEST_F(SessionManagerImplTest, StorePolicyEx_DeleteComponentPolicy) {
-  PolicyDescriptor descriptor;
-  descriptor.set_account_type(ACCOUNT_TYPE_DEVICE);
-  descriptor.set_account_id(kEmptyAccountId);
-  descriptor.set_domain(POLICY_DOMAIN_EXTENSIONS);
-  descriptor.set_component_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-  std::vector<uint8_t> descriptor_blob =
-      StringToBlob(descriptor.SerializeAsString());
-
-  SetDeviceMode("enterprise_ad");
-  ExpectDeletePolicy(device_policy_service_);
-
-  ResponseCapturer capturer;
-  impl_->StoreUnsignedPolicyEx(capturer.CreateMethodResponse<>(),
-                               StringToBlob(descriptor.SerializeAsString()),
-                               std::vector<uint8_t>() /* policy_blob */);
 }
 
 TEST_F(SessionManagerImplTest, RetrievePolicyEx) {
@@ -1546,7 +1554,7 @@ TEST_F(SessionManagerImplTest, ListStoredComponentPolicies) {
 }
 
 TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_TimeSync) {
-  EXPECT_CALL(state_key_generator_, RequestStateKeys(_));
+  EXPECT_CALL(device_identifier_generator_, RequestStateKeys(_));
 
   ResponseCapturer capturer;
   impl_->GetServerBackedStateKeys(
@@ -1555,7 +1563,7 @@ TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_TimeSync) {
 }
 
 TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_NoTimeSync) {
-  EXPECT_CALL(state_key_generator_, RequestStateKeys(_)).Times(0);
+  EXPECT_CALL(device_identifier_generator_, RequestStateKeys(_)).Times(0);
   ResponseCapturer capturer;
   impl_->GetServerBackedStateKeys(
       capturer.CreateMethodResponse<std::vector<std::vector<uint8_t>>>());
@@ -1564,7 +1572,7 @@ TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_NoTimeSync) {
 TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_TimeSyncDoneBefore) {
   ASSERT_NO_FATAL_FAILURE(GotLastSyncInfo(true));
 
-  EXPECT_CALL(state_key_generator_, RequestStateKeys(_));
+  EXPECT_CALL(device_identifier_generator_, RequestStateKeys(_));
   ResponseCapturer capturer;
   impl_->GetServerBackedStateKeys(
       capturer.CreateMethodResponse<std::vector<std::vector<uint8_t>>>());
@@ -1573,7 +1581,7 @@ TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_TimeSyncDoneBefore) {
 TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_FailedTimeSync) {
   ASSERT_NO_FATAL_FAILURE(GotLastSyncInfo(false));
 
-  EXPECT_CALL(state_key_generator_, RequestStateKeys(_)).Times(0);
+  EXPECT_CALL(device_identifier_generator_, RequestStateKeys(_)).Times(0);
   ResponseCapturer capturer;
   impl_->GetServerBackedStateKeys(
       capturer.CreateMethodResponse<std::vector<std::vector<uint8_t>>>());
@@ -1599,11 +1607,17 @@ TEST_F(SessionManagerImplTest, GetServerBackedStateKeys_TimeSyncAfterFail) {
   ASSERT_TRUE(Mock::VerifyAndClearExpectations(system_clock_proxy_.get()));
   ASSERT_FALSE(time_sync_callback.is_null());
 
-  EXPECT_CALL(state_key_generator_, RequestStateKeys(_)).Times(1);
+  EXPECT_CALL(device_identifier_generator_, RequestStateKeys(_)).Times(1);
   std::unique_ptr<dbus::Response> response = dbus::Response::CreateEmpty();
   dbus::MessageWriter writer(response.get());
   writer.AppendBool(true);
   std::move(time_sync_callback).Run(response.get());
+}
+
+TEST_F(SessionManagerImplTest, GetPsmDeviceActiveSecretSuccess) {
+  EXPECT_CALL(device_identifier_generator_, RequestPsmDeviceActiveSecret(_));
+  ResponseCapturer capturer;
+  impl_->GetPsmDeviceActiveSecret(capturer.CreateMethodResponse<std::string>());
 }
 
 TEST_F(SessionManagerImplTest, StoreUserPolicyEx_NoSession) {
@@ -1620,10 +1634,10 @@ TEST_F(SessionManagerImplTest, StoreUserPolicyEx_NoSession) {
 TEST_F(SessionManagerImplTest, StoreUserPolicyEx_SessionStarted) {
   ExpectAndRunStartSession(kSaneEmail);
   const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  EXPECT_CALL(*user_policy_services_[kSaneEmail],
-              Store(MakeChromePolicyNamespace(), policy_blob,
-                    PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW,
-                    SignatureCheck::kEnabled, _))
+  EXPECT_CALL(
+      *user_policy_services_[kSaneEmail],
+      Store(MakeChromePolicyNamespace(), policy_blob,
+            PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW, _))
       .WillOnce(Return(true));
 
   ResponseCapturer capturer;
@@ -1638,10 +1652,10 @@ TEST_F(SessionManagerImplTest, StoreUserPolicyEx_SecondSession) {
 
   // Store policy for the signed-in user.
   const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  EXPECT_CALL(*user_policy_services_[kSaneEmail],
-              Store(MakeChromePolicyNamespace(), policy_blob,
-                    PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW,
-                    SignatureCheck::kEnabled, _))
+  EXPECT_CALL(
+      *user_policy_services_[kSaneEmail],
+      Store(MakeChromePolicyNamespace(), policy_blob,
+            PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW, _))
       .WillOnce(Return(true));
 
   {
@@ -1668,10 +1682,10 @@ TEST_F(SessionManagerImplTest, StoreUserPolicyEx_SecondSession) {
   ASSERT_TRUE(user_policy_services_[kEmail2]);
 
   // Storing policy for that user now succeeds.
-  EXPECT_CALL(*user_policy_services_[kEmail2],
-              Store(MakeChromePolicyNamespace(), policy_blob,
-                    PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW,
-                    SignatureCheck::kEnabled, _))
+  EXPECT_CALL(
+      *user_policy_services_[kEmail2],
+      Store(MakeChromePolicyNamespace(), policy_blob,
+            PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW, _))
       .WillOnce(Return(true));
   {
     ResponseCapturer capturer;
@@ -1680,47 +1694,6 @@ TEST_F(SessionManagerImplTest, StoreUserPolicyEx_SecondSession) {
                          policy_blob);
   }
   Mock::VerifyAndClearExpectations(user_policy_services_[kEmail2]);
-}
-
-TEST_F(SessionManagerImplTest, StoreUserPolicyEx_NoSignatureConsumer) {
-  ExpectAndRunStartSession(kSaneEmail);
-  const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  EXPECT_CALL(*user_policy_services_[kSaneEmail], Store(_, _, _, _, _))
-      .Times(0);
-
-  ResponseCapturer capturer;
-  impl_->StoreUnsignedPolicyEx(
-      capturer.CreateMethodResponse<>(),
-      MakePolicyDescriptor(ACCOUNT_TYPE_USER, kSaneEmail), policy_blob);
-}
-
-TEST_F(SessionManagerImplTest, StoreUserPolicyEx_NoSignatureEnterprise) {
-  ExpectAndRunStartSession(kSaneEmail);
-  const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  SetDeviceMode("enterprise");
-  EXPECT_CALL(*user_policy_services_[kSaneEmail], Store(_, _, _, _, _))
-      .Times(0);
-
-  ResponseCapturer capturer;
-  impl_->StoreUnsignedPolicyEx(
-      capturer.CreateMethodResponse<>(),
-      MakePolicyDescriptor(ACCOUNT_TYPE_USER, kSaneEmail), policy_blob);
-}
-
-TEST_F(SessionManagerImplTest, StoreUserPolicyEx_NoSignatureEnterpriseAD) {
-  ExpectAndRunStartSession(kSaneEmail);
-  const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-  SetDeviceMode("enterprise_ad");
-  EXPECT_CALL(*user_policy_services_[kSaneEmail],
-              Store(MakeChromePolicyNamespace(), policy_blob,
-                    PolicyService::KEY_ROTATE | PolicyService::KEY_INSTALL_NEW,
-                    SignatureCheck::kDisabled, _))
-      .WillOnce(Return(true));
-
-  ResponseCapturer capturer;
-  impl_->StoreUnsignedPolicyEx(
-      capturer.CreateMethodResponse<>(),
-      MakePolicyDescriptor(ACCOUNT_TYPE_USER, kSaneEmail), policy_blob);
 }
 
 TEST_F(SessionManagerImplTest, RetrieveUserPolicyEx_NoSession) {
@@ -1797,36 +1770,6 @@ TEST_F(SessionManagerImplTest, RetrieveUserPolicyEx_SecondSession) {
   }
 }
 
-TEST_F(SessionManagerImplTest, RetrieveUserPolicyExWithoutSession) {
-  ASSERT_FALSE(user_policy_services_.count(kSaneEmail));
-
-  const std::vector<uint8_t> policy_blob = StringToBlob("fake policy");
-
-  // Set up what MockUserPolicyServiceFactory will return.
-  hidden_user_home_expected_username_ = kSaneEmail;
-  hidden_user_home_policy_service_ = std::make_unique<MockPolicyService>();
-  MockPolicyService* policy_service = hidden_user_home_policy_service_.get();
-
-  EXPECT_CALL(*policy_service, Retrieve(MakeChromePolicyNamespace(), _))
-      .WillOnce(DoAll(SetArgPointee<1>(policy_blob), Return(true)));
-
-  // Retrieve policy for a user who does not have a session.
-  std::vector<uint8_t> out_blob;
-  brillo::ErrorPtr error;
-  EXPECT_TRUE(impl_->RetrievePolicyEx(
-      &error, MakePolicyDescriptor(ACCOUNT_TYPE_SESSIONLESS_USER, kSaneEmail),
-      &out_blob));
-  Mock::VerifyAndClearExpectations(policy_service);
-  EXPECT_FALSE(error.get());
-  EXPECT_EQ(policy_blob, out_blob);
-  // Retrieval of policy without user session should not create a persistent
-  // PolicyService.
-  ASSERT_FALSE(user_policy_services_.count(kSaneEmail));
-
-  // Make sure the policy service is deleted.
-  base::RunLoop().RunUntilIdle();
-}
-
 TEST_F(SessionManagerImplTest, StoreDeviceLocalAccountPolicyNoAccount) {
   const std::vector<uint8_t> policy_blob = CreatePolicyFetchResponseBlob();
   base::FilePath policy_path = GetDeviceLocalAccountPolicyPath(kSaneEmail);
@@ -1848,7 +1791,7 @@ TEST_F(SessionManagerImplTest, StoreDeviceLocalAccountPolicySuccess) {
   base::FilePath policy_path = GetDeviceLocalAccountPolicyPath(kSaneEmail);
   SetupDeviceLocalAccount(kSaneEmail);
   EXPECT_FALSE(base::PathExists(policy_path));
-  EXPECT_CALL(owner_key_, Verify(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(owner_key_, Verify(_, _, _)).WillOnce(Return(true));
 
   brillo::FakeMessageLoop io_loop(nullptr);
   io_loop.SetAsCurrent();
@@ -1903,7 +1846,8 @@ TEST_F(SessionManagerImplTest, RetrieveActiveSessions) {
     std::map<std::string, std::string> active_users =
         impl_->RetrieveActiveSessions();
     EXPECT_EQ(active_users.size(), 1);
-    EXPECT_EQ(active_users[kSaneEmail], SanitizeUserName(kSaneEmail));
+    EXPECT_EQ(active_users[kSaneEmail],
+              *SanitizeUserName(Username(kSaneEmail)));
   }
   VerifyAndClearExpectations();
 
@@ -1918,8 +1862,9 @@ TEST_F(SessionManagerImplTest, RetrieveActiveSessions) {
     std::map<std::string, std::string> active_users =
         impl_->RetrieveActiveSessions();
     EXPECT_EQ(active_users.size(), 2);
-    EXPECT_EQ(active_users[kSaneEmail], SanitizeUserName(kSaneEmail));
-    EXPECT_EQ(active_users[kEmail2], SanitizeUserName(kEmail2));
+    EXPECT_EQ(active_users[kSaneEmail],
+              *SanitizeUserName(Username(kSaneEmail)));
+    EXPECT_EQ(active_users[kEmail2], *SanitizeUserName(Username(kEmail2)));
   }
 }
 
@@ -1927,7 +1872,7 @@ TEST_F(SessionManagerImplTest, RetrievePrimarySession) {
   ExpectGuestSession();
   {
     brillo::ErrorPtr error;
-    EXPECT_TRUE(impl_->StartSession(&error, kGuestUserName, kNothing));
+    EXPECT_TRUE(impl_->StartSession(&error, *GetGuestUsername(), kNothing));
     EXPECT_FALSE(error.get());
   }
   {
@@ -1950,7 +1895,7 @@ TEST_F(SessionManagerImplTest, RetrievePrimarySession) {
     std::string sanitized_username;
     impl_->RetrievePrimarySession(&username, &sanitized_username);
     EXPECT_EQ(username, kSaneEmail);
-    EXPECT_EQ(sanitized_username, SanitizeUserName(kSaneEmail));
+    EXPECT_EQ(sanitized_username, *SanitizeUserName(Username(kSaneEmail)));
   }
   VerifyAndClearExpectations();
 
@@ -1966,7 +1911,7 @@ TEST_F(SessionManagerImplTest, RetrievePrimarySession) {
     std::string sanitized_username;
     impl_->RetrievePrimarySession(&username, &sanitized_username);
     EXPECT_EQ(username, kSaneEmail);
-    EXPECT_EQ(sanitized_username, SanitizeUserName(kSaneEmail));
+    EXPECT_EQ(sanitized_username, *SanitizeUserName(Username(kSaneEmail)));
   }
 }
 
@@ -2231,7 +2176,7 @@ TEST_F(SessionManagerImplTest, EndSessionBeforeSuspend) {
   Mock::VerifyAndClearExpectations(&manager_);
 
   // We shouldn't end the session after the specified interval has elapsed.
-  tick_clock_->Advance(base::TimeDelta::FromSeconds(1));
+  tick_clock_->Advance(base::Seconds(1));
   set_expectations(false);
   suspend_imminent_callback_.Run(&imminent_signal);
 }
@@ -2250,7 +2195,7 @@ TEST_F(SessionManagerImplTest, EndSessionDuringAndAfterSuspend) {
   EXPECT_TRUE(impl_->ShouldEndSession(nullptr));
 
   // We should also end it if some time passes...
-  tick_clock_->Advance(base::TimeDelta::FromSeconds(20));
+  tick_clock_->Advance(base::Seconds(20));
   EXPECT_TRUE(impl_->ShouldEndSession(nullptr));
 
   // ... and right after resume finishes...
@@ -2264,14 +2209,14 @@ TEST_F(SessionManagerImplTest, EndSessionDuringAndAfterSuspend) {
   EXPECT_TRUE(impl_->ShouldEndSession(nullptr));
 
   // If we wait long enough, we should go back to restarting Chrome.
-  tick_clock_->Advance(base::TimeDelta::FromSeconds(1));
+  tick_clock_->Advance(base::Seconds(1));
   EXPECT_FALSE(impl_->ShouldEndSession(nullptr));
 }
 
 TEST_F(SessionManagerImplTest, StartDeviceWipe) {
   // Just make sure the device is being restart as a basic check of
   // InitiateDeviceWipe() invocation.
-  ExpectDeviceRestart();
+  ExpectDeviceRestart(1);
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartDeviceWipe(&error));
@@ -2288,31 +2233,98 @@ TEST_F(SessionManagerImplTest, StartDeviceWipe_AlreadyLoggedIn) {
   EXPECT_EQ(dbus_error::kSessionExists, error->GetCode());
 }
 
-TEST_F(SessionManagerImplTest, StartRemoteDeviceWipe) {
-  ExpectDeviceRestart();
-  EXPECT_CALL(*device_policy_service_, ValidateRemoteDeviceWipeCommand(_))
-      .WillOnce(Return(true));
+class StartRemoteDeviceWipeTest : public SessionManagerImplTest,
+                                  public testing::WithParamInterface<
+                                      em::PolicyFetchRequest::SignatureType> {
+ public:
+  std::unique_ptr<dbus::MethodCall> ConstructMethodCall() {
+    constexpr uint32_t kSerial = 123;
+    auto method_call = std::make_unique<dbus::MethodCall>(
+        login_manager::kSessionManagerInterface,
+        login_manager::kSessionManagerStartRemoteDeviceWipe);
+    method_call->SetSerial(kSerial);
 
-  brillo::ErrorPtr error;
-  std::vector<uint8_t> in_signed_command;
-  EXPECT_TRUE(impl_->StartRemoteDeviceWipe(&error, in_signed_command));
-  EXPECT_FALSE(error.get());
+    return method_call;
+  }
+};
+
+TEST_F(StartRemoteDeviceWipeTest, StartRemoteDeviceWipe_NoParameterShouldFail) {
+  ExpectDeviceRestart(0);
+  std::unique_ptr<dbus::MethodCall> method_call = ConstructMethodCall();
+  TestFuture<std::unique_ptr<dbus::Response>> sender;
+
+  impl_->StartRemoteDeviceWipe(method_call.get(), sender.GetCallback());
+
+  EXPECT_EQ(dbus_error::kInvalidParameter, sender.Get()->GetErrorName());
 }
 
-TEST_F(SessionManagerImplTest, StartRemoteDeviceWipe_BadSignature) {
-  EXPECT_CALL(*device_policy_service_, ValidateRemoteDeviceWipeCommand(_))
+TEST_F(StartRemoteDeviceWipeTest, StartRemoteDeviceWipe_EmptyArrayShouldFail) {
+  ExpectDeviceRestart(0);
+  std::vector<uint8_t> in_signed_command;
+  std::unique_ptr<dbus::MethodCall> method_call = ConstructMethodCall();
+  dbus::MessageWriter writer(method_call.get());
+  writer.AppendArrayOfBytes(in_signed_command.data(), in_signed_command.size());
+  TestFuture<std::unique_ptr<dbus::Response>> sender;
+
+  impl_->StartRemoteDeviceWipe(method_call.get(), sender.GetCallback());
+
+  EXPECT_EQ(dbus_error::kInvalidParameter, sender.Get()->GetErrorName());
+}
+
+TEST_F(StartRemoteDeviceWipeTest, StartRemoteDeviceWipe_NotArrayShouldFail) {
+  ExpectDeviceRestart(0);
+  std::unique_ptr<dbus::MethodCall> method_call = ConstructMethodCall();
+  dbus::MessageWriter writer(method_call.get());
+  writer.AppendByte(1);
+  TestFuture<std::unique_ptr<dbus::Response>> sender;
+
+  impl_->StartRemoteDeviceWipe(method_call.get(), sender.GetCallback());
+
+  EXPECT_EQ(dbus_error::kInvalidParameter, sender.Get()->GetErrorName());
+}
+
+TEST_F(StartRemoteDeviceWipeTest,
+       StartRemoteDeviceWipe_CorrectlySignedShouldPowerwash) {
+  ExpectDeviceRestart(1);
+  std::vector<uint8_t> in_signed_command;
+  in_signed_command.push_back(1);
+  std::unique_ptr<dbus::MethodCall> method_call = ConstructMethodCall();
+  dbus::MessageWriter writer(method_call.get());
+  writer.AppendArrayOfBytes(in_signed_command.data(), in_signed_command.size());
+  TestFuture<std::unique_ptr<dbus::Response>> sender;
+  EXPECT_CALL(
+      *device_policy_service_,
+      ValidateRemoteDeviceWipeCommand(_, em::PolicyFetchRequest::SHA256_RSA))
+      .WillOnce(Return(true));
+
+  impl_->StartRemoteDeviceWipe(method_call.get(), sender.GetCallback());
+
+  EXPECT_TRUE(sender.Get()->GetErrorName().empty());
+}
+
+TEST_F(StartRemoteDeviceWipeTest,
+       StartRemoteDeviceWipe_IncorrectlySignedShouldFail) {
+  ExpectDeviceRestart(0);
+  std::vector<uint8_t> in_signed_command;
+  in_signed_command.push_back(1);
+  std::unique_ptr<dbus::MethodCall> method_call = ConstructMethodCall();
+  dbus::MessageWriter writer(method_call.get());
+  writer.AppendArrayOfBytes(in_signed_command.data(), in_signed_command.size());
+  TestFuture<std::unique_ptr<dbus::Response>> sender;
+  EXPECT_CALL(
+      *device_policy_service_,
+      ValidateRemoteDeviceWipeCommand(_, em::PolicyFetchRequest::SHA256_RSA))
       .WillOnce(Return(false));
 
-  brillo::ErrorPtr error;
-  std::vector<uint8_t> in_signed_command;
-  EXPECT_FALSE(impl_->StartRemoteDeviceWipe(&error, in_signed_command));
-  EXPECT_TRUE(error.get());
+  impl_->StartRemoteDeviceWipe(method_call.get(), sender.GetCallback());
+
+  EXPECT_EQ(dbus_error::kInvalidArgs, sender.Get()->GetErrorName());
 }
 
 TEST_F(SessionManagerImplTest, InitiateDeviceWipe_TooLongReason) {
   ASSERT_TRUE(
       utils_.RemoveFile(base::FilePath(SessionManagerImpl::kLoggedInFlag)));
-  ExpectDeviceRestart();
+  ExpectDeviceRestart(1);
   impl_->InitiateDeviceWipe(
       "overly long test message with\nspecial/chars$\t\xa4\xd6 1234567890");
   std::string contents;
@@ -2327,8 +2339,7 @@ TEST_F(SessionManagerImplTest, InitiateDeviceWipe_TooLongReason) {
 
 TEST_F(SessionManagerImplTest, ClearForcedReEnrollmentVpd) {
   ResponseCapturer capturer;
-  EXPECT_CALL(*device_policy_service_, ClearForcedReEnrollmentFlags(_))
-      .Times(1);
+  EXPECT_CALL(*device_policy_service_, ClearBlockDevmode(_)).Times(1);
   impl_->ClearForcedReEnrollmentVpd(capturer.CreateMethodResponse<>());
 }
 
@@ -2418,7 +2429,7 @@ TEST_F(SessionManagerImplTest, StopArcInstance) {
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
   EXPECT_FALSE(error.get());
 
   EXPECT_TRUE(impl_->StopArcInstance(&error, std::string() /*account_id*/,
@@ -2446,7 +2457,7 @@ TEST_F(SessionManagerImplTest, StopArcInstance_BackupsArcBugReport) {
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
   EXPECT_FALSE(error.get());
 
   EXPECT_TRUE(
@@ -2471,7 +2482,7 @@ TEST_F(SessionManagerImplTest, StartArcMiniContainer) {
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
   EXPECT_FALSE(error.get());
   EXPECT_TRUE(android_container_.running());
 
@@ -2515,7 +2526,7 @@ TEST_F(SessionManagerImplTest, UpgradeArcContainer) {
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
 
   // Then, upgrade it to a fully functional one.
   {
@@ -2527,9 +2538,11 @@ TEST_F(SessionManagerImplTest, UpgradeArcContainer) {
   }
 
   EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                             UpgradeContainerExpectationsBuilder().Build(),
-                             InitDaemonController::TriggerMode::SYNC))
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder().Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
   EXPECT_CALL(
       *init_controller_,
@@ -2577,12 +2590,14 @@ TEST_F(SessionManagerImplTest,
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
 
   EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                             UpgradeContainerExpectationsBuilder().Build(),
-                             InitDaemonController::TriggerMode::SYNC))
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder().Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(ReturnNull());
   EXPECT_CALL(
       *init_controller_,
@@ -2598,7 +2613,6 @@ TEST_F(SessionManagerImplTest,
   EXPECT_CALL(*arc_sideload_status_, IsAdbSideloadAllowed())
       .WillRepeatedly(Return(false));
 
-  EXPECT_CALL(metrics_, SendArcBugReportBackupTime(_)).Times(1);
   EXPECT_CALL(*debugd_proxy_, CallMethodAndBlock(_, _))
       .WillOnce(WithArg<0>(Invoke([](dbus::MethodCall* method_call) {
         EXPECT_EQ(method_call->GetInterface(), debugd::kDebugdInterface);
@@ -2619,17 +2633,18 @@ TEST_F(SessionManagerImplTest, UpgradeArcContainerWithManagementTransition) {
 
   // Expect continue-arc-boot and start-arc-network impulses.
   EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                             UpgradeContainerExpectationsBuilder()
-                                 .SetManagementTransition(1)
-                                 .Build(),
-                             InitDaemonController::TriggerMode::SYNC))
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetManagementTransition(1)
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   auto upgrade_request = CreateUpgradeArcContainerRequest();
   upgrade_request.set_management_transition(
-      login_manager::
-          UpgradeArcContainerRequest_ManagementTransition_CHILD_TO_REGULAR);
+      arc::UpgradeArcContainerRequest_ManagementTransition_CHILD_TO_REGULAR);
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(
@@ -2638,29 +2653,10 @@ TEST_F(SessionManagerImplTest, UpgradeArcContainerWithManagementTransition) {
   EXPECT_TRUE(android_container_.running());
 }
 
-TEST_F(SessionManagerImplTest, DisableSystemDefaultApp) {
-  ExpectAndRunStartSession(kSaneEmail);
-
-  StartArcMiniContainerRequest request;
-  request.set_disable_system_default_app(true);
-
-  // First, start ARC for login screen.
-  EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
-                             StartArcInstanceExpectationsBuilder()
-                                 .SetDisableSystemDefaultApp(true)
-                                 .Build(),
-                             InitDaemonController::TriggerMode::ASYNC))
-      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
-
-  brillo::ErrorPtr error;
-  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
-}
-
 TEST_F(SessionManagerImplTest, DisableMediaStoreMaintenance) {
   ExpectAndRunStartSession(kSaneEmail);
 
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_disable_media_store_maintenance(true);
 
   // First, start ARC for login screen.
@@ -2676,10 +2672,93 @@ TEST_F(SessionManagerImplTest, DisableMediaStoreMaintenance) {
   EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
 }
 
+TEST_F(SessionManagerImplTest,
+       UpgradeArcContainer_ConsumerAutoUpdateToggleEnabled) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  // Expect continue-arc-boot and start-arc-network impulses.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetEnableConsumerAutoUpdateToggle(true)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  arc::StartArcMiniInstanceRequest request;
+  request.set_enable_consumer_auto_update_toggle(true);
+
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+  EXPECT_FALSE(error.get());
+}
+
+TEST_F(SessionManagerImplTest,
+       UpgradeArcContainer_ConsumerAutoUpdateToggleDisabled) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  // Expect continue-arc-boot and start-arc-network impulses.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetEnableConsumerAutoUpdateToggle(false)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  arc::StartArcMiniInstanceRequest request;
+  request.set_enable_consumer_auto_update_toggle(false);
+
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+  EXPECT_FALSE(error.get());
+}
+
+TEST_F(SessionManagerImplTest, UpgradeArcContainer_PrivacyHubForChromeEnabled) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  // Expect continue-arc-boot and start-arc-network impulses.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetEnablePrivacyHubForChrome(true)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  arc::StartArcMiniInstanceRequest request;
+  request.set_enable_privacy_hub_for_chrome(true);
+
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+  EXPECT_FALSE(error.get());
+}
+
+TEST_F(SessionManagerImplTest,
+       UpgradeArcContainer_PrivacyHubForChromeEDisabled) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  // Expect continue-arc-boot and start-arc-network impulses.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetEnablePrivacyHubForChrome(false)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  arc::StartArcMiniInstanceRequest request;
+  request.set_enable_privacy_hub_for_chrome(false);
+
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+  EXPECT_FALSE(error.get());
+}
+
 TEST_F(SessionManagerImplTest, DisableDownloadProvider) {
   ExpectAndRunStartSession(kSaneEmail);
 
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_disable_download_provider(true);
 
   // First, start ARC for login screen.
@@ -2687,6 +2766,82 @@ TEST_F(SessionManagerImplTest, DisableDownloadProvider) {
               TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
                              StartArcInstanceExpectationsBuilder()
                                  .SetDisableDownloadProvider(true)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+}
+
+TEST_F(SessionManagerImplTest, DisableUreadahead) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  arc::StartArcMiniInstanceRequest request;
+  request.set_disable_ureadahead(true);
+
+  // First, start ARC for login screen.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetDisableUreadahead(true)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+}
+
+TEST_F(SessionManagerImplTest, EnableNotificationRefresh) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  arc::StartArcMiniInstanceRequest request;
+  request.set_enable_notifications_refresh(true);
+
+  // First, start ARC for login screen.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetEnableNotificationRefresh(true)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+}
+
+TEST_F(SessionManagerImplTest, EnableTTSCaching) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  arc::StartArcMiniInstanceRequest request;
+  request.set_enable_tts_caching(true);
+
+  // First, start ARC for login screen.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetEnableTTSCaching(true)
+                                 .Build(),
+                             InitDaemonController::TriggerMode::ASYNC))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
+}
+
+TEST_F(SessionManagerImplTest, HostUreadaheadGeneration) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  arc::StartArcMiniInstanceRequest request;
+  request.set_host_ureadahead_generation(true);
+
+  // First, start ARC for login screen.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulse(SessionManagerImpl::kStartArcInstanceImpulse,
+                             StartArcInstanceExpectationsBuilder()
+                                 .SetHostUreadaheadGeneration(true)
                                  .Build(),
                              InitDaemonController::TriggerMode::ASYNC))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
@@ -2707,33 +2862,36 @@ TEST_P(SessionManagerPackagesCacheTest, PackagesCache) {
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
 
   bool skip_packages_cache_setup = false;
   bool copy_cache_setup = false;
   switch (std::get<0>(GetParam())) {
-    case UpgradeArcContainerRequest_PackageCacheMode_SKIP_SETUP_COPY_ON_INIT:
+    case arc::
+        UpgradeArcContainerRequest_PackageCacheMode_SKIP_SETUP_COPY_ON_INIT:
       skip_packages_cache_setup = true;
-      FALLTHROUGH;
-    case UpgradeArcContainerRequest_PackageCacheMode_COPY_ON_INIT:
+      [[fallthrough]];
+    case arc::UpgradeArcContainerRequest_PackageCacheMode_COPY_ON_INIT:
       copy_cache_setup = true;
       break;
-    case UpgradeArcContainerRequest_PackageCacheMode_DEFAULT:
+    case arc::UpgradeArcContainerRequest_PackageCacheMode_DEFAULT:
       break;
     default:
       NOTREACHED();
   }
 
   // Then, upgrade it to a fully functional one.
-  EXPECT_CALL(
-      *init_controller_,
-      TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                     UpgradeContainerExpectationsBuilder()
-                         .SetSkipPackagesCache(skip_packages_cache_setup)
-                         .SetCopyPackagesCache(copy_cache_setup)
-                         .SetSkipGmsCoreCache(std::get<1>(GetParam()))
-                         .Build(),
-                     InitDaemonController::TriggerMode::SYNC))
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetSkipPackagesCache(skip_packages_cache_setup)
+                      .SetCopyPackagesCache(copy_cache_setup)
+                      .SetSkipGmsCoreCache(std::get<1>(GetParam()))
+                      .SetSkipTtsCache(std::get<2>(GetParam()))
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
   EXPECT_CALL(
       *init_controller_,
@@ -2744,6 +2902,7 @@ TEST_P(SessionManagerPackagesCacheTest, PackagesCache) {
   auto upgrade_request = CreateUpgradeArcContainerRequest();
   upgrade_request.set_packages_cache_mode(std::get<0>(GetParam()));
   upgrade_request.set_skip_gms_core_cache(std::get<1>(GetParam()));
+  upgrade_request.set_skip_tts_cache(std::get<2>(GetParam()));
   EXPECT_TRUE(
       impl_->UpgradeArcContainer(&error, SerializeAsBlob(upgrade_request)));
   EXPECT_TRUE(android_container_.running());
@@ -2757,15 +2916,17 @@ INSTANTIATE_TEST_SUITE_P(
     ,
     SessionManagerPackagesCacheTest,
     ::testing::Combine(
-        ::testing::Values(UpgradeArcContainerRequest::DEFAULT,
-                          UpgradeArcContainerRequest::COPY_ON_INIT,
-                          UpgradeArcContainerRequest::SKIP_SETUP_COPY_ON_INIT),
+        ::testing::Values(
+            arc::UpgradeArcContainerRequest::DEFAULT,
+            arc::UpgradeArcContainerRequest::COPY_ON_INIT,
+            arc::UpgradeArcContainerRequest::SKIP_SETUP_COPY_ON_INIT),
+        ::testing::Bool(),
         ::testing::Bool()));
 
 TEST_P(SessionManagerPlayStoreAutoUpdateTest, PlayStoreAutoUpdate) {
   ExpectAndRunStartSession(kSaneEmail);
 
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_play_store_auto_update(GetParam());
 
   // First, start ARC for login screen.
@@ -2786,14 +2947,15 @@ INSTANTIATE_TEST_SUITE_P(
     ,
     SessionManagerPlayStoreAutoUpdateTest,
     ::testing::ValuesIn(
-        {StartArcMiniContainerRequest_PlayStoreAutoUpdate_AUTO_UPDATE_DEFAULT,
-         StartArcMiniContainerRequest_PlayStoreAutoUpdate_AUTO_UPDATE_ON,
-         StartArcMiniContainerRequest_PlayStoreAutoUpdate_AUTO_UPDATE_OFF}));
+        {arc::StartArcMiniInstanceRequest::AUTO_UPDATE_DEFAULT,
+         arc::StartArcMiniInstanceRequest_PlayStoreAutoUpdate_AUTO_UPDATE_ON,
+         arc::
+             StartArcMiniInstanceRequest_PlayStoreAutoUpdate_AUTO_UPDATE_OFF}));
 
 TEST_P(SessionManagerDalvikMemoryProfileTest, DalvikMemoryProfile) {
   ExpectAndRunStartSession(kSaneEmail);
 
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_dalvik_memory_profile(GetParam());
 
   // First, start ARC for login screen.
@@ -2813,10 +2975,11 @@ TEST_P(SessionManagerDalvikMemoryProfileTest, DalvikMemoryProfile) {
 INSTANTIATE_TEST_SUITE_P(
     ,
     SessionManagerDalvikMemoryProfileTest,
-    ::testing::ValuesIn({StartArcMiniContainerRequest::MEMORY_PROFILE_DEFAULT,
-                         StartArcMiniContainerRequest::MEMORY_PROFILE_4G,
-                         StartArcMiniContainerRequest::MEMORY_PROFILE_8G,
-                         StartArcMiniContainerRequest::MEMORY_PROFILE_16G}));
+    ::testing::ValuesIn(
+        {arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_DEFAULT,
+         arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_4G,
+         arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_8G,
+         arc::StartArcMiniInstanceRequest::MEMORY_PROFILE_16G}));
 
 TEST_F(SessionManagerImplTest, UpgradeArcContainerForDemoSession) {
   ExpectAndRunStartSession(kSaneEmail);
@@ -2830,7 +2993,7 @@ TEST_F(SessionManagerImplTest, UpgradeArcContainerForDemoSession) {
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
 
   // Then, upgrade it to a fully functional one.
   {
@@ -2841,15 +3004,16 @@ TEST_F(SessionManagerImplTest, UpgradeArcContainerForDemoSession) {
     EXPECT_EQ(dbus_error::kNotStarted, error->GetCode());
   }
 
-  EXPECT_CALL(
-      *init_controller_,
-      TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                     UpgradeContainerExpectationsBuilder()
-                         .SetIsDemoSession(true)
-                         .SetDemoSessionAppsPath(
-                             "/run/imageloader/0.1/demo_apps/img.squash")
-                         .Build(),
-                     InitDaemonController::TriggerMode::SYNC))
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetIsDemoSession(true)
+                      .SetDemoSessionAppsPath(
+                          "/run/imageloader/0.1/demo_apps/img.squash")
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
   EXPECT_CALL(
       *init_controller_,
@@ -2883,7 +3047,7 @@ TEST_F(SessionManagerImplTest,
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
 
   // Then, upgrade it to a fully functional one.
   {
@@ -2896,10 +3060,11 @@ TEST_F(SessionManagerImplTest,
 
   EXPECT_CALL(
       *init_controller_,
-      TriggerImpulse(
+      TriggerImpulseWithTimeoutAndError(
           SessionManagerImpl::kContinueArcBootImpulse,
           UpgradeContainerExpectationsBuilder().SetIsDemoSession(true).Build(),
-          InitDaemonController::TriggerMode::SYNC))
+          InitDaemonController::TriggerMode::SYNC,
+          SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
   EXPECT_CALL(
       *init_controller_,
@@ -2921,14 +3086,15 @@ TEST_F(SessionManagerImplTest,
 TEST_F(SessionManagerImplTest, UpgradeArcContainer_AdbSideloadingEnabled) {
   ExpectAndRunStartSession(kSaneEmail);
   SetUpArcMiniContainer();
-
   // Expect continue-arc-boot and start-arc-network impulses.
   EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                             UpgradeContainerExpectationsBuilder()
-                                 .SetEnableAdbSideload(true)
-                                 .Build(),
-                             InitDaemonController::TriggerMode::SYNC))
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetEnableAdbSideload(true)
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   // Pretend ADB sideloading is already enabled.
@@ -2948,14 +3114,15 @@ TEST_F(SessionManagerImplTest,
        UpgradeArcContainer_AdbSideloadingEnabled_ManagedAccount_Disallowed) {
   ExpectAndRunStartSession(kSaneEmail);
   SetUpArcMiniContainer();
-
   // Expect continue-arc-boot and start-arc-network impulses.
   EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                             UpgradeContainerExpectationsBuilder()
-                                 .SetEnableAdbSideload(false)
-                                 .Build(),
-                             InitDaemonController::TriggerMode::SYNC))
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetEnableAdbSideload(false)
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   // Pretend ADB sideloading is already enabled.
@@ -2977,14 +3144,15 @@ TEST_F(SessionManagerImplTest,
        UpgradeArcContainer_AdbSideloadingEnabled_ManagedAccount_Allowed) {
   ExpectAndRunStartSession(kSaneEmail);
   SetUpArcMiniContainer();
-
   // Expect continue-arc-boot and start-arc-network impulses.
   EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                             UpgradeContainerExpectationsBuilder()
-                                 .SetEnableAdbSideload(true)
-                                 .Build(),
-                             InitDaemonController::TriggerMode::SYNC))
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetEnableAdbSideload(true)
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   // Pretend ADB sideloading is already enabled.
@@ -3012,7 +3180,7 @@ TEST_F(SessionManagerImplTest, ArcNativeBridgeExperiment) {
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   brillo::ErrorPtr error;
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_native_bridge_experiment(true);
   // Use for login screen mode for minimalistic test.
   EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
@@ -3029,7 +3197,7 @@ TEST_F(SessionManagerImplTest, ArcFilePickerExperiment) {
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   brillo::ErrorPtr error;
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_arc_file_picker_experiment(true);
   // Use for login screen mode for minimalistic test.
   EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
@@ -3046,7 +3214,7 @@ TEST_F(SessionManagerImplTest, ArcCustomTabsExperiment) {
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   brillo::ErrorPtr error;
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_arc_custom_tabs_experiment(true);
   // Use for login screen mode for minimalistic test.
   EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
@@ -3063,7 +3231,7 @@ TEST_F(SessionManagerImplTest, ArcGeneratePai) {
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   brillo::ErrorPtr error;
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_arc_generate_pai(true);
   // Use for login screen mode for minimalistic test.
   EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
@@ -3081,7 +3249,7 @@ TEST_F(SessionManagerImplTest, ArcLcdDensity) {
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   brillo::ErrorPtr error;
-  StartArcMiniContainerRequest request;
+  arc::StartArcMiniInstanceRequest request;
   request.set_lcd_density(arc_lcd_density);
   // Use for login screen mode for minimalistic test.
   EXPECT_TRUE(impl_->StartArcMiniContainer(&error, SerializeAsBlob(request)));
@@ -3092,7 +3260,7 @@ TEST_F(SessionManagerImplTest, ArcNoSession) {
   SetUpArcMiniContainer();
 
   brillo::ErrorPtr error;
-  UpgradeArcContainerRequest request = CreateUpgradeArcContainerRequest();
+  arc::UpgradeArcContainerRequest request = CreateUpgradeArcContainerRequest();
   EXPECT_FALSE(impl_->UpgradeArcContainer(&error, SerializeAsBlob(request)));
   ASSERT_TRUE(error.get());
   EXPECT_EQ(dbus_error::kSessionDoesNotExist, error->GetCode());
@@ -3111,7 +3279,7 @@ TEST_F(SessionManagerImplTest, ArcLowDisk) {
                                   ArcContainerStopReason::LOW_DISK_SPACE)))
       .Times(1);
 
-  UpgradeArcContainerRequest request = CreateUpgradeArcContainerRequest();
+  arc::UpgradeArcContainerRequest request = CreateUpgradeArcContainerRequest();
   EXPECT_FALSE(impl_->UpgradeArcContainer(&error, SerializeAsBlob(request)));
   ASSERT_TRUE(error.get());
   EXPECT_EQ(dbus_error::kLowFreeDisk, error->GetCode());
@@ -3134,10 +3302,11 @@ TEST_F(SessionManagerImplTest, ArcUpgradeCrash) {
 
   EXPECT_CALL(
       *init_controller_,
-      TriggerImpulse(
+      TriggerImpulseWithTimeoutAndError(
           SessionManagerImpl::kContinueArcBootImpulse,
           UpgradeContainerExpectationsBuilder().SetDevMode(true).Build(),
-          InitDaemonController::TriggerMode::SYNC))
+          InitDaemonController::TriggerMode::SYNC,
+          SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
   EXPECT_CALL(
       *init_controller_,
@@ -3148,13 +3317,14 @@ TEST_F(SessionManagerImplTest, ArcUpgradeCrash) {
   {
     brillo::ErrorPtr error;
     EXPECT_TRUE(impl_->StartArcMiniContainer(
-        &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+        &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
     EXPECT_FALSE(error.get());
   }
 
   {
     brillo::ErrorPtr error;
-    UpgradeArcContainerRequest request = CreateUpgradeArcContainerRequest();
+    arc::UpgradeArcContainerRequest request =
+        CreateUpgradeArcContainerRequest();
     EXPECT_TRUE(impl_->UpgradeArcContainer(&error, SerializeAsBlob(request)));
     EXPECT_FALSE(error.get());
   }
@@ -3190,7 +3360,7 @@ TEST_F(SessionManagerImplTest, LocaleAndPreferredLanguages) {
 
   brillo::ErrorPtr error;
   EXPECT_TRUE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
 
   // Then, upgrade it to a fully functional one.
   {
@@ -3202,18 +3372,94 @@ TEST_F(SessionManagerImplTest, LocaleAndPreferredLanguages) {
   }
 
   EXPECT_CALL(*init_controller_,
-              TriggerImpulse(SessionManagerImpl::kContinueArcBootImpulse,
-                             UpgradeContainerExpectationsBuilder()
-                                 .SetLocale("fr_FR")
-                                 .SetPreferredLanguages("ru,en")
-                                 .Build(),
-                             InitDaemonController::TriggerMode::SYNC))
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetLocale("fr_FR")
+                      .SetPreferredLanguages("ru,en")
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
       .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
 
   auto upgrade_request = CreateUpgradeArcContainerRequest();
   upgrade_request.set_locale("fr_FR");
   upgrade_request.add_preferred_languages("ru");
   upgrade_request.add_preferred_languages("en");
+  EXPECT_TRUE(
+      impl_->UpgradeArcContainer(&error, SerializeAsBlob(upgrade_request)));
+  EXPECT_FALSE(error.get());
+  EXPECT_TRUE(android_container_.running());
+}
+
+TEST_F(SessionManagerImplTest, UpgradeArcContainer_ArcNearbyShareEnabled) {
+  ExpectAndRunStartSession(kSaneEmail);
+  SetUpArcMiniContainer();
+
+  // Expect continue-arc-boot and start-arc-network impulses.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetEnableArcNearbyShare(true)
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  auto upgrade_request = CreateUpgradeArcContainerRequest();
+  upgrade_request.set_enable_arc_nearby_share(true);
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(
+      impl_->UpgradeArcContainer(&error, SerializeAsBlob(upgrade_request)));
+  EXPECT_FALSE(error.get());
+  EXPECT_TRUE(android_container_.running());
+}
+
+TEST_F(SessionManagerImplTest, UpgradeArcContainer_ArcNearbyShareDisabled) {
+  ExpectAndRunStartSession(kSaneEmail);
+  SetUpArcMiniContainer();
+
+  // Expect continue-arc-boot and start-arc-network impulses.
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetEnableArcNearbyShare(false)
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  auto upgrade_request = CreateUpgradeArcContainerRequest();
+  upgrade_request.set_enable_arc_nearby_share(false);
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(
+      impl_->UpgradeArcContainer(&error, SerializeAsBlob(upgrade_request)));
+  EXPECT_FALSE(error.get());
+  EXPECT_TRUE(android_container_.running());
+}
+
+TEST_F(SessionManagerImplTest, UpgradeArcContainer_DisableUreadahead) {
+  ExpectAndRunStartSession(kSaneEmail);
+  SetUpArcMiniContainer();
+
+  EXPECT_CALL(*init_controller_,
+              TriggerImpulseWithTimeoutAndError(
+                  SessionManagerImpl::kContinueArcBootImpulse,
+                  UpgradeContainerExpectationsBuilder()
+                      .SetDisableUreadahead(true)
+                      .Build(),
+                  InitDaemonController::TriggerMode::SYNC,
+                  SessionManagerImpl::kArcBootContinueTimeout, _))
+      .WillOnce(Return(ByMove(dbus::Response::CreateEmpty())));
+
+  auto upgrade_request = CreateUpgradeArcContainerRequest();
+  upgrade_request.set_disable_ureadahead(true);
+
+  brillo::ErrorPtr error;
   EXPECT_TRUE(
       impl_->UpgradeArcContainer(&error, SerializeAsBlob(upgrade_request)));
   EXPECT_FALSE(error.get());
@@ -3226,7 +3472,7 @@ TEST_F(SessionManagerImplTest, ArcUnavailable) {
 
   brillo::ErrorPtr error;
   EXPECT_FALSE(impl_->StartArcMiniContainer(
-      &error, SerializeAsBlob(StartArcMiniContainerRequest())));
+      &error, SerializeAsBlob(arc::StartArcMiniInstanceRequest())));
   ASSERT_TRUE(error.get());
   EXPECT_EQ(dbus_error::kNotAvailable, error->GetCode());
 }
@@ -3305,35 +3551,111 @@ TEST_F(SessionManagerImplTest, QueryAdbSideload) {
   impl_->QueryAdbSideload(capturer.CreateMethodResponse<bool>());
 }
 
-TEST_F(SessionManagerImplTest, StartBrowserDataMigration) {
+TEST_F(SessionManagerImplTest, StartBrowserDataMigrationCopy) {
   ExpectAndRunStartSession(kSaneEmail);
+  const std::string mode = "copy";
 
-  const std::string userhash = SanitizeUserName(kSaneEmail);
-  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash)).Times(1);
+  const std::string userhash = *SanitizeUserName(Username(kSaneEmail));
+  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash, mode))
+      .Times(1);
+
   brillo::ErrorPtr error;
-  EXPECT_TRUE(impl_->StartBrowserDataMigration(&error, kSaneEmail));
+  EXPECT_TRUE(impl_->StartBrowserDataMigration(&error, kSaneEmail, mode));
+}
+
+TEST_F(SessionManagerImplTest, StartBrowserDataMigrationMove) {
+  ExpectAndRunStartSession(kSaneEmail);
+  const std::string mode = "move";
+
+  const std::string userhash = *SanitizeUserName(Username(kSaneEmail));
+  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash, mode))
+      .Times(1);
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartBrowserDataMigration(&error, kSaneEmail, mode));
+}
+
+TEST_F(SessionManagerImplTest, StartBrowserDataMigrationAny) {
+  ExpectAndRunStartSession(kSaneEmail);
+  // Only Chrome needs to understand the values.
+  const std::string mode = "any";
+
+  const std::string userhash = *SanitizeUserName(Username(kSaneEmail));
+  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash, mode))
+      .Times(1);
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartBrowserDataMigration(&error, kSaneEmail, mode));
 }
 
 TEST_F(SessionManagerImplTest, StartBrowserDataMigrationForNonLoggedInUser) {
   // If session has not been started for user,
   // |SetBrowserDataMigrationArgsForUser()| does not get called.
-  const std::string userhash = SanitizeUserName(kSaneEmail);
-  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash)).Times(0);
+  const std::string userhash = *SanitizeUserName(Username(kSaneEmail));
+  const std::string mode = "copy";
+  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash, mode))
+      .Times(0);
+
   brillo::ErrorPtr error;
-  EXPECT_FALSE(impl_->StartBrowserDataMigration(&error, kSaneEmail));
+  EXPECT_FALSE(impl_->StartBrowserDataMigration(&error, kSaneEmail, mode));
   EXPECT_EQ(error->GetCode(), dbus_error::kSessionDoesNotExist);
 }
 
-TEST_F(SessionManagerImplTest, StartBrowserDataMigrationForNonPrimarynUser) {
+TEST_F(SessionManagerImplTest, StartBrowserDataMigrationForNonPrimaryUser) {
+  const std::string second_user_email = "seconduser@gmail.com";
+  const std::string mode = "copy";
+  ExpectAndRunStartSession(kSaneEmail);
+  ExpectAndRunStartSession(second_user_email);
+
+  // Migration should only happen for primary user.
+  const std::string userhash = *SanitizeUserName(Username(second_user_email));
+  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash, mode))
+      .Times(0);
+
+  brillo::ErrorPtr error;
+  EXPECT_FALSE(
+      impl_->StartBrowserDataMigration(&error, second_user_email, mode));
+  EXPECT_EQ(error->GetCode(), dbus_error::kInvalidAccount);
+}
+
+TEST_F(SessionManagerImplTest, StartBrowserDataBackwardMigration) {
+  ExpectAndRunStartSession(kSaneEmail);
+
+  const std::string userhash = *SanitizeUserName(Username(kSaneEmail));
+  EXPECT_CALL(manager_, SetBrowserDataBackwardMigrationArgsForUser(userhash))
+      .Times(1);
+
+  brillo::ErrorPtr error;
+  EXPECT_TRUE(impl_->StartBrowserDataBackwardMigration(&error, kSaneEmail));
+}
+
+TEST_F(SessionManagerImplTest,
+       StartBrowserDataBackwardMigrationForNonLoggedInUser) {
+  // If session has not been started for user,
+  // |SetBrowserDataBackwardMigrationArgsForUser()| does not get called.
+  const std::string userhash = *SanitizeUserName(Username(kSaneEmail));
+  EXPECT_CALL(manager_, SetBrowserDataBackwardMigrationArgsForUser(userhash))
+      .Times(0);
+
+  brillo::ErrorPtr error;
+  EXPECT_FALSE(impl_->StartBrowserDataBackwardMigration(&error, kSaneEmail));
+  EXPECT_EQ(error->GetCode(), dbus_error::kSessionDoesNotExist);
+}
+
+TEST_F(SessionManagerImplTest,
+       StartBrowserDataBackwardMigrationForNonPrimaryUser) {
   const std::string second_user_email = "seconduser@gmail.com";
   ExpectAndRunStartSession(kSaneEmail);
   ExpectAndRunStartSession(second_user_email);
 
   // Migration should only happen for primary user.
-  const std::string userhash = SanitizeUserName(second_user_email);
-  EXPECT_CALL(manager_, SetBrowserDataMigrationArgsForUser(userhash)).Times(0);
+  const std::string userhash = *SanitizeUserName(Username(second_user_email));
+  EXPECT_CALL(manager_, SetBrowserDataBackwardMigrationArgsForUser(userhash))
+      .Times(0);
+
   brillo::ErrorPtr error;
-  EXPECT_FALSE(impl_->StartBrowserDataMigration(&error, second_user_email));
+  EXPECT_FALSE(
+      impl_->StartBrowserDataBackwardMigration(&error, second_user_email));
   EXPECT_EQ(error->GetCode(), dbus_error::kInvalidAccount);
 }
 
@@ -3419,7 +3741,7 @@ class StartTPMFirmwareUpdateTest : public SessionManagerImplTest {
 };
 
 TEST_F(StartTPMFirmwareUpdateTest, Success) {
-  ExpectDeviceRestart();
+  ExpectDeviceRestart(1);
 }
 
 TEST_F(StartTPMFirmwareUpdateTest, AlreadyLoggedIn) {
@@ -3443,7 +3765,7 @@ TEST_F(StartTPMFirmwareUpdateTest, EnterpriseFirstBootAllowed) {
   settings.mutable_tpm_firmware_update_settings()
       ->set_allow_user_initiated_powerwash(true);
   SetDevicePolicy(settings);
-  ExpectDeviceRestart();
+  ExpectDeviceRestart(1);
 }
 
 TEST_F(StartTPMFirmwareUpdateTest, EnterprisePreserveStatefulNotSet) {
@@ -3459,7 +3781,7 @@ TEST_F(StartTPMFirmwareUpdateTest, EnterprisePreserveStatefulAllowed) {
   settings.mutable_tpm_firmware_update_settings()
       ->set_allow_user_initiated_preserve_device_state(true);
   SetDevicePolicy(settings);
-  ExpectDeviceRestart();
+  ExpectDeviceRestart(1);
 }
 
 TEST_F(StartTPMFirmwareUpdateTest, EnterpriseCleanupDisallowed) {
@@ -3476,7 +3798,7 @@ TEST_F(StartTPMFirmwareUpdateTest, EnterpriseCleanupAllowed) {
   settings.mutable_tpm_firmware_update_settings()
       ->set_allow_user_initiated_preserve_device_state(true);
   SetDevicePolicy(settings);
-  ExpectDeviceRestart();
+  ExpectDeviceRestart(1);
 }
 
 TEST_F(StartTPMFirmwareUpdateTest, AvailabilityNotDecided) {
@@ -3507,7 +3829,7 @@ TEST_F(StartTPMFirmwareUpdateTest, RequestFileWriteFailure) {
 
 TEST_F(StartTPMFirmwareUpdateTest, PreserveStateful) {
   update_mode_ = "preserve_stateful";
-  ExpectDeviceRestart();
+  ExpectDeviceRestart(1);
 }
 
 }  // namespace login_manager

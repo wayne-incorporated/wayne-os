@@ -1,0 +1,645 @@
+This patch changes the output timing for the LRAMs to be correct for when
+registered output mode is used. It probably cannot be upstreamed since
+not all users will enable registered output mode. Ideally nextpnr/prjoxide
+would include both registered and non-registered timings and select the
+appropriate one based on parameters.
+
+This patch was produced by running the following commands in the prjoxide
+repository after first applying gen-ram-registered-output.patch:
+
+source environment.sh
+(cd timing; make -f tools/run-fuzzers.mk)
+(cd timing; make -f tools/postprocess.mk)
+(python timing/util/extract_cell_timings.py timing/output/)
+
+
+diff --git a/LIFCL/timing/cells_10.json b/LIFCL/timing/cells_10.json
+index 33a7d1d..dc77518 100644
+--- a/LIFCL/timing/cells_10.json
++++ b/LIFCL/timing/cells_10.json
+@@ -3679,26 +3679,26 @@
+             "iopaths": [
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 13462,
+-                    "minv": 8290,
++                    "maxv": 1834,
++                    "minv": 1008,
+                     "to_pin": "DOA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 13541,
+-                    "minv": 12849,
++                    "maxv": 1859,
++                    "minv": 1053,
+                     "to_pin": "DOB"
+                 },
+                 {
+                     "from_pin": "CLK",
+                     "maxv": 13303,
+-                    "minv": 8268,
++                    "minv": 985,
+                     "to_pin": "ERRDECA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 13384,
+-                    "minv": 12776,
++                    "maxv": 1701,
++                    "minv": 981,
+                     "to_pin": "ERRDECB"
+                 },
+                 {
+@@ -3759,18 +3759,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 185,
+-                    "max_setup": 6500,
+-                    "min_hold": 123,
++                    "max_hold": 713,
++                    "max_setup": 6244,
++                    "min_hold": 185,
+                     "min_setup": 4969,
+                     "pin": "CSA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 105,
+-                    "max_setup": 6422,
+-                    "min_hold": 105,
+-                    "min_setup": 6422,
++                    "max_hold": 729,
++                    "max_setup": 6048,
++                    "min_hold": 729,
++                    "min_setup": 6048,
+                     "pin": "CSB"
+                 },
+                 {
+@@ -3807,18 +3807,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 205,
+-                    "max_setup": 6500,
+-                    "min_hold": 138,
++                    "max_hold": 731,
++                    "max_setup": 6244,
++                    "min_hold": 205,
+                     "min_setup": 4968,
+                     "pin": "RSTA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 101,
+-                    "max_setup": 6409,
+-                    "min_hold": 101,
+-                    "min_setup": 6409,
++                    "max_hold": 819,
++                    "max_setup": 6034,
++                    "min_hold": 819,
++                    "min_setup": 6034,
+                     "pin": "RSTB"
+                 },
+                 {
+diff --git a/LIFCL/timing/cells_11.json b/LIFCL/timing/cells_11.json
+index 9293004..74ebc1a 100644
+--- a/LIFCL/timing/cells_11.json
++++ b/LIFCL/timing/cells_11.json
+@@ -3679,26 +3679,26 @@
+             "iopaths": [
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 11706,
+-                    "minv": 7208,
++                    "maxv": 1595,
++                    "minv": 877,
+                     "to_pin": "DOA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 11775,
+-                    "minv": 11173,
++                    "maxv": 1616,
++                    "minv": 916,
+                     "to_pin": "DOB"
+                 },
+                 {
+                     "from_pin": "CLK",
+                     "maxv": 11568,
+-                    "minv": 7189,
++                    "minv": 857,
+                     "to_pin": "ERRDECA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 11638,
+-                    "minv": 11110,
++                    "maxv": 1479,
++                    "minv": 853,
+                     "to_pin": "ERRDECB"
+                 },
+                 {
+@@ -3759,18 +3759,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 161,
+-                    "max_setup": 5652,
+-                    "min_hold": 107,
++                    "max_hold": 620,
++                    "max_setup": 5430,
++                    "min_hold": 161,
+                     "min_setup": 4321,
+                     "pin": "CSA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 91,
+-                    "max_setup": 5584,
+-                    "min_hold": 91,
+-                    "min_setup": 5584,
++                    "max_hold": 634,
++                    "max_setup": 5259,
++                    "min_hold": 634,
++                    "min_setup": 5259,
+                     "pin": "CSB"
+                 },
+                 {
+@@ -3807,18 +3807,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 178,
+-                    "max_setup": 5652,
+-                    "min_hold": 120,
++                    "max_hold": 636,
++                    "max_setup": 5430,
++                    "min_hold": 178,
+                     "min_setup": 4320,
+                     "pin": "RSTA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 88,
+-                    "max_setup": 5573,
+-                    "min_hold": 88,
+-                    "min_setup": 5573,
++                    "max_hold": 712,
++                    "max_setup": 5247,
++                    "min_hold": 712,
++                    "min_setup": 5247,
+                     "pin": "RSTB"
+                 },
+                 {
+diff --git a/LIFCL/timing/cells_12.json b/LIFCL/timing/cells_12.json
+index 9b8b6f4..f4afd8f 100644
+--- a/LIFCL/timing/cells_12.json
++++ b/LIFCL/timing/cells_12.json
+@@ -3679,26 +3679,26 @@
+             "iopaths": [
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 8504,
+-                    "minv": 5333,
++                    "maxv": 1169,
++                    "minv": 756,
+                     "to_pin": "DOA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 8537,
+-                    "minv": 8204,
++                    "maxv": 1164,
++                    "minv": 793,
+                     "to_pin": "DOB"
+                 },
+                 {
+                     "from_pin": "CLK",
+                     "maxv": 8391,
+-                    "minv": 5314,
++                    "minv": 739,
+                     "to_pin": "ERRDECA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 8446,
+-                    "minv": 8155,
++                    "maxv": 1075,
++                    "minv": 743,
+                     "to_pin": "ERRDECB"
+                 },
+                 {
+@@ -3759,18 +3759,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 101,
+-                    "max_setup": 4076,
+-                    "min_hold": 21,
++                    "max_hold": 440,
++                    "max_setup": 3884,
++                    "min_hold": 101,
+                     "min_setup": 3120,
+                     "pin": "CSA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 27,
+-                    "max_setup": 4024,
+-                    "min_hold": 27,
+-                    "min_setup": 4024,
++                    "max_hold": 465,
++                    "max_setup": 3777,
++                    "min_hold": 465,
++                    "min_setup": 3777,
+                     "pin": "CSB"
+                 },
+                 {
+@@ -3807,18 +3807,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 110,
+-                    "max_setup": 4082,
+-                    "min_hold": 27,
++                    "max_hold": 453,
++                    "max_setup": 3890,
++                    "min_hold": 110,
+                     "min_setup": 3125,
+                     "pin": "RSTA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 21,
+-                    "max_setup": 4011,
+-                    "min_hold": 21,
+-                    "min_setup": 4011,
++                    "max_hold": 516,
++                    "max_setup": 3765,
++                    "min_hold": 516,
++                    "min_setup": 3765,
+                     "pin": "RSTB"
+                 },
+                 {
+diff --git a/LIFCL/timing/cells_4.json b/LIFCL/timing/cells_4.json
+index 7a22a56..241c7f7 100644
+--- a/LIFCL/timing/cells_4.json
++++ b/LIFCL/timing/cells_4.json
+@@ -3679,26 +3679,26 @@
+             "iopaths": [
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 13462,
+-                    "minv": 8290,
++                    "maxv": 1834,
++                    "minv": 1008,
+                     "to_pin": "DOA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 13541,
+-                    "minv": 12849,
++                    "maxv": 1859,
++                    "minv": 1053,
+                     "to_pin": "DOB"
+                 },
+                 {
+                     "from_pin": "CLK",
+                     "maxv": 13303,
+-                    "minv": 8268,
++                    "minv": 985,
+                     "to_pin": "ERRDECA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 13384,
+-                    "minv": 12776,
++                    "maxv": 1701,
++                    "minv": 981,
+                     "to_pin": "ERRDECB"
+                 },
+                 {
+@@ -3759,18 +3759,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 185,
+-                    "max_setup": 6500,
+-                    "min_hold": 123,
++                    "max_hold": 713,
++                    "max_setup": 6244,
++                    "min_hold": 185,
+                     "min_setup": 4969,
+                     "pin": "CSA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 105,
+-                    "max_setup": 6422,
+-                    "min_hold": 105,
+-                    "min_setup": 6422,
++                    "max_hold": 729,
++                    "max_setup": 6048,
++                    "min_hold": 729,
++                    "min_setup": 6048,
+                     "pin": "CSB"
+                 },
+                 {
+@@ -3807,18 +3807,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 205,
+-                    "max_setup": 6500,
+-                    "min_hold": 138,
++                    "max_hold": 731,
++                    "max_setup": 6244,
++                    "min_hold": 205,
+                     "min_setup": 4968,
+                     "pin": "RSTA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 101,
+-                    "max_setup": 6409,
+-                    "min_hold": 101,
+-                    "min_setup": 6409,
++                    "max_hold": 819,
++                    "max_setup": 6034,
++                    "min_hold": 819,
++                    "min_setup": 6034,
+                     "pin": "RSTB"
+                 },
+                 {
+diff --git a/LIFCL/timing/cells_5.json b/LIFCL/timing/cells_5.json
+index 5c9f464..23d06c7 100644
+--- a/LIFCL/timing/cells_5.json
++++ b/LIFCL/timing/cells_5.json
+@@ -3679,26 +3679,26 @@
+             "iopaths": [
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 11706,
+-                    "minv": 7208,
++                    "maxv": 1595,
++                    "minv": 877,
+                     "to_pin": "DOA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 11775,
+-                    "minv": 11173,
++                    "maxv": 1616,
++                    "minv": 916,
+                     "to_pin": "DOB"
+                 },
+                 {
+                     "from_pin": "CLK",
+                     "maxv": 11568,
+-                    "minv": 7189,
++                    "minv": 857,
+                     "to_pin": "ERRDECA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 11638,
+-                    "minv": 11110,
++                    "maxv": 1479,
++                    "minv": 853,
+                     "to_pin": "ERRDECB"
+                 },
+                 {
+@@ -3759,18 +3759,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 161,
+-                    "max_setup": 5652,
+-                    "min_hold": 107,
++                    "max_hold": 620,
++                    "max_setup": 5430,
++                    "min_hold": 161,
+                     "min_setup": 4321,
+                     "pin": "CSA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 91,
+-                    "max_setup": 5584,
+-                    "min_hold": 91,
+-                    "min_setup": 5584,
++                    "max_hold": 634,
++                    "max_setup": 5259,
++                    "min_hold": 634,
++                    "min_setup": 5259,
+                     "pin": "CSB"
+                 },
+                 {
+@@ -3807,18 +3807,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 178,
+-                    "max_setup": 5652,
+-                    "min_hold": 120,
++                    "max_hold": 636,
++                    "max_setup": 5430,
++                    "min_hold": 178,
+                     "min_setup": 4320,
+                     "pin": "RSTA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 88,
+-                    "max_setup": 5573,
+-                    "min_hold": 88,
+-                    "min_setup": 5573,
++                    "max_hold": 712,
++                    "max_setup": 5247,
++                    "min_hold": 712,
++                    "min_setup": 5247,
+                     "pin": "RSTB"
+                 },
+                 {
+diff --git a/LIFCL/timing/cells_6.json b/LIFCL/timing/cells_6.json
+index c825410..821682c 100644
+--- a/LIFCL/timing/cells_6.json
++++ b/LIFCL/timing/cells_6.json
+@@ -3679,26 +3679,26 @@
+             "iopaths": [
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 8504,
+-                    "minv": 5333,
++                    "maxv": 1169,
++                    "minv": 756,
+                     "to_pin": "DOA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 8537,
+-                    "minv": 8204,
++                    "maxv": 1164,
++                    "minv": 793,
+                     "to_pin": "DOB"
+                 },
+                 {
+                     "from_pin": "CLK",
+                     "maxv": 8391,
+-                    "minv": 5314,
++                    "minv": 739,
+                     "to_pin": "ERRDECA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 8446,
+-                    "minv": 8155,
++                    "maxv": 1075,
++                    "minv": 743,
+                     "to_pin": "ERRDECB"
+                 },
+                 {
+@@ -3759,18 +3759,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 101,
+-                    "max_setup": 4076,
+-                    "min_hold": 21,
++                    "max_hold": 440,
++                    "max_setup": 3884,
++                    "min_hold": 101,
+                     "min_setup": 3120,
+                     "pin": "CSA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 27,
+-                    "max_setup": 4024,
+-                    "min_hold": 27,
+-                    "min_setup": 4024,
++                    "max_hold": 465,
++                    "max_setup": 3777,
++                    "min_hold": 465,
++                    "min_setup": 3777,
+                     "pin": "CSB"
+                 },
+                 {
+@@ -3807,18 +3807,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 110,
+-                    "max_setup": 4082,
+-                    "min_hold": 27,
++                    "max_hold": 453,
++                    "max_setup": 3890,
++                    "min_hold": 110,
+                     "min_setup": 3125,
+                     "pin": "RSTA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 21,
+-                    "max_setup": 4011,
+-                    "min_hold": 21,
+-                    "min_setup": 4011,
++                    "max_hold": 516,
++                    "max_setup": 3765,
++                    "min_hold": 516,
++                    "min_setup": 3765,
+                     "pin": "RSTB"
+                 },
+                 {
+diff --git a/LIFCL/timing/cells_M.json b/LIFCL/timing/cells_M.json
+index 77b7375..4e6568a 100644
+--- a/LIFCL/timing/cells_M.json
++++ b/LIFCL/timing/cells_M.json
+@@ -3679,26 +3679,26 @@
+             "iopaths": [
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 5544,
+-                    "minv": 3464,
++                    "maxv": 868,
++                    "minv": 527,
+                     "to_pin": "DOA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 5549,
+-                    "minv": 5304,
++                    "maxv": 862,
++                    "minv": 551,
+                     "to_pin": "DOB"
+                 },
+                 {
+                     "from_pin": "CLK",
+                     "maxv": 5457,
+-                    "minv": 3451,
++                    "minv": 515,
+                     "to_pin": "ERRDECA"
+                 },
+                 {
+                     "from_pin": "CLK",
+-                    "maxv": 5159,
+-                    "minv": 4933,
++                    "maxv": 791,
++                    "minv": 518,
+                     "to_pin": "ERRDECB"
+                 },
+                 {
+@@ -3759,18 +3759,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 173,
+-                    "max_setup": 2835,
+-                    "min_hold": 147,
++                    "max_hold": 437,
++                    "max_setup": 2705,
++                    "min_hold": 173,
+                     "min_setup": 2214,
+                     "pin": "CSA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 139,
+-                    "max_setup": 2798,
+-                    "min_hold": 139,
+-                    "min_setup": 2798,
++                    "max_hold": 449,
++                    "max_setup": 2619,
++                    "min_hold": 449,
++                    "min_setup": 2619,
+                     "pin": "CSB"
+                 },
+                 {
+@@ -3807,18 +3807,18 @@
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 181,
+-                    "max_setup": 2840,
+-                    "min_hold": 154,
++                    "max_hold": 445,
++                    "max_setup": 2710,
++                    "min_hold": 181,
+                     "min_setup": 2220,
+                     "pin": "RSTA"
+                 },
+                 {
+                     "clock": "CLK",
+-                    "max_hold": 133,
+-                    "max_setup": 2790,
+-                    "min_hold": 133,
+-                    "min_setup": 2790,
++                    "max_hold": 490,
++                    "max_setup": 2624,
++                    "min_hold": 490,
++                    "min_setup": 2624,
+                     "pin": "RSTB"
+                 },
+                 {

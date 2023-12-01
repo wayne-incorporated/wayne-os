@@ -1,0 +1,24 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# This GN target should be depended on targets whose package dependencies need
+# to be exported (eg to a .pc file).
+#
+# Parameters:
+#   pkg_deps: package names to be written as dependencies.
+#   target: the target name using the packages, which becomes the prefix of the
+#       generated file name.
+template("write_deps") {
+  forward_variables_from(invoker,
+                         [
+                           "pkg_deps",
+                           "target",
+                           "public_deps",
+                         ])
+  action(target_name) {
+    script = "//common-mk/write_args.py"
+    outputs = [ "${root_gen_dir}/${target}-deps.txt" ]
+    args = [ "--output" ] + outputs + [ "--" ] + pkg_deps
+  }
+}

@@ -1,0 +1,220 @@
+From 4e72293cbb6a1b6fabd13fe0d6995ee0b09bb916 Mon Sep 17 00:00:00 2001
+From: Adhemerval Zanella <adhemerval.zanella@linaro.org>
+Date: Fri, 11 Mar 2022 11:08:55 -0300
+Subject: [PATCH 052/163] x86: Remove .tfloat usage
+
+Some compiler does not support it (such as clang integrated assembly)
+neither gcc emits it.
+---
+ sysdeps/i386/fpu/e_atanh.S    |  3 ++-
+ sysdeps/i386/fpu/e_atanhf.S   |  3 ++-
+ sysdeps/i386/fpu/e_atanhl.S   |  3 ++-
+ sysdeps/i386/fpu/s_asinhl.S   |  3 ++-
+ sysdeps/i386/fpu/s_cbrtl.S    | 44 +++++++++++++++++++++--------------
+ sysdeps/i386/fpu/s_expm1.S    |  3 ++-
+ sysdeps/i386/fpu/s_expm1f.S   |  3 ++-
+ sysdeps/i386/fpu/s_log1pl.S   |  3 ++-
+ sysdeps/x86_64/fpu/s_log1pl.S |  3 ++-
+ 9 files changed, 42 insertions(+), 26 deletions(-)
+
+diff --git a/sysdeps/i386/fpu/e_atanh.S b/sysdeps/i386/fpu/e_atanh.S
+index 6e4fef06b2..a7fd9a60fa 100644
+--- a/sysdeps/i386/fpu/e_atanh.S
++++ b/sysdeps/i386/fpu/e_atanh.S
+@@ -33,7 +33,8 @@ one:	.double 1.0
+ limit:	.double 0.29
+ 	ASM_SIZE_DIRECTIVE(limit)
+ 	.type ln2_2,@object
+-ln2_2:	.tfloat 0.3465735902799726547086160
++ln2_2:	.quad  0xb17217f7d1cf79ac /* 0.3465735902799726547086160L */
++	.short 0x3ffd
+ 	ASM_SIZE_DIRECTIVE(ln2_2)
+ 
+ DEFINE_DBL_MIN
+diff --git a/sysdeps/i386/fpu/e_atanhf.S b/sysdeps/i386/fpu/e_atanhf.S
+index 146196eced..4ab1fa31fb 100644
+--- a/sysdeps/i386/fpu/e_atanhf.S
++++ b/sysdeps/i386/fpu/e_atanhf.S
+@@ -34,7 +34,8 @@ limit:	.double 0.29
+ 	ASM_SIZE_DIRECTIVE(limit)
+ 	.align ALIGNARG(4)
+ 	.type ln2_2,@object
+-ln2_2:	.tfloat 0.3465735902799726547086160
++ln2_2:	.quad   0xb17217f7d1cf79ac  /* 0.3465735902799726547086160L  */
++	.short  0x3ffd
+ 	ASM_SIZE_DIRECTIVE(ln2_2)
+ 
+ DEFINE_FLT_MIN
+diff --git a/sysdeps/i386/fpu/e_atanhl.S b/sysdeps/i386/fpu/e_atanhl.S
+index 1f6eb7ce48..df3f1b8f84 100644
+--- a/sysdeps/i386/fpu/e_atanhl.S
++++ b/sysdeps/i386/fpu/e_atanhl.S
+@@ -39,7 +39,8 @@ limit:	.double 0.29
+ 	ASM_SIZE_DIRECTIVE(limit)
+ 	.align ALIGNARG(4)
+ 	.type ln2_2,@object
+-ln2_2:	.tfloat 0.3465735902799726547086160
++ln2_2:	.quad   0xb17217f7d1cf79ac  /* 0.3465735902799726547086160  */
++	.short  0x3ffd
+ 	ASM_SIZE_DIRECTIVE(ln2_2)
+ 
+ #ifdef PIC
+diff --git a/sysdeps/i386/fpu/s_asinhl.S b/sysdeps/i386/fpu/s_asinhl.S
+index bd442c6a09..f4f420d060 100644
+--- a/sysdeps/i386/fpu/s_asinhl.S
++++ b/sysdeps/i386/fpu/s_asinhl.S
+@@ -23,7 +23,8 @@
+ 
+ 	.align ALIGNARG(4)
+ 	.type huge,@object
+-huge:	.tfloat 1e+4930
++huge:	.quad   0x89b634e7456ffa1d  /* 1e+4930  */
++	.short  0x7ff8
+ 	ASM_SIZE_DIRECTIVE(huge)
+ 	.align ALIGNARG(4)
+ 	/* Please note that we use double value for 1.0.  This number
+diff --git a/sysdeps/i386/fpu/s_cbrtl.S b/sysdeps/i386/fpu/s_cbrtl.S
+index 8802164706..935ac20530 100644
+--- a/sysdeps/i386/fpu/s_cbrtl.S
++++ b/sysdeps/i386/fpu/s_cbrtl.S
+@@ -23,55 +23,63 @@
+ 
+         .align ALIGNARG(4)
+         .type f8,@object
+-f8:	.tfloat 0.161617097923756032
++f8:	.quad   0xa57ef3d83a542839  /* 0.161617097923756032  */
++	.short  0x3ffc
+ 	ASM_SIZE_DIRECTIVE(f8)
+         .align ALIGNARG(4)
+         .type f7,@object
+-f7:	.tfloat -0.988553671195413709
++f7:	.quad   0xfd11da7820029014  /* -0.988553671195413709  */
++	.short  0xbffe
+ 	ASM_SIZE_DIRECTIVE(f7)
+         .align ALIGNARG(4)
+         .type f6,@object
+-f6:	.tfloat 2.65298938441952296
++f6:	.quad   0xa9ca93fcade3b4ad  /* 2.65298938441952296  */
++	.short  0x4000
+ 	ASM_SIZE_DIRECTIVE(f6)
+         .align ALIGNARG(4)
+         .type f5,@object
+-f5:	.tfloat -4.11151425200350531
++f5:	.quad   0x839186562c931c34  /* -4.11151425200350531  */
++	.short  0xc001
+ 	ASM_SIZE_DIRECTIVE(f5)
+         .align ALIGNARG(4)
+         .type f4,@object
+-f4:	.tfloat 4.09559907378707839
++f4:	.quad   0x830f25c9ee304594  /* 4.09559907378707839  */
++	.short  0x4001
+ 	ASM_SIZE_DIRECTIVE(f4)
+         .align ALIGNARG(4)
+         .type f3,@object
+-f3:	.tfloat -2.82414939754975962
++f3:	.quad   0xb4bedd1d5fa2f0c6  /* -2.82414939754975962  */
++	.short  0xc000
+ 	ASM_SIZE_DIRECTIVE(f3)
+         .align ALIGNARG(4)
+         .type f2,@object
+-f2:	.tfloat 1.67595307700780102
++f2:	.quad   0xd685a163b08586e3  /* 1.67595307700780102  */
++	.short  0x3fff
+ 	ASM_SIZE_DIRECTIVE(f2)
+         .align ALIGNARG(4)
+         .type f1,@object
+-f1:	.tfloat 0.338058687610520237
++f1:	.quad   0xad16073ed4ec3b45  /* 0.338058687610520237  */
++	.short  0x3ffd
+ 	ASM_SIZE_DIRECTIVE(f1)
+ 
+-#define CBRT2		1.2599210498948731648
+-#define ONE_CBRT2	0.793700525984099737355196796584
+-#define SQR_CBRT2	1.5874010519681994748
+-#define ONE_SQR_CBRT2	0.629960524947436582364439673883
+-
+ 	/* We make the entries in the following table all 16 bytes
+ 	   wide to avoid having to implement a multiplication by 10.  */
+ 	.type factor,@object
+         .align ALIGNARG(4)
+-factor:	.tfloat ONE_SQR_CBRT2
++factor:	.quad 0xa14517cc6b945711 /* 0.629960524947436582364439673883L */
++	.short 0x3ffe
+ 	.byte 0, 0, 0, 0, 0, 0
+-	.tfloat ONE_CBRT2
++	.quad 0xcb2ff529eb71e415 /* 1.5874010519681994748L */
++	.short 0x3ffe
+ 	.byte 0, 0, 0, 0, 0, 0
+-	.tfloat 1.0
++	.quad 0x8000000000000000 /* 1.0L */
++	.short 0x3fff
+ 	.byte 0, 0, 0, 0, 0, 0
+-	.tfloat CBRT2
++	.quad 0xa14517cc6b945711 /* 1.2599210498948731648L */
++	.short 0x3fff
+ 	.byte 0, 0, 0, 0, 0, 0
+-	.tfloat SQR_CBRT2
++	.quad 0xcb2ff529eb71e416 /* 1.5874010519681994748L */
++	.short 0x3fff
+ 	ASM_SIZE_DIRECTIVE(factor)
+ 
+         .type two64,@object
+diff --git a/sysdeps/i386/fpu/s_expm1.S b/sysdeps/i386/fpu/s_expm1.S
+index 7199d681ba..038ff72feb 100644
+--- a/sysdeps/i386/fpu/s_expm1.S
++++ b/sysdeps/i386/fpu/s_expm1.S
+@@ -33,7 +33,8 @@ minus1:	.double -1.0
+ one:	.double 1.0
+ 	ASM_SIZE_DIRECTIVE(one)
+ 	.type l2e,@object
+-l2e:	.tfloat 1.442695040888963407359924681002
++l2e:	.quad   0xb8aa3b295c17f0bc  /* 1.442695040888963407359924681002 */
++	.short  0x3fff
+ 	ASM_SIZE_DIRECTIVE(l2e)
+ 
+ DEFINE_DBL_MIN
+diff --git a/sysdeps/i386/fpu/s_expm1f.S b/sysdeps/i386/fpu/s_expm1f.S
+index 04c37bda1b..b0406a45aa 100644
+--- a/sysdeps/i386/fpu/s_expm1f.S
++++ b/sysdeps/i386/fpu/s_expm1f.S
+@@ -33,7 +33,8 @@ minus1:	.double -1.0
+ one:	.double 1.0
+ 	ASM_SIZE_DIRECTIVE(one)
+ 	.type l2e,@object
+-l2e:	.tfloat 1.442695040888963407359924681002
++l2e:	.quad  0xb8aa3b295c17f0bc  /* 1.442695040888963407359924681002 */
++	.short 0x3fff
+ 	ASM_SIZE_DIRECTIVE(l2e)
+ 
+ DEFINE_FLT_MIN
+diff --git a/sysdeps/i386/fpu/s_log1pl.S b/sysdeps/i386/fpu/s_log1pl.S
+index f28349f7d2..202995d3d6 100644
+--- a/sysdeps/i386/fpu/s_log1pl.S
++++ b/sysdeps/i386/fpu/s_log1pl.S
+@@ -14,7 +14,8 @@ RCSID("$NetBSD: s_log1p.S,v 1.7 1995/05/09 00:10:58 jtc Exp $")
+ 		-1 + sqrt(2) / 2 <= x <= 1 - sqrt(2) / 2
+ 	   0.29 is a safe value.
+ 	*/
+-limit:	.tfloat 0.29
++limit:	.quad   0x947ae147ae147ae1 /* 0.29 */
++	.short  0x3ffd
+ 	/* Please note:	 we use a double value here.  Since 1.0 has
+ 	   an exact representation this does not effect the accuracy
+ 	   but it helps to optimize the code.  */
+diff --git a/sysdeps/x86_64/fpu/s_log1pl.S b/sysdeps/x86_64/fpu/s_log1pl.S
+index 8219f6fbcc..b053579dc5 100644
+--- a/sysdeps/x86_64/fpu/s_log1pl.S
++++ b/sysdeps/x86_64/fpu/s_log1pl.S
+@@ -14,7 +14,8 @@ RCSID("$NetBSD: s_log1p.S,v 1.7 1995/05/09 00:10:58 jtc Exp $")
+ 		-1 + sqrt(2) / 2 <= x <= 1 - sqrt(2) / 2
+ 	   0.29 is a safe value.
+ 	*/
+-limit:	.tfloat 0.29
++limit:	.quad   0x947ae147ae147ae1	/* 0.29L  */
++	.short	0x3ffd
+ 	/* Please note:	 we use a double value here.  Since 1.0 has
+ 	   an exact representation this does not effect the accuracy
+ 	   but it helps to optimize the code.  */
+-- 
+2.37.2
+

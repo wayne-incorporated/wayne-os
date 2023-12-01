@@ -1,0 +1,53 @@
+# Copyright 2018 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/generate-dbus-proxies.gni")
+import("//common-mk/pkg_config.gni")
+import("//common-mk/proto_library.gni")
+
+generate_dbus_proxies("bootlockbox-proxies") {
+  dbus_service_config = "../dbus_adaptors/dbus-service-config.json"
+  proxy_output_file = "include/bootlockbox/dbus-proxies.h"
+  mock_output_file = "include/bootlockbox/dbus-proxy-mocks.h"
+  proxy_path_in_mocks = "bootlockbox/dbus-proxies.h"
+  sources = [ "../dbus_adaptors/org.chromium.BootLockboxInterface.xml" ]
+}
+
+proto_library("bootlockbox-proto") {
+  proto_in_dir = ".."
+  proto_lib_dirs = [ target_gen_dir ]
+  proto_out_dir = "include/bootlockbox"
+
+  # shared_library.
+  use_pic = true
+  sources = [ "${proto_in_dir}/key_value_map.proto" ]
+  standalone = true
+}
+
+pkg_config("bootlockbox_dependent_config") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+shared_library("libbootlockbox-client") {
+  sources = [
+    "../boot_lockbox_client.cc",
+    "../boot_lockbox_client.h",
+  ]
+  all_dependent_configs = [ ":bootlockbox_dependent_config" ]
+  libs = [ "system_api" ]
+  deps = [
+    ":bootlockbox-proto",
+    ":bootlockbox-proxies",
+  ]
+}
+
+group("all") {
+  deps = [
+    ":bootlockbox-proxies",
+    ":libbootlockbox-client",
+  ]
+}

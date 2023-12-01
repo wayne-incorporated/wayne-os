@@ -1,0 +1,87 @@
+commit 13a97305ba77f44eccba16087320c8aa016ac6da
+Author: Fangrui Song <maskray@google.com>
+Date:   Mon Feb 17 17:43:09 2020 -0800
+
+    [JumpThreading] Skip unconditional PredBB when threading jumps through two basic blocks
+    
+    Fixes https://bugs.llvm.org/show_bug.cgi?id=44922 (caused by 4698bf145d583e26ed438026ef7fde031ef322b1)
+    
+    ThreadThroughTwoBasicBlocks assumes PredBBBranch is conditional. The following code can segfault.
+    
+      AddPHINodeEntriesForMappedBlock(PredBBBranch->getSuccessor(1), PredBB, NewBB,
+                                      ValueMapping);
+    
+    We can also allow unconditional PredBB, but the produced code is not
+    better.
+    
+    Reviewed By: kazu
+    
+    Differential Revision: https://reviews.llvm.org/D74747
+
+diff --git a/llvm/lib/Transforms/Scalar/JumpThreading.cpp b/llvm/lib/Transforms/Scalar/JumpThreading.cpp
+index 411e3c1cca2..616d64a794b 100644
+--- a/llvm/lib/Transforms/Scalar/JumpThreading.cpp
++++ b/llvm/lib/Transforms/Scalar/JumpThreading.cpp
+@@ -2113,11 +2113,11 @@ bool JumpThreadingPass::MaybeThreadThroughTwoBasicBlocks(BasicBlock *BB,
+   if (!PredBB)
+     return false;
+ 
+-  // Require that PredBB end with a Branch.  If PredBB ends with an
+-  // unconditional branch, we should be merging PredBB and BB instead.  For
++  // Require that PredBB end with a conditional Branch. If PredBB ends with an
++  // unconditional branch, we should be merging PredBB and BB instead. For
+   // simplicity, we don't deal with a switch.
+   BranchInst *PredBBBranch = dyn_cast<BranchInst>(PredBB->getTerminator());
+-  if (!PredBBBranch)
++  if (!PredBBBranch || PredBBBranch->isUnconditional())
+     return false;
+ 
+   // If PredBB has exactly one incoming edge, we don't gain anything by copying
+diff --git a/llvm/test/Transforms/JumpThreading/thread-two-bbs6.ll b/llvm/test/Transforms/JumpThreading/thread-two-bbs6.ll
+new file mode 100644
+index 00000000000..0d8d2f058b8
+--- /dev/null
++++ b/llvm/test/Transforms/JumpThreading/thread-two-bbs6.ll
+@@ -0,0 +1,42 @@
++;; Test that we skip unconditional PredBB when threading jumps through two
++;; successive basic blocks.
++; RUN: opt -S -passes='function(jump-threading)' < %s | FileCheck %s
++
++target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
++target triple = "x86_64-unknown-linux-gnu"
++
++define i32 @f(i32* %0) {
++; CHECK-LABEL: @f
++; CHECK: br i1 %good, label %pred.bb, label %pred.pred.bb
++entry:
++  %size = call i64 @get_size(i32* %0)
++  %good = icmp ugt i64 %size, 3
++  br i1 %good, label %pred.bb, label %pred.pred.bb
++
++; CHECK:      pred.pred.bb:
++; CHECK:       br label %pred.bb
++; CHECK:      pred.bb:
++; CHECK:       br label %bb
++; CHECK:      bb:
++pred.pred.bb:                                        ; preds = %entry
++  call void @effect()
++  br label %pred.bb
++pred.bb:                                             ; preds = %pred.pred.bb, %entry
++  %v = load i32, i32* %0
++  br label %bb
++
++bb:                                                  ; preds = %pred.bb
++  call void @effect1(i8* blockaddress(@f, %bb))
++  br i1 %good, label %cont2, label %cont1
++
++cont1:                                               ; preds = %bb
++  br i1 %good, label %exit, label %cont2
++cont2:                                               ; preds = %bb
++  br label %exit
++exit:                                                ; preds = %cont1, %cont2
++  ret i32 %v
++}
++
++declare i64 @get_size(i32*)
++declare void @effect()
++declare void @effect1(i8*)

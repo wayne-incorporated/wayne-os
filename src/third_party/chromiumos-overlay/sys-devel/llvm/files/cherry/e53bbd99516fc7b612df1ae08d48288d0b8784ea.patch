@@ -1,0 +1,158 @@
+commit e53bbd99516fc7b612df1ae08d48288d0b8784ea
+Author: Zequan Wu <zequanwu@google.com>
+Date:   Tue Jan 12 11:22:31 2021 -0800
+
+    [IR] move nomerge attribute from function declaration/definition to callsites
+    
+    Move nomerge attribute from function declaration/definition to callsites to
+    allow virtual function calls attach the attribute.
+    
+    Differential Revision: https://reviews.llvm.org/D94537
+
+diff --git a/clang/lib/CodeGen/CGCall.cpp b/clang/lib/CodeGen/CGCall.cpp
+index 2cc7203d1194..42801372189b 100644
+--- a/clang/lib/CodeGen/CGCall.cpp
++++ b/clang/lib/CodeGen/CGCall.cpp
+@@ -1985,7 +1985,9 @@ void CodeGenModule::ConstructAttributeList(
+           FuncAttrs.addAttribute(llvm::Attribute::NoReturn);
+         NBA = Fn->getAttr<NoBuiltinAttr>();
+       }
+-      if (!AttrOnCallSite && TargetDecl->hasAttr<NoMergeAttr>())
++      // Only place nomerge attribute on call sites, never functions. This
++      // allows it to work on indirect virtual function calls.
++      if (AttrOnCallSite && TargetDecl->hasAttr<NoMergeAttr>())
+         FuncAttrs.addAttribute(llvm::Attribute::NoMerge);
+     }
+ 
+@@ -5018,13 +5020,11 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
+         Attrs.addAttribute(getLLVMContext(), llvm::AttributeList::FunctionIndex,
+                            llvm::Attribute::StrictFP);
+ 
+-  // Add nomerge attribute to the call-site if the callee function doesn't have
+-  // the attribute.
+-  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl))
+-    if (!FD->hasAttr<NoMergeAttr>() && InNoMergeAttributedStmt)
+-      Attrs = Attrs.addAttribute(getLLVMContext(),
+-                                 llvm::AttributeList::FunctionIndex,
+-                                 llvm::Attribute::NoMerge);
++  // Add call-site nomerge attribute if exists.
++  if (InNoMergeAttributedStmt)
++    Attrs =
++        Attrs.addAttribute(getLLVMContext(), llvm::AttributeList::FunctionIndex,
++                           llvm::Attribute::NoMerge);
+ 
+   // Apply some call-site-specific attributes.
+   // TODO: work this into building the attribute set.
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index da5b03b138bf..bee51715bdc6 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -1772,9 +1772,6 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
+       B.addAttribute(llvm::Attribute::MinSize);
+   }
+ 
+-  if (D->hasAttr<NoMergeAttr>())
+-    B.addAttribute(llvm::Attribute::NoMerge);
+-
+   F->addAttributes(llvm::AttributeList::FunctionIndex, B);
+ 
+   unsigned alignment = D->getMaxAlignment() / Context.getCharWidth();
+diff --git a/clang/test/CodeGen/attr-nomerge.cpp b/clang/test/CodeGen/attr-nomerge.cpp
+index d93f4a7c96d6..fc26af379fdb 100644
+--- a/clang/test/CodeGen/attr-nomerge.cpp
++++ b/clang/test/CodeGen/attr-nomerge.cpp
+@@ -3,7 +3,7 @@
+ class A {
+ public:
+   [[clang::nomerge]] A();
+-  [[clang::nomerge]] ~A();
++  [[clang::nomerge]] virtual ~A();
+   [[clang::nomerge]] void f();
+   [[clang::nomerge]] virtual void g();
+   [[clang::nomerge]] static void f1();
+@@ -14,14 +14,14 @@ public:
+   void g() override;
+ };
+ 
+-[[clang::nomerge]] bool bar();
++bool bar();
+ [[clang::nomerge]] void f(bool, bool);
+ 
+ void foo(int i, A *ap, B *bp) {
+   [[clang::nomerge]] bar();
+   [[clang::nomerge]] (i = 4, bar());
+   [[clang::nomerge]] (void)(bar());
+-  [[clang::nomerge]] f(bar(), bar());
++  f(bar(), bar());
+   [[clang::nomerge]] [] { bar(); bar(); }(); // nomerge only applies to the anonymous function call
+   [[clang::nomerge]] for (bar(); bar(); bar()) {}
+   [[clang::nomerge]] { asm("nop"); }
+@@ -37,6 +37,9 @@ void foo(int i, A *ap, B *bp) {
+ 
+   B b;
+   b.g();
++
++  A *newA = new B();
++  delete newA;
+ }
+ 
+ int g(int i);
+@@ -57,37 +60,34 @@ void something_else_again() {
+   g(1);
+ }
+ 
++// CHECK: call zeroext i1 @_Z3barv() #[[ATTR0:[0-9]+]]
++// CHECK: call zeroext i1 @_Z3barv() #[[ATTR0]]
++// CHECK: call zeroext i1 @_Z3barv() #[[ATTR0]]
+ // CHECK: call zeroext i1 @_Z3barv(){{$}}
+ // CHECK: call zeroext i1 @_Z3barv(){{$}}
+-// CHECK: call zeroext i1 @_Z3barv(){{$}}
+-// CHECK: call zeroext i1 @_Z3barv(){{$}}
+-// CHECK: call zeroext i1 @_Z3barv(){{$}}
+-// CHECK: call void @_Z1fbb({{.*}}){{$}}
+-// CHECK: call void @"_ZZ3fooiP1AP1BENK3$_0clEv"{{.*}} #[[ATTR0:[0-9]+]]
+-// CHECK: call zeroext i1 @_Z3barv(){{$}}
+-// CHECK: call zeroext i1 @_Z3barv(){{$}}
+-// CHECK: call zeroext i1 @_Z3barv(){{$}}
++// CHECK: call void @_Z1fbb({{.*}}) #[[ATTR0]]
++// CHECK: call void @"_ZZ3fooiP1AP1BENK3$_0clEv"{{.*}} #[[ATTR0]]
++// CHECK: call zeroext i1 @_Z3barv() #[[ATTR0]]
++// CHECK-LABEL: for.cond:
++// CHECK: call zeroext i1 @_Z3barv() #[[ATTR0]]
++// CHECK-LABEL: for.inc:
++// CHECK: call zeroext i1 @_Z3barv() #[[ATTR0]]
+ // CHECK: call void asm sideeffect "nop"{{.*}} #[[ATTR1:[0-9]+]]
+ // CHECK: call zeroext i1 @_Z3barv(){{$}}
+ // CHECK: %[[AG:.*]] = load void (%class.A*)*, void (%class.A*)**
+-// CHECK-NEXT: call void %[[AG]](%class.A* nonnull dereferenceable
++// CHECK-NEXT: call void %[[AG]](%class.A* {{.*}}) #[[ATTR0]]
+ // CHECK: %[[BG:.*]] = load void (%class.B*)*, void (%class.B*)**
+ // CHECK-NEXT: call void %[[BG]](%class.B* nonnull dereferenceable
+-
+-
+-// CHECK-DAG: declare zeroext i1 @_Z3barv() #[[ATTR2:[0-9]+]]
+-// CHECK-DAG: declare void @_Z1fbb(i1 zeroext, i1 zeroext) #[[ATTR2]]
+-// CHECK-DAG: declare void @_ZN1AC1Ev{{.*}} #[[ATTR2]]
+-// CHECK-DAG: declare void @_ZN1A1fEv{{.*}} #[[ATTR2]]
+-// CHECK-DAG: declare void @_ZN1A1gEv{{.*}} #[[ATTR2]]
+-// CHECK-DAG: declare void @_ZN1A2f1Ev{{.*}} #[[ATTR2]]
+-// CHECK-DAG: declare void @_ZN1AC2Ev{{.*}} #[[ATTR2]]
+-// CHECK-DAG: declare void @_ZN1AD1Ev{{.*}} #[[ATTR3:[0-9]+]]
+-// CHECK-DAG: declare void @_ZN1AD2Ev{{.*}} #[[ATTR3]]
+-// CHECK-DAG: define{{.*}} i32 @_Z1gi(i32 %i) #[[ATTR4:[0-9]+]] {
++// CHECK: call void @_ZN1AC1Ev({{.*}}) #[[ATTR0]]
++// CHECK: call void @_ZN1A1fEv({{.*}}) #[[ATTR0]]
++// CHECK: call void @_ZN1A1gEv({{.*}}) #[[ATTR0]]
++// CHECK: call void @_ZN1A2f1Ev() #[[ATTR0]]
++// CHECK: call void @_ZN1BC1Ev({{.*}}){{$}}
++// CHECK: call void @_ZN1B1gEv({{.*}}){{$}}
++// CHECK: call void @_ZN1BC1Ev({{.*}}){{$}}
++// CHECK: %[[AG:.*]] = load void (%class.A*)*, void (%class.A*)**
++// CHECK-NEXT: call void %[[AG]](%class.A* {{.*}}) #[[ATTR1]]
++// CHECK: call void  @_ZN1AD1Ev(%class.A* {{.*}}) #[[ATTR1]]
+ 
+ // CHECK-DAG: attributes #[[ATTR0]] = {{{.*}}nomerge{{.*}}}
+ // CHECK-DAG: attributes #[[ATTR1]] = {{{.*}}nomerge{{.*}}}
+-// CHECK-DAG: attributes #[[ATTR2]] = {{{.*}}nomerge{{.*}}}
+-// CHECK-DAG: attributes #[[ATTR3]] = {{{.*}}nomerge{{.*}}}
+-// CHECK-DAG: attributes #[[ATTR4]] = {{{.*}}nomerge{{.*}}}

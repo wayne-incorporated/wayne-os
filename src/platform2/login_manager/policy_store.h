@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+// Copyright 2012 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <string>
 
 #include <base/files/file_path.h>
-#include <base/macros.h>
 
 #include "bindings/device_management_backend.pb.h"
 
@@ -24,6 +23,8 @@ class PolicyKey;
 // and persisted to disk on-demand.
 //
 // THIS CLASS DOES NO SIGNATURE VALIDATION.
+// However, derived classes like `ResilientPolicyStore` might perform
+// signature validation.
 class PolicyStore {
  public:
   explicit PolicyStore(const base::FilePath& policy_path);
@@ -31,8 +32,6 @@ class PolicyStore {
   PolicyStore& operator=(const PolicyStore&) = delete;
 
   virtual ~PolicyStore();
-
-  virtual bool DefunctPrefsFilePresent();
 
   // Call LoadOrCreate() if it hasn't been called already. Returns the
   // (possibly cached) result from the LoadOrCreate() call.
@@ -47,35 +46,40 @@ class PolicyStore {
   // Clobber the stored policy with new data.
   virtual void Set(const enterprise_management::PolicyFetchResponse& policy);
 
-  // Deletes the policy file at |policy_file_| and clears the stored policy.
-  virtual bool Delete();
-
   const base::FilePath policy_path() const { return policy_path_; }
 
-  virtual bool resilient_for_testing() const { return false; }
+  bool resilient_for_testing() const { return is_resilient_store_; }
 
  protected:
+  PolicyStore(const base::FilePath& policy_path, bool is_resilient);
+
   // Load the signed policy off of disk into |policy_|. Returns true unless
   // there is a policy on disk and loading it fails.
   virtual bool LoadOrCreate();
-
-  // Load the signed policy off of disk into |policy_| from |policy_path|.
-  // Returns true unless there is a policy on disk and loading it fails.
-  bool LoadOrCreateFromPath(const base::FilePath& policy_path);
 
   // Persist |policy_| to disk at |policy_path|.
   // Returns false if there's an error while writing data.
   bool PersistToPath(const base::FilePath& policy_path);
 
-  // The cached policy data from |policy_path_|. It is kept up to date whenever
-  // the contents in the file are updated by this object.
-  std::string cached_policy_data_;
+  // Whether the |policy_| object was explicitly changed for the purpose of
+  // being persisted, but not persisted yet. Currently this happens only when
+  // it is updated through Set() method.
+  bool explicit_update_persist_pending_ = false;
 
   enterprise_management::PolicyFetchResponse policy_;
   const base::FilePath policy_path_;
 
   enum LoadResult { NOT_LOADED, LOAD_SUCCEEDED, LOAD_FAILED };
   LoadResult load_result_ = NOT_LOADED;
+
+ private:
+  // Load the signed policy off of disk into |policy_| from |policy_path|.
+  // Returns true unless there is a policy on disk and loading it fails.
+  bool LoadOrCreateFromPath(const base::FilePath& policy_path);
+
+  // The type of policy store. If resilient, the latest policy data are stored
+  // in multiple files.
+  const bool is_resilient_store_;
 };
 }  // namespace login_manager
 

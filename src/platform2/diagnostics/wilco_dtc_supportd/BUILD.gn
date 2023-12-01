@@ -1,0 +1,82 @@
+# Copyright 2020 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+pkg_config("common_pkg_deps") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+    "libdebugd-client",
+  ]
+}
+
+# Library that provides core functionality for the wilco_dtc_supportd daemon.
+source_set("libwilco_dtc_supportd") {
+  configs += [ ":common_pkg_deps" ]
+  deps = [
+    "telemetry:libtelemetry",
+    "utils:libutils",
+    "//diagnostics/constants:libconstants",
+    "//diagnostics/grpc:wilco_dtc_grpc_protos",
+    "//diagnostics/mojom/public:cros_healthd_mojo_bindings",
+    "//diagnostics/mojom/public:wilco_dtc_supportd_mojo_bindings",
+  ]
+  sources = [
+    "core.cc",
+    "core_delegate_impl.cc",
+    "dbus_service.cc",
+    "grpc_client_manager.cc",
+    "grpc_service.cc",
+    "json_utils.cc",
+    "mojo_grpc_adapter.cc",
+    "mojo_service.cc",
+    "mojo_service_factory.cc",
+    "probe_service_impl.cc",
+    "routine_service.cc",
+  ]
+}
+
+executable("wilco_dtc_supportd") {
+  sources = [
+    "daemon.cc",
+    "main.cc",
+  ]
+  configs += [ ":common_pkg_deps" ]
+  deps = [ ":libwilco_dtc_supportd" ]
+  if (use.wilco) {
+    install_path = "bin"
+  }
+}
+
+if (use.test) {
+  executable("wilco_dtc_supportd_test") {
+    if (use.wilco) {
+      run_test = true
+    }
+    sources = [
+      "core_test.cc",
+      "dbus_service_test.cc",
+      "ec_constants_test.cc",
+      "fake_browser.cc",
+      "fake_diagnostics_service.cc",
+      "fake_probe_service.cc",
+      "fake_wilco_dtc.cc",
+      "grpc_service_test.cc",
+      "mock_mojo_client.cc",
+      "mojo_service_test.cc",
+      "probe_service_impl_test.cc",
+      "routine_service_test.cc",
+    ]
+    configs += [
+      ":common_pkg_deps",
+      "//common-mk:test",
+    ]
+    deps = [
+      ":libwilco_dtc_supportd",
+      "telemetry:telemetry_test",
+      "utils:mojo_testrunner",
+    ]
+  }
+}

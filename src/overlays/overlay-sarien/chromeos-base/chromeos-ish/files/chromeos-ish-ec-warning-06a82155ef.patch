@@ -1,0 +1,37 @@
+commit 06a82155ef062adaccf3c2469c59ca850f5800c7
+Author: Fabio Baltieri <fabiobaltieri@google.com>
+Date:   Tue Dec 29 11:53:01 2020 +0000
+
+    ectool_keyscan: add missing null terminator to kbd_plain_xlate
+    
+    strchr relies on the source string to be null terminated. This fixes a
+    compiler warning when building outside of the chroot:
+    
+    util/ectool_keyscan.c: In function ‘cmd_keyscan’:
+    util/ectool_keyscan.c:208:9: error: ‘strchr’ argument missing terminating nul [-Werror=stringop-overflow=]
+      208 |   pos = strchr(kbd_plain_xlate, key);
+          |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    
+    BUG=none
+    TEST=build only, warning is gone
+    BRANCH=none
+    
+    Signed-off-by: Fabio Baltieri <fabiobaltieri@google.com>
+    Change-Id: Iafb8249515ffa1a5f7e04a272e54a048eef9a57c
+    Reviewed-on: https://chromium-review.googlesource.com/c/chromiumos/platform/ec/+/2606228
+    Reviewed-by: Keith Short <keithshort@chromium.org>
+    Reviewed-by: Simon Glass <sjg@chromium.org>
+
+diff --git a/util/ectool_keyscan.c b/util/ectool_keyscan.c
+index 293857285..3de28cac1 100644
+--- a/util/ectool_keyscan.c
++++ b/util/ectool_keyscan.c
+@@ -137,7 +137,7 @@ static const unsigned char kbd_plain_xlate[] = {
+ 	'8',  '9',  '-',  '4',  '5',  '6',  '+',  '1',	/* 0x40 - 0x4f */
+ 	'2',  '3',  '0',  '.', 0xff, 0xff, 0xff, 0xff,
+ 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,	/* 0x50 - 0x5F */
+-	'\r', 0xff, 0xff
++	'\r', 0xff, 0xff, '\0'
+ };
+ 
+ /**

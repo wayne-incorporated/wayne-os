@@ -1,0 +1,41 @@
+From 103080952dd6a352e6b0abc69899c589b024af71 Mon Sep 17 00:00:00 2001
+From: Michael Benfield <mbenfield@google.com>
+Date: Mon, 10 Jan 2022 17:32:23 +0000
+Subject: [PATCH] Revert "[libcxx] Add a dependency on unwind in cxx_static, if
+ LIBCXXABI_USE_LLVM_UNWINDER is set"
+
+This reverts commit b1c9d3d29a1e3cc6a9ad6f0fd1a3a0fa15800f64.
+
+Currently that commit causes the error
+
+CMake Error at src/CMakeLists.txt:293 (add_dependencies):
+  The dependency target "unwind" of target "cxx_static" does not exist.
+
+When the bug b/204093890 is fixed, this patch should no longer be
+needed.
+---
+ libcxx/src/CMakeLists.txt | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/libcxx/src/CMakeLists.txt b/libcxx/src/CMakeLists.txt
+index 12dcdf954405..62e1ccebb67e 100644
+--- a/libcxx/src/CMakeLists.txt
++++ b/libcxx/src/CMakeLists.txt
+@@ -300,13 +300,6 @@ if (LIBCXX_ENABLE_STATIC)
+   cxx_add_common_build_flags(cxx_static)
+   cxx_set_common_defines(cxx_static)
+ 
+-  if (LIBCXXABI_USE_LLVM_UNWINDER)
+-    # If we intend to use the just-built unwinder, add a dependency so that it
+-    # gets built, even if we technically aren't going to link it in at this
+-    # stage.
+-    add_dependencies(cxx_static unwind)
+-  endif()
+-
+   if (LIBCXX_HERMETIC_STATIC_LIBRARY)
+     # If the hermetic library doesn't define the operator new/delete functions
+     # then its code shouldn't declare them with hidden visibility.  They might
+-- 
+2.34.1.575.g55b058a8bb-goog
+
+

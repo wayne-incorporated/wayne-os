@@ -1,0 +1,24 @@
+Tensorflow uses its own implementation of ashmem_create if it is
+not being built for Android.
+
+That implementation has a bug, where if the same 'name' is passed in
+for multiple invocations, it will resize the underlying shared memory
+file, effectively ignoring the 'anonymous' aspect expected of ashmem.
+
+Our implementation handles this better, and this ensures all of the ashmem
+functionlity is consistenly served from our implementation.
+
+diff --git a/tensorflow/lite/nnapi/nnapi_implementation.cc b/tensorflow/lite/nnapi/nnapi_implementation.cc
+index 2722be73..c067bdd6 100644
+--- a/tensorflow/lite/nnapi/nnapi_implementation.cc
++++ b/tensorflow/lite/nnapi/nnapi_implementation.cc
+@@ -232,7 +232,8 @@ const NnApi LoadNnApi() {
+   // implementation, but don't have libneuralnetworks.so library, and
+   // platforms which use nnapi_implementation_disabled.cc stub.
+   if (libneuralnetworks != nullptr) {
+-    nnapi.ASharedMemory_create = ASharedMemory_create;
++    LOAD_FUNCTION_RENAME(libneuralnetworks, ASharedMemory_create,
++                         "ashmem_create_region");
+   }
+ #endif  // __ANDROID__
+ 

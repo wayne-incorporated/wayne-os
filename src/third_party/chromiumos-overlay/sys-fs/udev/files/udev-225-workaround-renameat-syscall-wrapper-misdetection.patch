@@ -1,0 +1,45 @@
+From 4097f57573bc5d7a705e5de09ec148d86e5fd925 Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Tue, 16 Feb 2021 20:21:21 +0200
+Subject: [PATCH] missing.h: workaround autotools renameat2 glibc 2.28
+ misdetection
+
+When building udev/systemd v225 on top of glibc 2.28 or newer,
+the following error occurs:
+
+error: static declaration of 'renameat2' follows non-static declaration
+
+This is because the old autotools infrastructure incorrectly
+detects the presence of the glibc renameat2 wrapper and tries to
+replace it with a compatible systemd-internal one. We avoid this
+situation by guarding the systemd wrapper with a __GLIBC__ macro.
+
+This patch should be dropped once systemd/udev is upgraded past
+the move to meson upstream which also has heavy syscall wrapper
+tree-wide refactorings.
+
+Signed-off-by: Adrian Ratiu <adrian.ratiu@collabora.com>
+---
+ src/basic/missing.h | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/basic/missing.h b/src/basic/missing.h
+index 34ab0254dd..87bce481ec 100644
+--- a/src/basic/missing.h
++++ b/src/basic/missing.h
+@@ -984,7 +984,11 @@ static inline pid_t raw_getpid(void) {
+ #endif
+ }
+ 
+-#if !HAVE_DECL_RENAMEAT2
++/* autotools detection is broken for this path with newer glibc and in the
++ * meantime systemd dropped autotools in favor of meson, so autotools bugs are
++ * not fixed anymore; systemd needs upgrading to be able to drop this #if hack.
++ */
++#if !HAVE_DECL_RENAMEAT2 && !(__GLIBC__ >= 2 && __GLIBC_MINOR__ >= 28)
+ 
+ #ifndef __NR_renameat2
+ #  if defined __x86_64__
+-- 
+2.30.1
+

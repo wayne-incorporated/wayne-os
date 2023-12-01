@@ -1,0 +1,97 @@
+From 82dbfbdcbbc13e540db99d07f9a73d2e78e8036c Mon Sep 17 00:00:00 2001
+From: Andrii Simiklit <andrii.simiklit@globallogic.com>
+Date: Tue, 5 Mar 2019 17:58:53 +0200
+Subject: [PATCH 2/4] FROMLIST: glsl: fix a binding points assignment for
+ ssbo/ubo arrays
+
+This is needed to be in agreement with spec requirements:
+https://github.com/KhronosGroup/OpenGL-API/issues/46
+
+Piers Daniell:
+   "We discussed this in the OpenGL/ES working group meeting
+    and agreed that eliminating unused elements from the interface
+    block array is not desirable. There is no statement in the spec
+    that this takes place and it would be highly implementation
+    dependent if it happens. If the application has an "interface"
+    in the shader they need to match up with the API it would be
+    quite confusing to have the binding point get compacted.
+    So the answer is no, the binding points aren't affected by
+    unused elements in the interface block array."
+
+Bugzilla: https://bugs.freedesktop.org/show_bug.cgi?id=109532
+Reported-By: Ilia Mirkin <imirkin@alum.mit.edu>
+Tested-by: Fritz Koenig <frkoenig@google.com>
+Signed-off-by: Andrii Simiklit <andrii.simiklit@globallogic.com>
+(cherry picked from commit e136ef61908abc0f672d9296eeab7dcd452691e0)
+Signed-off-by: Gurchetan Singh <gurchetansingh@chromium.org>
+---
+ .../glsl/link_uniform_block_active_visitor.cpp       |  1 +
+ .../glsl/link_uniform_block_active_visitor.h         |  1 +
+ src/compiler/glsl/link_uniform_blocks.cpp            | 12 +++++++-----
+ 3 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/src/compiler/glsl/link_uniform_block_active_visitor.cpp b/src/compiler/glsl/link_uniform_block_active_visitor.cpp
+index 368981852c06..0af3b3120711 100644
+--- a/src/compiler/glsl/link_uniform_block_active_visitor.cpp
++++ b/src/compiler/glsl/link_uniform_block_active_visitor.cpp
+@@ -103,6 +103,7 @@ process_arrays(void *mem_ctx, ir_dereference_array *ir,
+       if (*ub_array_ptr == NULL) {
+          *ub_array_ptr = rzalloc(mem_ctx, struct uniform_block_array_elements);
+          (*ub_array_ptr)->ir = ir;
++         (*ub_array_ptr)->original_dim_size = block->type->length;
+       }
+ 
+       struct uniform_block_array_elements *ub_array = *ub_array_ptr;
+diff --git a/src/compiler/glsl/link_uniform_block_active_visitor.h b/src/compiler/glsl/link_uniform_block_active_visitor.h
+index fbac65d5b674..a8ea3f52b6d1 100644
+--- a/src/compiler/glsl/link_uniform_block_active_visitor.h
++++ b/src/compiler/glsl/link_uniform_block_active_visitor.h
+@@ -32,6 +32,7 @@ struct uniform_block_array_elements {
+    unsigned num_array_elements;
+ 
+    ir_dereference_array *ir;
++   unsigned original_dim_size;
+ 
+    struct uniform_block_array_elements *array;
+ };
+diff --git a/src/compiler/glsl/link_uniform_blocks.cpp b/src/compiler/glsl/link_uniform_blocks.cpp
+index 741fae062f3d..1665fc3f8cbf 100644
+--- a/src/compiler/glsl/link_uniform_blocks.cpp
++++ b/src/compiler/glsl/link_uniform_blocks.cpp
+@@ -244,18 +244,21 @@ process_block_array(struct uniform_block_array_elements *ub_array, char **name,
+    for (unsigned j = 0; j < ub_array->num_array_elements; j++) {
+       size_t new_length = name_length;
+ 
++      unsigned int element_idx = ub_array->array_elements[j];
+       /* Append the subscript to the current variable name */
+-      ralloc_asprintf_rewrite_tail(name, &new_length, "[%u]",
+-                                   ub_array->array_elements[j]);
++      ralloc_asprintf_rewrite_tail(name, &new_length, "[%u]", element_idx);
+ 
+       if (ub_array->array) {
++         unsigned boffset = (*binding_offset) + (element_idx *
++                             ub_array->original_dim_size);
+          process_block_array(ub_array->array, name, new_length, blocks,
+                              parcel, variables, b, block_index,
+-                             binding_offset, ctx, prog, first_index);
++                             &boffset, ctx, prog, first_index);
+       } else {
++         unsigned boffset = (*binding_offset) + element_idx;
+          process_block_array_leaf(*name, blocks,
+                                   parcel, variables, b, block_index,
+-                                  binding_offset, *block_index - first_index,
++                                  &boffset, *block_index - first_index,
+                                   ctx, prog);
+       }
+    }
+@@ -307,7 +310,6 @@ process_block_array_leaf(const char *name,
+       (unsigned)(ptrdiff_t)(&variables[parcel->index] - blocks[i].Uniforms);
+ 
+    *block_index = *block_index + 1;
+-   *binding_offset = *binding_offset + 1;
+ }
+ 
+ /* This function resizes the array types of the block so that later we can use
+-- 
+2.20.1
+

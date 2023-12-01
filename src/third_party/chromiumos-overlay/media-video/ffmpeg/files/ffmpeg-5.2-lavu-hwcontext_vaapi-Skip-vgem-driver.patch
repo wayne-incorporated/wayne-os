@@ -1,0 +1,87 @@
+From 1b8ad1e64e583b1cb09c9105f159ade95f60aa77 Mon Sep 17 00:00:00 2001
+From: Brian Norris <briannorris@chromium.org>
+Date: Wed, 23 Nov 2022 13:36:57 -0800
+Subject: [PATCH] lavu/hwcontext_vaapi: Skip 'vgem' driver
+
+Mailing list post:
+http://ffmpeg.org/pipermail/ffmpeg-devel/2022-November/304223.html
+
+There can be more than one available render node, and it's not
+guaranteed the first node we come across is the correct one. In
+particular, 'vgem' devices are common, and are
+never VAAPI-enabled and thus not valid here.
+
+We have a 'kernel_driver' arg already for specifying a single driver we
+*do* want, but it doesn't support a negation, nor a list. It's easier
+just to automatically skip 'vgem' anyway, to avoid foisting this burden
+on users.
+
+This has precedent in libva-utils already:
+
+  bfb6b98ed62a exclude vgem node and invalid drm node in vainfo
+  https://github.com/intel/libva-utils/commit/bfb6b98ed62ac14a840ba62639ab902a23912258
+
+Signed-off-by: Brian Norris <briannorris@chromium.org>
+---
+
+ libavutil/hwcontext_vaapi.c | 28 +++++++++++++++++++++-------
+ 1 file changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/libavutil/hwcontext_vaapi.c b/libavutil/hwcontext_vaapi.c
+index 4bcde74f6212..84b03b633251 100644
+--- a/libavutil/hwcontext_vaapi.c
++++ b/libavutil/hwcontext_vaapi.c
+@@ -1700,6 +1700,7 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
+             char path[64];
+             int n, max_devices = 8;
+ #if CONFIG_LIBDRM
++            drmVersion *info;
+             const AVDictionaryEntry *kernel_driver;
+             kernel_driver = av_dict_get(opts, "kernel_driver", NULL, 0);
+ #endif
+@@ -1713,9 +1714,15 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
+                     break;
+                 }
+ #if CONFIG_LIBDRM
++                info = drmGetVersion(priv->drm_fd);
++                if (!info) {
++                    av_log(ctx, AV_LOG_VERBOSE,
++                           "Failed to get DRM version for device %d.\n", n);
++                    close(priv->drm_fd);
++                    priv->drm_fd = -1;
++                    continue;
++                }
+                 if (kernel_driver) {
+-                    drmVersion *info;
+-                    info = drmGetVersion(priv->drm_fd);
+                     if (strcmp(kernel_driver->value, info->name)) {
+                         av_log(ctx, AV_LOG_VERBOSE, "Ignoring device %d "
+                                "with non-matching kernel driver (%s).\n",
+@@ -1730,12 +1737,19 @@ static int vaapi_device_create(AVHWDeviceContext *ctx, const char *device,
+                            "with matching kernel driver (%s).\n",
+                            n, info->name);
+                     drmFreeVersion(info);
+-                } else
+-#endif
+-                {
+-                    av_log(ctx, AV_LOG_VERBOSE, "Trying to use "
+-                           "DRM render node for device %d.\n", n);
++                    break;
++                } else if (!strncmp(info->name, "vgem", 4)) {
++                    av_log(ctx, AV_LOG_VERBOSE,
++                           "Skipping vgem node for device %d.\n", n);
++                    drmFreeVersion(info);
++                    close(priv->drm_fd);
++                    priv->drm_fd = -1;
++                    continue;
+                 }
++                drmFreeVersion(info);
++#endif
++                av_log(ctx, AV_LOG_VERBOSE, "Trying to use "
++                       "DRM render node for device %d.\n", n);
+                 break;
+             }
+             if (n >= max_devices)
+-- 
+2.38.1.584.g0f3c55d4c2-goog
+

@@ -1,12 +1,31 @@
 #!/bin/sh
 
-# Copyright 2016 The Chromium OS Authors. All rights reserved.
+# Copyright 2016 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 set -e
 
 JOB=$(basename "$0")
+
+DEVICE_SHUTTING_DOWN=4 # Defined in session_manager_service.h
+
+# Check if file exists and is writeable by us. -w is always true under root.
+is_writeable() {
+  local file="$1"
+  local v=0
+
+  if [ -f "${file}" ]; then
+    local wfile
+    wfile=$(find "${file}" -maxdepth 1 | awk '$1 ~ /^.*w.*/ { print $NF; }')
+
+    if [ -n "${wfile}" ]; then
+      v=1
+    fi
+  fi
+
+  echo "${v}"
+}
 
 # Read chrome OS configurations
 read_cros_config() {
@@ -19,8 +38,8 @@ read_cros_config() {
 }
 
 read_cros_config_int() {
-  local v=$(read_cros_config "$@")
-
+  local v
+  v=$(read_cros_config "$@")
   # config value should be an integer
   case "${v}" in
     ''|*[!0-9]*)
@@ -34,6 +53,17 @@ read_cros_config_int() {
       ;;
     esac
 }
+
+# The ui job can be restarted asynchronously via ui-respawn. This allows the
+# possibility that ui can be started while shutdown/reboot is in process.
+# Make sure that the reboot/halt jobs are not active at the time we are
+# restarting ui.
+if ! initctl status reboot | grep -q 'stop/waiting' || \
+    ! initctl status halt | grep -q 'stop/waiting'; then
+  logger -t "${UPSTART_JOB:-}" "ERROR: reboot/shutdown in progress, quit."
+  stop ui
+  exit "${DEVICE_SHUTTING_DOWN}"
+fi
 
 # Setup drm log tracing if available. This will allow us to access more verbose
 # logs to debug display connectivity issues when they arise. The traces are
@@ -54,23 +84,29 @@ if [ -w "${DRM_TRACE_MASK}" ]; then
   # 0x106 corresponds to (DRM_UT_DRIVER | DRM_UT_KMS | DRM_UT_DP).
   echo 0x106 > "${DRM_TRACE_MASK}"
 fi
-DRM_TRACEFS_INSTANCE="/sys/kernel/debug/tracing/instances/drm"
+DRM_TRACEFS_INSTANCE="/sys/kernel/tracing/instances/drm"
 DRM_TRACEFS_BUF_SIZE="${DRM_TRACEFS_INSTANCE}/buffer_size_kb"
 if [ -w "${DRM_TRACEFS_BUF_SIZE}" ]; then
   # 64kB per-cpu of drm logs.
   echo 64 > "${DRM_TRACEFS_BUF_SIZE}"
 fi
 
-mkdir -p "${UI_LOG_DIR}"
-ln -sf ui.$(date +%Y%m%d-%H%M%S) "${UI_LOG_DIR}/${UI_LOG_FILE}"
+mkdir -p "${UI_LOG_DIR:-}"
+ln -sf ui."$(date --utc +%Y%m%d-%H%M%S)" "${UI_LOG_DIR}/${UI_LOG_FILE:-}"
 
-mkdir -p "${CONTAINER_ROOT_DIR}"
+mkdir -p "${CONTAINER_ROOT_DIR:-}"
+
+# Create support directory for Chrome to write its support files and give
+# ownership to Chronos since only interaction will be done by it.
+SUPPORT_DIR="/var/spool/support"
+mkdir -p "${SUPPORT_DIR}"
+chown -R chronos "${SUPPORT_DIR}"
 
 # Create a top-level cpu cgroup for ui tasks.  This will be used to share cpu
 # resources with tasks not managed by the UI.  Android will be placed in a
 # parallel cgroup allowing priority to be given to one or the other depending
 # on what the user is doing at the time.
-if [ ! -d "${UI_CPU_CGROUP_DIR}" ]; then
+if [ ! -d "${UI_CPU_CGROUP_DIR:-}" ]; then
   mkdir -p "${UI_CPU_CGROUP_DIR}"
 fi
 
@@ -84,28 +120,32 @@ if [ ! -d "${CHROME_CPU_CGROUP_DIR}" ]; then
   mkdir -p "${CHROME_CPU_CGROUP_DIR}/foreground"
   mkdir -p "${CHROME_CPU_CGROUP_DIR}/background"
   echo "10" > "${CHROME_CPU_CGROUP_DIR}/background/cpu.shares"
+  # Allow featured to still modify these values
+  chmod -R g+w "${CHROME_CPU_CGROUP_DIR}"
   chown -R chronos "${CHROME_CPU_CGROUP_DIR}"
-fi
 
-# TODO(ikjn): This scheduler settings are a bit complex,
-# Let's move these out to an another executable (c++).
-# Tracked in b/182958867
+  # TODO(ikjn): This scheduler settings are a bit complex,
+  # Let's move these out to an another executable (c++).
+  # Tracked in b/182958867
 
-# apply ui and chrome foreground cgroup's uclamp.min, default 20%,
-v=$(read_cros_config_int "/scheduler-tune" "boost-urgent" "20")
-for knob in "${UI_CPU_CGROUP_DIR}/cpu.uclamp.min" \
-            "${CHROME_CPU_CGROUP_DIR}/cpu.uclamp.min" \
-            "${CHROME_CPU_CGROUP_DIR}/foreground/cpu.uclamp.min"; do
-  if [ -f "${knob}" ]; then
-    echo "${v}" > "${knob}"
+  # We only do this once when we initially create the cgroups.
+  # Apply ui and chrome foreground cgroup's uclamp.min, default 20%,
+  v=$(read_cros_config_int "/scheduler-tune" "boost-urgent" "20")
+  for knob in "${UI_CPU_CGROUP_DIR}/cpu.uclamp.min" \
+              "${CHROME_CPU_CGROUP_DIR}/cpu.uclamp.min" \
+              "${CHROME_CPU_CGROUP_DIR}/foreground/cpu.uclamp.min"; do
+    if [ -f "${knob}" ]; then
+      echo "${v}" > "${knob}"
+    fi
+  done
+
+  # Apply boosting values for platforms using schedtune
+  # Will be removed soon (b/271420003)
+  SCHEDTUNE_BOOST_DIR=/sys/fs/cgroup/schedtune/chrome/urgent
+  if [ -d "${SCHEDTUNE_BOOST_DIR}" ]; then
+    echo "${v}" > "${SCHEDTUNE_BOOST_DIR}/schedtune.boost"
+    echo "1" > "${SCHEDTUNE_BOOST_DIR}/schedtune.prefer_idle"
   fi
-done
-
-# Apply boosting values for platforms using schedtune
-SCHEDTUNE_BOOST_DIR=/sys/fs/cgroup/schedtune/chrome/urgent
-if [ -d "${SCHEDTUNE_BOOST_DIR}" ]; then
-  echo "${v}" > "${SCHEDTUNE_BOOST_DIR}/schedtune.boost"
-  echo "1" > "${SCHEDTUNE_BOOST_DIR}/schedtune.prefer_idle"
 fi
 
 # Apply Input boosting
@@ -116,8 +156,9 @@ CPUFREQ_CONF=/etc/cpufreq.conf
 if [ -f "${INPUT_BOOST}" ]; then
   # Default value is 75 for platforms using EAS
   if [ -f "${CPUFREQ_CONF}" ]; then
+    # shellcheck source=/dev/null
     . "${CPUFREQ_CONF}"
-    if [ "${CPUFREQ_GOVERNOR}" = "schedutil" ] || \
+    if [ "${CPUFREQ_GOVERNOR:-}" = "schedutil" ] || \
        [ "${CPUFREQ_GOVERNOR}" = "sched" ]; then
       INPUT_BOOST_DEFAULT=75
     fi
@@ -126,66 +167,18 @@ if [ -f "${INPUT_BOOST}" ]; then
     "${INPUT_BOOST_DEFAULT}" > "${INPUT_BOOST}"
 fi
 
-# Limit non-urgent tasks to small cores
-CPUBUSDIR=/sys/bus/cpu/devices
-CPUSET_NONURGENT_DIR=/sys/fs/cgroup/cpuset/chrome/non-urgent
-if [ -d "${CPUSET_NONURGENT_DIR}" ]; then
-  v=$(read_cros_config "/scheduler-tune" "cpuset-nonurgent" "")
-
-  # If a cpuset-nonurgent isn't specified in cros_config,
-  # use all little cores as a non-urgent cpuset.
-  if [ -z "${v}" ] && grep -q '^big_little$' /etc/ui_use_flags.txt; then
-    nr_cpus=0
-    nr_small_cpus=0
-    min_cap=1025
-    cpus=""
-    prefix="${CPUBUSDIR}/cpu"
-    for cpu in ${CPUBUSDIR}/cpu*; do
-      if [ ! -f "${cpu}/cpu_capacity" ]; then
-        cpus=""
-        break;
-      fi
-      cap=$(cat "${cpu}/cpu_capacity")
-      if [ "${cap}" -lt "${min_cap}" ]; then
-        cpus="${cpu##${prefix}}"
-        min_cap="${cap}"
-        nr_small_cpus=1
-      elif [ "${cap}" -eq "${min_cap}" ]; then
-        cpus="${cpus},${cpu##${prefix}}"
-        nr_small_cpus=$((nr_small_cpus + 1))
-      fi
-      nr_cpus=$((nr_cpus + 1))
-    done
-    if [ "${nr_small_cpus}" -lt "${nr_cpus}" ]; then
-      v="${cpus}"
-    fi
-  fi
-
-  if [ -n "${v}" ]; then
-    echo "${v}" > "${CPUSET_NONURGENT_DIR}/cpus"
-  fi
-fi
-
-# Set up a folder on the stateful partition for ephemeral encrypted swap
-# files.
-USERSPACE_SWAP_DIR=/mnt/stateful_partition/unencrypted/userspace_swap.tmp/
-if [ ! -d "${USERSPACE_SWAP_DIR}" ]; then
-  mkdir -p "${USERSPACE_SWAP_DIR}"
-  chown -R chronos "${USERSPACE_SWAP_DIR}"
-fi
-
 # Set up the ui freezer cgroup. This is used during suspend to order the
 # freezing of processes to avoid FUSE causing freeze to timeout.
-if [ ! -d ${UI_FREEZER_CGROUP_DIR} ]; then
-  mkdir -p ${UI_FREEZER_CGROUP_DIR}
-  chown -R chronos ${UI_FREEZER_CGROUP_DIR}
-  chown power:power ${UI_FREEZER_CGROUP_DIR}/freezer.state
+if [ ! -d "${UI_FREEZER_CGROUP_DIR:-}" ]; then
+  mkdir -p "${UI_FREEZER_CGROUP_DIR}"
+  chown -R chronos "${UI_FREEZER_CGROUP_DIR}"
+  chown power:power "${UI_FREEZER_CGROUP_DIR}"/freezer.state
 fi
 
 # Set up the renderer freezer.  This is used during the suspend/resume cycle
 # to freeze all the chrome renderers so that they don't take up a lot of power
 # when the system comes up in dark resume
-if [ ! -d "${CHROME_FREEZER_CGROUP_DIR}" ]; then
+if [ ! -d "${CHROME_FREEZER_CGROUP_DIR:-}" ]; then
   mkdir -p "${CHROME_FREEZER_CGROUP_DIR}"
   mkdir -p "${CHROME_FREEZER_CGROUP_DIR}/to_be_frozen"
   chown -R chronos "${CHROME_FREEZER_CGROUP_DIR}"
@@ -207,6 +200,23 @@ fi
 # Enable madvise(MADV_HUGEPAGE) for VMs guest mappings
 if [ -f "/sys/kernel/mm/transparent_hugepage/shmem_enabled" ]; then
   echo "advise" > "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
+fi
+
+# Tweak KVM HLT polling only for x86
+if uname -m | grep -q x86; then
+  HALT_POLL_NS_SHRINK=/sys/module/kvm/parameters/halt_poll_ns_shrink
+  HALT_POLL_NS=/sys/module/kvm/parameters/halt_poll_ns
+  # Older kernels (e.g. 4.4) do not permit dynamic halt_poll_ns_shrink and
+  # have this attr as read-only.
+  v=$(is_writeable "${HALT_POLL_NS_SHRINK}")
+  if [ "${v}" != "0" ]; then
+    echo 2 > "${HALT_POLL_NS_SHRINK}"
+  fi
+  # Ditto, just in case
+  v=$(is_writeable "${HALT_POLL_NS}")
+  if [ "${v}" != "0" ]; then
+    echo 160000 > "${HALT_POLL_NS}"
+  fi
 fi
 
 if crossystem "cros_debug?1"; then

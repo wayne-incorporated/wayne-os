@@ -1,0 +1,52 @@
+# Copyright 2019 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//common-mk/pkg_config.gni")
+
+group("all") {
+  deps = [ ":policy" ]
+  if (use.test) {
+    deps += [ ":libmgmt_test" ]
+  }
+}
+
+pkg_config("target_defaults") {
+  pkg_deps = [
+    "libbrillo",
+    "libchrome",
+  ]
+}
+
+static_library("libmgmt") {
+  sources = [ "policy_writer.cc" ]
+  configs += [ ":target_defaults" ]
+}
+
+executable("policy") {
+  sources = [
+    "main.cc",
+    "policy_tool.cc",
+  ]
+  configs += [ ":target_defaults" ]
+  deps = [ ":libmgmt" ]
+}
+
+if (use.test) {
+  executable("libmgmt_test") {
+    sources = [
+      "policy_tool.cc",
+      "policy_tool_test.cc",
+      "policy_writer_test.cc",
+    ]
+    configs += [
+      "//common-mk:test",
+      ":target_defaults",
+    ]
+    deps = [
+      ":libmgmt",
+      "../common-mk/testrunner:testrunner",
+    ]
+    pkg_deps = [ "libchrome-test" ]
+  }
+}

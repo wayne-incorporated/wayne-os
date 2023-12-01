@@ -1,0 +1,41 @@
+#!/bin/bash
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This script generates CrOS specific files for camera metadata tags with mako
+# and specs/scripts from Android.  Checkout AOSP system/media/camera/docs folder
+# to a desired branch before running this script.
+
+if [[ -z $1 ]]; then
+  echo "Usage: $0 <path_to_android_system_media_camera_docs>"
+  exit 1
+fi
+
+BASE_DIR="$(dirname $(realpath "$0"))"
+CAMERA_DOCS_DIR="$1"
+
+function gen_file_abs() {
+  local in="$1"
+  local out="$2"
+  local hal_version="${3:-3.2}"
+  local spec_file="${CAMERA_DOCS_DIR}/metadata_definitions.xml"
+
+  python3 "${CAMERA_DOCS_DIR}/metadata_parser_xml.py" \
+      "${spec_file}" "${in}" "${out}" "${hal_version}"
+
+  local succ=$?
+
+  if [[ ${succ} -eq 0 ]]; then
+    echo "OK: Generated $(realpath ${out})"
+  else
+    echo "FAIL: Errors while generating $(realpath ${out})"
+  fi
+
+  return ${succ}
+}
+
+gen_file_abs "${BASE_DIR}/camera_metadata_tags.mojom.mako" \
+    "${BASE_DIR}/camera_metadata_tags.mojom" || exit 1
+gen_file_abs "${BASE_DIR}/CameraMetadataTagsVerifier.mako" \
+    "${BASE_DIR}/CameraMetadataTagsVerifier.cc" || exit 1

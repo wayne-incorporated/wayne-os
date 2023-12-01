@@ -1,0 +1,43 @@
+From d4145960e52cf76c4150b790227f94d7bb7faf6a Mon Sep 17 00:00:00 2001
+From: James Clark <james.clark@arm.com>
+Date: Thu, 21 Oct 2021 12:27:00 +0100
+Subject: [PATCH] perf dso: Fix /proc/kcore access on 32 bit systems
+
+Because _LARGEFILE64_SOURCE is set in perf, file offset sizes can be
+64 bits. If a workflow needs to open /proc/kcore on a 32 bit system (for
+example to decode Arm ETM kernel trace) then the size value will be
+wrapped to 32 bits in the function file_size() at this line:
+
+  dso->data.file_size = st.st_size;
+
+Setting the file_size member to be u64 fixes the issue and allows
+/proc/kcore to be opened.
+
+Reported-by: Denis Nikitin <denik@chromium.org>
+Signed-off-by: James Clark <james.clark@arm.com>
+Cc: Alexander Shishkin <alexander.shishkin@linux.intel.com>
+Cc: Jiri Olsa <jolsa@redhat.com>
+Cc: Mark Rutland <mark.rutland@arm.com>
+Cc: Namhyung Kim <namhyung@kernel.org>
+Link: http://lore.kernel.org/lkml/20211021112700.112499-1-james.clark@arm.com
+Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+---
+ tools/perf/util/dso.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/perf/util/dso.h b/tools/perf/util/dso.h
+index 83723ba11dc8..011da3924fc1 100644
+--- a/tools/perf/util/dso.h
++++ b/tools/perf/util/dso.h
+@@ -193,7 +193,7 @@ struct dso {
+ 		int		 fd;
+ 		int		 status;
+ 		u32		 status_seen;
+-		size_t		 file_size;
++		u64		 file_size;
+ 		struct list_head open_entry;
+ 		u64		 debug_frame_offset;
+ 		u64		 eh_frame_hdr_offset;
+-- 
+2.34.0.rc0.344.g81b53c2807-goog
+
