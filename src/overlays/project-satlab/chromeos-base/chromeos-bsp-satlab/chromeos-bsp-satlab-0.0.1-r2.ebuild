@@ -1,1 +1,0 @@
-chromeos-bsp-satlab-0.0.1.ebuild

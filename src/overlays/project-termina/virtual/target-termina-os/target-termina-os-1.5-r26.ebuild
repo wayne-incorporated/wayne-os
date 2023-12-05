@@ -1,1 +1,0 @@
-target-termina-os-1.5.ebuild

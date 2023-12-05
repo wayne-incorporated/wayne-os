@@ -1,1 +1,0 @@
-sof-topology-1.19.ebuild

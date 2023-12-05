@@ -1,1 +1,0 @@
-go2001-rules-0.0.1.ebuild

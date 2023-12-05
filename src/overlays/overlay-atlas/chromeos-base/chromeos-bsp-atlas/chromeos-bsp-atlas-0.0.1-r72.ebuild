@@ -1,1 +1,0 @@
-chromeos-bsp-atlas-0.0.1.ebuild

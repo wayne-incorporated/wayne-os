@@ -1,1 +1,0 @@
-manatee-apps-1.ebuild

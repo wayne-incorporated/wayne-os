@@ -1,1 +1,0 @@
-intel-vpu-umd-0.0.1.ebuild

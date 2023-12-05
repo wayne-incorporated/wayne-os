@@ -1,1 +1,0 @@
-kdump-init-0.1.ebuild

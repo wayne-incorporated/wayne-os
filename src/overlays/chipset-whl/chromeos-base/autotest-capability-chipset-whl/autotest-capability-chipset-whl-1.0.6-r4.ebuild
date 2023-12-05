@@ -1,1 +1,0 @@
-autotest-capability-chipset-whl-1.0.6.ebuild

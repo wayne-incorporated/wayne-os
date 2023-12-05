@@ -1,1 +1,0 @@
-system-locales-2.35.ebuild

@@ -1,1 +1,0 @@
-chromeos-bsp-dev-root-1.ebuild

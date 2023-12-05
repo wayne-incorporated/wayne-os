@@ -1,1 +1,0 @@
-xwayland-1.20.14.ebuild

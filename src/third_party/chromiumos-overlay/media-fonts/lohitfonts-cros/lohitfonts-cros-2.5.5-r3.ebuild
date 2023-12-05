@@ -1,1 +1,0 @@
-lohitfonts-cros-2.5.5.ebuild

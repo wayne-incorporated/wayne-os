@@ -1,1 +1,0 @@
-modem-fw-dlc-redrix-fm350-0.0.1.ebuild

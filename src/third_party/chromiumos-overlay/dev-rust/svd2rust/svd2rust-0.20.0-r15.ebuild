@@ -1,1 +1,0 @@
-svd2rust-0.20.0.ebuild

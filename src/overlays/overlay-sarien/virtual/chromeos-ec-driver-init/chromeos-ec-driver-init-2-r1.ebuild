@@ -1,1 +1,0 @@
-chromeos-ec-driver-init-2.ebuild

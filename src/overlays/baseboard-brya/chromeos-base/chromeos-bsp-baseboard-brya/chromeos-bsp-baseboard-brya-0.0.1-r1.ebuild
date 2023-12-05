@@ -1,1 +1,0 @@
-chromeos-bsp-baseboard-brya-0.0.1.ebuild

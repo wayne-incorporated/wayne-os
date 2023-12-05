@@ -1,1 +1,0 @@
-chromeos-bsp-tael-0.0.1.ebuild

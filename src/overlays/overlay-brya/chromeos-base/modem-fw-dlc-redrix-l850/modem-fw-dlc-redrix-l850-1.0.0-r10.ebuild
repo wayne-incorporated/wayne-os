@@ -1,1 +1,0 @@
-modem-fw-dlc-redrix-l850-1.0.0.ebuild

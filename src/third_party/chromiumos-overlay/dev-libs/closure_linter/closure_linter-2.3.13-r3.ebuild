@@ -1,1 +1,0 @@
-closure_linter-2.3.13.ebuild

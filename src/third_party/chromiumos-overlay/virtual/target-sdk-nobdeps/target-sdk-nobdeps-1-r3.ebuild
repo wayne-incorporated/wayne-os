@@ -1,1 +1,0 @@
-target-sdk-nobdeps-1.ebuild

@@ -1,1 +1,0 @@
-chromeos-bsp-baseboard-glados-0.0.1.ebuild

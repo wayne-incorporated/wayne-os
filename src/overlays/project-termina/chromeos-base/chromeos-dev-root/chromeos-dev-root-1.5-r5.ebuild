@@ -1,1 +1,0 @@
-chromeos-dev-root-1.5.ebuild

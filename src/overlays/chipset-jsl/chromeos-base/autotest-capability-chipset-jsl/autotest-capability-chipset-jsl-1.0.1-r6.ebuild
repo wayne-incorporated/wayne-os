@@ -1,1 +1,0 @@
-autotest-capability-chipset-jsl-1.0.1.ebuild

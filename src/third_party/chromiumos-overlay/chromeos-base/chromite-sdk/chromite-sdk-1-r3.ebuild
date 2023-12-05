@@ -1,1 +1,0 @@
-chromite-sdk-1.ebuild

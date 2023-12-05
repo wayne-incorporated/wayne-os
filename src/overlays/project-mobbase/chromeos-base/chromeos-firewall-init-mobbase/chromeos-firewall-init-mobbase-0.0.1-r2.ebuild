@@ -1,1 +1,0 @@
-chromeos-firewall-init-mobbase-0.0.1.ebuild

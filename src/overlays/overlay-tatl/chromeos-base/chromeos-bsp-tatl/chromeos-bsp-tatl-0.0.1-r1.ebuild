@@ -1,1 +1,0 @@
-chromeos-bsp-tatl-0.0.1.ebuild

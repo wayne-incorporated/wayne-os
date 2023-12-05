@@ -1,1 +1,0 @@
-chromeos-firewall-1.ebuild

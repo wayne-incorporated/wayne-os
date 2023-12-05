@@ -1,1 +1,0 @@
-autotest-capability-chipset-glk-1.0.7.ebuild

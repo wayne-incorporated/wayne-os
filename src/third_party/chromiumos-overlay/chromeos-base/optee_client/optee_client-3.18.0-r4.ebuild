@@ -1,1 +1,0 @@
-optee_client-3.18.0.ebuild

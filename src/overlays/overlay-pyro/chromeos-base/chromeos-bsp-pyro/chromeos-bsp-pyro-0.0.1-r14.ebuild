@@ -1,1 +1,0 @@
-chromeos-bsp-pyro-0.0.1.ebuild

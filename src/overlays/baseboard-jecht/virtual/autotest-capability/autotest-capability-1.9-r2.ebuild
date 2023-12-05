@@ -1,1 +1,0 @@
-autotest-capability-1.9.ebuild

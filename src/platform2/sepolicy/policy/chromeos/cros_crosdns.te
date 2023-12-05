@@ -1,9 +1,0 @@
-type cros_crosdns, domain, chromeos_domain;
-permissive cros_crosdns;
-
-domain_auto_trans(minijail, cros_crosdns_exec, cros_crosdns)
-
-# crosdns creates /run/crosdns and bind mounts it over /etc/hosts.d in
-# its pre-startup script, so make sure this doesn't change the
-# security context.
-filetrans_pattern(cros_init_scripts, cros_run, cros_conf_file, dir, "crosdns")

@@ -1,1 +1,0 @@
-chromeos-bsp-baseboard-octopus-0.0.1.ebuild

@@ -1,1 +1,0 @@
-modem-fw-dlc-anahera-l850-0.0.1.ebuild

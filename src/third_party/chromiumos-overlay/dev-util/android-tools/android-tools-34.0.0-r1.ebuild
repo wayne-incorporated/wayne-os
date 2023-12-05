@@ -1,1 +1,0 @@
-android-tools-34.0.0.ebuild

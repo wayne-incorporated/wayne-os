@@ -1,1 +1,0 @@
-autotest-capability-chipset-tgl-1.0.1.ebuild

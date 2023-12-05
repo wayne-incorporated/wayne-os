@@ -1,1 +1,0 @@
-modem-fw-dlc-primus-l850-0.0.1.ebuild

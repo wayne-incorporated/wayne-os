@@ -1,1 +1,0 @@
-img-ddk-1.8.ebuild

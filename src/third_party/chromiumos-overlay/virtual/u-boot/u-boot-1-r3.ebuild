@@ -1,1 +1,0 @@
-u-boot-1.ebuild

@@ -1,1 +1,0 @@
-modem-fw-dlc-brya-l850-1.0.0.ebuild

@@ -1,1 +1,0 @@
-coreboot-private-files-1.ebuild

@@ -1,1 +1,0 @@
-autotest-capability-chipset-mt8192-1.0.1.ebuild

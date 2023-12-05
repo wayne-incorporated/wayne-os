@@ -1,1 +1,0 @@
-android-sdk-6877874.ebuild

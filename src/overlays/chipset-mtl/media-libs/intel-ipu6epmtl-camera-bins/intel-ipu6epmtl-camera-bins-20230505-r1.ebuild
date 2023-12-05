@@ -1,1 +1,0 @@
-intel-ipu6epmtl-camera-bins-20230505.ebuild

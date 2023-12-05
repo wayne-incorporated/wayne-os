@@ -1,1 +1,0 @@
-cros-camera-hal-configs-1.9.ebuild

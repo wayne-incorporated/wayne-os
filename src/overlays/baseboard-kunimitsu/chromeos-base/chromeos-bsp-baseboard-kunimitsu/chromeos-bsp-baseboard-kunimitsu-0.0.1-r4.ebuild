@@ -1,1 +1,0 @@
-chromeos-bsp-baseboard-kunimitsu-0.0.1.ebuild

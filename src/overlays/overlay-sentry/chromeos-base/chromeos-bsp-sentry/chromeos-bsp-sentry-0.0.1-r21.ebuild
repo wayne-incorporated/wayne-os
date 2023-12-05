@@ -1,1 +1,0 @@
-chromeos-bsp-sentry-0.0.1.ebuild

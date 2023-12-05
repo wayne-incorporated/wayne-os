@@ -1,1 +1,0 @@
-chromeos-touch-config-kevin-0.0.1.ebuild

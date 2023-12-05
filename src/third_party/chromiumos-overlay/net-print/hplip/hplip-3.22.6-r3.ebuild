@@ -1,1 +1,0 @@
-hplip-3.22.6.ebuild

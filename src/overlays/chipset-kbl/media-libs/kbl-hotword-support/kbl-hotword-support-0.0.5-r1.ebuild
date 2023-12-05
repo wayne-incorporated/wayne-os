@@ -1,1 +1,0 @@
-kbl-hotword-support-0.0.5.ebuild

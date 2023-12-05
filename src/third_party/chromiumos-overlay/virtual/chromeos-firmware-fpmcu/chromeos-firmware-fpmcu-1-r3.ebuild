@@ -1,1 +1,0 @@
-chromeos-firmware-fpmcu-1.ebuild

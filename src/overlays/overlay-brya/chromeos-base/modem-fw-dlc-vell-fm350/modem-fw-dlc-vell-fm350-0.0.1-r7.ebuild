@@ -1,1 +1,0 @@
-modem-fw-dlc-vell-fm350-0.0.1.ebuild

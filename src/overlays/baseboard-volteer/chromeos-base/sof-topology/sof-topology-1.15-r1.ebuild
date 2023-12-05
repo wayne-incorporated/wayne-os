@@ -1,1 +1,0 @@
-sof-topology-1.15.ebuild

@@ -1,1 +1,0 @@
-autotest-capability-chipset-skl-1.0.8.ebuild

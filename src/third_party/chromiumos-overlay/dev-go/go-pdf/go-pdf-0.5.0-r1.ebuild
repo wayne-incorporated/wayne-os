@@ -1,1 +1,0 @@
-go-pdf-0.5.0.ebuild

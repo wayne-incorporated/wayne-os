@@ -1,1 +1,0 @@
-arcvm-codec-chipset-cezanne-0.0.1.ebuild

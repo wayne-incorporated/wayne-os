@@ -1,1 +1,0 @@
-autotest-capability-default-0.0.5.ebuild

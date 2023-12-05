@@ -1,1 +1,0 @@
-target-sdk-1.ebuild

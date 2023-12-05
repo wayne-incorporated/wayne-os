@@ -1,1 +1,0 @@
-chromeos-bsp-fizz-moblab-0.0.1.ebuild

@@ -1,1 +1,0 @@
-chromeos-firmware-1.ebuild

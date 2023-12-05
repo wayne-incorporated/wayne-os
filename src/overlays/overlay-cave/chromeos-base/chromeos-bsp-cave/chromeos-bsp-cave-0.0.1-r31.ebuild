@@ -1,1 +1,0 @@
-chromeos-bsp-cave-0.0.1.ebuild

@@ -1,1 +1,0 @@
-android-relocation-packer-20170210.ebuild

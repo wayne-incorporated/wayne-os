@@ -1,1 +1,0 @@
-chromeos-bsp-test-root-1.ebuild

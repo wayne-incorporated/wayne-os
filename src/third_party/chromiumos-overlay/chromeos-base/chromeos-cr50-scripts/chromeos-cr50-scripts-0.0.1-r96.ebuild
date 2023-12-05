@@ -1,1 +1,0 @@
-chromeos-cr50-scripts-0.0.1.ebuild

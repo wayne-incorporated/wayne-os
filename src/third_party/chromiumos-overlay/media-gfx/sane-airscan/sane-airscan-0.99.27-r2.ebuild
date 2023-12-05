@@ -1,1 +1,0 @@
-sane-airscan-0.99.27.ebuild

@@ -1,1 +1,0 @@
-autotest-capability-chipset-stnyridge-1.0.4.ebuild

@@ -1,1 +1,0 @@
-chromeos-regions-1.ebuild

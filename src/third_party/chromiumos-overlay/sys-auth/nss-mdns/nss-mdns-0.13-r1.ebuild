@@ -1,1 +1,0 @@
-nss-mdns-0.13.ebuild

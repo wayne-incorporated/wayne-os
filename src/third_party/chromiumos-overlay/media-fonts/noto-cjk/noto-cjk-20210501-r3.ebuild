@@ -1,1 +1,0 @@
-noto-cjk-20210501.ebuild

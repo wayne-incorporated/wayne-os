@@ -1,1 +1,0 @@
-kbl-rt5514-hotword-support-0.0.5.ebuild

@@ -1,1 +1,0 @@
-autotest-capability-chipset-cezanne-1.0.0.ebuild

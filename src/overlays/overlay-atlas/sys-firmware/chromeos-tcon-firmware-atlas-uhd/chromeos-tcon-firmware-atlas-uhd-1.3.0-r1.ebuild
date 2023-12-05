@@ -1,1 +1,0 @@
-chromeos-tcon-firmware-atlas-uhd-1.1.0.ebuild

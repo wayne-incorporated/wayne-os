@@ -1,1 +1,0 @@
-avahi-0.8.ebuild

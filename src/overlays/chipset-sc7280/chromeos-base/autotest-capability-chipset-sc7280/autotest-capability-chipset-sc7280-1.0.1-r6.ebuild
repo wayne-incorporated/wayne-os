@@ -1,1 +1,0 @@
-autotest-capability-chipset-sc7280-1.0.1.ebuild

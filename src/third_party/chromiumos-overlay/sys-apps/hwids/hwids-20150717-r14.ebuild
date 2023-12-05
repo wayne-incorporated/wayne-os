@@ -1,1 +1,0 @@
-hwids-20150717.ebuild

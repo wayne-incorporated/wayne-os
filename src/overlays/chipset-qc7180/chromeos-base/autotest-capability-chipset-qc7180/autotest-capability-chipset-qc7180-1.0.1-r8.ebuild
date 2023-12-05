@@ -1,1 +1,0 @@
-autotest-capability-chipset-qc7180-1.0.1.ebuild

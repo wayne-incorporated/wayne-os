@@ -1,1 +1,0 @@
-aosp-frameworks-base-proto-20220906.ebuild

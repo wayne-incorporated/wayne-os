@@ -1,1 +1,0 @@
-apl-hotword-support-1.0.ebuild

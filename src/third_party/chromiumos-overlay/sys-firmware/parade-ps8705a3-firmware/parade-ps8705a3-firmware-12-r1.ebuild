@@ -1,1 +1,0 @@
-parade-ps8705a3-firmware-4.ebuild

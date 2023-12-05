@@ -1,1 +1,0 @@
-parade-ps8755a2-firmware-2.ebuild
