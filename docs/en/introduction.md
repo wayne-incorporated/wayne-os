@@ -48,6 +48,9 @@ Sort in alphabet order
 --->
 - Alexander Frick @LordFrick
 - Wayne Inc. members
+- Han Seukhyun 
+- Dimitri Radytha K. 
+- Kho Angelica
 
 ## Official channels
 - Binary & Document: [wayne-os.com](https://wayne-os.com)
