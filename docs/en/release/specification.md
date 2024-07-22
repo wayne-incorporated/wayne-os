@@ -1,3 +1,14 @@
+# Wayne OS 23.11
+
+## Version
+- Chromium: 116
+- Platform: 15509
+- Kernel: 5.15
+- Board: reven
+- Image build type: dev, test
+
+
+  
 # Wayne OS 3q21-r1
 - Same with _Wayne OS 3q21_
 
