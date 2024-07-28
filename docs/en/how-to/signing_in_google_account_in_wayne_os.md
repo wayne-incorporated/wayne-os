@@ -1,6 +1,6 @@
-## Joining Google Groups
-In order to login to Wayne OS by Google account, you have to add the account to Google's whitelist.
-1. Login to your Google account.
+## Add your account to Google's whitelist
+In order to login to Wayne OS by Google account, you have to join Google Groups.
+1. Login to your Google account on web browser in any devices.
 2. Visit https://groups.google.com/u/0/a/chromium.org/g/google-browser-signin-testaccounts
 3. Press _Join group_ button
 4. Login with your Google account in Wayne OS.
