@@ -1,6 +1,3 @@
-## Note
-This document is looking foward to your contribution (documentation, translation, reporting, suggestion, coding).
-
 ## Joining Google Groups
 In order to login to Wayne OS by Google account, you have to add the account to Google's whitelist.
 1. Login to your Google account.
@@ -15,6 +12,6 @@ However, It doesn't mean that you can use all of Google services since Google re
 <br>
 
 ## Reference 
-https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/business/googles_restriction_for_chromium_and_chromium_os.md
-<br>
-https://www.chromium.org/developers/how-tos/api-keys
+[https://github.com/wayne-incorporated/wayne-os/blob/main/docs/business/googles_restriction_for_chromium_and_chromium_os.md
+<br>](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/business/googles_restriction_for_chromium_and_chromium_os.md)
+[https://www.chromium.org/developers/how-tos/api-keys](https://www.chromium.org/developers/how-tos/api-keys/#signing-in-to-chromium-is-restricted)
