@@ -1,7 +1,4 @@
-## Note
-This document is looking foward to your contribution (documentation, translation, reporting, suggestion, coding).
-
-## Windows
+## In Windows
 You can run Command Prompt as administrator.
 
 ![initialize_usb-1](resources/initialize_usb1.png)
@@ -15,10 +12,10 @@ The exFAT supports over 32GiB volume size but it doesn’t work on Windows XP (n
 
 ![initialize_usb-2](resources/initialize_usb2.jpg)
 
-## Linux Shell, [Wayne OS Shell](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/how-to/using_shell.md)
+## In Shell
 First, remove partition table on your USB flash drive.
 <br>
-`sudo dd if=/dev/zero bs=512 count=4096 of=/dev/${USB_FLASH_DRIVE}`
+`sudo dd if=/dev/zero bs=4M count=1 of=/dev/${USB_FLASH_DRIVE}`
 <br>
 The `${USB_FLASH_DRIVE}` must be a device name like sdx, Not a partition name like sdx1.
 <br>
