@@ -1,0 +1,12 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Avoid generating en_US.UTF-8 on the fly during enter_chroot. Pregen the
+# locale instead for every sdk so it is available immediately.
+
+# Uncomment the en_US.UTF-8 locale if it isn't already present.
+grep -q '^en_US.UTF-8' /etc/locale.gen || \
+  sudo sed -i -e '/^#en_US.UTF-8/s:#::' /etc/locale.gen
+# Generate locales.
+sudo locale-gen -u

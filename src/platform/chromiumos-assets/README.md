@@ -1,3 +1,19 @@
+## Package modification notice
+#### Purpose
+- BI in splash screen
+
+#### Modified files
+- images/*
+- images_100_percent/*
+- images_200_percent/*
+- README.md
+
+#### Modifier
+- evelyn@wayne-inc.com
+
+#### Copyright
+- Copyright of the graphic designs belongs to Wayne Inc.
+
 # Chromium OS Assets
 
 This repository [chromiumos-assets] contains the unofficial, Chromium OS
@@ -9,8 +25,8 @@ resources, and the [assets] repo which has resources shared between the two
 builds.
 
 [assets]: https://chromium.googlesource.com/chromiumos/platform/assets
-[common-assets package]: https://chromium.googlesource.com/chromiumos/overlays/chromiumos-overlay/+/master/chromeos-base/common-assets/
+[common-assets package]: https://chromium.googlesource.com/chromiumos/overlays/chromiumos-overlay/+/HEAD/chromeos-base/common-assets/
 [chromiumos-assets]: https://chromium.googlesource.com/chromiumos/platform/chromiumos-assets
-[chromiumos-assets package]: https://chromium.googlesource.com/chromiumos/overlays/chromiumos-overlay/+/master/chromeos-base/chromiumos-assets/
+[chromiumos-assets package]: https://chromium.googlesource.com/chromiumos/overlays/chromiumos-overlay/+/HEAD/chromeos-base/chromiumos-assets/
 [chromeos-assets]: https://chrome-internal.googlesource.com/chromeos/chromeos-assets
-[chromeos-assets package]: https://chrome-internal.googlesource.com/chromeos/overlays/chromeos-overlay/+/master/chromeos-base/chromeos-assets/
+[chromeos-assets package]: https://chrome-internal.googlesource.com/chromeos/overlays/chromeos-overlay/+/HEAD/chromeos-base/chromeos-assets/

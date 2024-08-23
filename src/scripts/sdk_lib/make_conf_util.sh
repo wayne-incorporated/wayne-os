@@ -1,4 +1,4 @@
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,7 +22,7 @@ _make_conf_fetchcommand() {
     output_opt="-O"
   else
     cmd=curl
-    options="--ipv4 -f -y 30 --retry 9 -L"
+    options="-f -y 30 --retry 9 -L"
     resume_opt="-C -"
     output_opt="--output"
   fi

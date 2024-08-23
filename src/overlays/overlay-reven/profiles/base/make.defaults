@@ -1,0 +1,101 @@
+# Copyright 2022 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Initial value just for style purposes.
+USE=""
+
+CHROMEOS_KERNEL_SPLITCONFIG="chromeos-x86_64-reven"
+
+# We assume that our 64bit baseline CPU supports at least
+# MMX, SSE, SSE2, and SSE3.
+BOARD_COMPILER_FLAGS="-march=x86-64 -msse3"
+BOARD_RUSTFLAGS="-Ctarget-cpu=x86-64 -Ctarget-feature=+sse3"
+USE="${USE} march_x86-64"
+
+# Use LLVM amdgpu target when building LLVM.
+LLVM_TARGETS="AMDGPU X86"
+
+# Assume a "legacy" (non-chromebook) keyboard with a caps-lock key.
+USE="${USE} legacy_keyboard"
+
+# Enable the OS installation feature
+USE="${USE} os_install_service"
+
+# Use kernel 5.15
+USE="${USE} -kernel-4_14 -kernel-5_4 -kernel-5_10 kernel-5_15"
+
+# Include the kernel in the base image.
+USE="${USE} include_vmlinuz"
+
+# Enable fscrypt v2 usage on 5.4+
+USE="${USE} direncription_allow_v2"
+
+# Enable libinput to handle touchpad if the gestures library is not working
+# well.
+USE="${USE} libinput"
+
+# Enable management of EFI boot entries when installing/updating.
+USE="${USE} manage_efi_boot_entries"
+
+# Repair the GPT when installing/updating, mostly for mass deploy (b/257478857).
+USE="${USE} postinstall_cgpt_repair"
+
+# Enable chromeos postinstall to configure both efi
+# and syslinux configuration files on install.
+USE="${USE} postinstall_config_efi_and_legacy"
+
+# Used by mesa.
+USE="${USE} llvm"
+
+# Enable libglvnd for big GL support
+USE="${USE} libglvnd"
+
+# TODO(b/200187231): Reexamine if early sandbox initialization is required
+# once mesa-reven uprevs past version 21.3.
+USE="${USE} -gpu_sandbox_start_early"
+
+# Intel graphics
+VIDEO_CARDS="i965 intel iris iHD iHD_g8 iHD_g9 iHD_g11 iHD_g12"
+
+# Nvidia graphics
+VIDEO_CARDS="${VIDEO_CARDS} nouveau"
+
+# AMD graphics
+VIDEO_CARDS="${VIDEO_CARDS} amdgpu radeon radeonsi"
+
+# Misc graphics (virtual machines, software rendering, etc)
+VIDEO_CARDS="${VIDEO_CARDS} llvmpipe virgl vmware"
+
+# TODO(b/193039888): these values match amd64-generic. We will need to evaluate
+# these to figure out which ones we really want in reven.
+USE="${USE} -video_capture_use_gpu_memory_buffer"
+USE="${USE} legacy_firmware_ui legacy_power_button"
+
+# b/195140252: Do not run the factory tasts.
+USE="${USE} no_factory_flow"
+
+# Enable runtime TPM selection
+USE="${USE} tpm_dynamic tpm tpm2"
+
+# Enable software fallback for TPM related features
+USE="${USE} tpm_insecure_fallback"
+
+# The rgbkbd service crashes constantly. b/243560151
+USE="${USE} -rgbkbd"
+
+# Enable crosvm GPU support.
+USE="${USE} containers kvm_host crosvm-gpu virtio_gpu"
+
+# Pack AMD microcode updates into the kernel binary.
+USE="${USE} builtin_fw_x86_amd_ucode"
+LINUX_FIRMWARE="${LINUX_FIRMWARE} amd_ucode"
+
+# Pack Intel microcode updates into the kernel binary.
+USE="${USE} builtin_fw_x86_intel_ucode"
+
+# Enable support for some UEFI-specific features.
+USE="${USE} uefi"
+
+# Added by seongbin@wayne-inc.com
+LINUX_FIRMWARE="${LINUX_FIRMWARE} *"

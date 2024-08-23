@@ -1,4 +1,4 @@
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -147,8 +147,23 @@ create_dev_install_lists() {
   sudo mkdir -p "${BOARD_ROOT}/build/dev-install"
   sudo mv "${pkgs_out}/package.installable" "${BOARD_ROOT}/build/dev-install/"
 
+  # installable_commands is the list of all programs installed into ${PATH} from
+  # package.installable.
+  local installable_packages=()
+  mapfile -t installable_packages \
+    < "${BOARD_ROOT}/build/dev-install/package.installable"
+  qlist-"${BOARD}" -e "${installable_packages[@]}" | \
+    grep -E '^(/usr)?/s?bin/' | \
+    awk -F/ '{print $NF}' | \
+    sort -u > "${pkgs_out}/installable_commands"
+  sudo cp "${pkgs_out}/installable_commands" \
+    "${root_fs_dir}/usr/share/dev-install/installable_commands"
+
+  local package_provided_dir="${root_fs_dir}/usr/share/dev-install/"
+  package_provided_dir+="portage/make.profile/package.provided"
+
   sudo mkdir -p \
-    "${root_fs_dir}/usr/share/dev-install/portage/make.profile/package.provided" \
+    "${package_provided_dir}" \
     "${root_fs_dir}/usr/share/dev-install/rootfs.provided"
   sudo cp "${pkgs_out}/bootstrap.packages" \
     "${root_fs_dir}/usr/share/dev-install/"
@@ -157,13 +172,14 @@ create_dev_install_lists() {
 
   # Copy the toolchain settings which are fixed at build_image time.
   sudo cp "${BOARD_ROOT}/etc/portage/profile/package.provided" \
-    "${root_fs_dir}/usr/share/dev-install/portage/make.profile/package.provided/"
+    "${package_provided_dir}/toolchain.conf"
 
   # Copy the profile stubbed packages which are always disabled for the board.
   # TODO(vapier): This doesn't currently respect the profile or its parents.
+  local overlay="${CHROOT_TRUNK_DIR}/src/third_party/chromiumos-overlay"
   sudo cp \
-    "/usr/local/portage/chromiumos/profiles/targets/chromeos/package.provided" \
-    "${root_fs_dir}/usr/share/dev-install/portage/make.profile/package.provided/"
+    "${overlay}/profiles/targets/chromeos/package.provided" \
+    "${package_provided_dir}/board-profile.conf"
 
   rm -r "${pkgs_out}"
 }
@@ -187,44 +203,137 @@ _get_variable() {
   fi
 }
 
-install_libc() {
-  root_fs_dir="$1"
+install_libc_for_abi() {
   # We need to install libc manually from the cross toolchain.
   # TODO: Improve this? It would be ideal to use emerge to do this.
-  libc_version="$(_get_variable "${BOARD_ROOT}/${SYSROOT_SETTINGS_FILE}" \
-    "LIBC_VERSION")"
+  local root_fs_dir="$1"
+  local abi="$2"
   PKGDIR="/var/lib/portage/pkgs"
-  local libc_atom="cross-${CHOST}/glibc-${libc_version}"
-  LIBC_PATH="${PKGDIR}/${libc_atom}.tbz2"
 
-  if [[ ! -e ${LIBC_PATH} ]]; then
-    sudo emerge --nodeps -gf "=${libc_atom}"
+  local pkgs=( "glibc" )
+  local pkg_ver_str=( "LIBC_VERSION" )
+  local exclude_gconv=false
+  if [[ "$3" == "--copy-cxx-runtime" ]]; then
+    # Normally only glibc gets installed here since it is not built per board
+    # while other "standard" libraries like the C++ libraries get installed by
+    # ebuilds. In the case of NaCl on Arm64, we need to install a second set of
+    # "standard" libraries for Arm32 to run NaCl binaries in Arm32 mode.
+    # So we'll install glibc and C++ libraries here using prebuilts for host
+    # cross-<abi>/<library> packages and not rely on ebuilds.
+    # This is a bit hacky but is only for a "short" while.
+    pkgs+=( "llvm-libunwind" "libcxx" )
+    pkg_ver_str+=("LIBGCC_VERSION" "LIBCXX_VERSION")
+    # gconv_strip.py does not like two set of gconv files but for
+    # arm32 + aarch64 multilib for NaCl, we have two set of files.
+    # As long as the second set for extra ABI is not needed for NaCl, we can
+    # just skip installing them for the arm32 abi while keeping aarch64.
+    exclude_gconv=true
   fi
 
-  # Strip out files we don't need in the final image at runtime.
-  local libc_excludes=(
-    # Compile-time headers.
-    'usr/include' 'sys-include'
-    # Link-time objects.
-    '*.[ao]'
-    # Debug commands not used by normal runtime code.
-    'usr/bin/'{getent,ldd}
-    # LD_PRELOAD objects for debugging.
-    'lib*/lib'{memusage,pcprofile,SegFault}.so 'usr/lib*/audit'
-    # We only use files & dns with nsswitch, so throw away the others.
-    'lib*/libnss_'{compat,db,hesiod,nis,nisplus}'*.so*'
-    # This is only for very old packages which we don't have.
-    'lib*/libBrokenLocale*.so*'
-  )
-  pbzip2 -dc --ignore-trailing-garbage=1 "${LIBC_PATH}" | \
-    sudo tar xpf - -C "${root_fs_dir}" ./usr/${CHOST} \
-      --strip-components=3 "${libc_excludes[@]/#/--exclude=}"
+  local idx pkg pkg_version pkg_atom pkg_path pkg_excludes pkg_comp
+  for (( idx = 0; idx < ${#pkgs[@]}; idx++ )); do
+    pkg="${pkgs[${idx}]}"
+    pkg_version="$(_get_variable "${BOARD_ROOT}/${SYSROOT_SETTINGS_FILE}" \
+      "${pkg_ver_str[${idx}]}")"
+    pkg_atom="cross-${abi}/${pkg}-${pkg_version}"
+    pkg_path="${PKGDIR}/${pkg_atom}.tbz2"
+    pkg_decompressor="$(detect_decompression_tool "${pkg_path}")"
+    if [[ "${pkg}" == "glibc" ]]; then
+      # LIBC_PATH needs to be export for later use in dev_image_util.sh
+      # to extract debug symbols.
+      # TODO(b/223285139): Change to export an array of packages instead
+      # since we should have really extract debug info for all of them.
+      export LIBC_PATH="${pkg_path}"
+      export LIBC_DECOMPRESSOR="${pkg_decompressor}"
+    fi
+
+    if [[ ! -e "${pkg_path}" ]]; then
+      sudo emerge --nodeps -gf "=${pkg_atom}"
+    fi
+
+    # Strip out files we don't need in the final image at runtime.
+    pkg_excludes=(
+      # Compile-time headers.
+      'usr/include' 'sys-include'
+      # Link-time objects.
+      '*.[ao]'
+      # Debug commands not used by normal runtime code.
+      'usr/bin/'{getent,ldd}
+      # LD_PRELOAD objects for debugging.
+      'lib*/lib'{memusage,pcprofile,SegFault}.so 'usr/lib*/audit'
+      # We only use files & dns with nsswitch, so throw away the others.
+      'lib*/libnss_'{compat,db,hesiod,nis,nisplus}'*.so*'
+      # This is only for very old packages which we don't have.
+      'lib*/libBrokenLocale*.so*'
+   )
+   if [[ "${exclude_gconv}" == true ]]; then
+      pkg_excludes+=(
+        'usr/lib/gconv'
+        'usr/lib64/gconv'
+      )
+    fi
+    info_run sudo tar -I"${pkg_decompressor}" -xpf "${pkg_path}" \
+      -C "${root_fs_dir}" "./usr/${abi}" \
+      --strip-components=3 "${pkg_excludes[@]/#/--exclude=}"
+  done
+}
+
+install_libc() {
+  local root_fs_dir="$1"
+
+  # Until nacl goes away completely, we actually need to run it in arm32
+  # mode on arm64 hosts. This will get the basic C/C++ libraries installed
+  # onto the device.
+  if [[ "${CHOST}" == "aarch64-cros-linux-gnu" ]]; then
+    install_libc_for_abi "${root_fs_dir}" "armv7a-cros-linux-gnueabihf" \
+      "--copy-cxx-runtime"
+  fi
+
+  install_libc_for_abi "${root_fs_dir}" "${CHOST}"
+}
+
+inject_system_wide_scudo() {
+  local root_fs_dir="$1"
+  info "'system_wide_scudo' enabled; Injecting scudo..."
+  local arch
+  local libdir
+  case "${ARCH}" in
+    x86)
+      arch='i386'
+      libdir='lib'
+      ;;
+    amd64)
+      arch='x86_64'
+      libdir='lib64'
+      ;;
+    arm)
+      arch='armhf'
+      libdir="lib"
+      ;;
+    arm64)
+      arch='aarch64'
+      libdir="lib64"
+      ;;
+    *) die "Inject scudo: unknown ARCH '${ARCH}'";;
+  esac
+  local libname="libclang_rt.scudo_standalone-${arch}.so"
+  local rootfs_scudo_loc="/usr/${libdir}/${libname}"
+  local preload_file="${root_fs_dir}/etc/ld.so.preload"
+  if [[ -f "${preload_file}" ]]; then
+    die "Inject scudo: preload '${preload_file}' already exists"
+  fi
+  local absolute_scudo_loc="${root_fs_dir}${rootfs_scudo_loc}"
+  if [[ -f "${absolute_scudo_loc}" ]]; then
+    echo "${rootfs_scudo_loc}" | sudo tee "${preload_file}" > /dev/null
+    info "Wrote ${rootfs_scudo_loc} to ${preload_file}"
+  else
+    die "Inject scudo: lib '${absolute_scudo_loc}' does NOT exist"
+  fi
 }
 
 create_base_image() {
   local image_name=$1
   local rootfs_verification_enabled=$2
-  local bootcache_enabled=$3
   local image_type="usb"
 
   info "Entering create_base_image $*"
@@ -244,6 +353,7 @@ create_base_image() {
   get_disk_layout_path
   info "Using disk layout ${DISK_LAYOUT_PATH}"
   root_fs_dir="${BUILD_DIR}/rootfs"
+  root_cros_vdb_strip_prefix="${root_fs_dir}"
   stateful_fs_dir="${BUILD_DIR}/stateful"
   esp_fs_dir="${BUILD_DIR}/esp"
 
@@ -280,19 +390,33 @@ create_base_image() {
   # trim the image size as much as possible.
   emerge_to_image --root="${root_fs_dir}" ${BASE_PACKAGE}
 
+  # Inject scudo system wide if system_wide_scudo is enabled.
+  if has "system_wide_scudo" in "$(portageq-"${BOARD}" envvar USE)"; then
+    # We do inject at this stage (and not during build_packages) because
+    # some unit tests fail when tested with Scudo. This isn't an inherent
+    # problem with Scudo, but instead is a problem with shared memory regions
+    # between allocators. If the host is using GNU Allocator and the VM is
+    # using Scudo, we're going to end up with a lot of memory errors.
+    inject_system_wide_scudo "${root_fs_dir}"
+  fi
+
   # Run depmod to recalculate the kernel module dependencies.
   run_depmod "${BOARD_ROOT}" "${root_fs_dir}"
 
   # Generate the license credits page for the packages installed on this
   # image in a location that will be used by Chrome.
   info "Generating license credits page. Time:"
-  sudo mkdir -p "${root_fs_dir}/opt/google/chrome/resources"
-  local license_path="${root_fs_dir}/opt/google/chrome/resources/about_os_credits.html"
-  time sudo "${GCLIENT_ROOT}/chromite/licensing/licenses" \
+  local dir_name="${root_fs_dir}/opt/google/chrome/resources"
+  sudo mkdir -p "${dir_name}"
+  local license_path="${dir_name}/about_os_credits.html.gz"
+  time info_run sudo "${GCLIENT_ROOT}/chromite/licensing/licenses" \
     --board="${BOARD}" \
+    --os-version="${CHROMEOS_VERSION_STRING}" \
+    --milestone-version="${CHROME_BRANCH}" \
     --log-level error \
     --generate-licenses \
-    --output "${license_path}"
+    --output "${license_path}" \
+    --compress-output
   # Copy the license credits file to ${BUILD_DIR} so that is will be uploaded
   # as artifact later in ArchiveStage.
   if [[ -r "${license_path}" ]]; then
@@ -305,7 +429,7 @@ create_base_image() {
   # and we don't known which ones will be used until all the applications are
   # installed. This script looks for the charset names on all the binaries
   # installed on the the ${root_fs_dir} and removes the unreferenced ones.
-  sudo "${CHROMITE_BIN}/gconv_strip" "${root_fs_dir}"
+  info_run sudo "${CHROMITE_BIN}/gconv_strip" "${root_fs_dir}"
 
   # Run ldconfig to create /etc/ld.so.cache.
   run_ldconfig "${root_fs_dir}"
@@ -339,30 +463,30 @@ create_base_image() {
   # into /usr/local later on.  Create symlinks in the rootfs so python still
   # works even when not in the rootfs.  This is needed because Gentoo creates
   # wrappers with hardcoded paths to the rootfs (e.g. python-exec).
+  local pyversions=(
+    # Querying versions is a bit fun.  We don't know precisely what will be
+    # installed in /usr/local, so just query what is available in the sysroot.
+    # The qlist output is: dev-lang/python:3.6
+    $("qlist-${BOARD}" -ICSe 'dev-lang/python' | cut -d: -f2)
+  )
   local path python_paths=(
     "/etc/env.d/python"
+    "${pyversions[@]/#//usr/lib/python}"
     "/usr/lib/python-exec"
     "/usr/lib/portage"
     "/usr/bin/python"
-    "/usr/bin/python2"
     "/usr/bin/python3"
-    # Querying versions is a bit fun.  We don't know precisely what will be
-    # installed in /usr/local, so just query what is available in the sysroot.
-    # The qlist output is: dev-lang/python:2.7
-    $("qlist-${BOARD}" -ICSe dev-lang/python | \
-        tr -d ':' | sed 's:dev-lang:/usr/bin:')
+    "/usr/bin/python-exec2c"
+    "${pyversions[@]/#//usr/bin/python}"
   )
+  if [[ -d "${root_fs_dir}/lib64" ]]; then
+    python_paths+=( "${pyversions[@]/#//usr/lib64/python}" )
+  fi
   for path in "${python_paths[@]}"; do
     if [[ ! -e "${root_fs_dir}${path}" && ! -L "${root_fs_dir}${path}" ]]; then
       sudo ln -sf "/usr/local${path}" "${root_fs_dir}${path}"
     fi
   done
-
-  # If Python is installed in the rootfs, make sure the latest is the default.
-  # If we have multiple versions, there's no guarantee as to which was selected.
-  if [[ -e "${root_fs_dir}/usr/bin/python" ]]; then
-    sudo env ROOT="${root_fs_dir}" eselect python update
-  fi
 
   # Set /etc/lsb-release on the image.
   local official_flag=
@@ -393,7 +517,7 @@ create_base_image() {
     unibuild_flag="--unibuild"
   fi
 
-  "${CHROMITE_BIN}/cros_set_lsb_release" \
+  info_run "${CHROMITE_BIN}/cros_set_lsb_release" \
     --sysroot="${root_fs_dir}" \
     --board="${BOARD}" \
     ${unibuild_flag} \
@@ -422,7 +546,7 @@ create_base_image() {
   # Note: fields in /etc/os-release can come from different places:
   # * /etc/os-release itself with docrashid
   # * /etc/os-release.d for fields created with do_osrelease_field
-  sudo "${CHROMITE_BIN}/cros_generate_os_release" \
+  info_run sudo "${CHROMITE_BIN}/cros_generate_os_release" \
     --root="${root_fs_dir}" \
     --version="${CHROME_BRANCH}" \
     --build_id="${CHROMEOS_VERSION_STRING}"
@@ -444,28 +568,31 @@ create_base_image() {
   # use those templates to update the legacy boot partition (12/ESP)
   # on update.
   # (This script does not populate vmlinuz.A and .B needed by syslinux.)
-  # Factory install shims may be booted from USB by legacy EFI BIOS, which does
-  # not support verified boot yet (see create_legacy_bootloader_templates.sh)
-  # so rootfs verification is disabled if we are building with --factory_install
   local enable_rootfs_verification=
   if [[ ${rootfs_verification_enabled} -eq ${FLAGS_TRUE} ]]; then
     enable_rootfs_verification="--enable_rootfs_verification"
   fi
-  local enable_bootcache=
-  if [[ ${bootcache_enabled} -eq ${FLAGS_TRUE} ]]; then
-    enable_bootcache="--enable_bootcache"
+
+  # If the KERN-A partition is of type "reserved", there is no kernel.
+  # Skip the preparation of a bootable kernel partition.
+  local has_bootable_kernel=1
+  local kernel_part_num="$(get_layout_partition_number "${image_type}" KERN-A)"
+  local kernel_part_type="$(get_type "${image_type}" "${kernel_part_num}")"
+  if [[ "${kernel_part_type}" == "reserved" ]]; then
+    has_bootable_kernel=0
   fi
 
-  ${BUILD_LIBRARY_DIR}/create_legacy_bootloader_templates.sh \
-    --arch=${ARCH} \
-    --board=${BOARD} \
-    --image_type="${image_type}" \
-    --to="${root_fs_dir}"/boot \
-    --boot_args="${FLAGS_boot_args}" \
-    --enable_serial="${FLAGS_enable_serial}" \
-    --loglevel="${FLAGS_loglevel}" \
-      ${enable_rootfs_verification} \
-      ${enable_bootcache}
+  if [[ "${has_bootable_kernel}" -eq 1 ]]; then
+    info_run "${BUILD_LIBRARY_DIR}/create_legacy_bootloader_templates.sh" \
+      --arch=${ARCH} \
+      --board=${BOARD} \
+      --image_type="${image_type}" \
+      --to="${root_fs_dir}"/boot \
+      --boot_args="${FLAGS_boot_args}" \
+      --enable_serial="${FLAGS_enable_serial}" \
+      --loglevel="${FLAGS_loglevel}" \
+      ${enable_rootfs_verification}
+  fi
 
   # Run board-specific build image function, if available.
   if type board_finalize_base_image &>/dev/null; then
@@ -498,16 +625,24 @@ create_base_image() {
     # stateful since we created a symlink for those. We ignore the
     # symlink in this package since the directory /usr/local/var
     # exists in the target image when dev_install runs.
-    sudo tar -cf "${BOARD_ROOT}/packages/dev-only-extras.tar.xz" \
+    info_run sudo tar -cf "${BOARD_ROOT}/packages/dev-only-extras.tar.xz" \
       -I 'xz -9 -T0' --exclude=var -C "${root_fs_dir}/usr/local" .
 
-    create_dev_install_lists "${root_fs_dir}"
+    if should_build_image ${CHROMEOS_FACTORY_INSTALL_SHIM_NAME}; then
+      info "Skipping dev-install lists for factory shim images."
+    else
+      create_dev_install_lists "${root_fs_dir}"
+    fi
   fi
 
   # Generate DLCs and copy their metadata to the rootfs + factory install DLC
   # images into stateful partition.
-  build_dlc --sysroot="${BOARD_ROOT}" --rootfs="${root_fs_dir}" \
-    --stateful="${stateful_fs_dir}" --board="${BOARD}" --factory-install
+  if should_build_image ${CHROMEOS_FACTORY_INSTALL_SHIM_NAME}; then
+    info "Skipping DLC copying for factory shim images."
+  else
+    info_run build_dlc --sysroot="${BOARD_ROOT}" --rootfs="${root_fs_dir}" \
+      --stateful="${stateful_fs_dir}" --board="${BOARD}" --factory-install
+  fi
 
   restore_fs_contexts "${BOARD_ROOT}" "${root_fs_dir}" "${stateful_fs_dir}"
 
@@ -516,28 +651,17 @@ create_base_image() {
   # the bootable partitions later.
   mkdir -p "${BUILD_DIR}/boot_images"
 
-  # Bootable kernel image for ManaTEE enabled targets is located at directory
-  # ${BOARD_ROOT}/build/manatee/boot and included only in bootable partition.
-  # If no manatee USE flag is specified the standard /boot location is used,
-  # optionally including kernel image in final build image:
+  # The standard /boot location may be optionally including kernel image in
+  # final build image iff:
+  #
   # - boards that boot with legacy bioses need the kernel on the boot image
   # - boards with coreboot/depthcharge boot from a boot partition.
-  local boot_dir
   local cpmv
-  if has "manatee" "$(portageq-"${BOARD}" envvar USE)"; then
-    boot_dir="${BOARD_ROOT}/build/manatee/boot"
+  local boot_dir="${root_fs_dir}/boot"
+  if has "include_vmlinuz" "$(portageq-"${BOARD}" envvar USE)"; then
     cpmv="cp"
-    # The CrOS VM (guest) kernel goes into initramfs, so we should drop it
-    # from rootfs to save space.
-    sudo rm "${root_fs_dir}"/boot/vmlinuz-*
-    sudo rm "${root_fs_dir}"/boot/vmlinuz
   else
-    boot_dir="${root_fs_dir}/boot"
-    if has "include_vmlinuz" "$(portageq-"${BOARD}" envvar USE)"; then
-      cpmv="cp"
-    else
-      cpmv="mv"
-    fi
+    cpmv="mv"
   fi
 
   [ -e "${boot_dir}"/Image-* ] && \
@@ -574,15 +698,17 @@ create_base_image() {
     USE_DEV_KEYS="--use_dev_keys"
   fi
 
-  if [[ ${skip_kernelblock_install} -ne 1 ]]; then
+  if [[ "${skip_kernelblock_install}" -ne 1 \
+    && "${has_bootable_kernel}" -eq 1 ]]; then
     # Place flags before positional args.
-    ${SCRIPTS_DIR}/bin/cros_make_image_bootable "${BUILD_DIR}" \
+    info_run "${SCRIPTS_DIR}/bin/cros_make_image_bootable" "${BUILD_DIR}" \
       ${image_name} ${USE_DEV_KEYS} --adjust_part="${FLAGS_adjust_part}"
   fi
 
   # Build minios kernel and put it in the MINIOS-A partition of the image.
   if has "minios" "$(portageq-"${BOARD}" envvar USE)"; then
-    build_minios --board "${BOARD}" --image "${BUILD_DIR}/${image_name}" \
+    info_run build_minios --board "${BOARD}" \
+      --image "${BUILD_DIR}/${image_name}" \
       --version "${CHROMEOS_VERSION_STRING}"
   fi
 }

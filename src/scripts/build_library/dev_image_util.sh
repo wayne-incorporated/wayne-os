@@ -1,4 +1,4 @@
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -34,22 +34,15 @@ install_dev_packages() {
   # Install developer packages.
   emerge_to_image --root="${root_dev_dir}" virtual/target-os-dev
 
-  # If Python is installed in the dev image, make sure the latest is the
-  # default.  If we have multiple versions, there's no guarantee as to which
-  # was selected.
-  if [[ -e "${root_dev_dir}/usr/bin/python" ]]; then
-    sudo env ROOT="${root_dev_dir}" eselect python update
-  fi
-
   # Run depmod to recalculate the kernel module dependencies.
   run_depmod "${BOARD_ROOT}" "${root_fs_dir}"
 
   # Copy over the libc debug info so that gdb
   # works with threads and also for a better debugging experience.
   sudo mkdir -p "${root_fs_dir}/usr/local/usr/lib/debug"
-  pbzip2 -dc --ignore-trailing-garbage=1 "${LIBC_PATH}" | \
-    sudo tar xpf - -C "${root_fs_dir}/usr/local/usr/lib/debug" \
-      ./usr/lib/debug/usr/${CHOST} --strip-components=6
+  info_run sudo tar -I"${LIBC_DECOMPRESSOR}" -xpf "${LIBC_PATH}" \
+    -C "${root_fs_dir}/usr/local/usr/lib/debug" \
+    ./usr/lib/debug/usr/${CHOST} --strip-components=6
   # Since gdb only looks in /usr/lib/debug, symlink the /usr/local
   # path so that it is found automatically.
   sudo ln -sfT /usr/local/usr/lib/debug "${root_fs_dir}/usr/lib/debug"
@@ -84,5 +77,13 @@ install_dev_packages() {
       ${SCRIPTS_DIR}/bin/cros_make_image_bootable "${BUILD_DIR}" \
         ${image_name} --force_developer_mode
     fi
+  fi
+
+  # Update MINIOS-A partition with developer mode image. This does not rebuild
+  # the MiniOS image. It only enables/adds dev-mode flags.
+  if has "minios" "$(portageq-"${BOARD}" envvar USE)"; then
+    build_minios --mod-for-dev --board "${BOARD}" \
+      --image "${BUILD_DIR}/${image_name}" \
+      --version "${CHROMEOS_VERSION_STRING}"
   fi
 }

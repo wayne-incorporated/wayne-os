@@ -1,16 +1,22 @@
 #!/bin/bash
 
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-if [[ ! -f ${ROOT_FS_DIR}/etc/fwupd/daemon.conf ]]; then
+CONFIG_FILE="${ROOT_FS_DIR}/etc/fwupd/fwupd.conf"
+
+if [[ ! -f ${CONFIG_FILE} ]]; then
   exit 0
 fi
 
+echo "Enabling verbose debug output for fwupd."
+
+sed -e 's/^\(VerboseDomains=\).*/\1*/' -i "${CONFIG_FILE}"
+
 echo "Enabling dummy fwupd remote for tests."
 
-sed -e '/^DisabledPlugins=/s/^/#/' -i "${ROOT_FS_DIR}/etc/fwupd/daemon.conf"
+sed -e 's/^\(DisabledPlugins=\).*/\1/' -i "${CONFIG_FILE}"
 
 cat > "${ROOT_FS_DIR}/usr/share/fwupd/remotes.d/vendor/fwupd-tests.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -50,6 +56,17 @@ cat > "${ROOT_FS_DIR}/usr/share/fwupd/remotes.d/vendor/fwupd-tests.xml" <<EOF
             <checksum type="sha256">3fab34cfa1ef97238fb24c5e40a979bc544bb2b0967b863e43e7d58e0d9a923f</checksum>
             <size type="installed">10</size>
             <size type="download">24493</size>
+            <testing>
+              <test_result date="2023-06-22">
+                <vendor_name id="1">LVFS</vendor_name>
+                <device>Google Voxel</device>
+                <os version="113">chromeos</os>
+                <previous_version>1.2.3</previous_version>
+                <custom>
+                  <value key="RuntimeVersion(org.freedesktop.fwupd)">1.8.12</value>
+                </custom>
+              </test_result>
+            </testing>
           </artifact>
         </artifacts>
       </release>
@@ -59,7 +76,7 @@ cat > "${ROOT_FS_DIR}/usr/share/fwupd/remotes.d/vendor/fwupd-tests.xml" <<EOF
 EOF
 
 cat > "${ROOT_FS_DIR}/etc/fwupd/remotes.d/fwupd-tests.conf" <<EOF
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 

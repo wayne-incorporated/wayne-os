@@ -1,0 +1,94 @@
+#!/bin/bash
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Force clean up some SDK packages that have been removed.
+pkgs=(
+  app-arch/pbzip2
+  app-arch/unrar
+  app-benchmarks/sysbench
+  app-doc/doxygen
+  app-shells/dash
+  app-shells/push
+  app-text/tree
+  chromeos-base/chromeos-activate-date
+  chromeos-base/crosvm-base
+  chromeos-base/update-policy-chromeos
+  chromeos-base/vpd
+  dev-db/mariadb-connector-c
+  dev-embedded/meta-embedded-toolkit
+  dev-go/brotli
+  dev-go/go-uuid
+  dev-go/mitmproxy
+  dev-lang/luajit
+  dev-libs/concurrencykit
+  dev-libs/crypto++
+  dev-libs/iniparser
+  dev-libs/libnl
+  dev-libs/libusb-compat
+  dev-libs/wayland
+  dev-python/appdirs
+  dev-python/argcomplete
+  dev-python/boto
+  dev-python/click
+  dev-python/entrypoints
+  dev-python/fasteners
+  dev-python/future
+  dev-python/gcs-oauth2-boto-plugin
+  dev-python/google-apitools
+  dev-python/google-cloud-logging
+  dev-python/google-reauth-python
+  dev-python/keyring
+  dev-python/linecache2
+  dev-python/monotonic
+  dev-python/oauth2client
+  dev-python/pathlib2
+  dev-python/pbr
+  dev-python/pip
+  dev-python/pyshark
+  dev-python/python-gflags
+  dev-python/pyu2f
+  dev-python/pyxattr
+  dev-python/retry-decorator
+  dev-python/secretstorage
+  dev-python/selenium
+  dev-python/toml
+  dev-python/traceback2
+  dev-python/unittest2
+  dev-rust/cros_async
+  dev-rust/io_uring
+  dev-rust/minijail
+  dev-rust/minijail-sys
+  dev-rust/serde_keyvalue
+  dev-rust/serde_keyvalue_derive
+  dev-rust/sync
+  dev-util/gob
+  dev-util/ragel
+  net-analyzer/wireshark
+  net-fs/sshfs
+  net-libs/grpc-web
+  net-libs/http-parser
+  net-libs/libpcap
+  net-misc/gsutil
+  sys-apps/hdparm
+  sys-apps/mmc-utils
+  sys-apps/smartmontools
+  sys-auth/pambase
+  '<sys-devel/autoconf-2.71'
+  '<sys-devel/automake-1.16'
+  sys-fs/fuse
+  sys-fs/fuse-common
+  sys-libs/pam
+  virtual/chromeos-activate-date
+  virtual/libusb:0
+  virtual/modutils
+  virtual/pam
+  virtual/update-policy
+  x11-libs/libXcursor
+  x11-libs/libxkbcommon
+)
+mapfile -t installed_pkgs < <(qlist -eICS "${pkgs[@]}" || :)
+if [[ ${#installed_pkgs[@]} -gt 0 ]]; then
+  sudo emerge --rage -q "${installed_pkgs[@]}"
+fi

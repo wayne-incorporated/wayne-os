@@ -1,0 +1,19 @@
+#!/bin/bash
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Force clean up cross-*/libcxx packages, as we need to remove libcxx-9999.
+# See: b/293898274
+mapfile -t pkgs < <(qlist -IC 'cross-.*/libcxx-9999$')
+if [[ ${#pkgs[@]} -gt 0 ]]; then
+  sudo emerge --quiet --rage-clean "${pkgs[@]}" || true
+fi
+
+# We also need to rewrite all the keyword files to what's listed in
+# toolchains-overlay.
+if [[ -d /etc/portage/package.accept_keywords ]]; then
+  sudo cp \
+    /mnt/host/source/src/third_party/toolchains-overlay/profiles/base/package.accept_keywords/cross-* \
+    /etc/portage/package.accept_keywords/
+fi

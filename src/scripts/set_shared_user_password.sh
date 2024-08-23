@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 # Make sure common.sh is here.
 SCRIPT_ROOT=$(dirname $(readlink -f "$0"))
+# shellcheck source=common.sh
 . "${SCRIPT_ROOT}/common.sh" || { echo "Unable to load common.sh"; exit 1; }
 
 assert_inside_chroot

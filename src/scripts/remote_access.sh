@@ -1,12 +1,21 @@
 #!/bin/bash
-# Copyright (c) 2009 The Chromium OS Authors. All rights reserved.
+# Copyright 2009 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # Library for setting up remote access and running remote commands.
 
-DEFAULT_PRIVATE_KEY="${GCLIENT_ROOT}/src/scripts/mod_for_test_scripts/\
-ssh_keys/testing_rsa"
+case ${SCRIPT_NAME} in
+cros_show_stacks|update_kernel.sh)
+  ;;
+*)
+  echo "remote_access.sh: This script will be removed by July 2023." >&2
+  exit 1
+  ;;
+esac
+
+DEFAULT_PRIVATE_KEY="${GCLIENT_ROOT}/chromite/ssh_keys/testing_rsa"
+PARTNER_PRIVATE_KEY="${GCLIENT_ROOT}/sshkeys/partner_testing_rsa"
 
 DEFINE_string remote "" "remote hostname/IP of running Chromium OS instance"
 DEFINE_string private_key "$DEFAULT_PRIVATE_KEY" \
@@ -59,6 +68,9 @@ ssh_connect_settings() {
       "ControlMaster=auto"
       "ControlPersist=45"
     )
+    if [[ -f "${TMP_PRIVATE_PARTNER_KEY}" ]]; then
+      settings+=("IdentityFile=${TMP_PRIVATE_PARTNER_KEY}")
+    fi
     printf -- '-o %s ' "${settings[@]}"
 
     if [[ "${FLAGS_ssh_port}" -ne 0 ]]; then
@@ -110,9 +122,10 @@ remote_rsync_from() {
 # Send a directory from $1 to $2 on remote host
 #
 # Tries to use rsync -a but will fall back to tar if the remote doesn't
-# have rsync.
+# have rsync.  The optional rsync flags are ignored if we fall back to tar.
 #
-# Use like: remote_send_to /build/board/lib/modules/ /lib/modules/
+# Use like:
+# remote_send_to /build/board/lib/modules/ /lib/modules/ [optional rsync flags]
 remote_send_to() {
   local rsync_rem
   if [ ! -d "$1" ]; then
@@ -121,7 +134,7 @@ remote_send_to() {
 
   if remote_sh rsync --version >/dev/null 2>&1; then
     rsync_rem="$(brackets_enclosed_if_ipv6 "${FLAGS_remote}")"
-    remote_rsync_raw -a "$1/" root@"${rsync_rem}:$2/"
+    remote_rsync_raw -a "${@:3}" "$1/" root@"${rsync_rem}:$2/"
   else
     tar -C "$1" -cz . | remote_sh tar -C "$2" -xz
   fi
@@ -161,6 +174,10 @@ remote_sh_allow_changed_host_key() {
 set_up_remote_access() {
   cp $FLAGS_private_key $TMP_PRIVATE_KEY
   chmod 0400 $TMP_PRIVATE_KEY
+  if [[ -f "${PARTNER_PRIVATE_KEY}" ]]; then
+      cp "${PARTNER_PRIVATE_KEY}" "${TMP_PRIVATE_PARTNER_KEY}"
+      chmod 0400 "${TMP_PRIVATE_PARTNER_KEY}"
+  fi
 
   # Verify the client is reachable before continuing
   local output
@@ -268,6 +285,7 @@ cleanup_remote_access() {
 
 remote_access_init() {
   TMP_PRIVATE_KEY=$TMP/private_key
+  TMP_PRIVATE_PARTNER_KEY="${TMP}/partner_private_key"
   TMP_KNOWN_HOSTS=$TMP/known_hosts
   TMP_CONTROL_FILE="${TMP}/ssh_control-%C"
 

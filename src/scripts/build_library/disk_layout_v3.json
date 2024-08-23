@@ -1,10 +1,3 @@
-# Changes from disk_layout_v2:
-# * Introduce 128MB MINIOS-A and MINIOS-B on partitions 9 and 10, with
-#   10 being set as last_partition.
-# * Reduce OEM partition 8 from 16MB to 4MB.
-# * Remove -no-exports from ROOTFS-A squashfs options.
-# * Add powerwash data as partition 11.
-# * Delete 2gb-rootfs, 2gb-rootfs-updatable, and 4gb-rootfs.
 {
   # See README.disk_layout.
   "parent": "common_disk_layout.json",
@@ -82,9 +75,10 @@
         "fs_format": "ext2",
         "fs_options": {
           "squashfs": "-noI -comp lzo -Xalgorithm lzo1x_999 -Xcompression-level 9",
+          "ext2": "-i 65536",
           "btrfs": "skinny-metadata"
         },
-        "size": "4096 MiB",
+        "size": "4 GiB",
         "fs_size": "2300 MiB",
         "uuid": "clear"
       },
@@ -102,7 +96,7 @@
         "num": 5,
         "label": "ROOT-B",
         "type": "rootfs",
-        "size": "4096 MiB"
+        "size": "4 GiB"
       },
       {
         # Powerwash data, including rollback data.
@@ -144,33 +138,40 @@
       {
         "num": 5,
         "size": "2 MiB"
+      }
+    ],
+    # Same as USB, but updatable.
+    "usb-updatable": [
+      {
+        "num": 3,
+        "size": "2400 MiB"
       },
       {
-        # MINIOS-B partitions are not filled with anything on USB images.
-        "num": 10,
-        "size": "2 MiB",
-        "type": "reserved"
+        "num": 5,
+        "size": "2400 MiB"
       }
     ],
     # Used for factory install images.
     "factory_install": [
       {
         "num": 3,
-        "size": "420 MiB",
-        "fs_size": "400 MiB"
+        "size": "480 MiB",
+        "fs_size": "460 MiB",
+        "fs_options": {
+          "ext2": "-i 32768"
+        }
+      },
+      {
+        "num": 4,
+        "size": "1"
       },
       {
         "num": 5,
-        "size": "2 MiB"
+        "size": "1"
       },
       {
         "num": 1,
-        "size": "140 MiB"
-      },
-      {
-        "num": 10,
-        "size": "2 MiB",
-        "type": "reserved"
+        "size": "200 MiB"
       }
     ],
     "recovery": [
@@ -200,11 +201,6 @@
         # Stateful on recovery is dynamically resized larger.
         "num": 1,
         "size": "2 MiB"
-      },
-      {
-        "num": 10,
-        "size": "2 MiB",
-        "type": "reserved"
       }
     ],
     # Huge rootfs, suitable for VM only images, should not be used
@@ -212,17 +208,12 @@
     "16gb-rootfs": [
       {
         "num": 3,
-        "size": "16384 MiB",
+        "size": "16 GiB",
         "fs_size": "16000 MiB"
       },
       {
         "num": 5,
         "size": "2 MiB"
-      },
-      {
-        "num": 10,
-        "size": "2 MiB",
-        "type": "reserved"
       }
     ]
   }

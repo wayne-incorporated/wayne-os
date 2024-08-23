@@ -1,4 +1,4 @@
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -9,85 +9,12 @@
 # one file aside from its lack of anywhere else to go.  Probably,
 # this file should get broken up or otherwise reorganized.
 
-# Use canonical path since some tools (e.g. mount) do not like symlinks.
-# Append build attempt to output directory.
-IMAGE_SUBDIR="R${CHROME_BRANCH}"
-if [ -z "${FLAGS_version}" ]; then
-  IMAGE_SUBDIR="${IMAGE_SUBDIR}-${CHROMEOS_VERSION_STRING}-a\
-${FLAGS_build_attempt}"
-else
-  IMAGE_SUBDIR="${IMAGE_SUBDIR}-${FLAGS_version}"
-fi
-
-if [ -n "${FLAGS_output_suffix}" ];  then
-  IMAGE_SUBDIR="${IMAGE_SUBDIR}-${FLAGS_output_suffix}"
-fi
-
-BUILD_DIR="${FLAGS_build_root}/${BOARD}/${IMAGE_SUBDIR}"
-OUTPUT_DIR="${FLAGS_output_root}/${BOARD}/${IMAGE_SUBDIR}"
-OUTSIDE_OUTPUT_DIR="../build/images/${BOARD}/${IMAGE_SUBDIR}"
-IMAGES_TO_BUILD=
-
 EMERGE_BOARD_CMD="${CHROMITE_BIN}/parallel_emerge"
 EMERGE_BOARD_CMD="$EMERGE_BOARD_CMD --board=$BOARD"
-
-export INSTALL_MASK="${DEFAULT_INSTALL_MASK}"
 
 if [[ $FLAGS_jobs -ne -1 ]]; then
   EMERGE_JOBS="--jobs=$FLAGS_jobs"
 fi
-
-# Populates list of IMAGES_TO_BUILD from args passed in.
-# Arguments should be the shortnames of images we want to build.
-get_images_to_build() {
-  local image_to_build
-  for image_to_build in $*; do
-    # Shflags leaves "'"s around ARGV.
-    case ${image_to_build} in
-      \'base\' )
-        IMAGES_TO_BUILD="${IMAGES_TO_BUILD} ${CHROMEOS_BASE_IMAGE_NAME}"
-        ;;
-      \'dev\' )
-        IMAGES_TO_BUILD="${IMAGES_TO_BUILD} ${CHROMEOS_DEVELOPER_IMAGE_NAME}"
-        ;;
-      \'test\' )
-        IMAGES_TO_BUILD="${IMAGES_TO_BUILD} ${CHROMEOS_TEST_IMAGE_NAME}"
-        ;;
-      \'factory_install\' )
-        IMAGES_TO_BUILD="${IMAGES_TO_BUILD} \
-          ${CHROMEOS_FACTORY_INSTALL_SHIM_NAME}"
-        ;;
-      * )
-        die "${image_to_build} is not an image specification."
-        ;;
-    esac
-  done
-
-  # Set default if none specified.
-  if [ -z "${IMAGES_TO_BUILD}" ]; then
-    IMAGES_TO_BUILD=${CHROMEOS_DEVELOPER_IMAGE_NAME}
-  fi
-
-  info "The following images will be built ${IMAGES_TO_BUILD}."
-}
-
-# Look at flags to determine which image types we should build.
-parse_build_image_args() {
-  get_images_to_build ${FLAGS_ARGV}
-  if should_build_image ${CHROMEOS_BASE_IMAGE_NAME} \
-      ${CHROMEOS_DEVELOPER_IMAGE_NAME} ${CHROMEOS_TEST_IMAGE_NAME} && \
-      should_build_image ${CHROMEOS_FACTORY_INSTALL_SHIM_NAME}; then
-    die_notrace \
-        "Can't build ${CHROMEOS_FACTORY_INSTALL_SHIM_NAME} with any other" \
-        "image."
-  fi
-  if should_build_image ${CHROMEOS_FACTORY_INSTALL_SHIM_NAME}; then
-    # For factory, force rootfs verification and bootcache off
-    FLAGS_enable_rootfs_verification=${FLAGS_FALSE}
-    FLAGS_enable_bootcache=${FLAGS_FALSE}
-    FLAGS_bootcache_use_board_default=${FLAGS_FALSE}
-  fi
-}
 
 make_salt() {
   # It is not important that the salt be cryptographically strong; it just needs
@@ -106,10 +33,6 @@ create_boot_desc() {
   if [[ ${FLAGS_enable_rootfs_verification} -eq ${FLAGS_TRUE} ]]; then
     enable_rootfs_verification_flag="--enable_rootfs_verification"
   fi
-  local enable_bootcache_flag=""
-  if [[ ${FLAGS_enable_bootcache} -eq ${FLAGS_TRUE} ]]; then
-    enable_bootcache_flag=--enable_bootcache
-  fi
 
   [ -z "${FLAGS_verity_salt}" ] && FLAGS_verity_salt=$(make_salt)
   cat <<EOF > ${BUILD_DIR}/boot.desc
@@ -123,7 +46,6 @@ create_boot_desc() {
   --enable_serial="${FLAGS_enable_serial}"
   --loglevel="${FLAGS_loglevel}"
   ${enable_rootfs_verification_flag}
-  ${enable_bootcache_flag}
 EOF
 }
 
@@ -194,10 +116,9 @@ delete_prompt() {
 # Arguments to this command are passed as addition options/arguments
 # to the basic emerge command.
 emerge_to_image() {
-  set -- ${EMERGE_BOARD_CMD} --root-deps=rdeps --usepkgonly -v --with-bdeps=n \
-    "$@" ${EMERGE_JOBS}
-  info "$*"
-  sudo -E "$@"
+  set -- ${EMERGE_BOARD_CMD} --root-cros-vdb-strip-prefix="${root_cros_vdb_strip_prefix}" \
+    --root-deps=rdeps --usepkgonly -v --with-bdeps=n "$@" ${EMERGE_JOBS}
+  info_run sudo -E "$@"
 }
 
 # Create the /etc/shadow file with all the right entries.
@@ -209,6 +130,7 @@ setup_etc_shadow() {
   local passwd="${root}/etc/passwd"
   local line
   local cmds
+  local sed_cmds=()
 
   # Remove the file completely so we know it is fully initialized
   # with the correct permissions.  Note: we're just making it writable
@@ -245,9 +167,19 @@ setup_etc_shadow() {
     # Password is set directly.
     *)
       echo "${acct}:${pass}:::::::" >> "${shadow}"
+
+      # This is a sed command to replace the password field with an 'x' instead
+      # of the existing hashed password. We use ! as the sed separator because
+      # it's guaranteed not to appear in a hashed password field (see passwd(5)
+      # and crypt(3) man pages)
+      sed_cmds+=("-e" "s!^${acct}:${pass}:!${acct}:x:!")
       ;;
     esac
   done <"${passwd}"
+
+  if [[ "${#sed_cmds[@]}" -gt 0 ]]; then
+    sudo sed -i "${sed_cmds[@]}" "${passwd}"
+  fi
 
   # Now make the settings sane.
   cmds=(
@@ -296,7 +228,8 @@ run_depmod() {
     local system_map="${kernel_out_dir}/System.map"
 
     if [[ -r "${system_map}" ]]; then
-      sudo depmod -ae -F "${system_map}" -b "${root_fs_dir}" "${kernel_release}"
+      info_run sudo depmod -ae -F "${system_map}" -b "${root_fs_dir}" \
+        "${kernel_release}"
     fi
   done
 }
