@@ -1,14 +1,16 @@
 #!/bin/bash
 
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # Helper script to generate GRUB bootloader configuration files for
 # x86 platforms.
 
-SCRIPT_ROOT=$(readlink -f $(dirname "$0")/..)
+SCRIPT_ROOT=$(readlink -f "$(dirname "$0")"/..)
+# shellcheck source=../common.sh
 . "${SCRIPT_ROOT}/common.sh" || exit 1
+# shellcheck source=disk_layout_util.sh
 . "${BUILD_LIBRARY_DIR}/disk_layout_util.sh" || exit 1
 
 # We're invoked only by build_image, which runs in the chroot
@@ -23,9 +25,7 @@ DEFINE_string to "/tmp/boot" \
   "Path to populate with bootloader templates (Default: /tmp/boot)"
 DEFINE_string boot_args "" \
   "Additional boot arguments to pass to the commandline (Default: '')"
-DEFINE_boolean enable_bootcache ${FLAGS_FALSE} \
-  "Default all bootloaders to NOT use boot cache."
-DEFINE_boolean enable_rootfs_verification ${FLAGS_FALSE} \
+DEFINE_boolean enable_rootfs_verification "${FLAGS_FALSE}" \
   "Controls if verity is used for root filesystem checking (Default: false)"
 DEFINE_string enable_serial "tty2" \
   "Enable serial port for printks. Example values: ttyS0 (Default: tty2)"
@@ -50,9 +50,6 @@ dev_wait=0
 ROOTDEV=/dev/dm-0
 if [[ ${FLAGS_enable_rootfs_verification} -eq ${FLAGS_TRUE} ]]; then
   dev_wait=1
-  if [[ ${FLAGS_enable_bootcache} -eq ${FLAGS_TRUE} ]]; then
-    ROOTDEV=/dev/dm-1
-  fi
 fi
 
 # Common kernel command-line args. Write them to a temporary config_file so that
@@ -60,7 +57,7 @@ fi
 # TODO: This code to support modifying kernel command line by boards is very
 # similar to the one in build_kernel_image.sh. This could be refactored into a
 # common place. Until then it needs to be kept consistent.
-config_file="$(mktemp legacy_config_XXXXXXXXXX.txt)"
+config_file="$(mktemp --tmpdir legacy_config_XXXXXXXXXX.txt)"
 cleanup() {
   rm -f "${config_file}"
 }
@@ -68,11 +65,9 @@ trap cleanup EXIT
 
 cat <<EOF > "${config_file}"
 init=/sbin/init
-boot=local
 rootwait
 ro
 noresume
-noswap
 loglevel=${FLAGS_loglevel}
 ${FLAGS_boot_args}
 console=${FLAGS_enable_serial}
@@ -88,9 +83,13 @@ modify_kernel_command_line() {
   :
 }
 
+# shellcheck source=board_options.sh
 . "${BUILD_LIBRARY_DIR}/board_options.sh" || exit 1
-load_board_specific_script "build_kernel_image.sh"
-modify_kernel_command_line "${config_file}"
+(
+  # Run in a subshell so we know build_kernel_image.sh can't set env vars.
+  load_board_specific_script "build_kernel_image.sh"
+  modify_kernel_command_line "${config_file}"
+)
 # Read back the config_file; translate newlines to space
 common_args="$(tr "\n" " " < "${config_file}")"
 cleanup
@@ -111,13 +110,98 @@ partition_num_kern_b="$(get_layout_partition_number \
 partition_num_root_a="$(get_layout_partition_number \
     "${FLAGS_image_type}" ROOT-A)"
 
+# Create grub image and common grub.cfg template for EFI on x86/amd64/arm64.
+install_grub_efi_template() {
+  # To cover all of our bases, now populate templated boot support for efi.
+  sudo mkdir -p "${FLAGS_to}"/efi/boot
+
+  # /boot/syslinux must be installed in partition 12 as /syslinux/.
+  SYSLINUX_DIR="${FLAGS_to}/syslinux"
+  sudo mkdir -p "${SYSLINUX_DIR}"
+
+  grub_args=(
+    -p /efi/boot
+    part_gpt gptpriority test fat ext2 normal boot chain
+    efi_gop configfile linux
+    # For more context on SBAT, see chromiumos-overlay/sys-boot/grub/README.md
+    -s "${SRC_ROOT}/third_party/chromiumos-overlay/sys-boot/grub/files/sbat.csv"
+  )
+
+  if [[ "${FLAGS_arch}" == "arm64" ]]; then
+    # GRUB for arm64 is installed inside board overlay, since cross compilation
+    # tools are not available in base SDK.
+    sudo grub-mkimage -O arm64-efi \
+      -d "/build/${FLAGS_board}/lib64/grub/arm64-efi/" \
+      -o "${FLAGS_to}/efi/boot/bootaa64.efi" "${grub_args[@]}"
+  else
+    sudo grub-mkimage -O x86_64-efi \
+      -o "${FLAGS_to}/efi/boot/bootx64.efi" "${grub_args[@]}"
+    sudo grub-mkimage -O i386-efi \
+      -o "${FLAGS_to}/efi/boot/bootia32.efi" "${grub_args[@]}"
+  fi
+
+  # Templated variables:
+  #  DMTABLEA, DMTABLEB -> '0 xxxx verity ... '
+  # This should be replaced during postinst when updating the ESP.
+  cat <<EOF | sudo dd of="${FLAGS_to}/efi/boot/grub.cfg" 2>/dev/null
+defaultA=0
+defaultB=1
+gptpriority \$grubdisk ${partition_num_kern_a} prioA
+gptpriority \$grubdisk ${partition_num_kern_b} prioB
+
+if [ \$prioA -lt \$prioB ]; then
+  set default=\$defaultB
+else
+  set default=\$defaultA
+fi
+
+# Modified by seongbin@wayne-inc.com
+# set timeout=2
+set timeout=0
+
+# NOTE: These magic grub variables are a Chrome OS hack. They are not portable.
+
+menuentry "local image A" {
+  linux /syslinux/vmlinuz.A ${common_args} i915.modeset=1 cros_efi \
+      root=/dev/\$linuxpartA
+}
+
+menuentry "local image B" {
+  linux /syslinux/vmlinuz.B ${common_args} i915.modeset=1 cros_efi \
+      root=/dev/\$linuxpartB
+}
+
+menuentry "verified image A" {
+  linux /syslinux/vmlinuz.A ${common_args} ${verity_common} \
+      i915.modeset=1 cros_efi root=${ROOTDEV} dm="DMTABLEA"
+}
+
+menuentry "verified image B" {
+  linux /syslinux/vmlinuz.B ${common_args} ${verity_common} \
+      i915.modeset=1 cros_efi root=${ROOTDEV} dm="DMTABLEB"
+}
+
+# FIXME: usb doesn't support verified boot for now
+menuentry "Alternate USB Boot" {
+  linux (hd0,${partition_num_root_a})/boot/vmlinuz ${common_args} root=HDROOTUSB i915.modeset=1 cros_efi
+}
+EOF
+  if [[ ${FLAGS_enable_rootfs_verification} -eq ${FLAGS_TRUE} ]]; then
+    sudo sed -i \
+      -e '/^defaultA=/s:=.*:=2:' \
+      -e '/^defaultB=/s:=.*:=3:' \
+      "${FLAGS_to}/efi/boot/grub.cfg"
+  fi
+  info "Emitted ${FLAGS_to}/efi/boot/grub.cfg"
+}
+
 # Populate the x86 rootfs to support legacy and EFI bios config templates.
 # The templates are used by the installer to populate partition 12 with
 # the correct bootloader configuration.
-if [[ "${FLAGS_arch}" = "x86" || "${FLAGS_arch}" = "amd64"  ]]; then
+if [[ "${FLAGS_arch}" == "x86" || "${FLAGS_arch}" == "amd64"  ]]; then
   # TODO: For some reason the /dev/disk/by-uuid is not being generated by udev
   # in the initramfs. When we figure that out, switch to root=UUID=${UUID}.
-  sudo mkdir -p ${FLAGS_to}
+  sudo mkdir -p "${FLAGS_to}"
 
   # /boot/syslinux must be installed in partition 12 as /syslinux/.
   SYSLINUX_DIR="${FLAGS_to}/syslinux"
@@ -206,71 +290,11 @@ and legacy BIOSes use this syslinux configuration.
 EOF
   info "Emitted ${SYSLINUX_DIR}/README"
 
-  # To cover all of our bases, now populate templated boot support for efi.
-  sudo mkdir -p "${FLAGS_to}"/efi/boot
-
-  grub_args=(
-    -p /efi/boot
-    part_gpt gptpriority test fat ext2 hfs hfsplus normal boot chain
-    efi_gop configfile linux
-  # For more context on SBAT, see chromiumos-overlay/sys-boot/grub/README.md
-    -s "${SRC_ROOT}/third_party/chromiumos-overlay/sys-boot/grub/files/sbat.csv"
-  )
-  sudo grub-mkimage -O x86_64-efi \
-    -o "${FLAGS_to}/efi/boot/bootx64.efi" "${grub_args[@]}"
-  sudo grub-mkimage -O i386-efi \
-    -o "${FLAGS_to}/efi/boot/bootia32.efi" "${grub_args[@]}"
-  # Templated variables:
-  #  DMTABLEA, DMTABLEB -> '0 xxxx verity ... '
-  # This should be replaced during postinst when updating the ESP.
-  cat <<EOF | sudo dd of="${FLAGS_to}/efi/boot/grub.cfg" 2>/dev/null
-defaultA=0
-defaultB=1
-gptpriority \$grubdisk ${partition_num_kern_a} prioA
-gptpriority \$grubdisk ${partition_num_kern_b} prioB
-
-if [ \$prioA -lt \$prioB ]; then
-  set default=\$defaultB
-else
-  set default=\$defaultA
-fi
-
-set timeout=2
-
-# NOTE: These magic grub variables are a Chrome OS hack. They are not portable.
-
-menuentry "local image A" {
-  linux /syslinux/vmlinuz.A ${common_args} i915.modeset=1 cros_efi \
-      root=/dev/\$linuxpartA
-}
-
-menuentry "local image B" {
-  linux /syslinux/vmlinuz.B ${common_args} i915.modeset=1 cros_efi \
-      root=/dev/\$linuxpartB
-}
-
-menuentry "verified image A" {
-  linux /syslinux/vmlinuz.A ${common_args} ${verity_common} \
-      i915.modeset=1 cros_efi root=${ROOTDEV} dm="DMTABLEA"
-}
-
-menuentry "verified image B" {
-  linux /syslinux/vmlinuz.B ${common_args} ${verity_common} \
-      i915.modeset=1 cros_efi root=${ROOTDEV} dm="DMTABLEB"
-}
-
-# FIXME: usb doesn't support verified boot for now
-menuentry "Alternate USB Boot" {
-  linux (hd0,${partition_num_root_a})/boot/vmlinuz ${common_args} root=HDROOTUSB i915.modeset=1 cros_efi
-}
-EOF
-  if [[ ${FLAGS_enable_rootfs_verification} -eq ${FLAGS_TRUE} ]]; then
-    sudo sed -i \
-      -e '/^defaultA=/s:=.*:=2:' \
-      -e '/^defaultB=/s:=.*:=3:' \
-      "${FLAGS_to}/efi/boot/grub.cfg"
-  fi
-  info "Emitted ${FLAGS_to}/efi/boot/grub.cfg"
+  install_grub_efi_template
+  exit 0
+elif [[ "${FLAGS_arch}" == "arm64" ]] && \
+     [[ -d "/build/${FLAGS_board}/lib64/grub/arm64-efi/" ]]; then
+  install_grub_efi_template
   exit 0
 fi
 

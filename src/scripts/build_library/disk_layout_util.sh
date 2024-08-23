@@ -1,12 +1,15 @@
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # BUILD_LIBRARY_DIR must be set prior to sourcing this file, since this file
 # is sourced as ${BUILD_LIBRARY_DIR}/disk_layout_util.sh
+# shellcheck source=filesystem_util.sh
 . "${BUILD_LIBRARY_DIR}/filesystem_util.sh" || exit 1
 
-CGPT_PY="${BUILD_LIBRARY_DIR}/cgpt.py"
+# shellcheck disable=SC2154
+CGPT_PY="${GCLIENT_ROOT}/chromite/scripts/disk_layout_tool"
+# shellcheck disable=SC2034
 PARTITION_SCRIPT_PATH="usr/sbin/write_gpt.sh"
 DISK_LAYOUT_PATH=
 
@@ -43,14 +46,22 @@ write_partition_script() {
   local adjust_part="$3"
   get_disk_layout_path
 
-  local temp_script_file=$(mktemp)
+  local part_vars
+  part_vars="$(dirname "${partition_script_path}")/partition_vars.json"
+
+  local temp_script_file
+  local temp_vars_file
+  temp_script_file=$(mktemp)
+  temp_vars_file=$(mktemp)
 
   sudo mkdir -p "$(dirname "${partition_script_path}")"
   cgpt_py ${adjust_part:+--adjust_part "${adjust_part}"} \
           write "${image_type}" "${DISK_LAYOUT_PATH}" \
-          "${temp_script_file}"
+          "${temp_script_file}" "${temp_vars_file}"
   sudo mv "${temp_script_file}" "${partition_script_path}"
+  sudo mv "${temp_vars_file}" "${part_vars}"
   sudo chmod a+r "${partition_script_path}"
+  sudo chmod a+r "${part_vars}"
 }
 
 run_partition_script() {
@@ -213,7 +224,7 @@ emit_gpt_scripts() {
 
   # Write out the header for the script.
   local gpt_layout=$(${GPT} show "${image}" | sed -e 's/^/# /')
-  for x in "${unpack}" "${pack}" "${mount}" "${umount}"; do
+  for x in "${unpack}" "${pack}" "${mount}"; do
     cat >"${x}" <<\EOF
 #!/bin/bash -eu
 # File automatically generated. Do not edit.
@@ -280,8 +291,19 @@ esac
 
 EOF
 
-    if [[ "${x}" != "${umount}" ]]; then
+    if [[ "${x}" == "${pack}" || "${x}" == "${unpack}" ]]; then
       cat >>"${x}" <<\EOF
+echo
+echo "WARNING: $0 is deprecated and will be removed."
+echo "WARNING: If you rely on this script, please email go/cros-build-help."
+echo "NB: You can use losetup to efficiently access partitions:"
+echo "    losetup --show -f -P ${TARGET}"
+echo
+sleep 1
+EOF
+    fi
+
+    cat >>"${x}" <<\EOF
 # Losetup has support for partitions, and offset= has issues.
 # See crbug.com/954188
 LOOPDEV=''
@@ -296,7 +318,6 @@ if [[ "${USE_LOSETUP}" == yes ]]; then
 fi
 
 EOF
-    fi
 
     echo "${gpt_layout}" >> "${x}"
   done
@@ -311,7 +332,7 @@ EOF
     local size_b=$(( size * 512 ))
     local label=$(${GPT} show "${image}" -i ${part} -l)
 
-    for x in "${unpack}" "${pack}" "${mount}" "${umount}"; do
+    for x in "${unpack}" "${pack}" "${mount}"; do
       cat <<EOF >> "${x}"
 case \${PART:-${part}} in
 ${part}|"${label}")
@@ -348,24 +369,16 @@ fi
 ln -sfT ${dir} "${dir}_${label}"
 ) &
 EOF
-      cat <<-EOF >>"${umount}"
-if [[ -d ${dir} ]]; then
-  (
-  sudo umount ${dir} || :
-  rmdir ${dir}
-  rm -f "${dir}_${label}"
-  ) &
-fi
-EOF
     fi
 
-    for x in "${unpack}" "${pack}" "${mount}" "${umount}"; do
+    for x in "${unpack}" "${pack}" "${mount}"; do
       echo "esac" >> "${x}"
     done
   done < <(${GPT} show -q "${image}")
 
   echo "wait" >> "${mount}"
-  echo "wait" >> "${umount}"
+
+  cp "${BUILD_LIBRARY_DIR}/umount_image_helper.sh" "${umount}"
 
   chmod +x "${unpack}" "${pack}" "${mount}" "${umount}"
 }

@@ -1,0 +1,74 @@
+Copyright 2015 The ChromiumOS Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+
+## Package modification notice
+#### Purpose
+- To change ssh server's port number and configuration
+
+#### Modified files
+- openssh-server.conf
+- sshd-pre
+- sshd-post
+- openssh-server.conf.README
+
+#### Modifier
+- seongbin@wayne-inc.com
+
+------------------------------
+Instructions for enabling sshd
+------------------------------
+
+Normally base images will not automatically start sshd on boot. If sshd is
+needed, below are a few recommended ways to start it, from simplest to most
+complicated.
+
+
+1. OOBE debugging features.
+  This is the easiest way to enable sshd, but if OOBE has already been bypassed
+  the machine will have to be powerwashed first to get back to OOBE.
+
+  Enabling the OOBE debugging features will cause sshd to start automatically
+  on each boot, and both password and test key access will be enabled.
+
+  For more information on OOBE debugging features, see
+  dev.chromium.org/chromium-os/how-tos-and-troubleshooting/debugging-features.
+
+
+2. Run a helper program.
+  An executable named dev_features_ssh is available to enable sshd. Rootfs
+  verification must be removed first or the helper program will have no effect.
+
+  This will cause sshd to start automatically on each boot with test key
+  access. Password access can optionally be enabled after rootfs verification
+  has been removed.
+
+  # Remove rootfs verification.
+  $ /usr/share/vboot/bin/make_dev_ssd.sh --remove_rootfs_verification
+  $ reboot
+
+  # Install sshd startup files.
+  $ /usr/libexec/debugd/helpers/dev_features_ssh
+
+  # Allow password access (optional).
+  $ passwd
+
+
+3. Manually start sshd.
+  This is the least convenient option, but doesn't require OOBE or rootfs
+  verification removal, so can be used without changing the system too much.
+
+  Unlike the above methods, this will not auto-start sshd on boot.
+  Additionally, password access is not possible without rootfs verification
+  removal, so test keys must be used to SSH into the device.
+
+  # Create host keys (only needs to be done once).
+  $ mkdir -p /mnt/stateful_partition/etc/ssh
+  $ ssh-keygen -f /mnt/stateful_partition/etc/ssh/ssh_host_rsa_key -N '' -t rsa
+  $ ssh-keygen -f /mnt/stateful_partition/etc/ssh/ssh_host_ed25519_key -N '' -t ed25519
+
+  # Open firewall and start sshd (must be done on every boot).
+  $ iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+  $ ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
+  $ /usr/sbin/sshd \
+    -oAuthorizedKeysFile=/usr/share/chromeos-ssh-config/keys/authorized_keys

@@ -90,7 +90,7 @@
         "num": 5,
         "label": "ROOT-B",
         "type": "rootfs",
-        "size": "2048 MiB"
+        "size": "2 GiB"
       },
       {
         # Slot A rootfs. Rootfs + extras (AKA verity) must fit, AKA:
@@ -123,9 +123,10 @@
         "fs_format": "ext2",
         "fs_options": {
           "squashfs": "-noI -no-exports -comp lzo -Xalgorithm lzo1x_999 -Xcompression-level 9",
+          "ext2": "-i 65536",
           "btrfs": "skinny-metadata"
         },
-        "size": "2048 MiB",
+        "size": "2 GiB",
         "fs_size": "1991 MiB",
         "uuid": "clear"
       },
@@ -153,6 +154,9 @@
         "size": "2 MiB"
       }
     ],
+    # CAN apply updates when running from USB.
+    "usb-updatable": [
+    ],
     # Used for factory install images.
     "factory_install": [
       {
@@ -165,8 +169,11 @@
       },
       {
         "num": 3,
-        "size": "420 MiB",
-        "fs_size": "400 MiB"
+        "size": "480 MiB",
+        "fs_size": "460 MiB",
+        "fs_options": {
+          "ext2": "-i 32768"
+        }
       },
       {
         "num": 1,
@@ -175,6 +182,16 @@
     ],
     # Used for recovery images.
     "recovery": [
+      {
+        # Kernel for Slot A, no file system.
+        # Make the partition as large as the firmware supports so we can boot
+        # larger recovery kernels.  The kernel won't actually be this large.
+        # NB: firmware defaulted to 32 MiB since 2015
+        # (https://crrev.com/c/281806), and was increased to 512 MiB in 2018
+        # (https://crbug.com/873135#c5).
+        "num": 2,
+        "size": "32 MiB"
+      },
       {
         # Slot B rootfs, unused on USB, but pad to 2M.
         # installation will expand this to size from base.
@@ -185,40 +202,6 @@
         # Stateful on recovery is dynamically resized larger.
         "num": 1,
         "size": "2 MiB"
-      }
-    ],
-    # Larger rootfs, suitable for development with symbols, etc.
-    # Cannot apply updates when running from USB (no slot B).
-    "2gb-rootfs": [
-      {
-        # Will be grown to size from base on install.
-        "num": 5,
-        "size": "2 MiB"
-      },
-      {
-        # Will be shrunk to size from base on install.
-        "num": 3,
-        "size": "2048 MiB",
-        "fs_size": "2000 MiB"
-      }
-    ],
-    # Larger rootfs, suitable for development with symbols, etc.
-    # CAN apply updates when running from USB.
-    "2gb-rootfs-updatable": [
-      {
-        # The partition size matches base, so it's installable.
-        "num": 5,
-        "size": "2048 MiB"
-      },
-      {
-        # The partition size matches base, so it's installable.
-        "num": 3,
-        "size": "2048 MiB",
-        "fs_size": "2000 MiB"
-      },
-      {
-        "num": 1,
-        "size": "4 GiB"
       }
     ],
     # Very large rootfs, suitable for development with symbols,
@@ -232,7 +215,7 @@
         # This partition is larger than the base partition, so the
         # installer will corrupt the disk during installation.
         "num": 3,
-        "size": "4096 MiB",
+        "size": "4 GiB",
         "fs_size": "4000 MiB"
       }
     ],
@@ -245,7 +228,7 @@
       },
       {
         "num": 3,
-        "size": "16384 MiB",
+        "size": "16 GiB",
         "fs_size": "16000 MiB"
       }
     ]

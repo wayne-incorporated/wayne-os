@@ -1,9 +1,10 @@
 #!/bin/bash
-# Copyright 2015 The Chromium OS Authors. All rights reserved.
+# Copyright 2015 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 BUILD_LIBRARY_DIR=$(dirname $0)
+# shellcheck source=filesystem_util.sh
 . "${BUILD_LIBRARY_DIR}/filesystem_util.sh" || exit 1
 
 set -e -u

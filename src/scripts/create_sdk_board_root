@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# shellcheck source=common.sh
+. "$(dirname "$0")/common.sh" || exit 1
+
+# Script must run inside the chroot
+restart_in_chroot_if_needed "$@"
+
+assert_not_root_user
+
+# Developer-visible flags.
+DEFINE_string board "amd64-host" \
+  "The name of the board to set up."
+DEFINE_string profile "" \
+  "The name of the profile to set up."
+DEFINE_boolean force "${FLAGS_FALSE}" \
+  "Force re-creating board root."
+
+FLAGS_HELP="usage: $(basename "$0") [flags]
+
+create_sdk_board_root creates the board root for the amd64-host (chroot) board.
+This should not need to be called except by the SDK Builder or Alchemy builders.
+"
+
+# Parse command line flags
+FLAGS "$@" || exit 1
+eval set -- "${FLAGS_ARGV}"
+
+# Only now can we die on error.  shflags functions leak non-zero error codes,
+# so will die prematurely if 'switch_to_strict_mode' is specified before now.
+switch_to_strict_mode
+
+BOARD=${FLAGS_board}
+
+# Locations we will need
+BOARD_ROOT="/build/${BOARD}"
+CHROMIUMOS_OVERLAY="${CHROOT_TRUNK_DIR}/src/third_party/chromiumos-overlay"
+CHROMIUMOS_CONFIG="${CHROMIUMOS_OVERLAY}/chromeos/config"
+BOARD_ETC="${BOARD_ROOT}/etc"
+BOARD_SETUP="${BOARD_ETC}/make.conf.board_setup"
+BOARD_PROFILE="${BOARD_ETC}/portage/profile"
+
+if [ -d "${BOARD_ROOT}" ]; then
+  if [[ ${FLAGS_force} -eq ${FLAGS_TRUE} ]]; then
+    echo "--force set.  Re-creating ${BOARD_ROOT}..."
+    # Removal takes long. Make it asynchronous.
+    TEMP_DIR=$(mktemp -d -p "$(dirname "${BOARD_ROOT}")")
+    info_run sudo mv "${BOARD_ROOT}" "${TEMP_DIR}"
+    info_run sudo rm -rf --one-file-system "${TEMP_DIR}" &
+  fi
+fi
+
+# Setup the make.confs. We use the following:
+#    make.conf             <- Overall target make.conf [arm, x86, etc. version]
+#    make.conf.board_setup <- Declares CHOST, ROOT, etc.
+#    make.conf.board       <- Optional board-supplied make.conf.
+#    make.conf.user        <- User specified parameters.
+cmds=(
+  "mkdir -p '${BOARD_ROOT}' '${BOARD_ETC}' '${BOARD_PROFILE}' /usr/local/bin"
+  "ln -sf /etc/make.conf.user '${BOARD_ROOT}/etc/make.conf.user'"
+  "mkdir -p '${BOARD_ROOT}/etc/portage/hooks'"
+)
+for d in "${SCRIPTS_DIR}"/hooks/*; do
+  cmds+=( "ln -sfT '${d}' '${BOARD_ROOT}/etc/portage/hooks/${d##*/}'" )
+done
+
+cmds+=(
+  "ln -sf '${CHROMIUMOS_CONFIG}/make.conf.${BOARD}' \
+    '${BOARD_ETC}/make.conf'"
+  "cp -f '/etc/make.conf.host_setup' '${BOARD_ETC}/'"
+
+  # Setting up symlinks for bootstrapping multilib.
+  # See http://crosbug.com/14498
+  "mkdir -p '${BOARD_ROOT}'{/usr,}/lib64"
+  "ln -sfT lib64 '${BOARD_ROOT}/lib'"
+  "rm -rf '${BOARD_ROOT}/usr/lib'"
+  "ln -sfT lib64 '${BOARD_ROOT}/usr/lib'"
+
+  # Copying some files for bootstrapping empty chroot.
+  # See http://crosbug.com/14499
+  "mkdir -p '${BOARD_ETC}'/{init.d,xml}"
+  "cp /etc/xml/catalog '${BOARD_ETC}'/xml/"
+  "cp /etc/init.d/functions.sh '${BOARD_ETC}'/init.d/"
+)
+sudo_multi "${cmds[@]}"
+
+# Generating the standard configuration file (make.conf.board_setup) for the
+# sysroot.
+info_run cros_sysroot_utils generate-config --sysroot="${BOARD_ROOT}" \
+  --board="${BOARD}" --out-file="${BOARD_SETUP}"
+
+# Generate wrappers for portage helpers (equery, portageq, emerge, etc...).
+# Those are used to generate make.conf.board.
+info_run cros_sysroot_utils create-wrappers --sysroot="${BOARD_ROOT}" \
+  --friendlyname="${BOARD}"
+
+# Choose the profile.
+if ! info_run cros_choose_profile --profile "${FLAGS_profile}" \
+      --board-root "${BOARD_ROOT}" --board "${BOARD}"; then
+  info_run sudo rm -rf --one-file-system "${BOARD_ROOT}"
+  die "Selecting profile failed, removing incomplete board directory!"
+fi
+
+command_completed
+echo "Created SDK board root at ${BOARD_ROOT}"

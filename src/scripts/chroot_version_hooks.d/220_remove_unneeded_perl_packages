@@ -1,0 +1,17 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Remove some packages that were breaking update_chroot b/272316794
+pkgs=(
+  app-text/po4a
+  dev-perl/File-Slurp
+  dev-perl/Locale-gettext
+  perl-core/File-Path
+  virtual/perl-File-Path
+  virtual/perl-IO
+)
+mapfile -t installed_pkgs < <(qlist -IC "${pkgs[@]}" || :)
+if [[ ${#installed_pkgs[@]} -gt 0 ]]; then
+  sudo emerge --rage -q "${installed_pkgs[@]}"
+fi

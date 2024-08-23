@@ -1,0 +1,35 @@
+#!/bin/bash
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Force clean up some SDK packages that have been removed.
+pkgs=(
+  app-admin/eselect-mesa
+  app-admin/eselect-opengl
+  app-editors/qemacs
+  app-portage/eclass-manpages
+  chromeos-base/sirenia-tools
+  dev-cpp/gflags
+  dev-libs/dbus-glib
+  dev-embedded/cbootimage
+  dev-embedded/tegrarcm
+  dev-go/test
+  dev-libs/libyaml
+  dev-python/mysqlclient
+  dev-python/pypy3
+  dev-python/pypy3-exe-bin
+  dev-util/bazel:0
+  dev-util/sh
+  dev-util/unifdef
+  sys-apps/dbus
+  sys-apps/man-pages
+  sys-apps/ripgrep
+  sys-boot/bootstub
+  '<sys-devel/automake-1.15'
+  sys-fs/libfat
+)
+mapfile -t installed_pkgs < <(qlist -IC "${pkgs[@]}" || :)
+if [[ ${#installed_pkgs[@]} -gt 0 ]]; then
+  sudo emerge --rage -q "${installed_pkgs[@]}"
+fi

@@ -1,7 +1,8 @@
-# Copyright 2015 The Chromium OS Authors. All rights reserved.
+# Copyright 2015 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# shellcheck source=../common.sh
 . "${BUILD_LIBRARY_DIR}/../common.sh" || exit 1
 
 # Usage: fs_parse_option <mount_options> <option_key> [default_value]

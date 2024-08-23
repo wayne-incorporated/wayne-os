@@ -1,4 +1,4 @@
-# Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+# Copyright 2014 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,14 +14,17 @@ To create a board specific layout that modifies this:
     modern images, or legacy_disk_layout.json for old boards.
 
 A layout file consists of layouts. Common types of layouts would be "base",
-"usb", "vm" and "common". Each of these layouts is made up of one or more
-partitions.
+"usb", "usb-updatable", "vm" and "common". Each of these layouts is made up of
+one or more partitions.
 
 The "common" layout is special, since it's the layout on which all other layouts
-get overlaid upon. The base layout represents the "installed" layout, the way
+get overlaid upon. "base" layout represents the "installed" layout, the way
 things should be once the image has been installed onto a device. The "usb"
 layout represents how things should look on a USB image (typically, this means
-that ROOT-B is 1 block long).
+that ROOT-B is 1 block long). "usb-updatable" tracks "usb", but its ROOT-B is
+the same size of ROOT-A, so it is updatable.
+"base" can be different from "usb-updatable" if the device storage is specific
+(direct raw flash instead of usual block device storage).
 
 
 Here is an example disk layout with comments.
@@ -348,6 +351,5 @@ I want to update a package and I used to use the --rootfs_size and
 how do I do this now?
 
 Most commonly, create an image using one of the development layouts:
-    ./build_image --disk_layout 2gb-rootfs
-    ./build_image --disk_layout 2gb-rootfs-updatable
+    ./build_image --disk_layout usb-updatable
     ./build_image --disk_layout 4gb-rootfs

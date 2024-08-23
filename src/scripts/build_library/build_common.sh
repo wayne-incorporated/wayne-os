@@ -1,4 +1,4 @@
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -9,11 +9,13 @@
 # common to all the scripts.
 
 # SCRIPT_ROOT must be set prior to sourcing this file
+# shellcheck source=../common.sh
 . "${SCRIPT_ROOT}/common.sh" || exit 1
 
 # All scripts using this file must be run inside the chroot.
 restart_in_chroot_if_needed "$@"
 
+# shellcheck source=../../platform2/chromeos-common-script/share/chromeos-common.sh
 . /usr/share/misc/chromeos-common.sh || exit 1
 
 locate_gpt
@@ -71,6 +73,9 @@ emerge_custom_kernel() {
   local root=/build/${FLAGS_board}
   local tmp_pkgdir=${root}/custom-packages
 
+  info "Emerging custom kernel into ${install_root}"
+  info "Setting PKGDIR=${tmp_pkgdir} to avoid conflicts in ${root}"
+
   # Clean up any leftover state in custom directories.
   sudo rm -rf "${tmp_pkgdir}"
 
@@ -102,4 +107,19 @@ emerge_custom_kernel() {
   # Install the custom kernel to the provided install root.
   sudo -E PKGDIR="${tmp_pkgdir}" ${EMERGE_BOARD_CMD} --usepkgonly \
     --root=${install_root} ${kernel} || die "Cannot emerge kernel to root"
+}
+
+# Detect the decompression tool to use for |file|.
+detect_decompression_tool() {
+  local file="$1"
+
+  if [[ "$(od -An -tx1 -N4 "${file}")" == " 28 b5 2f fd" ]]; then
+    # Since the Gentoo binpkg has trailing garbage, tell zstd to ignore it.
+    echo "zstd -f"
+  elif [[ "$(od -An -tx1 -N3 "${file}")" == " 42 5a 68" ]]; then
+    echo "lbzip2"
+  else
+    echo "$1: unknown compression type" >&2
+    return 1
+  fi
 }

@@ -1,9 +1,13 @@
 #!/bin/bash
-# Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+# Copyright 2014 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
 # The 'su' command requires a correct PATH setting in /etc/environment.
-touch ${ROOT_FS_DIR}/etc/environment
+touch "${ROOT_FS_DIR}"/etc/environment
 echo "PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin" \
   >> "${ROOT_FS_DIR}/etc/environment"
+
+# INTEL_DEBUG is a mesa flag to capture more logs when we see a GPU hangs.
+# https://docs.mesa3d.org/envvars.html
+echo "INTEL_DEBUG=capture-all" >> "${ROOT_FS_DIR}/etc/environment"
