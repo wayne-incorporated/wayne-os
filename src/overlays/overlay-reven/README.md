@@ -2,6 +2,8 @@
 #### Purpose
 - Adding linux firmware files
 - Resizing partitions
+- Adding codecs
+- login_enable_crosh_sudo
 
 #### Modified files
 - profile/base/make.defaults
