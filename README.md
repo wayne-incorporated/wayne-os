@@ -8,7 +8,7 @@ It's a [free/libre and open-source](https://en.wikipedia.org/wiki/Free_and_open-
 
 ## Purpose
 Saving [TCO](https://en.wikipedia.org/wiki/Total_cost_of_ownership) of Web thin clients.
-<br>This project intends to be used as an intermediate good in IT and education.
+<br>This project intends to be used as an intermediate good in IT/education industry.
 
 ## Use cases
 #### Manufacturer
