@@ -4,7 +4,7 @@
 
 ## What is Wayne OS project?
 It's a [free/libre and open-source](https://en.wikipedia.org/wiki/Free_and_open-source_software) OS project based on [Chromium OS](https://en.wikipedia.org/wiki/Chromium_OS).
-<br>This project offers useful binary, source code, document, video, user support
+<br>This project offers useful binary, source code, document, user support
 
 ## Purpose
 Saving [TCO](https://en.wikipedia.org/wiki/Total_cost_of_ownership) of Web thin clients.
