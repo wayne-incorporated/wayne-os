@@ -12,7 +12,7 @@ You need to check the source codes yourself since each packages/files are under 
 <br>[Licensing in Chromium OS](https://www.chromium.org/chromium-os/licensing/)
 #### Wayne OS
 The packages, which are inherited from Chromium OS, use the upstream licenses.
-<br>The packages, which are added by Wayne OS project, use [GNU GENERAL PUBLIC LICENSE Version 3](https://www.gnu.org/licenses/gpl-3.0.en.html)
+<br>The packages, which are added by Wayne OS project, use vatious open source license.
 
 ## Document
 Creative Commons Attribution 4.0 International Public License (CC BY 4.0)
