@@ -18,8 +18,3 @@ The packages, which are inherited from Chromium OS, use the upstream licenses.
 Creative Commons Attribution 4.0 International Public License (CC BY 4.0)
 <br> [View License Deed](https://creativecommons.org/licenses/by/4.0/)
 <br> [View Legal Code](https://creativecommons.org/licenses/by/4.0/legalcode)
-
-## Video
-Creative Commons Attribution 4.0 International Public License (CC BY 4.0)
-<br> [View License Deed](https://creativecommons.org/licenses/by/4.0/)
-<br> [View Legal Code](https://creativecommons.org/licenses/by/4.0/legalcode)
