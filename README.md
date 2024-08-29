@@ -45,9 +45,9 @@ Saving [TCO](https://en.wikipedia.org/wiki/Total_cost_of_ownership) of Web thin 
 - Diversity: Various img types (base/dev/test) and features (ex: auto login, portable, UEM) are released.
 - [Improved live USB](https://github.com/wayne-incorporated/improved-live-usb): In contrast to [legacy live USB](https://en.wikipedia.org/wiki/Live_USB), Wayne OS USB flash drive works as a removable storage (and the OS partitions are hidden) in Windows/macOS. Wayne OS portable versions include this feature.
 
-## Release process
+## Life cycle of release
 The doc describes how Wayne OS is released from Chromium OS.
-<br>[release_process.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/release_process.md)
+<br>[life_cycle](https://github.com/wayne-incorporated/wayne-os/blob/stabilize-R120-15662.B/docs/en/release/life_cycle.md)
 
 ## Legal
 Binary, source code, document, are under each different licenses.
