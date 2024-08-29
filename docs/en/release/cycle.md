@@ -4,7 +4,7 @@
 3) Chrome OS LTS version is released for every 6 Chrome OS stable versions.
 4) Chromium OS LTS version src are released on the *release* branch of Chromium OS project.
 5) Wayne OS project maintainers download the src and develop (verify/modify/add) it.
-6) The developing sources are on *stabilized* branch of Wayne OS project.
+6) The developing sources are on *stabilize* branch of Wayne OS project.
 7) The finalized sources are on *release* branch of Wayne OS project.
 8) The development information for each Wayne OS versions are on [version_details.md](https://github.com/wayne-incorporated/wayne-os/blob/stabilize-R120-15662.B/docs/en/release/version_details.md).
 9) Wayne OS binaries are released, after simple alpha test.
