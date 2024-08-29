@@ -3,39 +3,30 @@
 ## What Wayne OS project looking forward from you
 #### Contribution
 - Reporting: [hw_compatibility_information.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md), [known_issues.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/known_issues.md)
-- Suggestion/Solution: [Issues](https://github.com/orgs/wayne-incorporated/projects/23)
+- Suggestion/Solution: [Issues](https://github.com/wayne-incorporated/wayne-os/issues)
 - Coding: bug fix, refactoring, improving error/help messages
 - Documentation: update, revision, writing tutorial/manual, link
 - Translation: translating English documents to other languages
 #### Development to use
 - Starting your own OS project: make a branch yourself or fork this project
-- Download OS binaries: [wayne-os.com](http://wayne-os.com/download-wayne-os-binary/)
-
-## Joining Wayne OS project
-1) Join Gitlab: https://github.com/join
-2) Go to https://github.com/wayne-incorporated/wayne-os
-3) Press _Request Access_ button that is near the project title "Wayne OS", then wait for approval
-4) After approval, check your [role and permission](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
-5) By default, each project member will get *Member* role
+- Download OS binaries: [Release](https://github.com/wayne-incorporated/wayne-os/releases)
 
 ## Directories of repository
 Wayne OS project repository doesn't manage upstream Chromium OS source codes as it manages only modified/additional source codes.
 <br>Using/Developing Wayne OS project repository requires knowledge/experience about upstream Chromium OS project.
 <br>The upstream source codes and build instructions can be referred from [Chromium OS project](http://dev.chromium.org/chromium-os).
-- src: modified/added codes from Chromium OS codes. The directory path is the same with the path of Chromium OS source
-- patches_on_binary: additional codes that should be added in the OS binary. The directory path is the same with the path of Chromium OS binary
-- docs: documents that are referred in [wayne-os.com](http://wayne-os.com). English _document_ in en directory should be made first, then translate to other languages
-
-## Issue
-- All project members can see/create [Issues](https://github.com/orgs/wayne-incorporated/projects/23)
-- There are Wayne OS development status, plan, direction
+- src: Modified/added codes from Chromium OS codes. The directory path is the same with the path of Chromium OS src.
+- patches_on_binary: Additional codes that should be added in the OS binary. The directory path is the same with the path of Chromium OS binary.
+- docs: Manuals for using and development.
 
 ## Branch
-- *master*: Default, protected, at least *Maintainer* is allowed to push (add/modify/delete files and commit) or merge (allow merge request)
-- At least *Developer* is allowed to create branches and push or merge to those
-- Avoid confusing branch name that is similar with existing branch name
-- You can delete your temporary branch after merge
-- If you want to protect certain branch and restrict push/merge authority, request it to the project owner in [Issues](https://github.com/orgs/wayne-incorporated/projects/23)
+#### Managed by maintainer
+- *main*: The latest branch.
+- *stabilize*: Working branch for release.
+- *release*: (most) Stabled and released Wayne OS version.
+#### Managed by contributor
+- You can make your own branch, source, and docs if you need it.
+- Refer the below notation rules.
 
 ## Notation guide
 #### Date & time
