@@ -29,7 +29,7 @@ Saving [TCO](https://en.wikipedia.org/wiki/Total_cost_of_ownership) of Web thin 
 2) Use the USB flash drive as an normal removable storage with Windows/MacOS.
 3) And you can boot/install Wayne OS on remainder PC regardless of the exist OS.
 
-## Comparison of Chrome OS (Flex), Chromium OS and Wayne OS
+## Comparison of Chrome OS (Flex), Chromium OS, and Wayne OS
 #### Common
 - Integrity: OS user cannot install/excute virus/code/app.
 - Lightweight: No slowing down (It doesn't mean that the OS is fast on any devices as the speed depends on HW).
@@ -46,10 +46,12 @@ Saving [TCO](https://en.wikipedia.org/wiki/Total_cost_of_ownership) of Web thin 
 - [Improved live USB](https://github.com/wayne-incorporated/improved-live-usb): In contrast to [legacy live USB](https://en.wikipedia.org/wiki/Live_USB), Wayne OS USB flash drive works as a removable storage (and the OS partitions are hidden) in Windows/macOS. Wayne OS portable versions include this feature.
 
 ## Release process
+The doc describes how Wayne OS is released from Chromium OS.
+<br>[release_process.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/release_process.md)
 
 ## Legal
 Binary, source code, document, are under each different licenses.
-<br>[License.md](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md)
+<br>[LICENSE.md](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md)
 
 ## Contribution and development guide
 Wayne OS project is looking forward to your contribution (translation, documentation, reporting, suggestion, coding).
