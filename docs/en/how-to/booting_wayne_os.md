@@ -1,6 +1,6 @@
 ## 1. To enter BIOS/UEFI
-- Check the connection of local disk or USB flash drive with Wayne OS installed when the PC is turned off
-- Once the PC is turned on, press the BIOS/UEFI entrance key repeatedly, which varies depending on the PC model and manufacturer as per below example
+- Check the connection of the local disk or USB flash drive with Wayne OS installed when the PC is turned off
+- Once the PC is turned on, press the BIOS/UEFI entrance key repeatedly, which varies depending on the PC model and manufacturer, as shown in the below examples
 
 | manufacturer     | Key    |
 | ------ | ------ |
@@ -53,5 +53,5 @@
 
 ## 3. Start OS
 - Wayne OS splash screen will be displayed
-- Once booting, configure language, accessibility, network
+- Once booting, configure language, accessibility, network settings
 - Login with Google account or guest mode
