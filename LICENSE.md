@@ -6,13 +6,13 @@ Wayne OS Terms of Service
 <br>English: [terms_of_service.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/business/terms_of_service.md)
 
 ## Source code
-You need to check the source codes yourself since each packages/files are under different licenses. 
+You need to check the source code yourself, as each package/file is under a different license.
 #### Chromium OS
 [Source code](https://chromium.googlesource.com/)
 <br>[Licensing in Chromium OS](https://www.chromium.org/chromium-os/licensing/)
 #### Wayne OS
-The packages, which are inherited from Chromium OS, use the upstream licenses.
-<br>The packages, which are added by Wayne OS project, use vatious open source license.
+The packages inherited from Chromium OS use the upstream licenses.
+<br>The packages added by the Wayne OS project use various open-source licenses.
 
 ## Document
 Creative Commons Attribution 4.0 International Public License (CC BY 4.0)
