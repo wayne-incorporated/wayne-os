@@ -6,9 +6,9 @@ In order to login to Wayne OS by Google account, you have to join Google Groups.
 4. Login with your Google account in Wayne OS.
 
 ## Note
-Above method is for test purposes and managed by Google officially. 
+The above method is for test purposes and is officially managed by Google. 
 <br>
-However, It doesn't mean that you can use all of Google services since Google restricts/controls third-parties of open source.
+However, this doesn't mean that you can use all of Google services, as Google restricts/controls third-party use of open source.
 <br>
 
 ## Reference 
