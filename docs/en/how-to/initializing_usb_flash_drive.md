@@ -19,7 +19,7 @@ First, remove partition table on your USB flash drive.
 <br>
 The `${USB_FLASH_DRIVE}` must be a device name like sdx, Not a partition name like sdx1.
 <br>
-**Warning: If you write local storage (ex: hdd/ssd) name on it by mistake, you will lose data on the local storage so please check the name carefully by `lsblk`.**
+**Warning: If you write local storage (e.g.,: hdd/ssd) name on it by mistake, you will lose data on the local storage so please check the name carefully by `lsblk`.**
 <br>
 <br>
-Then you can make a new partition table, partition, and file system by your preferred tools. (ex: Gparted, parted, fdisk, gdisk, mkfs.fat, etc)
+You can then create a new partition table, partition, and file system using your preferred tools. (e.g., Gparted, parted, fdisk, gdisk, mkfs.fat, etc)
