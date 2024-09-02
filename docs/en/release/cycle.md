@@ -1,13 +1,13 @@
 ## Development process
-1) Chrome stable version is released, every 4 weeks.
-2) Chrome OS stable version is released, After Chrome stable version release.
-3) Chrome OS LTS version is released for every 6 Chrome OS stable versions.
-4) Chromium OS LTS version src are released on the *release* branch of Chromium OS project.
+1) The Chrome OS stable version is released every 4 weeks.
+2) The Chrome OS stable version is released after the Chrome stable version is released.
+3) The Chrome OS LTS version is released for every 6 Chrome OS stable versions.
+4) The Chromium OS LTS version src is released on the *release* branch of Chromium OS project.
 5) Wayne OS project maintainers download the src and develop (verify/modify/add) it.
-6) The developing sources are on *stabilize* branch of Wayne OS project.
-7) The finalized sources are on *release* branch of Wayne OS project.
-8) The development information for each Wayne OS versions are on [version_details.md](https://github.com/wayne-incorporated/wayne-os/blob/stabilize-R120-15662.B/docs/en/release/version_details.md).
-9) Wayne OS binaries are released, after simple alpha test.
+6) The developing sources are maintained on *stabilize* branch of Wayne OS project.
+7) The finalized sources are maintained on *release* branch of Wayne OS project.
+8) The development information for each Wayne OS version is documented in [version_details.md](https://github.com/wayne-incorporated/wayne-os/blob/stabilize-R120-15662.B/docs/en/release/version_details.md).
+9) The Wayne OS binaries are released after simple alpha tests.
 
 ## Release schedules
 All dates are approximate and are subject to change without notice.
@@ -43,4 +43,4 @@ All dates are approximate and are subject to change without notice.
 - https://chromium.googlesource.com/chromiumos/manifest/+refs
 
 ## TL;DR
-Generally Wayne OSs are released every 6 months, based on Chromium OS LTS version.
+Wayne OS is generally released every 6 months, based on the Chromium OS LTS version.
