@@ -1,6 +1,6 @@
 ## 1. Preparation
-- An Wayne OS binary file
-- A USB flash drive which size is greater than the OS binary file size
+- A Wayne OS binary file
+- A USB flash drive with a capacity greater than the OS binary file size
 - A Windows/Linux/Chrome OS environment with free disk space greater than the OS binary file size.
   
 ## 2. Initialize USB flash drive (optional)
