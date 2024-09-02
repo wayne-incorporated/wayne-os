@@ -3,9 +3,9 @@ wayne-os-${IMAGE_TYPE}-${USE}-${RELEASED_QUARTER_YEAR}
 
 ## Description
 #### Image type
-- _base_: Pristine Chromium OS image that is similar to Chrome OS 
-- _dev_: Developer image that is similar to base with additional dev packages
-- _test_: Similar to dev with additional test specific packages and can be easily used for automatic testing using scripts such as test_that, etc
+- _base_: A pristine Chromium OS image similar to Chrome OS.
+- _dev_: A developer image based on the "base" image, with additional dev packages.
+- _test_: Similar to "dev" image, but with additional test-specific packagesand can be easily used for automated testing with scripts like test_that, etc.
 #### Comparison
 | category 1                                | category 2                                                  | category 3                                                                             | pkg name                                                                   | src                                                                                       | file                                                                                     | file modification                                 | file addition                                                 | pkg build/installation method                     | wayne-os-desktop-23.11                 | wayne-os-kiosk-23.11 | wayne-os-kiosk-23.10-gs   | wayne-os-test-vanilla-r120 | wayne-os-dev-desktop-r120 |
 | ----------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------- | -------------------- | ------------------------- | -------------------------- | ------------------------- |
