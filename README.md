@@ -3,58 +3,58 @@
 --->
 
 ## What is Wayne OS project?
-It's a [free/libre and open-source](https://en.wikipedia.org/wiki/Free_and_open-source_software) OS project based on [Chromium OS](https://en.wikipedia.org/wiki/Chromium_OS).
-<br>This project offers useful binary, source code, document, user support.
+It is a [free/libre and open-source](https://en.wikipedia.org/wiki/Free_and_open-source_software) OS project based on [Chromium OS](https://en.wikipedia.org/wiki/Chromium_OS).
+<br>This project offers useful binaries, source code, documentation, and user support.
 
 ## Purpose
 Saving [TCO](https://en.wikipedia.org/wiki/Total_cost_of_ownership) of Web thin clients.
-<br>This project intends to be used as an intermediate good in IT/education industry.
+<br>This project is intended to be used as an intermediate good in the IT/education industries.
 
 ## Use cases
 #### Manufacturer
 1) Download Wayne OS.
-2) Change *Wayne OS* brand to yours.
-3) Install the OS on POP/Kiosk/low-spec device.
+2) Rebrand *Wayne OS* with your own brand.
+3) Install the OS on POP/Kiosk/low-spec devices.
 4) Sell it under your business.
 #### Business
-1) Make sure that your office work can be done sorely on the web (ex: working on SaaS, call center).
+1) Ensure that your office work can be done entirely on the web (ex: working on SaaS, call center).
 2) Install Wayne OS on office PCs.
-3) Monitor & control the PCs by [UEM](https://en.wikipedia.org/wiki/Unified_endpoint_management) server.
+3) Monitor & control the PCs with the [UEM](https://en.wikipedia.org/wiki/Unified_endpoint_management) server.
 #### School
 1) Install Wayne OS on school PCs.
-2) Use the exist PCs as Chromebooks.
-3) Change the OS setting to force/restrict some websites.
+2) Use the existing PCs as Chromebooks.
+3) Change the OS settings to force/restrict certain websites.
 #### Individual
-1) Install Wayne OS on USB flash drive.
-2) Use the USB flash drive as an normal removable storage with Windows/MacOS.
-3) And you can boot/install Wayne OS on remainder PC regardless of the exist OS.
+1) Install Wayne OS on a USB flash drive.
+2) Use the USB flash drive as normal removable storage with Windows/MacOS.
+3) You can also boot/install Wayne OS on any remaining PCs, regardless of the existing OS.
 
 ## Comparison of Chrome OS (Flex), Chromium OS, and Wayne OS
 #### Common
-- Integrity: OS user cannot install/excute virus/code/app.
-- Lightweight: No slowing down (It doesn't mean that the OS is fast on any devices as the speed depends on HW).
-- Easy: Simple UI/UX from Chrome. No periodic/complex setup/management like Windows or traditional Linux OS.
+- Integrity: OS users cannot install/excute virus/code/apps.
+- Lightweight: No slowing down (this does not mean that the OS is fast on all devices, as speed depends on HW).
+- Easy of use: Simple UI/UX similar to Chrome, with no need for periodic or complex setup and management like with Windows or traditional Linux OS.
 #### CROS
-- Chrome OS: You have to buy Chromebook to use it.
-- Chrome OS Flex: If you are an end-user, You can download and install it in your PC. But you cannot use it for commercial (copy/modification/distribution is prohibited).
-- Chromium OS: Upstream and open source version of Chrome OS (Flex). But you have to build/customize it yourself.
+- Chrome OS: You have to buy a Chromebook to use it.
+- Chrome OS Flex:If you are an end-user, you can download and install it on your PC, but it cannot be used for commercial purposes (copy/modification/distribution is prohibited).
+- Chromium OS: The upstream and open source version of Chrome OS (Flex), but you have to build/customize it yourself.
 #### Wayne OS
-- Pre-built & customized Chromium OS for Web thin clients (ex: Industrial device, Education PC, Low-spec HW).
-- Open: Every modified/additional sources (include things are not obligated to disclose) are opened. This ensures the transparency of the OS's internal logic.
-- Free for commercial: Anyone (individual, profit/nonprofit org, etc.) can use it for commercial (copy/modification/distribution of source/binary/brand is allowed) purpose under minimal restrictions [licenses](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md).
-- Diversity: Various img types (base/dev/test) and features (ex: auto login, portable, UEM) are released.
-- [Improved live USB](https://github.com/wayne-incorporated/improved-live-usb): In contrast to [legacy live USB](https://en.wikipedia.org/wiki/Live_USB), Wayne OS USB flash drive works as a removable storage (and the OS partitions are hidden) in Windows/macOS. Wayne OS portable versions include this feature.
+- Pre-built and Customized: A pre-built and customized version of Chromium OS for web thin clients (e.g., industrial devices, educational PCs, low-spec hardware).
+- Open: All modified and additional source code (including parts that are not required to be disclosed) is made publicly available. This ensures transparency of the OS's internal logic.
+- Free for commercial: Anyone (individuals, profit/nonprofit org, etc.) can use it for commercial purposes (copy/modification/distribution of source code/binary/brand is allowed) under minimal restrictions [licenses](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md).
+- Diversity: Various image types (base/dev/test) and features (e.g., auto login, portable, UEM) are available.
+- [Improved live USB](https://github.com/wayne-incorporated/improved-live-usb): Unlike [legacy live USB](https://en.wikipedia.org/wiki/Live_USB), a Wayne OS USB flash drive functions as a removable storage (with OS partitions hidden) in Windows/macOS. Wayne OS portable versions include this feature.
 
 ## The cycle of development and release
 The doc describes how Wayne OS is developed and released from Chromium OS.
 <br>[cycle.md](https://github.com/wayne-incorporated/wayne-os/blob/stabilize-R120-15662.B/docs/en/release/cycle.md)
 
 ## Legal
-Binary, source code, document, are under each different licenses.
+Binaries, source code, and documentation, are each under different licenses.
 <br>[LICENSE.md](https://github.com/wayne-incorporated/wayne-os/blob/main/LICENSE.md)
 
 ## Contribution and development guide
-Wayne OS project is looking forward to your contribution (translation, documentation, reporting, suggestion, coding).
+Wayne OS project is looking forward to your contributions (translation, documentation, reporting, suggestion, coding).
 <br>[CONTRIBUTING.md](https://github.com/wayne-incorporated/wayne-os/blob/main/CONTRIBUTING.md)
 
 ## Contributors
@@ -68,7 +68,7 @@ Sort in alphabet order
 - Wayne Inc. members
   
 ## Official channels
-- Representative website: [wayne-inc.com](https://wayne-inc.com/)
+- Official website: [wayne-inc.com](https://wayne-inc.com/)
 - Wayne Inc. open-source repository: [github.com/wayne-incorporated](https://github.com/wayne-incorporated)
 - User Forum: [facebook.com/groups/wayneosgroup](https://www.facebook.com/groups/wayneosgroup/)
 - Videos: [youtube.com/@wayne-incorporated](https://www.youtube.com/@wayne-incorporated)
