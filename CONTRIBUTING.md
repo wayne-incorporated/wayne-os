@@ -1,32 +1,32 @@
 # Contribution and Development Guide
 
-## What Wayne OS project looking forward from you
+## What Wayne OS project is looking forward to from you
 #### Contribution
 - Reporting: [hw_compatibility_information.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/hw_compatibility_information.md), [known_issues.md](https://github.com/wayne-incorporated/wayne-os/blob/main/docs/en/release/known_issues.md)
 - Suggestion/Solution: [Issues](https://github.com/wayne-incorporated/wayne-os/issues)
-- Coding: bug fix, refactoring, improving error/help messages
-- Documentation: update, revision, writing tutorial/manual, link
-- Translation: translating English documents to other languages
-#### Development to use
-- Starting your own OS project: make a branch yourself or fork this project
+- Coding: bug fixing, refactoring, error/help messages improving
+- Documentation: update, revision, tutorial/manual writing, link addition
+- Translation: Translation of English documents into other languages
+#### Development for use
+- Start your own OS project: create a branch or fork this project
 - Download OS binaries: [Release](https://github.com/wayne-incorporated/wayne-os/releases)
 
 ## Directories of repository
-Wayne OS project repository doesn't manage upstream Chromium OS source codes as it manages only modified/additional source codes.
-<br>Using/Developing Wayne OS project repository requires knowledge/experience about upstream Chromium OS project.
-<br>The upstream source codes and build instructions can be referred from [Chromium OS project](http://dev.chromium.org/chromium-os).
-- src: Modified/added codes from Chromium OS codes. The directory path is the same with the path of Chromium OS src.
-- patches_on_binary: Additional codes that should be added in the OS binary. The directory path is the same with the path of Chromium OS binary.
-- docs: Manuals for using and development.
+Wayne OS project repository doesn't include the upstream Chromium OS source code as it only manages modified/additional source code.
+<br>Using/Developing Wayne OS project repository requires knowledge/experience with the upstream Chromium OS project.
+<br>The upstream source code and build instructions can be referred from [Chromium OS project](http://dev.chromium.org/chromium-os).
+- src: Modified/added code from Chromium OS code. The directory path is the same with the path of Chromium OS src.
+- patches_on_binary: Additional code that should be added to the OS binary. The directory path is the same with the path of Chromium OS binary.
+- docs: Manuals for usage and development.
 
 ## Branch
 #### Managed by maintainer
 - *main*: The latest branch.
-- *stabilize*: Working branch for release.
-- *release*: (most) Stabled and released Wayne OS version.
+- *stabilize*: The working branch for preparing releases.
+- *release*: The (most) Stable branch, containing released versions of Wayne OS.
 #### Managed by contributor
-- You can make your own branch, source, and docs if you need it.
-- Refer the below notation rules.
+- You can create your own branch, source code, and documentation asneeded.
+- Refer to the below notation rules.
 
 ## Notation guide
 #### Date & time
@@ -34,17 +34,17 @@ Wayne OS project repository doesn't manage upstream Chromium OS source codes as 
 - File/Dir/Branch: YYMMDD or YYMMDD_HHMM format
 
 #### Naming for file/dir/branch
-- Only Latin alphabet's (English) lowercases (ASCII code 97-122), hypen (ASCII code 45), underscore (ASCII code 95), Arabic numerals (ASCII code 48-57) are allowed
+- Only lowercase Latin alphabet (English) characters (ASCII code 97-122), hyphens (ASCII code 45), underscores (ASCII code 95), and Arabic numerals (ASCII code 48-57) are allowed.
 <!--- 
 Most of files in Chromium OS project are written in lowercases, except the files which are from external project.
 If we allow uppercases, sometimes it's confuse (ex: docs? Docs? DOCS?).
 --->
-- If content of file/dir is written in non-English, the name of file/dir can also be non-English
-- For special file/dir that is required to emphasize customarily, the name can be written in uppercases all (ex: README, LICENSE)
-- Avoid special characters, except minus/hyphen[-] and underscore[_]
-- Relationship between objects/subjects should be expressed by minus/hyphen[-]
-- Space should be replaced to underscore[_]
-- For history and to distinguish similar names, [YYMMDD]/[YYMMDD_HHMM]/[identification number] can be added
+- If the content of file/dir is written in non-English, the name of file/dir may also be non-English
+- For special file/dir that is required to emphasize customarily, the name can be written entirely in uppercase (ex: README, LICENSE)
+- Avoid special characters, except for minus/hyphen[-] and underscore[_]
+- Use hyphens [-] to express relationships between objects or subjects.
+- Replace space to underscore[_]
+- For historical purposes or to distinguish between similar names, you may add [YYMMDD], [YYMMDD_HHMM], or an identification number.
 
 |format|example|
 | --- | --- |
