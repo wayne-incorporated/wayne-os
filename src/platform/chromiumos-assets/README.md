@@ -3,7 +3,6 @@
 - BI in splash screen
 
 #### Modified files
-- images/*
 - images_100_percent/*
 - images_200_percent/*
 - README.md
