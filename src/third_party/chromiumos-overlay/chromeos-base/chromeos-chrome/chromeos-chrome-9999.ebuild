@@ -34,13 +34,13 @@ IUSE="
 	asan
 	+build_tests
 	cdm_factory_daemon
-	+chrome_debug
+	chrome_debug
 	+cfi
 	cfm
 	chrome_debug_tests
 	chrome_dcheck
 	chrome_internal
-	chrome_media
+	+chrome_media
 	+chrome_remoting
 	clang_tidy
 	component_build
@@ -53,12 +53,12 @@ IUSE="
 	hw_details
 	feature_management
 	goma_thinlto
-	hevc_codec
+	+hevc_codec
 	+highdpi
 	intel_oemcrypto
 	internal_gles_conform
 	+libcxx
-	libinput
+	+libinput
 	mojo
 	msan
 	+nacl
