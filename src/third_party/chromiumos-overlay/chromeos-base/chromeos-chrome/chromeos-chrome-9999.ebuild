@@ -34,12 +34,16 @@ IUSE="
 	asan
 	+build_tests
 	cdm_factory_daemon
+# Modified by Alex313031@gmail.com
+#	chrome_debug
 	-chrome_debug
 	+cfi
 	cfm
 	chrome_debug_tests
 	chrome_dcheck
 	chrome_internal
+# Modified by Alex313031@gmail.com
+#	chrome_media
 	+chrome_media
 	+chrome_remoting
 	clang_tidy
@@ -53,11 +57,14 @@ IUSE="
 	hw_details
 	feature_management
 	goma_thinlto
+# License issue
 	hevc_codec
 	+highdpi
 	intel_oemcrypto
 	internal_gles_conform
 	+libcxx
+# Modified by Alex313031@gmail.com
+#	libinput
 	+libinput
 	mojo
 	msan
