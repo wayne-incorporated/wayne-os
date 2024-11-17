@@ -35,8 +35,8 @@ IUSE="
 	+build_tests
 	cdm_factory_daemon
 # Modified by Alex313031@gmail.com
-#	chrome_debug
-	-chrome_debug
+#	+chrome_debug
+	chrome_debug
 	+cfi
 	cfm
 	chrome_debug_tests
