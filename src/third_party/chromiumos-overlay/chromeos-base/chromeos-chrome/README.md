@@ -10,6 +10,5 @@
 - README.md
 
 #### Modifier
+- Alex313031@gmail.com
 - seongbin@wayne-inc.com
-
-
