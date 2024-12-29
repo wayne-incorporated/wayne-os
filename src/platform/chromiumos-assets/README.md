@@ -8,7 +8,7 @@
 - images_200_percent/*
 - README.md
 
-#### Modifier
+#### Contributor
 - evelyn@wayne-inc.com
 
 #### Copyright
