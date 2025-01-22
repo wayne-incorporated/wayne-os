@@ -1,0 +1,246 @@
+mountall-net
+  start on net-device-up (job:, env:)
+mountnfs-bootclean.sh
+  start on virtual-filesystems (job:, env:)
+passwd
+  start on filesystem (job:, env:)
+rc
+  emits deconfiguring-networking
+  emits unmounted-remote-filesystems
+  start on runlevel (job:, env: [0123456])
+  stop on runlevel (job:, env: [!$RUNLEVEL])
+rsyslog
+  start on filesystem (job:, env:)
+  stop on runlevel (job:, env: [06])
+tty4
+  start on runlevel (job:, env: [23])
+  start on not-container (job:, env:)
+  start on container (job:, env: CONTAINER=lxc)
+  start on container (job:, env: CONTAINER=lxc-libvirt)
+  stop on runlevel (job:, env: [!23])
+udev
+  start on virtual-filesystems (job:, env:)
+  stop on runlevel (job:, env: [06])
+upstart-udev-bridge
+  emits *-device-added
+  emits *-device-removed
+  emits *-device-changed
+  emits *-device-online
+  emits *-device-offline
+  start on starting (job: udev, env:)
+  stop on stopped (job: udev, env:)
+ureadahead-other
+  start on mounted (job:, env: DEVICE=[/UL]* MOUNTPOINT=/?*)
+console-setup
+  start on virtual-filesystems (job:, env:)
+  start on starting (job: rcS, env:)
+  start on starting (job: mountall-shell, env:)
+hwclock-save
+  start on runlevel (job:, env: [06])
+irqbalance
+  start on runlevel (job:, env: [2345])
+  start on not-container (job:, env:)
+  stop on runlevel (job:, env: [!2345])
+tty5
+  start on runlevel (job:, env: [23])
+  start on not-container (job:, env:)
+  stop on runlevel (job:, env: [!23])
+failsafe
+  emits failsafe-boot
+  start on filesystem (job:, env:)
+  start on net-device-up (job:, env: IFACE=lo)
+  stop on static-network-up (job:, env:)
+  stop on starting (job: rc-sysinit, env:)
+mountall.sh
+  start on local-filesystems (job:, env:)
+procps-instance
+  start on virtual-filesystems (job:, env:)
+  start on static-network-up (job:, env:)
+dbus
+  start on filesystem (job:, env:)
+  stop on deconfiguring-networking (job:, env:)
+mounted-var
+  start on mounted (job:, env: MOUNTPOINT=/var)
+resolvconf
+  start on mounted (job:, env: MOUNTPOINT=/run)
+  stop on runlevel (job:, env: [06])
+checkroot.sh
+  start on mounted (job:, env: MOUNTPOINT=/)
+control-alt-delete
+  start on control-alt-delete (job:, env:)
+hwclock
+  start on starting (job: mountall, env:)
+mounted-proc
+  start on mounted (job:, env: MOUNTPOINT=/proc TYPE=proc)
+setvtrgb
+  start on started (job: plymouth-splash, env:)
+  start on started (job: tty1, env:)
+shutdown
+  start on power-status-changed (job:, env:)
+cron
+  start on runlevel (job:, env: [2345])
+  stop on runlevel (job:, env: [!2345])
+mountall
+  emits virtual-filesystems
+  emits local-filesystems
+  emits remote-filesystems
+  emits all-swaps
+  emits filesystem
+  emits mounting
+  emits mounted
+  start on startup (job:, env:)
+  stop on starting (job: rcS, env:)
+mounted-debugfs
+  start on mounted (job:, env: MOUNTPOINT=/sys/kernel/debug TYPE=debugfs)
+mountkernfs.sh
+  start on virtual-filesystems (job:, env:)
+console
+  start on stopped (job: rc, env: RUNLEVEL=[2345])
+  start on container (job:, env: CONTAINER=lxc)
+  stop on runlevel (job:, env: [!2345])
+hostname.sh
+  start on stopped (job: hostname, env:)
+mounted-run
+  start on mounted (job:, env: MOUNTPOINT=/run TYPE=tmpfs)
+checkfs.sh
+  start on mounted (job:, env: MOUNTPOINT=/)
+checkroot-bootclean.sh
+  start on mounted (job:, env: MOUNTPOINT=/)
+kmod
+  start on startup (job:, env:)
+  start on started (job: udev, env:)
+mountnfs.sh
+  start on remote-filesystems (job:, env:)
+rcS
+  start on runlevel (job:, env: S)
+  stop on runlevel (job:, env: [!S])
+ufw
+  start on starting (job: network-interface, env:)
+  start on starting (job: network-manager, env:)
+  start on starting (job: networking, env:)
+  stop on runlevel (job:, env: [!023456])
+wait-for-state
+  stop on started (job: $WAIT_FOR, env:)
+  stop on stopped (job: $WAIT_FOR, env:)
+bootmisc.sh
+  start on virtual-filesystems (job:, env:)
+flush-early-job-log
+  start on filesystem (job:, env:)
+friendly-recovery
+  emits recovery
+  emits startup
+  emits mounted
+  start on recovery (job:, env:)
+rc-sysinit
+  emits runlevel
+  start on filesystem (job:, env:)
+  start on static-network-up (job:, env:)
+  start on failsafe-boot (job:, env:)
+  stop on runlevel (job:, env:)
+apparmor
+  start on starting (job: rc-sysinit, env:)
+cgproxy
+  emits cgmanager-ready
+  start on started (job: cgmanager, env:)
+  stop on runlevel (job:, env: [06])
+upstart-socket-bridge
+  emits socket
+  start on net-device-up (job:, env: IFACE=lo)
+  stop on runlevel (job:, env: [!2345])
+mountdevsubfs.sh
+  start on virtual-filesystems (job:, env:)
+tty2
+  start on runlevel (job:, env: [23])
+  start on not-container (job:, env:)
+  start on container (job:, env: CONTAINER=lxc)
+  start on container (job:, env: CONTAINER=lxc-libvirt)
+  stop on runlevel (job:, env: [!23])
+udevtrigger
+  start on startup (job:, env:)
+  start on started (job: udev, env:)
+  start on not-container (job:, env:)
+upstart-file-bridge
+  emits file
+  start on filesystem (job:, env:)
+  stop on runlevel (job:, env: [!2345])
+container-detect
+  emits container
+  emits not-container
+  start on mounted (job:, env: MOUNTPOINT=/run)
+mounted-dev
+  start on mounted (job:, env: MOUNTPOINT=/dev)
+mtab.sh
+  start on virtual-filesystems (job:, env:)
+tty3
+  start on runlevel (job:, env: [23])
+  start on not-container (job:, env:)
+  start on container (job:, env: CONTAINER=lxc)
+  start on container (job:, env: CONTAINER=lxc-libvirt)
+  stop on runlevel (job:, env: [!23])
+cgmanager
+  start on mounted (job:, env: MOUNTPOINT=/sys/fs/cgroup)
+  start on virtual-filesystems (job:, env:)
+  start on starting (job: dbus, env:)
+  stop on runlevel (job:, env: [06])
+hostname
+  start on startup (job:, env:)
+hwclock.sh
+  start on starting (job: hwclock, env:)
+mountall-reboot
+  start on stopped (job: mountall, env: EXIT_STATUS=4)
+mountall-shell
+  start on stopped (job: mountall, env: EXIT_STATUS=[!4])
+  start on stopped (job: mountall, env: EXIT_SIGNAL=?*)
+  stop on runlevel (job:, env: [06])
+mounted-tmp
+  start on mounted (job:, env: MOUNTPOINT=/tmp)
+  start on mounted (job:, env: MOUNTPOINT=/usr)
+network-interface
+  emits net-device-up
+  emits net-device-down
+  emits static-network-up
+  start on net-device-added (job:, env:)
+  stop on net-device-removed (job:, env: INTERFACE=$INTERFACE)
+tty1
+  start on stopped (job: rc, env: RUNLEVEL=[2345])
+  start on not-container (job:, env:)
+  start on container (job:, env: CONTAINER=lxc)
+  start on container (job:, env: CONTAINER=lxc-libvirt)
+  stop on runlevel (job:, env: [!2345])
+udevmonitor
+  start on startup (job:, env:)
+  start on starting (job: udevtrigger, env:)
+  stop on stopped (job: udevtrigger, env:)
+mountall-bootclean.sh
+  start on virtual-filesystems (job:, env:)
+network-interface-security
+  start on starting (job: network-interface, env:)
+  start on starting (job: network-manager, env:)
+  start on starting (job: networking, env:)
+  stop on stopped (job: network-interface, env: JOB=$JOB INTERFACE=$INTERFACE)
+  stop on stopped (job: network-manager, env: JOB=$JOB)
+  stop on stopped (job: networking, env: JOB=$JOB)
+networking
+  emits static-network-up
+  emits net-device-up
+  emits deconfiguring-networking
+  start on local-filesystems (job:, env:)
+  start on stopped (job: udevtrigger, env:)
+  start on container (job:, env:)
+  start on runlevel (job:, env: [2345])
+  start on stopped (job: networking, env: RESULT=failed PROCESS=post-stop EXIT_STATUS=100)
+  stop on unmounted-remote-filesystems (job:, env:)
+procps
+  start on started (job: procps-instance, env:)
+tty6
+  start on runlevel (job:, env: [23])
+  start on not-container (job:, env:)
+  stop on runlevel (job:, env: [!23])
+console-font
+  start on starting (job: plymouth-splash, env:)
+network-interface-container
+  emits net-device-added
+  start on container (job:, env:)
+ureadahead
+  start on starting (job: mountall, env:)
+  stop on stopped (job: rc, env:)
