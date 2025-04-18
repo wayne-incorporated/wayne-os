@@ -19,6 +19,7 @@ All dates are approximate and are subject to change without notice.
 - Chrome OS (Chromium OS) LTS release: 2024-10-01
 - Chrome OS (Chromium OS) LTS last refresh: 2025-04-15
 - Wayne OS release: 2024-10-01 - 2024-12-31
+- Result: This Wayne OS release is canceled.
 #### Milestone 132
 - Feature freeze: 2024-10-28
 - Branch: 2024-11-11
