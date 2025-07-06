@@ -27,7 +27,7 @@ All dates are approximate and are subject to change without notice.
 - Chrome OS (Chromium OS) stable release: 2025-01-14
 - Chrome OS (Chromium OS) LTS release: 2025-04-08
 - Chrome OS (Chromium OS) LTS last refresh: 2025-10-07
-- Wayne OS release: 2025-04-08 - 2025-07-07
+- Wayne OS release: 2025-04-08 - 2025-10-07
 #### Milestone 138
 - Feature freeze: 2025-05-12
 - Branch: 2025-05-26
@@ -35,7 +35,7 @@ All dates are approximate and are subject to change without notice.
 - Chrome OS (Chromium OS) stable release: 2025-07-22
 - Chrome OS (Chromium OS) LTS release: 2025-10-14
 - Chrome OS (Chromium OS) LTS last refresh: 2026-04-21
-- Wayne OS release: 2025-10-14 - 2026-01-13
+- Wayne OS release: 2025-10-14 - 2026-04-21
 
 ## Reference
 - https://support.google.com/chrome/a/answer/11333726?hl=en
